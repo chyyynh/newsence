@@ -1,0 +1,61 @@
+# API Keys and Secrets
+.env
+.env.local
+.env.*.local
+.dev.vars
+**/secrets.json
+**/*secret*
+**/*key*
+**/*token*
+
+# Wrangler config files (contains API keys)
+wrangler.jsonc
+*/wrangler.jsonc
+**/wrangler.jsonc
+**/worker-configuration.d.ts
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Cache directories
+.cache/
+.parcel-cache/
+.wrangler/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# TypeScript
+*.tsbuildinfo
+# Learning and project management files
+learning.md
+TODO.md
+todo/

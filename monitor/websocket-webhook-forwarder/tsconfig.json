@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020" /* Update target to support newer features */,
+    "lib": ["ES2020", "DOM"] /* Add DOM lib for fetch types */,
+    "module": "CommonJS" /* Specify module code generation: 'none', 'commonjs', 'amd', 'system', 'umd', 'es2015', 'es2020', or 'ESNext'. */,
+    "outDir": "./dist" /* Redirect output structure to the directory. */,
+    "rootDir": "./src" /* Specify the root directory of input files. Use to control the output directory structure with --outDir. */,
+    "strict": true /* Enable all strict type-checking options. */,
+    "esModuleInterop": true /* Enables emit interoperability between CommonJS and ES Modules via creation of namespace objects for all imports. Implies 'allowSyntheticDefaultImports'. */,
+    "skipLibCheck": true /* Skip type checking of declaration files. */,
+    "forceConsistentCasingInFileNames": true /* Disallow inconsistently-cased references to the same file. */
+  },
+  "include": ["src/**/*"] /* Include all files in the src directory */,
+  "exclude": [
+    "node_modules",
+    "**/*.spec.ts"
+  ] /* Exclude node_modules and test files */
+}

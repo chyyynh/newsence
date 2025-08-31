@@ -1,0 +1,29 @@
+{
+	"name": "opennews-worker",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev --test-scheduled",
+		"start": "wrangler dev --test-scheduled",
+		"cf-typegen": "wrangler types",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250506.0",
+		"@types/bun": "^1.2.12",
+		"@types/jest": "^29.5.14",
+		"jest": "^29.7.0",
+		"ts-jest": "^29.3.2",
+		"typescript": "^5.8.3",
+		"wrangler": "^4.14.1"
+	},
+	"dependencies": {
+		"@google/generative-ai": "^0.24.0",
+		"@hono/node-server": "^1.14.1",
+		"@hono/oauth-providers": "^0.7.1",
+		"@supabase/supabase-js": "^2.49.4",
+		"fast-xml-parser": "^5.2.0",
+		"vitest": "^3.1.3"
+	}
+}
