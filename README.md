@@ -35,5 +35,4 @@ An AI-powered news aggregation system that helps users stay informed about topic
 - **Frontend**: Next.js, React, TypeScript, Zustand
 - **Backend**: Cloudflare (Workers, Queue, Workflow), Prisma ORM
 - **Database**: PostgreSQL with Supabase
-- **AI**: Gemini 2.5 Flash integration
 - **Deployment**: Vercel (Frontend), Cloudflare (Workers)
