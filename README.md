@@ -8,22 +8,20 @@ An AI-powered news aggregation system that helps users stay informed about topic
 
 **Key Features:**
 
-- 🔍 Smart RSS feed monitoring with AI-powered content analysis
-- 🤖 Automated social media posting with intelligent scheduling
-- 📱 Multi-platform support (Web, Telegram Bot, Twitter)
-- ⚡ Real-time processing with Cloudflare Workers
-- 🎯 Personalized news filtering and recommendations
+- Smart RSS feed monitoring with AI-powered content analysis
+- Automated social media posting with intelligent scheduling
+- Real-time processing with Cloudflare Workers
 
 ![](https://www.mermaidchart.com/raw/ce8745bd-e9c3-4711-9dbe-636f96e9e14d?theme=light&version=v0.1&format=svg)
 
 ## Core Components
 
-### 🖥️ Frontend Platform
+### 🖥️ Core Services
 
-- **Multi-Platform Access**: Web dashboard, Telegram bot, and Mini App support
-- **Authentication**: Secure Telegram Login Widget integration
-- **AI Commentary**: Custom prompt-based news analysis and commentary
-- **Responsive Design**: Optimized for both desktop and mobile experiences
+- **RSS Feed Processing**: Automated monitoring and content extraction
+- **AI Content Analysis**: Smart summarization and topic classification
+- **Multi-Platform Distribution**: Telegram and Twitter integration
+- **Real-time Updates**: WebSocket-based live content delivery
 
 ### ⚙️ Backend Infrastructure
 
@@ -34,8 +32,8 @@ An AI-powered news aggregation system that helps users stay informed about topic
 
 ### 🔧 Technical Stack
 
-- **Frontend**: Next.js, React, TypeScript
-- **Backend**: Cloudflare Workers, Prisma ORM
+- **Frontend**: Next.js, React, TypeScript, Zustand
+- **Backend**: Cloudflare (Workers, Queue, Workflow), Prisma ORM
 - **Database**: PostgreSQL with Supabase
-- **AI**: OpenAI GPT integration
+- **AI**: Gemini 2.5 Flash integration
 - **Deployment**: Vercel (Frontend), Cloudflare (Workers)
