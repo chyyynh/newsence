@@ -1,6 +1,6 @@
 # Social Connect Workers
 
-OpenNews 社交媒體連接系統，包含 Telegram 和 Twitter 自動化 Workers。
+newsence 社交媒體連接系統，包含 Telegram 和 Twitter 自動化 Workers。
 
 ## 架構概覽
 
@@ -16,25 +16,28 @@ social-connect/
 ## Workers 說明
 
 ### 1. 📱 Telegram Worker
-- **功能**: 每3小時生成並推送新聞摘要到 Telegram
-- **排程**: `0 */3 * * *` (每3小時執行)
-- **範圍**: 90-180分鐘前的文章
-- **AI引擎**: OpenRouter API
+
+- **功能**: 每 3 小時生成並推送新聞摘要到 Telegram
+- **排程**: `0 */3 * * *` (每 3 小時執行)
+- **範圍**: 90-180 分鐘前的文章
+- **AI 引擎**: OpenRouter API
 - **推送對象**: 註冊用戶 + 頻道
 
 ### 2. 🤖 Telegram Bot Worker
+
 - **功能**: 處理 Telegram 用戶互動和登入
 - **觸發**: Telegram Webhook
-- **主要功能**: 
+- **主要功能**:
   - 用戶註冊/登入
   - 偏好設定
   - 即時查詢
 
 ### 3. 🐦 Twitter Summary Worker
-- **功能**: 每4小時選擇最重要新聞發布到 Twitter
-- **排程**: `0 */4 * * *` (每4小時執行)
-- **範圍**: 過去4小時內的文章
-- **特色**: 
+
+- **功能**: 每 4 小時選擇最重要新聞發布到 Twitter
+- **排程**: `0 */4 * * *` (每 4 小時執行)
+- **範圍**: 過去 4 小時內的文章
+- **特色**:
   - 智能重要性評分
   - 精確字數控制 (letter-count)
   - 自動重試機制
@@ -56,7 +59,7 @@ cd social-connect
 cd telegram-worker
 pnpm install && pnpm run deploy
 
-# 部署 Telegram Bot Worker  
+# 部署 Telegram Bot Worker
 cd ../telegram-bot-worker
 pnpm install && pnpm run deploy
 
@@ -70,6 +73,7 @@ pnpm install && pnpm run deploy
 每個 Worker 都需要在 Cloudflare Workers 中設定對應的環境變數。
 
 ### Telegram Worker
+
 ```
 SUPABASE_URL=<your-supabase-url>
 SUPABASE_SERVICE_ROLE_KEY=<your-supabase-key>
@@ -80,6 +84,7 @@ GEMINI_API_KEY=<your-gemini-api-key>
 ```
 
 ### Telegram Bot Worker
+
 ```
 SUPABASE_URL=<your-supabase-url>
 SUPABASE_SERVICE_ROLE_KEY=<your-supabase-key>
@@ -87,6 +92,7 @@ TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
 ```
 
 ### Twitter Summary Worker
+
 ```
 SUPABASE_URL=<your-supabase-url>
 SUPABASE_SERVICE_ROLE_KEY=<your-supabase-key>
@@ -115,16 +121,18 @@ CREATE TABLE twitter_posts (
 ## 監控和除錯
 
 ### 查看部署狀態
+
 ```bash
 wrangler deployments list
 ```
 
 ### 即時日誌監控
+
 ```bash
 # Telegram Worker
 wrangler tail telegram-worker
 
-# Telegram Bot Worker  
+# Telegram Bot Worker
 wrangler tail telegram-bot-worker
 
 # Twitter Summary Worker
@@ -132,6 +140,7 @@ wrangler tail twitter-summary-worker
 ```
 
 ### 手動觸發測試
+
 ```bash
 # 測試 Telegram Worker
 wrangler dev --test-scheduled
@@ -159,4 +168,5 @@ wrangler dev --test-scheduled
 4. **Twitter API 錯誤**: 確認 OAuth token 是否有效
 
 ### 查看詳細日誌
+
 所有 Worker 都有詳細的日誌輸出，可透過 `wrangler tail` 命令即時查看執行狀況。
