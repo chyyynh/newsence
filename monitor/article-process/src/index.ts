@@ -43,7 +43,7 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 	console.log(`Analyzing article: ${article.title.substring(0, 80)}...`);
 
 	const content = article.content || article.summary || article.title;
-	
+
 	// Add timeout for AI calls to prevent hanging
 	const timeoutMs = 30000; // 30 second timeout
 	const prompt = `作為一個專業的新聞分析師和翻譯師，請分析以下新聞文章並提供結構化的分析結果，包含英文和中文版本。
@@ -92,8 +92,8 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 			headers: {
 				'Content-Type': 'application/json',
 				Authorization: `Bearer ${openrouterApiKey}`,
-				'HTTP-Referer': 'https://opennews.tw',
-				'X-Title': 'OpenNews Article Process',
+				'HTTP-Referer': 'https://app.newsence.xyz',
+				'X-Title': 'newsence',
 			},
 			body: JSON.stringify({
 				model: 'google/gemini-2.5-flash-lite',
@@ -112,7 +112,7 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 				temperature: 0.3,
 			}),
 		});
-		
+
 		clearTimeout(timeoutId);
 
 		if (!response.ok) {
@@ -170,13 +170,13 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 		}
 	} catch (fetchError: any) {
 		clearTimeout(timeoutId);
-		
+
 		if (fetchError.name === 'AbortError') {
 			console.error('AI request timed out after', timeoutMs, 'ms');
 		} else {
 			console.error('AI request failed:', fetchError);
 		}
-		
+
 		// Fallback: basic analysis when network fails
 		return {
 			tags: ['Other'],
@@ -326,7 +326,7 @@ export default {
 	// Handle queue messages from workflow orchestrator
 	async queue(batch: any, env: Env, ctx: ExecutionContext): Promise<void> {
 		const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-		
+
 		console.log(`Processing ${batch.messages.length} article processing queue messages`);
 
 		for (const message of batch.messages) {
@@ -342,7 +342,7 @@ export default {
 
 				if (messageData.type === 'process_articles') {
 					const { article_ids, source, triggered_by, batch_info } = messageData;
-					
+
 					console.log(`Processing batch from ${triggered_by}, source: ${source}, articles: ${article_ids.length}`);
 					if (batch_info) {
 						console.log(`Batch info: ${batch_info.batch_size} articles, ${batch_info.total_batches} total batches`);

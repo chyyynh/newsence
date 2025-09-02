@@ -238,8 +238,8 @@ async function callGemini(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${openrouterApiKey}`,
-        "HTTP-Referer": "https://opennews.tw",
-        "X-Title": "OpenNews Twitter Summary",
+        "HTTP-Referer": "https://app.newsence.xyz",
+        "X-Title": "newsence",
       },
       body: JSON.stringify({
         model: "google/gemini-2.5-flash-lite",
