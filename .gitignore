@@ -5,7 +5,6 @@
 .dev.vars
 **/secrets.json
 **/*secret*
-**/*key*
 **/*token*
 
 # Wrangler config files (contains API keys)
