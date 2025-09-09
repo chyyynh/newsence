@@ -39,7 +39,7 @@ export class OpenNewsMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 			console.log('Workflow execution logged');
 		});
 
-		// Step 2: Send article batches to processing queue
+		// Step 2: Send individual article to processing queue  
 		if (event.payload.source === 'rss' || event.payload.source === 'twitter' || event.payload.source === 'manual') {
 			await step.do(
 				'send-to-processing-queue',
@@ -53,44 +53,31 @@ export class OpenNewsMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 				},
 				async (): Promise<any> => {
 					const articleIds = event.payload.article_ids || [];
-					console.log(`Sending ${articleIds.length} articles to processing queue in batches`);
+					console.log(`Sending ${articleIds.length} articles to processing queue individually`);
 
-					// Split article IDs into batches matching queue consumer config (10)
-					// This matches the max_batch_size in article-process queue config
-					const BATCH_SIZE = 10;
-					const batches = [];
-					for (let i = 0; i < articleIds.length; i += BATCH_SIZE) {
-						batches.push(articleIds.slice(i, i + BATCH_SIZE));
-					}
-
-					console.log(`Created ${batches.length} batches of up to ${BATCH_SIZE} articles each`);
-
-					// Send each batch to the queue
-					const queueMessages = batches.map(batch => ({
-						body: {
+					// Send each article individually to maximize concurrency
+					for (const articleId of articleIds) {
+						await this.env.ARTICLE_PROCESSING_QUEUE.send({
 							type: 'process_articles',
 							source: event.payload.source,
-							article_ids: batch,
+							article_ids: [articleId],
 							triggered_by: 'workflow-orchestrator',
-							batch_info: {
-								batch_size: batch.length,
-								total_batches: batches.length,
+							metadata: {
+								workflow_instance: event.instanceId,
 								timestamp: new Date().toISOString()
 							}
-						}
-					}));
+						});
 
-					// Send all batches to queue
-					await this.env.ARTICLE_PROCESSING_QUEUE.sendBatch(queueMessages);
+						console.log(`Sent article ${articleId} to processing queue`);
+					}
 
 					const result = {
 						total_articles: articleIds.length,
-						total_batches: batches.length,
-						batch_size: BATCH_SIZE,
-						source: event.payload.source
+						source: event.payload.source,
+						processing_approach: 'individual_concurrent'
 					};
 
-					console.log('Article batches sent to processing queue:', result);
+					console.log('All articles sent to processing queue individually:', result);
 					return result;
 				}
 			);
@@ -121,134 +108,61 @@ export class OpenNewsMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 	}
 }
 
-// Add workflow deduplication and rate limiting
-const WORKFLOW_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between workflows of same type
-const lastWorkflowTimes: { [key: string]: number } = {};
-
-function shouldCreateWorkflow(source: string): boolean {
-	const now = Date.now();
-	const lastRun = lastWorkflowTimes[source] || 0;
-	const cooldownPeriod = now - lastRun;
-
-	if (cooldownPeriod < WORKFLOW_COOLDOWN) {
-		console.log(`Skipping ${source} workflow - cooldown period (${Math.round(cooldownPeriod / 1000)}s < ${WORKFLOW_COOLDOWN / 1000}s)`);
-		return false;
-	}
-
-	return true;
-}
-
-function markWorkflowCreated(source: string): void {
-	lastWorkflowTimes[source] = Date.now();
-}
+// Remove workflow cooldown mechanism - allow full concurrency for better performance
 
 export default {
-	// Handle queue messages from RSS feed monitor
+	// Handle queue messages from RSS feed monitor - one workflow per article for maximum concurrency
 	async queue(batch: any, env: Env): Promise<void> {
-		console.log(`Processing ${batch.messages.length} queue messages`);
+		console.log(`Processing ${batch.messages.length} queue messages with individual workflows`);
 
-		// Group messages by type for batch processing and collect article IDs
-		const rssMessages: any[] = [];
-		const twitterMessages: any[] = [];
-		const articleIds: string[] = [];
-
+		// Process each message individually to maximize concurrency
 		for (const message of batch.messages) {
 			try {
 				const messageData = message.body;
 
 				if (messageData.type === 'article_scraped') {
-					rssMessages.push(message);
-					if (messageData.article_id) {
-						articleIds.push(messageData.article_id);
-					}
+					// Create individual workflow for each article
+					const instance = await env.MONITOR_WORKFLOW.create({
+						params: {
+							source: messageData.source_type || 'rss',
+							article_ids: [messageData.article_id],
+							metadata: {
+								trigger_time: new Date().toISOString(),
+								message_id: message.id,
+								source: messageData.source,
+								url: messageData.url,
+							},
+						},
+					});
+
+					console.log(`Started workflow instance ${instance.id} for article ${messageData.article_id}`);
+					message.ack();
+
 				} else if (messageData.type === 'tweet_scraped') {
-					twitterMessages.push(message);
-					if (messageData.article_id) {
-						articleIds.push(messageData.article_id);
-					}
+					// Create individual workflow for each tweet
+					const instance = await env.MONITOR_WORKFLOW.create({
+						params: {
+							source: 'twitter',
+							article_ids: [messageData.article_id],
+							metadata: {
+								trigger_time: new Date().toISOString(),
+								message_id: message.id,
+								source: messageData.source,
+								url: messageData.url,
+							},
+						},
+					});
+
+					console.log(`Started workflow instance ${instance.id} for tweet ${messageData.article_id}`);
+					message.ack();
+
 				} else {
 					console.warn('Unknown message type:', messageData.type);
 					message.ack(); // Acknowledge unknown message types
 				}
 			} catch (error) {
-				console.error('Error parsing message:', error);
+				console.error('Error creating workflow for message:', error);
 				message.retry();
-			}
-		}
-
-		// Process RSS messages - ONE workflow for the entire batch with rate limiting
-		if (rssMessages.length > 0) {
-			if (shouldCreateWorkflow('rss')) {
-				try {
-					const messageIds = rssMessages.map((m) => m.id);
-					const rssArticleIds = rssMessages
-						.map((m) => m.body.article_id)
-						.filter(Boolean);
-
-					const instance = await env.MONITOR_WORKFLOW.create({
-						params: {
-							source: 'rss',
-							article_ids: rssArticleIds,
-							metadata: {
-								trigger_time: new Date().toISOString(),
-								message_ids: messageIds,
-								batch_size: rssMessages.length,
-								article_count: rssArticleIds.length,
-							},
-						},
-					});
-
-					markWorkflowCreated('rss');
-					console.log(`Started single workflow instance ${instance.id} for ${rssMessages.length} RSS messages with ${rssArticleIds.length} article IDs`);
-
-					// Acknowledge all RSS messages
-					rssMessages.forEach((message) => message.ack());
-				} catch (error) {
-					console.error('Error creating RSS workflow:', error);
-					rssMessages.forEach((message) => message.retry());
-				}
-			} else {
-				// Still acknowledge messages during cooldown to avoid reprocessing
-				console.log(`Acknowledging ${rssMessages.length} RSS messages during cooldown`);
-				rssMessages.forEach((message) => message.ack());
-			}
-		}
-
-		// Process Twitter messages - ONE workflow for the entire batch with rate limiting
-		if (twitterMessages.length > 0) {
-			if (shouldCreateWorkflow('twitter')) {
-				try {
-					const messageIds = twitterMessages.map((m) => m.id);
-					const twitterArticleIds = twitterMessages
-						.map((m) => m.body.article_id)
-						.filter(Boolean);
-
-					const instance = await env.MONITOR_WORKFLOW.create({
-						params: {
-							source: 'twitter',
-							article_ids: twitterArticleIds,
-							metadata: {
-								trigger_time: new Date().toISOString(),
-								message_ids: messageIds,
-								batch_size: twitterMessages.length,
-								article_count: twitterArticleIds.length,
-							},
-						},
-					});
-
-					markWorkflowCreated('twitter');
-					console.log(`Started single workflow instance ${instance.id} for ${twitterMessages.length} Twitter messages with ${twitterArticleIds.length} article IDs`);
-
-					// Acknowledge all Twitter messages
-					twitterMessages.forEach((message) => message.ack());
-				} catch (error) {
-					console.error('Error creating Twitter workflow:', error);
-					twitterMessages.forEach((message) => message.retry());
-				}
-			} else {
-				// Still acknowledge messages during cooldown to avoid reprocessing
-				console.log(`Acknowledging ${twitterMessages.length} Twitter messages during cooldown`);
-				twitterMessages.forEach((message) => message.ack());
 			}
 		}
 	},
