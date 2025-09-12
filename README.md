@@ -1,13 +1,15 @@
 # Newsence
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/Newsence)
-[![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://newsence.xyz)
+[![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://app.newsence.xyz)
 [![Telegram](https://img.shields.io/badge/Telegram-Channel-blue?style=flat-square&logo=telegram)](https://t.me/opennews_demo)
 [![Twitter](https://img.shields.io/badge/Twitter-Demo-1DA1F2?style=flat-square&logo=twitter)](https://x.com/artofcryptowar)
 
 **AI-Powered News Intelligence Platform**
 
-Newsence is an news aggregation system that leverages artificial intelligence to deliver personalized, real-time content across multiple platforms. Built for the modern information age, it transforms how users discover and consume news from cryptocurrency markets to emerging technology sectors.
+Newsence is an news aggregation system that leverages AI to deliver personalized, real-time content across multiple sources.
+
+This open source repo only contain cloudflare workers for monitor news, article processing and social posting.
 
 ![](https://www.mermaidchart.com/raw/ce8745bd-e9c3-4711-9dbe-636f96e9e14d?theme=light&version=v0.1&format=svg)
 
