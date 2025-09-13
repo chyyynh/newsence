@@ -9,7 +9,7 @@
 
 Newsence is an news aggregation system that leverages AI to deliver personalized, real-time content across multiple sources.
 
-This open source repo only contain cloudflare workers for monitor news, article processing and social posting.
+This open source repo only contain cloudflare workers for monitor news, article processing and social posting. please add wrangler.jsonc file yourself.
 
 ![](https://www.mermaidchart.com/raw/ce8745bd-e9c3-4711-9dbe-636f96e9e14d?theme=light&version=v0.1&format=svg)
 
