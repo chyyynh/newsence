@@ -207,7 +207,15 @@ export default {
 			try {
 				console.log(`Processing feed: ${feed.name}`);
 				if (feed.type === 'rss') {
-					const res = await fetch(feed.RSSLink);
+					const res = await fetch(feed.RSSLink, {
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+						'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+						'Accept-Language': 'en-US,en;q=0.9',
+						'Cache-Control': 'no-cache',
+						'Referer': 'https://stratechery.com/',
+					}
+				});
 
 					// Check for rate limiting (429) or other HTTP errors
 					if (!res.ok) {
@@ -333,7 +341,8 @@ export default {
 						.filter(Boolean);
 
 					// Split URLs into batches to avoid 414 Request-URI Too Large error
-					const BATCH_SIZE = 50;
+					// Use smaller batch for feeds with very long URLs (e.g. Stratechery with JWT tokens)
+					const BATCH_SIZE = feed.name.toLowerCase().includes('stratechery') ? 5 : 50;
 					let existing: any[] = [];
 
 					for (let i = 0; i < urls.length; i += BATCH_SIZE) {
