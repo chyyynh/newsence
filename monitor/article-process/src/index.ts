@@ -93,7 +93,7 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 				'Content-Type': 'application/json',
 				Authorization: `Bearer ${openrouterApiKey}`,
 				'HTTP-Referer': 'https://app.newsence.xyz',
-				'X-Title': 'newsence',
+				'X-Title': 'app.newsence.xyz',
 			},
 			body: JSON.stringify({
 				model: 'google/gemini-2.5-flash-lite',
@@ -433,7 +433,7 @@ export default {
 		}
 
 		return new Response(
-			'OpenNews Article AI Analysis Worker\n\nPOST /process - Manually trigger processing\nOptional JSON body: { "article_ids": ["id1", "id2"], "source": "rss", "triggered_by": "workflow" }',
+			'Newsence Article AI Analysis Worker\n\nPOST /process - Manually trigger processing\nOptional JSON body: { "article_ids": ["id1", "id2"], "source": "rss", "triggered_by": "workflow" }',
 			{
 				headers: { 'Content-Type': 'text/plain' },
 			}

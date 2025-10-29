@@ -1,43 +1,12 @@
 import { XMLParser } from 'fast-xml-parser';
 import { createClient } from '@supabase/supabase-js';
-import { sendMessageToTelegram, tagNews, scrapeArticleContent } from './utils';
+import { scrapeArticleContent } from './utils';
 import { ScheduledEvent, ExecutionContext, Queue } from '@cloudflare/workers-types';
-import { GoogleGenAI } from '@google/genai';
 
 interface Env {
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_ROLE_KEY: string;
-	TELEGRAM_BOT_TOKEN: string;
-	GEMINI_API_KEY: string;
 	rss_handle: Queue;
-}
-
-async function notifyMatchedUsers(supabase: any, env: Env, tags: Array<string>, content: string) {
-	const { data: users, error } = await supabase.from('user_preferences').select('telegram_id, selected_tags');
-
-	if (error) {
-		console.error('[notifyMatchedUsers] 無法取得用戶資料', error);
-		return;
-	}
-
-	const matchedUsers = users.filter(
-		(user: { telegram_id: string; selected_tags: string[] }) =>
-			// 空陣列 → 接收全部
-			user.selected_tags.length === 0 ||
-			// 否則比對 tag
-			user.selected_tags.some((tag: string) => tags.includes(tag))
-	);
-
-	console.log(`[notifyMatchedUsers] 符合條件的用戶數量：${matchedUsers.length}`);
-	const formattedTags = tags.map((tag) => `#${tag}`).join(' ');
-
-	for (const user of matchedUsers) {
-		await sendMessageToTelegram(env.TELEGRAM_BOT_TOKEN, user.telegram_id?.toString(), `${formattedTags}\n\n${content}`, {
-			parse_mode: 'Markdown',
-		});
-
-		console.log(`[Telegram Notify] Send to ${user.telegram_id}, tags ${JSON.stringify(user.selected_tags)}`);
-	}
 }
 
 async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?: any, source_type?: string) {
@@ -166,27 +135,6 @@ async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?
 		}
 	}
 }
-
-const CommentByAI = async (title: string, summary: string, apiKey: string) => {
-	const genAI = new GoogleGenAI({ apiKey });
-	const response = await genAI.models.generateContent({
-		model: 'gemini-1.5-flash',
-		contents: `你是加密領域的銳評關鍵意見領袖, 請用 "1-3 句話" 使用 "繁體中文" 盡可能簡潔的評論這則新聞: ${title} ${summary}`,
-	});
-	const text = response.text ?? '';
-	return text;
-};
-
-const SummaryByAI = async (title: string, article: string, apiKey: string) => {
-	const genAI = new GoogleGenAI({ apiKey });
-	const response = await genAI.models.generateContent({
-		model: 'gemini-1.5-flash',
-		contents: `幫我用繁體中文 1-2 句話總結這篇新聞 \n\n ${title} \n\n ${article}`,
-	});
-
-	const text = response.text ?? '';
-	return text;
-};
 
 export default {
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
