@@ -2,8 +2,6 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/Newsence)
 [![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://app.newsence.xyz)
-[![Telegram](https://img.shields.io/badge/Telegram-Channel-blue?style=flat-square&logo=telegram)](https://t.me/opennews_demo)
-[![Twitter](https://img.shields.io/badge/Twitter-Demo-1DA1F2?style=flat-square&logo=twitter)](https://x.com/artofcryptowar)
 
 **AI-Powered News Intelligence Platform**
 
