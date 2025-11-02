@@ -6,7 +6,6 @@ interface Env {
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	TELEGRAM_BOT_TOKEN: string;
 	TELEGRAM_CHANNEL_ID: string;
-	GEMINI_API_KEY: string;
 	OPENROUTER_API_KEY: string;
 }
 
