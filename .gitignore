@@ -6,6 +6,7 @@
 **/secrets.json
 **/*secret*
 **/*token*
+!frontend/src/components/smartPanel/TokenCounter.tsx
 
 # Wrangler config files (contains API keys)
 wrangler.jsonc
