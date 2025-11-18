@@ -9,6 +9,34 @@ interface Env {
 	rss_handle: Queue;
 }
 
+/**
+ * Normalizes URL by removing tracking and cache-busting parameters
+ * This prevents duplicate articles with different URL parameters
+ */
+function normalizeUrl(url: string): string {
+	try {
+		const urlObj = new URL(url);
+
+		// Remove common tracking and cache-busting parameters
+		const paramsToRemove = [
+			'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+			'_', '__', 'nc', 'cachebust', 'noCache', 'cache', 'rand', 'random',
+			'_rnd', '_refresh', '_t', '_ts', '_dc', '_q', '_nocache',
+			'timestamp', 'ts', 'time', 'cb', 'r', 'sid', 'ttl', 'vfff', 'ttt'
+		];
+
+		paramsToRemove.forEach(param => {
+			urlObj.searchParams.delete(param);
+		});
+
+		// Return the clean URL
+		return urlObj.toString();
+	} catch (e) {
+		// If URL parsing fails, return the original
+		return url;
+	}
+}
+
 async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?: any, source_type?: string) {
 	console.log(`[${feed.name}] Starting processAndInsertArticle for: ${item.title || item.text || 'No title'}`);
 
@@ -43,6 +71,9 @@ async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?
 	} else {
 		url = `https://t.me/${feed.RSSLink}/${item.message_id}`;
 	}
+
+	// Normalize URL to remove tracking parameters before storing
+	url = normalizeUrl(url);
 
 	// Scrape article content if it's an RSS feed item with a link
 	let crawled_content = '';
@@ -263,28 +294,30 @@ export default {
 
 					const urls = items
 						.map((item: any) => {
+							let url: string | null = null;
+
 							// Handle arXiv feeds specially
 							if (feed.name && feed.name.toLowerCase().includes('arxiv')) {
 								if (item.id) {
-									return item.id; // arXiv ID format
+									url = item.id; // arXiv ID format
 								} else if (typeof item.link === 'string') {
-									return item.link; // arXiv link is direct string
+									url = item.link; // arXiv link is direct string
 								} else if (item.link && Array.isArray(item.link)) {
 									const absLink = item.link.find((l: any) => l['@_href']?.includes('/abs/'));
-									return absLink ? absLink['@_href'] : item.link[0]['@_href'];
+									url = absLink ? absLink['@_href'] : item.link[0]['@_href'];
 								}
-							}
-							
-							if (typeof item.link === 'string') {
-								return item.link;
+							} else if (typeof item.link === 'string') {
+								url = item.link;
 							} else if (item.link?.['@_href']) {
-								return item.link['@_href'];
+								url = item.link['@_href'];
 							} else if (item.link?.href) {
-								return item.link.href;
+								url = item.link.href;
 							} else if (item.url) {
-								return item.url;
+								url = item.url;
 							}
-							return null;
+
+							// Normalize URL to remove tracking parameters
+							return url ? normalizeUrl(url) : null;
 						})
 						.filter(Boolean);
 
@@ -307,11 +340,11 @@ export default {
 						}
 					}
 
-					const existingUrls = new Set(existing.map((e: any) => e.url));
+					const existingUrls = new Set(existing.map((e: any) => normalizeUrl(e.url)));
 					
 					const newItems = items.filter((item: any) => {
 						let itemUrl;
-						
+
 						// Handle arXiv feeds specially
 						if (feed.name && feed.name.toLowerCase().includes('arxiv')) {
 							if (item.id) {
@@ -331,8 +364,9 @@ export default {
 						} else if (item.url) {
 							itemUrl = item.url;
 						}
-						
-						return itemUrl && !existingUrls.has(itemUrl);
+
+						// Normalize URL before checking
+						return itemUrl && !existingUrls.has(normalizeUrl(itemUrl));
 					});
 
 					console.log(`[${feed.name}] Found ${newItems.length} new items to process`);
