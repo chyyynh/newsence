@@ -8,6 +8,7 @@
 **/*token*
 !frontend/src/components/smartPanel/TokenCounter.tsx
 !frontend/src/lib/ai/token-consumption.config.ts
+!frontend/src/app/tokens/page.tsx
 
 # Wrangler config files (contains API keys)
 wrangler.jsonc
