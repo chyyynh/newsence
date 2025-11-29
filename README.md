@@ -42,12 +42,9 @@ This repository contains the open-source Cloudflare Workers components:
 │   ├── telegram-notify/              # Telegram notification service
 │   └── twitter-summary/              # Twitter content summarization
 │
-├── script/                           # Utility scripts
-│   ├── x_login.js                    # Twitter/X authentication helper
-│   └── refresh_token.js              # Token refresh utility
-│
-└── .github/workflows/                # CI/CD automation
-    └── sync-public.yml               # Sync to public repository
+└── script/                           # Utility scripts
+    ├── x_login.js                    # Twitter/X authentication helper
+    └── refresh_token.js              # Token refresh utility
 ```
 
 ## Deployment
