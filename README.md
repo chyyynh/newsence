@@ -11,49 +11,80 @@ This open source repo only contain cloudflare workers for monitor news, article 
 
 ![](https://www.mermaidchart.com/raw/ce8745bd-e9c3-4711-9dbe-636f96e9e14d?theme=light&version=v0.1&format=svg)
 
-## Core Components
+## Core Feature
 
-### 🖥️ Core Services
+- **Resource Processing**: Monitoring and content extraction
+- **Collecting**: save any resources in one place and use ai to understand better
+- **AI Remix**: remix your feed to daily newsletter, social post and even research
 
-- **RSS Feed Processing**: Automated monitoring and content extraction
-- **AI Content Analysis**: Smart summarization and topic classification
-- **Multi-Platform Distribution**: Telegram and Twitter integration
-- **Real-time Updates**: WebSocket-based live content delivery
+## Technical Stack
 
-### ⚙️ Backend Infrastructure
+- **Frontend(not opensource)**: Next.js, Zustand, Motion
+- **Backend**: Cloudflare Workers
+- **Database**: PostgreSQL with Supabase, Prisma
+- **Tool**: Statsig, polar.sh for payment
 
-- **RSS Monitor**: Automated feed scanning every 5 minutes via Cloudflare Workers
-- **AI Summarization**: Intelligent content processing and summary generation
-- **Social Integration**: Auto-posting to Twitter/Telegram with OAuth2 authentication
-- **Real-time Processing**: WebSocket support for live updates
+## Project Structure
 
-### 🔧 Technical Stack
+This repository contains the open-source Cloudflare Workers components:
 
-- **Frontend**: Next.js 14, React 18, TypeScript, Zustand
-- **Backend**: Cloudflare Workers, Queues, Workflows
-- **Database**: PostgreSQL with Supabase, Prisma ORM
-- **AI/ML**: Gemini 2.5 Flash, OpenAI GPT
-- **Infrastructure**: Vercel Edge Functions, Cloudflare Edge Network
-- **Monitoring**: Real-time analytics and performance tracking
+```
+.
+├── monitor/                          # News monitoring workers
+│   ├── article-process/              # Article content extraction and processing
+│   ├── rss-feed-monitor/             # RSS feed monitoring and parsing
+│   ├── twitter-monitor/              # Twitter/X content monitoring
+│   ├── websocket-webhook-forwarder/  # WebSocket to webhook bridge
+│   └── workflow/                     # Workflow orchestration
+│
+├── social/                           # Social media integration workers
+│   ├── telegram-bot/                 # Telegram bot service
+│   ├── telegram-notify/              # Telegram notification service
+│   └── twitter-summary/              # Twitter content summarization
+│
+├── script/                           # Utility scripts
+│   ├── x_login.js                    # Twitter/X authentication helper
+│   └── refresh_token.js              # Token refresh utility
+│
+└── .github/workflows/                # CI/CD automation
+    └── sync-public.yml               # Sync to public repository
+```
 
----
+## Deployment
 
-## 🌟 Why Choose Newsence?
+### Prerequisites
 
-**For Content Creators & Publishers**
+1. [Cloudflare account](https://dash.cloudflare.com/sign-up)
+2. [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) installed
 
-- Automated content curation saves 10+ hours weekly
-- AI-powered insights increase engagement by 40%
-- Multi-platform distribution maximizes reach
+### Setup
 
-**For Developers & Teams**
+1. Copy the example configuration file and fill in your environment variables:
 
-- Open-source components and APIs
-- Serverless architecture reduces infrastructure costs
-- Comprehensive monitoring and analytics
+```bash
+cp wrangler.json.example wrangler.jsonc
+```
 
-**For Organizations**
+2. Edit `wrangler.jsonc` with your Cloudflare account settings and environment variables
 
-- Enterprise-grade security and compliance
-- Scalable from startup to enterprise volumes
-- Custom integrations and white-label solutions
+### Deploy to Cloudflare
+
+1. Navigate to the worker directory:
+
+```bash
+cd monitor/article-process  # or any other worker
+```
+
+2. Install dependencies (if needed):
+
+```bash
+pnpm install
+```
+
+3. Deploy to Cloudflare:
+
+```bash
+pnpm wrangler deploy
+```
+
+Repeat these steps for each worker you want to deploy.
