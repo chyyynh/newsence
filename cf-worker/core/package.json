@@ -1,0 +1,35 @@
+{
+	"name": "newsence-core",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev --test-scheduled",
+		"start": "wrangler dev --test-scheduled",
+		"test": "vitest",
+		"cf-typegen": "wrangler types"
+	},
+	"dependencies": {
+		"@google/genai": "^0.8.0",
+		"@supabase/supabase-js": "^2.55.0",
+		"axios": "^1.8.4",
+		"cheerio": "^1.0.0",
+		"fast-xml-parser": "^5.2.0",
+		"keyword-extractor": "^0.0.28",
+		"natural": "^8.0.1"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.8.19",
+		"@cloudflare/workers-types": "^4.20251014.0",
+		"@types/natural": "^5.1.5",
+		"@types/node": "^22.14.0",
+		"typescript": "^5.5.2",
+		"vitest": "~3.2.0",
+		"wrangler": "^4.51.0"
+	},
+	"packageManager": "pnpm@9.1.4",
+	"engines": {
+		"pnpm": "^9.1.4"
+	}
+}

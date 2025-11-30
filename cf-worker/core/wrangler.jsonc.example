@@ -1,0 +1,88 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "newsence-core-test",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-11-28",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	/**
+	 * Schedule Triggers
+	 * https://developers.cloudflare.com/workers/configuration/cron-triggers/
+	 */
+	"triggers": {
+		"crons": [
+			"*/5 * * * *", // RSS monitor (every 5 minutes)
+			"0 */6 * * *", // Twitter monitor (every 6 hours)
+			"*/5 * * * *" // Article daily processing (3 AM daily)
+		]
+	},
+	/**
+	 * Queue Bindings
+	 * https://developers.cloudflare.com/queues/configuration/configure-queues/
+	 */
+	"queues": {
+		"consumers": [
+			{
+				"queue": "rss-scraping-queue-core",
+				"max_batch_size": 10,
+				"max_batch_timeout": 30,
+				"max_retries": 3,
+				"dead_letter_queue": "workflow-dlq-core"
+			},
+			{
+				"queue": "twitter-processing-queue-core",
+				"max_batch_size": 10,
+				"max_batch_timeout": 30,
+				"max_retries": 3,
+				"dead_letter_queue": "workflow-dlq-core"
+			},
+			{
+				"queue": "article-processing-queue-core",
+				"max_batch_size": 10,
+				"max_batch_timeout": 30,
+				"max_retries": 3,
+				"dead_letter_queue": "article-processing-dlq-core"
+			}
+		],
+		"producers": [
+			{
+				"binding": "RSS_QUEUE",
+				"queue": "rss-scraping-queue-core"
+			},
+			{
+				"binding": "TWITTER_QUEUE",
+				"queue": "twitter-processing-queue-core"
+			},
+			{
+				"binding": "ARTICLE_QUEUE",
+				"queue": "article-processing-queue-core"
+			}
+		]
+	},
+	/**
+	 * Workflows
+	 * https://developers.cloudflare.com/workflows/
+	 */
+	"workflows": [
+		{
+			"binding": "MONITOR_WORKFLOW",
+			"name": "newsence-monitor-workflow-test",
+			"class_name": "NewsenceMonitorWorkflow"
+		}
+	],
+	"vars": {
+		"ARTICLES_TABLE": "",
+		"KAITO_API_KEY": "",
+		"OPENROUTER_API_KEY": "",
+		"SUPABASE_SERVICE_ROLE_KEY": "",
+		"SUPABASE_URL": "",
+		"TELEGRAM_BOT_TOKEN": "",
+		"TELEGRAM_CHAT_ID": ""
+	}
+}
