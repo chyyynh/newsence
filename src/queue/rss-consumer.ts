@@ -14,7 +14,7 @@ export async function handleRSSQueue(batch: MessageBatch<QueueMessage>, env: Env
 
 			const instance = await env.MONITOR_WORKFLOW.create({
 				params: {
-					source: body.source_type || 'rss',
+					source: 'rss' as const,
 					article_ids: [body.article_id],
 					metadata: {
 						trigger_time: new Date().toISOString(),

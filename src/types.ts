@@ -1,5 +1,4 @@
 import { ScheduledEvent, ExecutionContext, Queue, MessageBatch } from '@cloudflare/workers-types';
-import type { Workflow } from 'cloudflare:workflows';
 
 // Environment variables
 export interface Env {
@@ -17,7 +16,7 @@ export interface Env {
 	ARTICLE_QUEUE: Queue;
 
 	// Workflow binding
-	MONITOR_WORKFLOW: Workflow;
+	MONITOR_WORKFLOW: any; // Workflow type from cloudflare:workers
 }
 
 // Article related types
@@ -112,4 +111,4 @@ export interface QueueMessage {
 }
 
 // Exported handlers
-export { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
+export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
