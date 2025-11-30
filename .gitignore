@@ -1,8 +1,10 @@
 # API Keys and Secrets
 .env
 .env.local
-.env.*.local
+.env.*
 .dev.vars
+**/.dev.vars
+!**/.dev.vars.example
 **/secrets.json
 **/*secret*
 

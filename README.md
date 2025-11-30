@@ -30,14 +30,14 @@ This repository contains the open-source Cloudflare Workers components:
 
 ```
 .
-├── monitor/                          # News monitoring workers
+├── cf-worker/                        # All Cloudflare Workers
+│   ├── .dev.vars                     # Shared environment variables (git-ignored)
+│   ├── .dev.vars.example             # Environment template
 │   ├── article-process/              # Article content extraction and processing
 │   ├── rss-feed-monitor/             # RSS feed monitoring and parsing
 │   ├── twitter-monitor/              # Twitter/X content monitoring
 │   ├── websocket-webhook-forwarder/  # WebSocket to webhook bridge
-│   └── workflow/                     # Workflow orchestration
-│
-├── social/                           # Social media integration workers
+│   ├── workflow/                     # Workflow orchestration
 │   ├── telegram-bot/                 # Telegram bot service
 │   ├── telegram-notify/              # Telegram notification service
 │   └── twitter-summary/              # Twitter content summarization
@@ -47,41 +47,97 @@ This repository contains the open-source Cloudflare Workers components:
     └── refresh_token.js              # Token refresh utility
 ```
 
-## Deployment
+## Quick Start
 
 ### Prerequisites
 
-1. [Cloudflare account](https://dash.cloudflare.com/sign-up)
-2. [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) installed
+- Node.js 20+
+- pnpm 9+
+- [Cloudflare account](https://dash.cloudflare.com/sign-up)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) installed
 
-### Setup
-
-1. Copy the example configuration file and fill in your environment variables:
-
-```bash
-cp wrangler.json.example wrangler.jsonc
-```
-
-2. Edit `wrangler.jsonc` with your Cloudflare account settings and environment variables
-
-### Deploy to Cloudflare
-
-1. Navigate to the worker directory:
+### Installation
 
 ```bash
-cd monitor/article-process  # or any other worker
-```
-
-2. Install dependencies (if needed):
-
-```bash
+# Install dependencies
 pnpm install
+
+# Setup environment variables
+cd cf-worker
+cp .dev.vars.example .dev.vars
+vim .dev.vars  # Edit with your actual values
 ```
 
-3. Deploy to Cloudflare:
+### Local Development
 
 ```bash
+# Start all workers
+pnpm run dev
+
+# Or start individual worker
+cd cf-worker/article-process
+pnpm run dev
+```
+
+### Deployment
+
+#### Quick Deploy (All Workers)
+
+```bash
+# Deploy all workers
+pnpm run deploy
+
+# Deploy individual worker
+pnpm run deploy:article-process
+```
+
+#### Individual Worker Deploy
+
+```bash
+# Navigate to worker directory
+cd cf-worker/article-process
+
+# Deploy
 pnpm wrangler deploy
 ```
 
-Repeat these steps for each worker you want to deploy.
+#### Automated CI/CD
+
+We support automated deployment via GitHub Actions:
+
+- **Staging**: Auto-deploy on merge to `main`
+- **Production**: Manual trigger or Git tag
+
+See [CICD-SETUP.md](./CICD-SETUP.md) for 10-minute setup guide.
+
+## Documentation
+
+### Getting Started
+- [QUICK-START.md](./QUICK-START.md) - 5-minute quick start ⭐ Start here!
+- [FLAT-STRUCTURE.md](./FLAT-STRUCTURE.md) - New flat structure explanation
+
+### Workers Management
+- [WORKERS.md](./WORKERS.md) - Complete workers guide
+- [WORKERS-QUICK-REF.md](./WORKERS-QUICK-REF.md) - Quick reference
+
+### CI/CD
+- [CICD.md](./CICD.md) - Full CI/CD documentation
+- [CICD-SETUP.md](./CICD-SETUP.md) - Quick setup (10 min)
+- [CICD-QUICK-REF.md](./CICD-QUICK-REF.md) - Command reference
+
+### Environment Variables
+- [ENV-SETUP.md](./ENV-SETUP.md) - Environment variable management
+
+## Architecture
+
+### Workers Flow
+
+```
+RSS Monitor (Cron) → Queue → Article Processor
+                              ↓
+                         Supabase DB
+                              ↓
+                     Telegram/Twitter Bot
+```
+
+For detailed architecture, see documentation above.
