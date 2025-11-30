@@ -1,5 +1,9 @@
 # Cloudflare Workers
 
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/OpenNews/tree/main/cf-worker/core)
+
+> Consolidated Cloudflare Worker for Newsence - RSS monitoring, Twitter tracking, article processing, and AI analysis.
+
 All Cloudflare Workers in one place.
 
 ## 📁 Structure
@@ -18,6 +22,42 @@ cf-worker/
 └── twitter-summary/
 ```
 
+## Overview
+
+This worker consolidates 8 separate workers into one core worker, handling:
+
+- **RSS Feed Monitoring** (every 5 minutes)
+- **Twitter Monitoring** (every 6 hours)
+- **Twitter Summary** (every 5 minutes)
+- **Article Daily Processing** (3 AM daily)
+- **Workflow Orchestration** using Cloudflare Workflows
+- **AI-Powered Article Analysis** using OpenRouter/Gemini
+- **WebSocket Message Processing**
+
+## Features
+
+- ✅ Multi-trigger support (HTTP, Cron, Queue, Workflow)
+- ✅ Cloudflare Queues for reliable message processing
+- ✅ Cloudflare Workflows for orchestration
+- ✅ AI-powered article analysis and translation
+- ✅ RSS feed parsing with content scraping
+- ✅ Twitter high-engagement tweet tracking
+- ✅ Structured logging with module prefixes
+- ✅ Comprehensive error handling and retry mechanisms
+
+## Architecture
+
+```
+RSS Monitor (cron) → articles table → rss-scraping-queue →
+Workflow → article-processing-queue → Article Consumer (AI Analysis)
+
+Twitter Monitor (cron) → articles table → twitter-processing-queue →
+Workflow → article-processing-queue → Article Consumer (AI Analysis)
+
+WebSocket Client → /webhook → articles table → rss-scraping-queue →
+Workflow → article-processing-queue → Article Consumer (AI Analysis)
+```
+
 ## 🚀 Quick Start
 
 ### 1. Setup Environment Variables
@@ -33,6 +73,7 @@ vim .dev.vars
 ```
 
 **Example .dev.vars:**
+
 ```bash
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-key
@@ -101,6 +142,7 @@ All workers automatically use the shared `.dev.vars` file.
 ### When to Update Secrets
 
 You only need to run `sync-secrets` when:
+
 1. **First deployment** - Initial setup
 2. **New variable added** - Added to `.dev.vars`
 3. **Key rotation** - API key changed
@@ -186,13 +228,14 @@ export default {
     const key = env.OPENROUTER_API_KEY;
 
     return new Response('OK');
-  }
-}
+  },
+};
 ```
 
 ## 🎯 Deployment Workflow
 
 ### Development
+
 ```bash
 1. Edit cf-worker/.dev.vars
 2. cd cf-worker/article-process
@@ -200,6 +243,7 @@ export default {
 ```
 
 ### First Deploy
+
 ```bash
 1. Edit cf-worker/.dev.vars
 2. pnpm run sync-secrets:staging      # One-time
@@ -208,6 +252,7 @@ export default {
 ```
 
 ### Daily Deploy
+
 ```bash
 # Secrets already set, just deploy
 pnpm run deploy

@@ -43,7 +43,7 @@ async function selectTopArticle(supabase: any, env: Env) {
 		return { ...article, score };
 	});
 
-	scored.sort((a, b) => b.score - a.score);
+	scored.sort((a: { score: number }, b: { score: number }) => b.score - a.score);
 	return scored[0];
 }
 

@@ -2,6 +2,7 @@ import { Env, ScheduledEvent, ExecutionContext, MessageBatch, QueueMessage } fro
 import { handleHealth } from './handlers/health';
 import { handleStatus } from './handlers/status';
 import { handleManualTrigger } from './handlers/trigger';
+import { handleWebhook } from './handlers/webhook';
 import { handleRSSCron } from './cron/rss-monitor';
 import { handleTwitterCron } from './cron/twitter-monitor';
 import { handleTwitterSummaryCron } from './cron/twitter-summary';
@@ -27,6 +28,11 @@ export default {
 
 		if (url.pathname === '/trigger' && request.method === 'POST') {
 			return handleManualTrigger(request, env, ctx);
+		}
+
+		// WebSocket webhook endpoint for receiving messages from WebSocket forwarder
+		if (url.pathname === '/webhook' && request.method === 'POST') {
+			return handleWebhook(request, env, ctx);
 		}
 
 		// Manual cron triggers for local/remote testing without __scheduled
@@ -61,6 +67,7 @@ export default {
 			'GET /health - Health check\n' +
 			'GET /status - Worker status\n' +
 			'POST /trigger - Manually trigger article processing\n' +
+			'POST /webhook - Receive WebSocket messages\n' +
 			'POST /cron/rss - Trigger RSS monitor\n' +
 			'POST /cron/twitter - Trigger Twitter monitor\n' +
 			'POST /cron/twitter-summary - Trigger Twitter summary\n' +

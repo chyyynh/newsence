@@ -3,6 +3,8 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/Newsence)
 [![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://app.newsence.xyz)
 
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/OpenNews/tree/main/cf-worker/core)
+
 **AI-Powered News Intelligence Platform**
 
 Newsence is an news aggregation system that leverages AI to deliver personalized, real-time content across multiple sources.
@@ -113,19 +115,23 @@ See [CICD-SETUP.md](./CICD-SETUP.md) for 10-minute setup guide.
 ## Documentation
 
 ### Getting Started
+
 - [QUICK-START.md](./QUICK-START.md) - 5-minute quick start ⭐ Start here!
 - [FLAT-STRUCTURE.md](./FLAT-STRUCTURE.md) - New flat structure explanation
 
 ### Workers Management
+
 - [WORKERS.md](./WORKERS.md) - Complete workers guide
 - [WORKERS-QUICK-REF.md](./WORKERS-QUICK-REF.md) - Quick reference
 
 ### CI/CD
+
 - [CICD.md](./CICD.md) - Full CI/CD documentation
 - [CICD-SETUP.md](./CICD-SETUP.md) - Quick setup (10 min)
 - [CICD-QUICK-REF.md](./CICD-QUICK-REF.md) - Command reference
 
 ### Environment Variables
+
 - [ENV-SETUP.md](./ENV-SETUP.md) - Environment variable management
 
 ## Architecture
