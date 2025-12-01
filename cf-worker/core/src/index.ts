@@ -5,7 +5,6 @@ import { handleManualTrigger } from './handlers/trigger';
 import { handleWebhook } from './handlers/webhook';
 import { handleRSSCron } from './cron/rss-monitor';
 import { handleTwitterCron } from './cron/twitter-monitor';
-import { handleTwitterSummaryCron } from './cron/twitter-summary';
 import { handleArticleDailyCron } from './cron/article-daily';
 import { handleRSSQueue } from './queue/rss-consumer';
 import { handleTwitterQueue } from './queue/twitter-consumer';
@@ -48,12 +47,6 @@ export default {
 				headers: { 'Content-Type': 'application/json' }
 			});
 		}
-		if (url.pathname === '/cron/twitter-summary' && request.method === 'POST') {
-			ctx.waitUntil(handleTwitterSummaryCron(env, ctx));
-			return new Response(JSON.stringify({ status: 'started', cron: 'twitter-summary' }), {
-				headers: { 'Content-Type': 'application/json' }
-			});
-		}
 		if (url.pathname === '/cron/article-daily' && request.method === 'POST') {
 			ctx.waitUntil(handleArticleDailyCron(env, ctx));
 			return new Response(JSON.stringify({ status: 'started', cron: 'article-daily' }), {
@@ -70,7 +63,6 @@ export default {
 			'POST /webhook - Receive WebSocket messages\n' +
 			'POST /cron/rss - Trigger RSS monitor\n' +
 			'POST /cron/twitter - Trigger Twitter monitor\n' +
-			'POST /cron/twitter-summary - Trigger Twitter summary\n' +
 			'POST /cron/article-daily - Trigger article daily processing\n',
 			{
 				headers: { 'Content-Type': 'text/plain' }
@@ -85,7 +77,6 @@ export default {
 		try {
 			if (cron === '*/5 * * * *') {
 				ctx.waitUntil(handleRSSCron(env, ctx));
-				ctx.waitUntil(handleTwitterSummaryCron(env, ctx));
 			} else if (cron === '0 */6 * * *') {
 				ctx.waitUntil(handleTwitterCron(env, ctx));
 			} else if (cron === '0 3 * * *') {

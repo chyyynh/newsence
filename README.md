@@ -3,7 +3,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/Newsence)
 [![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://app.newsence.xyz)
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/OpenNews/tree/main/cf-worker/core)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/newsence/tree/main/cf-worker/core)
 
 **AI-Powered News Intelligence Platform**
 
@@ -33,8 +33,7 @@ This repository contains the open-source Cloudflare Workers components:
 ```
 .
 ├── cf-worker/                        # All Cloudflare Workers
-│   ├── .dev.vars                     # Shared environment variables (git-ignored)
-│   ├── .dev.vars.example             # Environment template
+│   ├── core/                         # Combining rss, twitter & process worker, queues and workflow
 │   ├── article-process/              # Article content extraction and processing
 │   ├── rss-feed-monitor/             # RSS feed monitoring and parsing
 │   ├── twitter-monitor/              # Twitter/X content monitoring
