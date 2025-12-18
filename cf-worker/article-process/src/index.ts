@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { ScheduledEvent, ExecutionContext } from '@cloudflare/workers-types';
+import * as cheerio from 'cheerio';
 
 interface Env {
 	SUPABASE_URL: string;
@@ -19,6 +20,7 @@ interface Article {
 	published_date: string;
 	tags: string[];
 	keywords: string[];
+	og_image_url?: string | null;
 }
 
 interface AIAnalysisResult {
@@ -37,6 +39,54 @@ interface OpenRouterResponse {
 			content: string | null;
 		};
 	}>;
+}
+
+async function extractOgImage(url: string): Promise<string | null> {
+	try {
+		console.log(`[OG Image] Extracting og:image from ${url}...`);
+		const response = await fetch(url, {
+			headers: {
+				'User-Agent': 'Mozilla/5.0 (compatible; NewsenceBot/1.0)',
+			},
+		});
+
+		if (!response.ok) {
+			console.warn(`[OG Image] Failed to fetch ${url}: ${response.status}`);
+			return null;
+		}
+
+		const html = await response.text();
+		const $ = cheerio.load(html);
+
+		// Try to get og:image from meta tags
+		let imageUrl =
+			$('meta[property="og:image"]').attr('content') ||
+			$('meta[property="og:image:url"]').attr('content') ||
+			$('meta[name="twitter:image"]').attr('content') ||
+			$('meta[name="twitter:image:src"]').attr('content');
+
+		// If image URL is relative, make it absolute
+		if (imageUrl && !imageUrl.startsWith('http')) {
+			try {
+				const baseUrl = new URL(url);
+				imageUrl = new URL(imageUrl, baseUrl.origin).toString();
+			} catch (urlError) {
+				console.warn(`[OG Image] Failed to convert relative URL to absolute: ${imageUrl}`);
+				return null;
+			}
+		}
+
+		if (imageUrl) {
+			console.log(`[OG Image] Found og:image for ${url}: ${imageUrl}`);
+		} else {
+			console.log(`[OG Image] No og:image found for ${url}`);
+		}
+
+		return imageUrl || null;
+	} catch (error: any) {
+		console.warn(`[OG Image] Failed to extract og:image from ${url}:`, error.message || error);
+		return null;
+	}
 }
 
 async function callGeminiForAnalysis(article: Article, openrouterApiKey: string): Promise<AIAnalysisResult> {
@@ -199,7 +249,7 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 		// Fetch specific articles by IDs
 		const { data: specificArticles, error } = await supabase
 			.from('articles')
-			.select('id, title, title_cn, summary, summary_cn, content, url, source, published_date, tags, keywords, scraped_date')
+			.select('id, title, title_cn, summary, summary_cn, content, url, source, published_date, tags, keywords, scraped_date, og_image_url')
 			.in('id', articleIds);
 
 		if (error) {
@@ -216,9 +266,9 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 		// Fetch articles that need processing - filter in database, not JavaScript
 		const { data: timeFrameArticles, error } = await supabase
 			.from('articles')
-			.select('id, title, title_cn, summary, summary_cn, content, url, source, published_date, tags, keywords, scraped_date')
+			.select('id, title, title_cn, summary, summary_cn, content, url, source, published_date, tags, keywords, scraped_date, og_image_url')
 			.gte('scraped_date', timeframe)
-			.or('tags.is.null,keywords.is.null,title_cn.is.null,summary_cn.is.null,summary.is.null,title_cn.eq.,summary_cn.eq.,summary.eq.')
+			.or('tags.is.null,keywords.is.null,title_cn.is.null,summary_cn.is.null,summary.is.null,title_cn.eq.,summary_cn.eq.,summary.eq.,og_image_url.is.null')
 			.order('scraped_date', { ascending: false });
 
 		if (error) {
@@ -244,6 +294,12 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 		const article = articles[i];
 		try {
 			console.log(`Processing article ${i + 1}/${articles.length} - ${article.id}: ${article.title.substring(0, 60)}...`);
+
+			// Extract og:image if not already present
+			let ogImageUrl = article.og_image_url;
+			if (!ogImageUrl && article.url) {
+				ogImageUrl = await extractOgImage(article.url);
+			}
 
 			const analysis = await callGeminiForAnalysis(article, env.OPENROUTER_API_KEY);
 
@@ -277,6 +333,11 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				updateData.title = analysis.title_en;
 			}
 
+			// Update og_image_url if extracted
+			if (ogImageUrl && !article.og_image_url) {
+				updateData.og_image_url = ogImageUrl;
+			}
+
 			// Clear content after AI processing to save storage costs
 			updateData.content = null;
 
@@ -302,6 +363,9 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 					console.log(`   Title CN: ${analysis.title_cn}`);
 					console.log(`   Summary EN: ${analysis.summary_en}`);
 					console.log(`   Summary CN: ${analysis.summary_cn}`);
+				}
+				if (updateData.og_image_url) {
+					console.log(`   OG Image: ${updateData.og_image_url}`);
 				}
 				console.log(`   Category: ${analysis.category}`);
 				processedCount++;

@@ -59,6 +59,10 @@ async function getLastQueryTime(supabase: any, env: Env): Promise<Date | null> {
 
 async function saveTweetToArticles(tweet: Tweet, listId: string, listType: string, supabase: any, env: Env) {
 	const table = getArticlesTable(env);
+
+	// Extract first media image as og_image_url
+	const og_image_url = tweet.media && tweet.media.length > 0 ? tweet.media[0].url : null;
+
 	const articleData = {
 		url: tweet.url,
 		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
@@ -92,6 +96,7 @@ async function saveTweetToArticles(tweet: Tweet, listId: string, listType: strin
 				mediaUrls: tweet.media?.map((m) => m.url) || [],
 			},
 		}),
+		og_image_url: og_image_url,
 	};
 
 	const { data: existing } = await supabase.from(table).select('id').eq('url', articleData.url).single();
