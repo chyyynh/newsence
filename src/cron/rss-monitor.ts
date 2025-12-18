@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import { Env, ExecutionContext } from '../types';
 import { getSupabaseClient } from '../utils/supabase';
-import { normalizeUrl, scrapeArticleContent } from '../utils/rss';
+import { normalizeUrl, scrapeArticleContent, extractOgImage } from '../utils/rss';
 
 type RSSItem = any;
 
@@ -27,14 +27,22 @@ async function processAndInsertArticle(
 
 	url = url ? normalizeUrl(url) : null;
 
-	// Scrape content if URL exists
+	// Scrape content and extract og:image if URL exists
 	let crawled_content = '';
+	let og_image_url: string | null = null;
 	if (url) {
 		try {
-			crawled_content = await scrapeArticleContent(url);
+			// Extract both content and og:image in parallel for better performance
+			const [content, ogImage] = await Promise.all([
+				scrapeArticleContent(url),
+				extractOgImage(url)
+			]);
+			crawled_content = content;
+			og_image_url = ogImage;
 		} catch (err) {
 			console.warn(`[${feed.name}] scrape failed for ${url}:`, err);
 			crawled_content = '';
+			og_image_url = null;
 		}
 	}
 
@@ -50,6 +58,7 @@ async function processAndInsertArticle(
 		summary: '',
 		source_type: sourceType,
 		content: crawled_content || item.description || item.summary || '',
+		og_image_url: og_image_url,
 	};
 
 	const table = getArticlesTable(env);

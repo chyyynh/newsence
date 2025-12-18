@@ -2,6 +2,52 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 
 /**
+ * Extracts Open Graph image URL from a webpage
+ */
+export async function extractOgImage(url: string): Promise<string | null> {
+	try {
+		console.log(`[OG-IMAGE] Extracting og:image from ${url}...`);
+		const response = await axios.get(url, {
+			headers: {
+				'User-Agent': 'Mozilla/5.0 (compatible; NewsenceBot/1.0)',
+			},
+		});
+
+		const html = response.data;
+		const $ = cheerio.load(html);
+
+		// Try to get og:image from meta tags
+		let imageUrl =
+			$('meta[property="og:image"]').attr('content') ||
+			$('meta[property="og:image:url"]').attr('content') ||
+			$('meta[name="twitter:image"]').attr('content') ||
+			$('meta[name="twitter:image:src"]').attr('content');
+
+		// If image URL is relative, make it absolute
+		if (imageUrl && !imageUrl.startsWith('http')) {
+			try {
+				const baseUrl = new URL(url);
+				imageUrl = new URL(imageUrl, baseUrl.origin).toString();
+			} catch (urlError) {
+				console.warn(`[OG-IMAGE] Failed to convert relative URL to absolute: ${imageUrl}`);
+				return null;
+			}
+		}
+
+		if (imageUrl) {
+			console.log(`[OG-IMAGE] Found og:image for ${url}: ${imageUrl}`);
+		} else {
+			console.log(`[OG-IMAGE] No og:image found for ${url}`);
+		}
+
+		return imageUrl || null;
+	} catch (error: any) {
+		console.warn(`[OG-IMAGE] Failed to extract og:image from ${url}:`, error.message || error);
+		return null;
+	}
+}
+
+/**
  * Normalizes URL by removing tracking and cache-busting parameters
  * This prevents duplicate articles with different URL parameters
  */

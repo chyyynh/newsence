@@ -26,6 +26,7 @@ async function processWebSocketMessage(
 		summary: message.summary || '',
 		source_type: 'websocket',
 		content: message.content || message.text || '',
+		og_image_url: message.og_image_url || null,
 	};
 
 	console.log(`[WEBHOOK] Inserting WebSocket message: ${insert.title}`);
