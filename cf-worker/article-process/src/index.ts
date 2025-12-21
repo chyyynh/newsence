@@ -33,6 +33,79 @@ interface AIAnalysisResult {
 	category: string;
 }
 
+// Phase 1: Article Segment for fine-grained search
+interface ArticleSegment {
+	article_id: string;
+	seq: number;
+	segment_text: string;
+	metadata?: Record<string, any>;
+}
+
+/**
+ * Split article content into segments for fine-grained search and citation
+ * Segments are created based on paragraphs (double newlines)
+ */
+function segmentArticleContent(articleId: string, content: string): ArticleSegment[] {
+	if (!content || content.trim().length === 0) {
+		return [];
+	}
+
+	const segments: ArticleSegment[] = [];
+
+	// Split by double newlines (paragraphs)
+	const paragraphs = content
+		.split(/\n\n+/)
+		.map((p) => p.trim())
+		.filter((p) => p.length >= 50); // Filter out very short paragraphs
+
+	paragraphs.forEach((text, index) => {
+		segments.push({
+			article_id: articleId,
+			seq: index,
+			segment_text: text,
+			metadata: {
+				char_count: text.length,
+				word_count: text.split(/\s+/).length,
+			},
+		});
+	});
+
+	return segments;
+}
+
+/**
+ * Save article segments to database
+ */
+async function saveArticleSegments(supabase: any, articleId: string, segments: ArticleSegment[]): Promise<boolean> {
+	if (segments.length === 0) {
+		return true;
+	}
+
+	try {
+		// First, delete existing segments for this article (in case of reprocessing)
+		const { error: deleteError } = await supabase.from('article_segments').delete().eq('article_id', articleId);
+
+		if (deleteError) {
+			console.warn(`[Segments] Failed to delete existing segments for ${articleId}:`, deleteError.message);
+			// Continue anyway - might be first time
+		}
+
+		// Insert new segments
+		const { error: insertError } = await supabase.from('article_segments').insert(segments);
+
+		if (insertError) {
+			console.error(`[Segments] Failed to insert segments for ${articleId}:`, insertError.message);
+			return false;
+		}
+
+		console.log(`[Segments] ✅ Created ${segments.length} segments for article ${articleId}`);
+		return true;
+	} catch (error: any) {
+		console.error(`[Segments] Error saving segments for ${articleId}:`, error.message || error);
+		return false;
+	}
+}
+
 interface OpenRouterResponse {
 	choices: Array<{
 		message: {
@@ -338,6 +411,18 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				updateData.og_image_url = ogImageUrl;
 			}
 
+			// Phase 1: Create article segments for fine-grained search and citation
+			// Do this BEFORE clearing content
+			if (article.content && article.content.trim().length > 0) {
+				const segments = segmentArticleContent(article.id, article.content);
+				if (segments.length > 0) {
+					const segmentsSaved = await saveArticleSegments(supabase, article.id, segments);
+					if (!segmentsSaved) {
+						console.warn(`[Segments] Failed to save segments for ${article.id}, continuing...`);
+					}
+				}
+			}
+
 			// Clear content after AI processing to save storage costs
 			updateData.content = null;
 
@@ -368,6 +453,13 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 					console.log(`   OG Image: ${updateData.og_image_url}`);
 				}
 				console.log(`   Category: ${analysis.category}`);
+				// Log segment info
+				if (article.content) {
+					const segmentCount = segmentArticleContent(article.id, article.content).length;
+					if (segmentCount > 0) {
+						console.log(`   Segments: ${segmentCount} created`);
+					}
+				}
 				processedCount++;
 			}
 
