@@ -26,15 +26,23 @@ export interface ArticleInsert {
 }
 
 /**
- * Check if article with this URL already exists
+ * Check if article with this URL already exists and return full data
  */
 export async function findExistingArticle(
 	supabase: SupabaseClient,
 	normalizedUrl: string
-): Promise<{ id: string } | null> {
+): Promise<{
+	id: string;
+	title?: string;
+	summary?: string;
+	source?: string;
+	source_type?: string;
+	og_image_url?: string;
+	author?: string;
+} | null> {
 	const { data, error } = await supabase
 		.from('articles')
-		.select('id')
+		.select('id, title, summary, source, source_type, og_image_url, author')
 		.eq('url', normalizedUrl)
 		.maybeSingle();
 
