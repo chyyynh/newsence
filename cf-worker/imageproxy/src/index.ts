@@ -18,11 +18,11 @@ export default {
 			return new Response('OK', { status: 200 });
 		}
 
-		// Parse URL: /cdn-cgi/image/{options}/{imageUrl}
-		const match = url.pathname.match(/^\/cdn-cgi\/image\/([^/]+)\/(.+)$/);
+		// Parse URL: /proxy/{options}/{imageUrl}
+		const match = url.pathname.match(/^\/proxy\/([^/]+)\/(.+)$/);
 
 		if (!match) {
-			return new Response('Invalid URL format. Expected: /cdn-cgi/image/{options}/{imageUrl}', {
+			return new Response('Invalid URL format. Expected: /proxy/{options}/{imageUrl}', {
 				status: 400,
 			});
 		}
@@ -40,24 +40,13 @@ export default {
 		const options = parseOptions(optionsStr);
 
 		try {
-			// Fetch the original image
+			// Fetch the original image (simple proxy without Image Resizing)
 			const imageResponse = await fetch(imageUrl, {
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (compatible; ImageProxy/1.0)',
+					'Accept': 'image/*,*/*',
+				},
 				cf: {
-					image: {
-						width: options.width,
-						quality: options.quality,
-						format: (options.format === 'auto' ? 'auto' : options.format) as
-							| 'avif'
-							| 'webp'
-							| 'json'
-							| 'jpeg'
-							| 'png'
-							| 'baseline-jpeg'
-							| 'png-force'
-							| 'svg'
-							| undefined,
-						fit: options.fit || 'scale-down',
-					},
 					cacheEverything: true,
 					cacheTtl: 60 * 60 * 24 * 30, // Cache for 30 days
 				},
@@ -66,22 +55,25 @@ export default {
 			if (!imageResponse.ok) {
 				return new Response(`Failed to fetch image: ${imageResponse.statusText}`, {
 					status: imageResponse.status,
+					headers: { 'Access-Control-Allow-Origin': '*' },
 				});
 			}
 
 			// Create response with proper headers
-			const headers = new Headers(imageResponse.headers);
+			const headers = new Headers();
+			headers.set('Content-Type', imageResponse.headers.get('Content-Type') || 'image/jpeg');
 			headers.set('Cache-Control', 'public, max-age=31536000, immutable');
 			headers.set('Access-Control-Allow-Origin', '*');
 
 			return new Response(imageResponse.body, {
-				status: imageResponse.status,
+				status: 200,
 				headers,
 			});
 		} catch (error) {
 			console.error('Image proxy error:', error);
 			return new Response(`Error processing image: ${error}`, {
 				status: 500,
+				headers: { 'Access-Control-Allow-Origin': '*' },
 			});
 		}
 	},
