@@ -129,6 +129,7 @@ In an age of information overload, we consume countless news articles, reports, 
 │   │   │   ├── auth/                 # Authentication UI
 │   │   │   └── ...
 │   │   ├── lib/                      # Core libraries
+│   │   │   └── ai/prompts/           # AI Prompt Pipeline System
 │   │   └── store/                    # Zustand state management
 │   └── prisma/                       # Database schema
 │
@@ -142,6 +143,41 @@ In an age of information overload, we consume countless news articles, reports, 
 │
 └── script/                           # Utility scripts
 ```
+
+### AI Prompt Pipeline System
+
+The prompt system uses a modular pipeline architecture for context engineering:
+
+```
+frontend/src/lib/ai/prompts/
+├── core/
+│   ├── types.ts              # Zod schemas + core types
+│   ├── token-budget.ts       # Token budget management (Chinese: 1.8 chars/token)
+│   └── registry.ts           # Prompt version control
+├── pipeline/
+│   ├── context-pipeline.ts   # Composable context pipeline
+│   └── stages/               # Pipeline stages
+│       ├── instruction-stage.ts
+│       ├── article-stage.ts
+│       ├── citation-stage.ts
+│       └── constraint-stage.ts
+├── optimization/
+│   └── multi-turn-optimizer.ts  # Multi-turn conversation handling
+├── templates/
+│   └── preset-templates.ts   # Versioned prompt templates
+├── testing/
+│   └── ab-testing.ts         # A/B testing for prompts
+└── instructions/
+    └── citation.ts           # Unified citation instructions
+```
+
+| Component | Description |
+|-----------|-------------|
+| **ContextPipeline** | Composable pipeline for building LLM context |
+| **TokenBudgetManager** | Unified token estimation with language awareness |
+| **PromptRegistry** | Version control for prompt templates |
+| **MultiTurnOptimizer** | Handles first message vs follow-up logic |
+| **ABTestingService** | A/B testing different prompt versions |
 
 ## Features
 
