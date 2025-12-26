@@ -3,12 +3,12 @@ import { detectUrlType, extractTweetId, extractYouTubeId, extractHackerNewsId, n
 import { getSupabaseClient, findExistingArticle, insertArticle } from './utils/supabase';
 import { scrapeWebPage } from './scrapers/web';
 import { scrapeTweet } from './scrapers/twitter';
-import { scrapeYouTube } from './scrapers/youtube';
+import { scrapeYouTube, fetchYouTubeTranscript } from './scrapers/youtube';
 import { scrapeHackerNews } from './scrapers/hackernews';
 
 const CORS_HEADERS = {
 	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'POST, OPTIONS',
+	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 	'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
@@ -183,6 +183,46 @@ export default {
 			}
 
 			return handleScrape(request, env);
+		}
+
+		// YouTube Transcript endpoint (GET, no auth required - rate limited by CF)
+		if (url.pathname === '/api/youtube/transcript' && request.method === 'GET') {
+			const videoId = url.searchParams.get('videoId');
+
+			if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+				return errorResponse('INVALID_URL', 'Invalid or missing videoId', 400);
+			}
+
+			try {
+				const transcript = await fetchYouTubeTranscript(videoId);
+				return new Response(
+					JSON.stringify({
+						success: true,
+						data: {
+							transcript,
+							fetchedAt: new Date().toISOString(),
+						},
+					}),
+					{
+						headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+					}
+				);
+			} catch (error) {
+				console.error('[TRANSCRIPT] Error:', error);
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: {
+							code: 'FETCH_FAILED',
+							message: error instanceof Error ? error.message : 'Failed to fetch transcript',
+						},
+					}),
+					{
+						status: 500,
+						headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+					}
+				);
+			}
 		}
 
 		return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
