@@ -1,11 +1,12 @@
 /**
- * Detects if URL is Twitter/X or regular web
+ * Detects URL type: Twitter/X, YouTube, HackerNews, or regular web
  */
-export function detectUrlType(url: string): 'twitter' | 'web' {
+export function detectUrlType(url: string): 'twitter' | 'youtube' | 'hackernews' | 'web' {
 	try {
 		const urlObj = new URL(url);
 		const hostname = urlObj.hostname.toLowerCase();
 
+		// Twitter/X
 		if (
 			hostname === 'twitter.com' ||
 			hostname === 'x.com' ||
@@ -14,6 +15,26 @@ export function detectUrlType(url: string): 'twitter' | 'web' {
 			hostname === 'mobile.twitter.com'
 		) {
 			return 'twitter';
+		}
+
+		// YouTube
+		if (
+			hostname === 'youtube.com' ||
+			hostname === 'www.youtube.com' ||
+			hostname === 'm.youtube.com' ||
+			hostname === 'youtu.be' ||
+			hostname === 'www.youtu.be'
+		) {
+			return 'youtube';
+		}
+
+		// HackerNews
+		if (
+			hostname === 'news.ycombinator.com' ||
+			hostname === 'ycombinator.com' ||
+			hostname === 'www.ycombinator.com'
+		) {
+			return 'hackernews';
 		}
 
 		return 'web';
@@ -28,6 +49,39 @@ export function detectUrlType(url: string): 'twitter' | 'web' {
 export function extractTweetId(url: string): string | null {
 	const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
 	return match ? match[1] : null;
+}
+
+/**
+ * Extracts item ID from HackerNews URL
+ * Supports: news.ycombinator.com/item?id=12345
+ */
+export function extractHackerNewsId(url: string): string | null {
+	const match = url.match(/[?&]id=(\d+)/);
+	return match ? match[1] : null;
+}
+
+/**
+ * Extracts video ID from YouTube URL
+ * Supports: youtube.com/watch?v=ID, youtu.be/ID, youtube.com/embed/ID
+ */
+export function extractYouTubeId(url: string): string | null {
+	// Try ?v= parameter
+	let match = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+	if (match) return match[1];
+
+	// Try youtu.be short URL
+	match = url.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+	if (match) return match[1];
+
+	// Try /embed/ URL
+	match = url.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
+	if (match) return match[1];
+
+	// Try /v/ URL (old format)
+	match = url.match(/\/v\/([a-zA-Z0-9_-]{11})/);
+	if (match) return match[1];
+
+	return null;
 }
 
 /**

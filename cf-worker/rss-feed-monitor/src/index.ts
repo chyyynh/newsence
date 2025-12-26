@@ -1,11 +1,13 @@
 import { XMLParser } from 'fast-xml-parser';
 import { createClient } from '@supabase/supabase-js';
 import { scrapeArticleContent } from './utils';
+import { fetchPlatformMetadata } from './utils/platform-metadata';
 import { ScheduledEvent, ExecutionContext, Queue } from '@cloudflare/workers-types';
 
 interface Env {
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_ROLE_KEY: string;
+	YOUTUBE_API_KEY?: string;
 	rss_handle: Queue;
 }
 
@@ -75,6 +77,20 @@ async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?
 	// Normalize URL to remove tracking parameters before storing
 	url = normalizeUrl(url);
 
+	// Extract comments URL for HackerNews RSS feeds
+	// HN RSS has: <link> = external URL, <comments> = HN discussion URL
+	const commentsUrl = item.comments || null;
+
+	// Fetch platform-specific metadata (HackerNews, YouTube, etc.)
+	const { sourceType: detectedSourceType, platformMetadata } = await fetchPlatformMetadata(
+		url,
+		env.YOUTUBE_API_KEY,
+		commentsUrl
+	);
+
+	// Always use 'rss' as source type for workflow compatibility
+	const finalSourceType = 'rss';
+
 	// Scrape article content if it's an RSS feed item with a link
 	let crawled_content = '';
 	if (source_type === 'rss' && url && typeof url === 'string') {
@@ -126,7 +142,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?
 		}
 	}
 
-	const insert = {
+	const insert: Record<string, unknown> = {
 		url: url,
 		title: item.title || item.text || item.news_title || 'No Title',
 		source: feed.name || item.source_name || 'Unknown',
@@ -136,9 +152,15 @@ async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?
 		tags: [], // Empty array for now, will be filled by separate cronjob
 		tokens: [], // Empty array for now, will be filled by separate cronjob
 		summary: '', // For arXiv: use description, others: null (filled by separate cronjob)
-		source_type: source_type || 'rss',
+		source_type: finalSourceType,
 		content: (summary || crawled_content || '') + contentExtensions,
 	};
+
+	// Add platform metadata if available (HackerNews, YouTube, etc.)
+	if (platformMetadata) {
+		insert.platform_metadata = platformMetadata;
+		console.log(`[${feed.name}] Added ${platformMetadata.type} metadata for: ${url}`);
+	}
 
 	console.log(`[${feed.name}] Inserting article into database...`);
 	const { data: insertedData, error: insertError } = await supabase.from('articles').insert([insert]).select('id');

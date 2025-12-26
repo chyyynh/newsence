@@ -27,7 +27,10 @@ export default {
 			});
 		}
 
-		const [, optionsStr, imageUrl] = match;
+		const [, optionsStr, encodedImageUrl] = match;
+
+		// Decode the URL-encoded image URL
+		const imageUrl = decodeURIComponent(encodedImageUrl);
 
 		// Validate image URL
 		if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {

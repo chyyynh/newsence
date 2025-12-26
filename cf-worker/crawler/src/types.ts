@@ -2,6 +2,7 @@ export interface Env {
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	KAITO_API_KEY: string;
+	YOUTUBE_API_KEY: string;
 	API_SECRET_KEY: string;
 }
 
@@ -22,7 +23,7 @@ export interface ScrapeResponse {
 		content: string;
 		summary?: string;
 		source: string;
-		sourceType: 'web' | 'twitter';
+		sourceType: 'web' | 'twitter' | 'youtube' | 'hackernews';
 		ogImageUrl?: string;
 		publishedDate?: string;
 		author?: string;

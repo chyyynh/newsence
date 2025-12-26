@@ -12,7 +12,7 @@ type Env = {
 };
 
 type MonitorWorkflowParams = {
-	source: 'rss' | 'twitter' | 'manual';
+	source: 'rss' | 'twitter' | 'manual' | 'hackernews' | 'youtube';
 	article_ids?: string[];
 	metadata?: Record<string, any>;
 };
@@ -39,8 +39,8 @@ export class OpenNewsMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 			console.log('Workflow execution logged');
 		});
 
-		// Step 2: Send individual article to processing queue  
-		if (event.payload.source === 'rss' || event.payload.source === 'twitter' || event.payload.source === 'manual') {
+		// Step 2: Send individual article to processing queue
+		if (event.payload.source === 'rss' || event.payload.source === 'twitter' || event.payload.source === 'manual' || event.payload.source === 'hackernews' || event.payload.source === 'youtube') {
 			await step.do(
 				'send-to-processing-queue',
 				{

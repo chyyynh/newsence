@@ -423,11 +423,9 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				}
 			}
 
-			// Clear content after AI processing to save storage costs
-			updateData.content = null;
-
 			// Skip if nothing to update
-			if (Object.keys(updateData).length === 1 && updateData.content === null) {
+			const noUpdates = Object.keys(updateData).length === 0;
+			if (noUpdates) {
 				console.log(`⏭️  Article ${article.id} already processed, skipping`);
 				processedCount++; // Count as processed since it doesn't need work
 				continue;

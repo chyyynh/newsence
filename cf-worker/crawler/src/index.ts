@@ -1,8 +1,10 @@
 import type { Env, ScrapeRequest, ScrapeResponse, ScrapeErrorResponse } from './types';
-import { detectUrlType, extractTweetId, normalizeUrl, isValidUrl } from './utils/url';
+import { detectUrlType, extractTweetId, extractYouTubeId, extractHackerNewsId, normalizeUrl, isValidUrl } from './utils/url';
 import { getSupabaseClient, findExistingArticle, insertArticle } from './utils/supabase';
 import { scrapeWebPage } from './scrapers/web';
 import { scrapeTweet } from './scrapers/twitter';
+import { scrapeYouTube } from './scrapers/youtube';
+import { scrapeHackerNews } from './scrapers/hackernews';
 
 const CORS_HEADERS = {
 	'Access-Control-Allow-Origin': '*',
@@ -88,6 +90,18 @@ async function handleScrape(request: Request, env: Env): Promise<Response> {
 				return errorResponse('INVALID_URL', 'Could not extract tweet ID from URL');
 			}
 			scrapedContent = await scrapeTweet(tweetId, env.KAITO_API_KEY);
+		} else if (urlType === 'youtube') {
+			const videoId = extractYouTubeId(url);
+			if (!videoId) {
+				return errorResponse('INVALID_URL', 'Could not extract YouTube video ID from URL');
+			}
+			scrapedContent = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
+		} else if (urlType === 'hackernews') {
+			const itemId = extractHackerNewsId(url);
+			if (!itemId) {
+				return errorResponse('INVALID_URL', 'Could not extract HackerNews item ID from URL');
+			}
+			scrapedContent = await scrapeHackerNews(itemId);
 		} else {
 			scrapedContent = await scrapeWebPage(url);
 		}

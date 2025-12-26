@@ -125,16 +125,31 @@ In an age of information overload, we consume countless news articles, reports, 
 │   │   ├── app/                      # App Router pages
 │   │   ├── components/               # React components
 │   │   │   ├── article/              # Article editor (Lexical)
+│   │   │   ├── articles/             # Article cards & layouts
+│   │   │   │   └── ArticleCard/variants/  # Platform-specific cards
 │   │   │   ├── collections/          # Collection management
 │   │   │   ├── auth/                 # Authentication UI
 │   │   │   └── ...
 │   │   ├── lib/                      # Core libraries
-│   │   │   └── ai/prompts/           # AI Prompt Pipeline System
+│   │   │   ├── ai/prompts/           # AI Prompt Pipeline System
+│   │   │   └── source-handlers/      # Platform-specific handlers
+│   │   │       ├── types.ts          # SourceHandler interface & metadata types
+│   │   │       ├── registry.ts       # SourceHandlerRegistry class
+│   │   │       └── handlers/         # Platform handlers (twitter, youtube...)
 │   │   └── store/                    # Zustand state management
 │   └── prisma/                       # Database schema
 │
 ├── cf-worker/                        # Cloudflare Workers (Open Source)
 │   ├── core/                         # Combined RSS, Twitter & processing
+│   ├── crawler/                      # URL scraping service
+│   │   └── src/
+│   │       ├── index.ts              # Main entry, URL routing
+│   │       ├── types.ts              # Request/Response types
+│   │       ├── utils/url.ts          # URL detection & extraction
+│   │       └── scrapers/             # Platform scrapers
+│   │           ├── twitter.ts        # Twitter/X scraper (Kaito API)
+│   │           ├── youtube.ts        # YouTube scraper (Data API)
+│   │           └── web.ts            # Generic web scraper
 │   ├── article-process/              # Content extraction
 │   ├── rss-feed-monitor/             # RSS monitoring
 │   ├── twitter-monitor/              # Twitter/X monitoring
@@ -142,6 +157,55 @@ In an age of information overload, we consume countless news articles, reports, 
 │   └── workflow/                     # Workflow orchestration
 │
 └── script/                           # Utility scripts
+```
+
+### Source Handler System (Platform-Specific Cards)
+
+The system supports platform-specific article cards (Twitter, YouTube, GitHub, etc.) through a modular registry pattern.
+
+```
+Frontend (Next.js)                          CF Worker (Crawler)
+┌─────────────────────────────┐            ┌─────────────────────────────┐
+│ lib/source-handlers/        │            │ cf-worker/crawler/src/      │
+│ ├── types.ts                │            │ ├── index.ts                │
+│ ├── registry.ts             │◄──────────►│ ├── types.ts                │
+│ ├── index.ts                │  metadata  │ ├── utils/url.ts            │
+│ └── handlers/               │            │ └── scrapers/               │
+│     ├── twitter.ts          │            │     ├── twitter.ts          │
+│     ├── youtube.ts          │            │     ├── youtube.ts          │
+│     └── default.ts          │            │     └── web.ts              │
+└─────────────────────────────┘            └─────────────────────────────┘
+         │                                          │
+         ▼                                          ▼
+┌─────────────────────────────┐            ┌─────────────────────────────┐
+│ components/articles/        │            │ External APIs               │
+│ ArticleCard/variants/       │            │ ├── Kaito (Twitter)         │
+│ ├── TwitterArticleContent   │            │ ├── YouTube Data API        │
+│ ├── YouTubeArticleContent   │            │ └── Web scraping            │
+│ └── DefaultArticleContent   │            └─────────────────────────────┘
+└─────────────────────────────┘
+```
+
+**Adding a New Platform (e.g., GitHub):**
+
+| Step | Frontend | CF Worker |
+|------|----------|-----------|
+| 1. URL Detection | Add patterns to `handlers/github.ts` | Update `utils/url.ts` detectUrlType |
+| 2. Metadata Type | Add `GitHubMetadata` to `types.ts` | Add to `types.ts` ScrapedContent |
+| 3. Handler/Scraper | Create `handlers/github.ts` | Create `scrapers/github.ts` |
+| 4. Card Component | Create `GitHubArticleContent.tsx` | N/A |
+| 5. Registration | Add to `index.ts` registry | Add case in `index.ts` |
+
+```typescript
+// Frontend: handlers/github.ts
+export const githubHandler: SourceHandler<GitHubMetadata> = {
+  type: 'github',
+  urlPatterns: [/github\.com\/[\w-]+\/[\w.-]+/i],
+  extractId: (url) => url.match(/github\.com\/([\w-]+\/[\w.-]+)/)?.[1] || null,
+  isMetadataComplete: (m) => !!(m?.repoName && m?.ownerName),
+  stalenessMs: 6 * 60 * 60 * 1000, // 6 hours
+  CardComponent: GitHubArticleContent,
+};
 ```
 
 ### AI Prompt Pipeline System

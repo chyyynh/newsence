@@ -92,7 +92,42 @@ async function getLastQueryTime(_listId: string, supabase: any): Promise<Date | 
 
 async function saveTweetToSupabase(tweet: Tweet, listId: string, listType: string, supabase: any, env?: Env): Promise<void> {
 	try {
+		// Extract media URLs from tweet
+		const mediaUrls = tweet.media?.map((m) => m.url).filter(Boolean) || [];
+
+		// Build platform_metadata for frontend card rendering (won't be cleared by article-process)
+		// All Twitter-specific data goes here for card rendering
+		const platformMetadata = {
+			type: 'twitter',
+			fetchedAt: new Date().toISOString(),
+			data: {
+				authorId: tweet.author?.id || '',
+				authorName: tweet.author?.name || '',
+				authorUserName: tweet.author?.userName || '',
+				authorProfilePicture: null, // API doesn't provide profile picture
+				authorVerified: tweet.author?.verified || false,
+				viewCount: tweet.viewCount || 0,
+				likeCount: tweet.likeCount || 0,
+				retweetCount: tweet.retweetCount || 0,
+				replyCount: tweet.replyCount || 0,
+				quoteCount: tweet.quoteCount || 0,
+				mediaUrls: mediaUrls,
+				createdAt: tweet.createdAt,
+				// Additional metadata for reference
+				listType: listType,
+				listId: listId,
+				hashtags: tweet.hashTags || [],
+				mentions: tweet.mentions?.map((m: any) => m.username) || [],
+				urls: tweet.urls?.map((u: any) => u.expanded_url || u.url) || [],
+				lang: tweet.lang,
+				possiblySensitive: tweet.possiblySensitive || false,
+				originalSource: tweet.source,
+			}
+		};
+
 		// Convert tweet to article format for the articles table
+		// content stores the tweet text directly (not JSON)
+		// summary is left empty - article-process will translate content to summary_cn
 		const articleData = {
 			url: tweet.url,
 			title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
@@ -100,37 +135,12 @@ async function saveTweetToSupabase(tweet: Tweet, listId: string, listType: strin
 			published_date: new Date(tweet.createdAt),
 			scraped_date: new Date(),
 			keywords: tweet.hashTags || [],
-			tags: [], // Will be filled by separate cronjob like RSS feeds
-			tokens: [], // Will be filled by separate cronjob
-			summary: tweet.text,
+			tags: [], // Will be filled by article-process
+			tokens: [], // Will be filled by article-process
+			summary: null, // No summary needed - content is the tweet text
 			source_type: 'twitter',
-			content: JSON.stringify({
-				text: tweet.text,
-				author: {
-					id: tweet.author?.id,
-					username: tweet.author?.userName,
-					name: tweet.author?.name,
-					verified: tweet.author?.verified || false
-				},
-				metrics: {
-					viewCount: tweet.viewCount || 0,
-					likeCount: tweet.likeCount || 0,
-					retweetCount: tweet.retweetCount || 0,
-					replyCount: tweet.replyCount || 0,
-					quoteCount: tweet.quoteCount || 0
-				},
-				metadata: {
-					listType: listType,
-					listId: listId,
-					hashtags: tweet.hashTags || [],
-					mentions: tweet.mentions?.map((m) => m.username) || [],
-					urls: tweet.urls?.map((u) => u.expanded_url || u.url) || [],
-					lang: tweet.lang,
-					possiblySensitive: tweet.possiblySensitive || false,
-					originalSource: tweet.source,
-					mediaUrls: tweet.media?.map((m) => m.url) || []
-				}
-			})
+			platform_metadata: platformMetadata, // All Twitter metadata for frontend
+			content: tweet.text, // Store tweet text directly as content
 		};
 
 		// Check if article already exists by URL
