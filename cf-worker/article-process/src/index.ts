@@ -17,6 +17,7 @@ interface Article {
 	content: string | null;
 	url: string;
 	source: string;
+	source_type?: string | null;
 	published_date: string;
 	tags: string[];
 	keywords: string[];
@@ -159,6 +160,89 @@ async function extractOgImage(url: string): Promise<string | null> {
 	} catch (error: any) {
 		console.warn(`[OG Image] Failed to extract og:image from ${url}:`, error.message || error);
 		return null;
+	}
+}
+
+/**
+ * Twitter-specific: Translate tweet and generate tags/keywords
+ * Simpler prompt since tweets are short
+ */
+async function translateTweet(tweetText: string, openrouterApiKey: string): Promise<{ summary_cn: string; tags: string[]; keywords: string[] }> {
+	console.log(`Translating tweet: ${tweetText.substring(0, 60)}...`);
+
+	const timeoutMs = 30000;
+	const prompt = `請翻譯以下推文成繁體中文，並提供標籤和關鍵字。
+
+推文內容：
+${tweetText}
+
+請以JSON格式回答：
+{
+  "summary_cn": "繁體中文翻譯",
+  "tags": ["標籤1", "標籤2", "標籤3"],
+  "keywords": ["關鍵字1", "關鍵字2", "關鍵字3"]
+}
+
+標籤規則：
+- AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
+- 產品相關: Coding, Robotics, SoftwareDevelopment, API
+- 產業應用: Tech, Finance, Healthcare, Gaming, Creative
+- 事件類型: ProductLaunch, Research, Partnership, Announcement
+
+請只回傳JSON，不要其他文字。`;
+
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+	try {
+		const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+			method: 'POST',
+			signal: controller.signal,
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${openrouterApiKey}`,
+				'HTTP-Referer': 'https://app.newsence.xyz',
+				'X-Title': 'app.newsence.xyz',
+			},
+			body: JSON.stringify({
+				model: 'google/gemini-2.5-flash-lite',
+				messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+				max_tokens: 500,
+				temperature: 0.3,
+			}),
+		});
+
+		clearTimeout(timeoutId);
+
+		if (!response.ok) {
+			throw new Error(`OpenRouter API error: ${response.status}`);
+		}
+
+		const data: OpenRouterResponse = await response.json();
+		const rawContent = data.choices?.[0]?.message?.content || '';
+
+		const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+		if (!jsonMatch) {
+			throw new Error('No JSON found in response');
+		}
+
+		const result = JSON.parse(jsonMatch[0]);
+
+		return {
+			summary_cn: result.summary_cn || tweetText,
+			tags: (result.tags || ['Other']).slice(0, 5),
+			keywords: (result.keywords || []).slice(0, 8),
+		};
+	} catch (error: any) {
+		clearTimeout(timeoutId);
+		console.error('Tweet translation failed:', error.message);
+
+		// Fallback: return original text
+		return {
+			summary_cn: tweetText,
+			tags: ['Twitter'],
+			keywords: [],
+		};
 	}
 }
 
@@ -322,7 +406,7 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 		// Fetch specific articles by IDs
 		const { data: specificArticles, error } = await supabase
 			.from('articles')
-			.select('id, title, title_cn, summary, summary_cn, content, url, source, published_date, tags, keywords, scraped_date, og_image_url')
+			.select('id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url')
 			.in('id', articleIds);
 
 		if (error) {
@@ -339,7 +423,7 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 		// Fetch articles that need processing - filter in database, not JavaScript
 		const { data: timeFrameArticles, error } = await supabase
 			.from('articles')
-			.select('id, title, title_cn, summary, summary_cn, content, url, source, published_date, tags, keywords, scraped_date, og_image_url')
+			.select('id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url')
 			.gte('scraped_date', timeframe)
 			.or('tags.is.null,keywords.is.null,title_cn.is.null,summary_cn.is.null,summary.is.null,title_cn.eq.,summary_cn.eq.,summary.eq.,og_image_url.is.null')
 			.order('scraped_date', { ascending: false });
@@ -374,41 +458,71 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				ogImageUrl = await extractOgImage(article.url);
 			}
 
-			const analysis = await callGeminiForAnalysis(article, env.OPENROUTER_API_KEY);
-
-			// Update the article with AI analysis
-			// Combine tags and category, removing duplicates
-			const allTags = [...analysis.tags, analysis.category].filter((v, i, a) => a.indexOf(v) === i);
-
 			// Prepare update object with only necessary fields
 			const updateData: any = {};
 
-			// Update tags and keywords if needed
-			if (!article.tags || article.tags.length === 0) {
-				updateData.tags = allTags;
-			}
-			if (!article.keywords || article.keywords.length === 0) {
-				updateData.keywords = analysis.keywords;
-			}
+			// Twitter-specific processing: simpler logic
+			if (article.source_type === 'twitter') {
+				console.log(`[Twitter] Processing tweet...`);
+				const tweetText = article.content || '';
 
-			// Update translation fields if needed (check for null, empty, or undefined)
-			if (!article.title_cn || article.title_cn.trim() === '') {
-				updateData.title_cn = analysis.title_cn;
-			}
-			if (!article.summary || article.summary.trim() === '') {
-				updateData.summary = analysis.summary_en; // English summary
-			}
-			if (!article.summary_cn || article.summary_cn.trim() === '') {
-				updateData.summary_cn = analysis.summary_cn; // Chinese summary
-			}
-			// Update English title if we don't have Chinese title (means original was non-English)
-			if (analysis.title_en && !article.title_cn) {
-				updateData.title = analysis.title_en;
-			}
+				// summary = original tweet text
+				if (!article.summary || article.summary.trim() === '') {
+					updateData.summary = tweetText;
+				}
 
-			// Update og_image_url if extracted
-			if (ogImageUrl && !article.og_image_url) {
-				updateData.og_image_url = ogImageUrl;
+				// Translate and get tags/keywords
+				const tweetAnalysis = await translateTweet(tweetText, env.OPENROUTER_API_KEY);
+
+				if (!article.summary_cn || article.summary_cn.trim() === '') {
+					updateData.summary_cn = tweetAnalysis.summary_cn;
+				}
+				if (!article.tags || article.tags.length === 0) {
+					updateData.tags = tweetAnalysis.tags;
+				}
+				if (!article.keywords || article.keywords.length === 0) {
+					updateData.keywords = tweetAnalysis.keywords;
+				}
+
+				// Update og_image_url if extracted
+				if (ogImageUrl && !article.og_image_url) {
+					updateData.og_image_url = ogImageUrl;
+				}
+			} else {
+				// Regular article processing
+				const analysis = await callGeminiForAnalysis(article, env.OPENROUTER_API_KEY);
+
+				// Update the article with AI analysis
+				// Combine tags and category, removing duplicates
+				const allTags = [...analysis.tags, analysis.category].filter((v, i, a) => a.indexOf(v) === i);
+
+				// Update tags and keywords if needed
+				if (!article.tags || article.tags.length === 0) {
+					updateData.tags = allTags;
+				}
+				if (!article.keywords || article.keywords.length === 0) {
+					updateData.keywords = analysis.keywords;
+				}
+
+				// Update translation fields if needed (check for null, empty, or undefined)
+				if (!article.title_cn || article.title_cn.trim() === '') {
+					updateData.title_cn = analysis.title_cn;
+				}
+				if (!article.summary || article.summary.trim() === '') {
+					updateData.summary = analysis.summary_en; // English summary
+				}
+				if (!article.summary_cn || article.summary_cn.trim() === '') {
+					updateData.summary_cn = analysis.summary_cn; // Chinese summary
+				}
+				// Update English title if we don't have Chinese title (means original was non-English)
+				if (analysis.title_en && !article.title_cn) {
+					updateData.title = analysis.title_en;
+				}
+
+				// Update og_image_url if extracted
+				if (ogImageUrl && !article.og_image_url) {
+					updateData.og_image_url = ogImageUrl;
+				}
 			}
 
 			// Phase 1: Create article segments for fine-grained search and citation
@@ -441,16 +555,8 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				console.log(`   Updated fields: ${Object.keys(updateData).join(', ')}`);
 				if (updateData.tags) console.log(`   Tags: ${updateData.tags.join(', ')}`);
 				if (updateData.keywords) console.log(`   Keywords: ${updateData.keywords.join(', ')}`);
-				if (updateData.title_cn) {
-					console.log(`   Title EN: ${analysis.title_en}`);
-					console.log(`   Title CN: ${analysis.title_cn}`);
-					console.log(`   Summary EN: ${analysis.summary_en}`);
-					console.log(`   Summary CN: ${analysis.summary_cn}`);
-				}
-				if (updateData.og_image_url) {
-					console.log(`   OG Image: ${updateData.og_image_url}`);
-				}
-				console.log(`   Category: ${analysis.category}`);
+				if (updateData.summary_cn) console.log(`   Summary CN: ${updateData.summary_cn.substring(0, 60)}...`);
+				if (updateData.og_image_url) console.log(`   OG Image: ${updateData.og_image_url}`);
 				// Log segment info
 				if (article.content) {
 					const segmentCount = segmentArticleContent(article.id, article.content).length;

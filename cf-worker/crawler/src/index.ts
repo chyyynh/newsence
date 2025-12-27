@@ -185,6 +185,35 @@ export default {
 			return handleScrape(request, env);
 		}
 
+		// YouTube metadata endpoint (lightweight, no DB save)
+		if (url.pathname === '/api/youtube/metadata' && request.method === 'GET') {
+			// Verify API key
+			const authHeader = request.headers.get('Authorization');
+			if (!authHeader || authHeader !== `Bearer ${env.API_SECRET_KEY}`) {
+				return errorResponse('UNAUTHORIZED', 'Invalid API key', 401);
+			}
+
+			const videoId = url.searchParams.get('videoId');
+			if (!videoId) {
+				return errorResponse('INVALID_URL', 'videoId is required');
+			}
+
+			try {
+				const metadata = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
+				return jsonResponse({
+					success: true,
+					data: metadata.metadata,
+				});
+			} catch (error) {
+				console.error('[CRAWLER] YouTube metadata error:', error);
+				return errorResponse(
+					'FETCH_FAILED',
+					error instanceof Error ? error.message : 'Failed to fetch YouTube metadata',
+					500
+				);
+			}
+		}
+
 		return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
 	},
 } satisfies ExportedHandler<Env>;

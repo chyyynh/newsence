@@ -3,10 +3,12 @@
  * Fetches platform-specific metadata for HackerNews and YouTube
  */
 
-import { detectPlatformType, extractHnItemId, extractYouTubeVideoId } from './url-detection';
+import { detectPlatformType, extractHnItemId, extractYouTubeVideoId, extractTweetId } from './url-detection';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
-const YOUTUBE_API = 'https://www.googleapis.com/youtube/v3/videos';
+const YOUTUBE_VIDEO_API = 'https://www.googleapis.com/youtube/v3/videos';
+const YOUTUBE_CHANNEL_API = 'https://www.googleapis.com/youtube/v3/channels';
+const KAITO_API = 'https://api.twitterapi.io/twitter/tweets';
 
 export interface PlatformMetadataResult {
 	sourceType: string;
@@ -22,11 +24,13 @@ export interface PlatformMetadataResult {
  * @param url - The main article URL
  * @param youtubeApiKey - Optional YouTube API key
  * @param commentsUrl - Optional HackerNews comments URL (from RSS <comments> tag)
+ * @param kaitoApiKey - Optional Kaito API key for Twitter
  */
 export async function fetchPlatformMetadata(
 	url: string,
 	youtubeApiKey?: string,
-	commentsUrl?: string
+	commentsUrl?: string,
+	kaitoApiKey?: string
 ): Promise<PlatformMetadataResult> {
 	const platformType = detectPlatformType(url);
 
@@ -35,6 +39,8 @@ export async function fetchPlatformMetadata(
 			return fetchHnMetadata(url);
 		case 'youtube':
 			return fetchYouTubeMetadata(url, youtubeApiKey);
+		case 'twitter':
+			return fetchTwitterMetadata(url, kaitoApiKey);
 		default:
 			// Check if commentsUrl is a HackerNews URL (RSS feeds have HN link in <comments>)
 			if (commentsUrl) {
@@ -93,6 +99,46 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 }
 
 /**
+ * Fetches channel avatar from YouTube Channels API
+ */
+async function fetchChannelAvatar(
+	channelId: string,
+	apiKey: string
+): Promise<string | null> {
+	try {
+		const apiUrl = `${YOUTUBE_CHANNEL_API}?part=snippet&id=${channelId}&key=${apiKey}`;
+		const response = await fetch(apiUrl);
+
+		if (!response.ok) {
+			console.error(`[PLATFORM-METADATA] YouTube Channels API error: ${response.status}`);
+			return null;
+		}
+
+		const data = await response.json() as {
+			items?: Array<{
+				snippet?: {
+					thumbnails?: {
+						default?: { url: string };
+						medium?: { url: string };
+						high?: { url: string };
+					};
+				};
+			}>;
+		};
+
+		const channel = data.items?.[0];
+		return (
+			channel?.snippet?.thumbnails?.medium?.url ||
+			channel?.snippet?.thumbnails?.default?.url ||
+			null
+		);
+	} catch (error) {
+		console.error('[PLATFORM-METADATA] Failed to fetch channel avatar:', error);
+		return null;
+	}
+}
+
+/**
  * Fetches YouTube metadata from YouTube Data API
  */
 async function fetchYouTubeMetadata(
@@ -110,7 +156,7 @@ async function fetchYouTubeMetadata(
 	}
 
 	try {
-		const apiUrl = `${YOUTUBE_API}?part=snippet,statistics,contentDetails&id=${videoId}&key=${apiKey}`;
+		const apiUrl = `${YOUTUBE_VIDEO_API}?part=snippet,statistics,contentDetails&id=${videoId}&key=${apiKey}`;
 		const response = await fetch(apiUrl);
 
 		if (!response.ok) {
@@ -146,6 +192,12 @@ async function fetchYouTubeMetadata(
 			return { sourceType: 'youtube', platformMetadata: null };
 		}
 
+		// Fetch channel avatar if we have channelId
+		let channelAvatar: string | null = null;
+		if (video.snippet?.channelId) {
+			channelAvatar = await fetchChannelAvatar(video.snippet.channelId, apiKey);
+		}
+
 		return {
 			sourceType: 'youtube',
 			platformMetadata: {
@@ -155,6 +207,7 @@ async function fetchYouTubeMetadata(
 					videoId,
 					channelName: video.snippet?.channelTitle || '',
 					channelId: video.snippet?.channelId || '',
+					channelAvatar: channelAvatar || undefined,
 					duration: video.contentDetails?.duration || '',
 					thumbnailUrl:
 						video.snippet?.thumbnails?.maxres?.url ||
@@ -172,5 +225,103 @@ async function fetchYouTubeMetadata(
 	} catch (error) {
 		console.error('[PLATFORM-METADATA] Failed to fetch YouTube metadata:', error);
 		return { sourceType: 'youtube', platformMetadata: null };
+	}
+}
+
+interface KaitoTweet {
+	id: string;
+	url: string;
+	text: string;
+	createdAt: string;
+	viewCount?: number;
+	likeCount?: number;
+	retweetCount?: number;
+	replyCount?: number;
+	quoteCount?: number;
+	lang?: string;
+	author?: {
+		userName: string;
+		name: string;
+		isBlueVerified?: boolean;
+		profilePicture?: string;
+	};
+	extendedEntities?: {
+		media?: Array<{ media_url_https: string; type: string }>;
+	};
+	entities?: {
+		hashtags?: Array<{ text: string }>;
+	};
+}
+
+/**
+ * Fetches Twitter metadata from Kaito API
+ */
+async function fetchTwitterMetadata(
+	url: string,
+	apiKey?: string
+): Promise<PlatformMetadataResult> {
+	const tweetId = extractTweetId(url);
+	if (!tweetId) {
+		return { sourceType: 'twitter', platformMetadata: null };
+	}
+
+	if (!apiKey) {
+		console.warn('[PLATFORM-METADATA] Kaito API key not provided');
+		return { sourceType: 'twitter', platformMetadata: null };
+	}
+
+	try {
+		const response = await fetch(`${KAITO_API}?tweet_ids=${tweetId}`, {
+			method: 'GET',
+			headers: {
+				'X-API-Key': apiKey,
+				'Content-Type': 'application/json',
+			},
+		});
+
+		if (!response.ok) {
+			console.error(`[PLATFORM-METADATA] Kaito API error: ${response.status}`);
+			return { sourceType: 'twitter', platformMetadata: null };
+		}
+
+		const data = (await response.json()) as {
+			tweets?: KaitoTweet[];
+			status: string;
+			msg?: string;
+		};
+
+		if (data.status !== 'success' || !data.tweets || data.tweets.length === 0) {
+			console.error(`[PLATFORM-METADATA] Kaito API error: ${data.msg || 'Tweet not found'}`);
+			return { sourceType: 'twitter', platformMetadata: null };
+		}
+
+		const tweet = data.tweets[0];
+		const mediaUrls = tweet.extendedEntities?.media?.map((m) => m.media_url_https) || [];
+
+		console.log(`[PLATFORM-METADATA] Fetched Twitter metadata for @${tweet.author?.userName}`);
+
+		return {
+			sourceType: 'twitter',
+			platformMetadata: {
+				type: 'twitter',
+				fetchedAt: new Date().toISOString(),
+				data: {
+					authorName: tweet.author?.name || '',
+					authorUserName: tweet.author?.userName || '',
+					authorProfilePicture: tweet.author?.profilePicture,
+					authorVerified: tweet.author?.isBlueVerified,
+					viewCount: tweet.viewCount || 0,
+					likeCount: tweet.likeCount || 0,
+					retweetCount: tweet.retweetCount || 0,
+					replyCount: tweet.replyCount || 0,
+					quoteCount: tweet.quoteCount || 0,
+					mediaUrls,
+					createdAt: tweet.createdAt,
+				},
+			},
+		};
+	} catch (error) {
+		console.error('[PLATFORM-METADATA] Failed to fetch Twitter metadata:', error);
+		return { sourceType: 'twitter', platformMetadata: null };
 	}
 }

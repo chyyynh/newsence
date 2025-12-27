@@ -35,6 +35,7 @@ interface Tweet {
 		userName: string;
 		name: string;
 		verified?: boolean;
+		profilePicture?: string;
 	};
 	text: string;
 	likeCount?: number;
@@ -67,6 +68,47 @@ interface TelegramUpdate {
 	};
 }
 
+interface TweetDetailResponse {
+	status: string;
+	msg?: string;
+	tweets?: Array<{
+		author?: {
+			profilePicture?: string;
+		};
+	}>;
+}
+
+/**
+ * Fetch tweet details including author profile picture from tweets endpoint
+ */
+async function fetchTweetProfilePicture(tweetId: string, apiKey: string): Promise<string | null> {
+	try {
+		const response = await fetch(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
+			method: 'GET',
+			headers: {
+				'X-API-Key': apiKey,
+				'Content-Type': 'application/json',
+			},
+		});
+
+		if (!response.ok) {
+			console.log(`Failed to fetch tweet details: HTTP ${response.status}`);
+			return null;
+		}
+
+		const data = (await response.json()) as TweetDetailResponse;
+
+		if (data.status !== 'success' || !data.tweets || data.tweets.length === 0) {
+			return null;
+		}
+
+		return data.tweets[0].author?.profilePicture || null;
+	} catch (error) {
+		console.error('Error fetching tweet profile picture:', error);
+		return null;
+	}
+}
+
 async function getLastQueryTime(_listId: string, supabase: any): Promise<Date | null> {
 	try {
 		const { data, error } = await supabase
@@ -90,10 +132,16 @@ async function getLastQueryTime(_listId: string, supabase: any): Promise<Date | 
 	}
 }
 
-async function saveTweetToSupabase(tweet: Tweet, listId: string, listType: string, supabase: any, env?: Env): Promise<void> {
+async function saveTweetToSupabase(tweet: Tweet, listId: string, listType: string, supabase: any, env?: Env, apiKey?: string): Promise<void> {
 	try {
 		// Extract media URLs from tweet
 		const mediaUrls = tweet.media?.map((m) => m.url).filter(Boolean) || [];
+
+		// Fetch profile picture from tweets endpoint if we have the tweet ID and API key
+		let profilePicture: string | null = null;
+		if (tweet.id && apiKey) {
+			profilePicture = await fetchTweetProfilePicture(tweet.id, apiKey);
+		}
 
 		// Build platform_metadata for frontend card rendering (won't be cleared by article-process)
 		// All Twitter-specific data goes here for card rendering
@@ -104,7 +152,7 @@ async function saveTweetToSupabase(tweet: Tweet, listId: string, listType: strin
 				authorId: tweet.author?.id || '',
 				authorName: tweet.author?.name || '',
 				authorUserName: tweet.author?.userName || '',
-				authorProfilePicture: null, // API doesn't provide profile picture
+				authorProfilePicture: profilePicture,
 				authorVerified: tweet.author?.verified || false,
 				viewCount: tweet.viewCount || 0,
 				likeCount: tweet.likeCount || 0,
@@ -262,7 +310,7 @@ async function getHighViewTweetsFromList(apiKey: string, listId: string, listTyp
 				for (const tweet of data.tweets) {
 					if (tweet.viewCount > viewThreshold) {
 						// 只保存高瀏覽量推文到 Supabase
-						await saveTweetToSupabase(tweet, listId, listType, supabase, env);
+						await saveTweetToSupabase(tweet, listId, listType, supabase, env, apiKey);
 						tweet.listType = listType;
 						allFilteredTweets.push(tweet);
 						currentPageFilteredCount++;

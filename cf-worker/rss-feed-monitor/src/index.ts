@@ -8,6 +8,7 @@ interface Env {
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	YOUTUBE_API_KEY?: string;
+	KAITO_API_KEY?: string;
 	rss_handle: Queue;
 }
 
@@ -81,11 +82,12 @@ async function processAndInsertArticle(supabase: any, env: Env, item: any, feed?
 	// HN RSS has: <link> = external URL, <comments> = HN discussion URL
 	const commentsUrl = item.comments || null;
 
-	// Fetch platform-specific metadata (HackerNews, YouTube, etc.)
+	// Fetch platform-specific metadata (HackerNews, YouTube, Twitter, etc.)
 	const { sourceType: detectedSourceType, platformMetadata } = await fetchPlatformMetadata(
 		url,
 		env.YOUTUBE_API_KEY,
-		commentsUrl
+		commentsUrl,
+		env.KAITO_API_KEY
 	);
 
 	// Always use 'rss' as source type for workflow compatibility
