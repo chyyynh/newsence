@@ -51,16 +51,11 @@ function segmentArticleContent(articleId: string, content: string): ArticleSegme
 		return [];
 	}
 
-	const segments: ArticleSegment[] = [];
-
-	// Split by double newlines (paragraphs)
-	const paragraphs = content
+	return content
 		.split(/\n\n+/)
 		.map((p) => p.trim())
-		.filter((p) => p.length >= 50); // Filter out very short paragraphs
-
-	paragraphs.forEach((text, index) => {
-		segments.push({
+		.filter((p) => p.length >= 50)
+		.map((text, index) => ({
 			article_id: articleId,
 			seq: index,
 			segment_text: text,
@@ -68,10 +63,7 @@ function segmentArticleContent(articleId: string, content: string): ArticleSegme
 				char_count: text.length,
 				word_count: text.split(/\s+/).length,
 			},
-		});
-	});
-
-	return segments;
+		}));
 }
 
 /**
@@ -113,6 +105,119 @@ interface OpenRouterResponse {
 			content: string | null;
 		};
 	}>;
+}
+
+interface EmbeddingResponse {
+	data: Array<{ embedding: number[]; index: number }>;
+}
+
+const EMBEDDING_MODEL = 'google/gemini-embedding-001';
+const EMBEDDING_DIMENSIONS = 256;
+
+/**
+ * Prepare article text for embedding
+ */
+function prepareArticleTextForEmbedding(article: {
+	title: string;
+	title_cn?: string | null;
+	summary?: string | null;
+	summary_cn?: string | null;
+}): string {
+	return [article.title, article.title_cn, article.summary, article.summary_cn]
+		.filter(Boolean)
+		.join(' ')
+		.slice(0, 8000);
+}
+
+/**
+ * Normalize embedding vector
+ */
+function normalizeVector(values: number[]): number[] {
+	const norm = Math.sqrt(values.reduce((s, v) => s + v * v, 0));
+	if (norm === 0) return values;
+	return values.map((v) => v / norm);
+}
+
+/**
+ * Generate embedding for article using OpenRouter
+ */
+async function generateArticleEmbedding(text: string, openrouterApiKey: string): Promise<number[] | null> {
+	if (!text || text.trim().length === 0) {
+		return null;
+	}
+
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+		const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
+			method: 'POST',
+			signal: controller.signal,
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${openrouterApiKey}`,
+			},
+			body: JSON.stringify({
+				model: EMBEDDING_MODEL,
+				input: text.trim().slice(0, 8000),
+				dimensions: EMBEDDING_DIMENSIONS,
+			}),
+		});
+
+		clearTimeout(timeout);
+
+		if (!response.ok) {
+			console.error(`[Embedding] API error: ${response.status}`);
+			return null;
+		}
+
+		const data: EmbeddingResponse = await response.json();
+		if (!data.data?.[0]?.embedding) {
+			console.error('[Embedding] Invalid response format');
+			return null;
+		}
+
+		return normalizeVector(data.data[0].embedding);
+	} catch (error: any) {
+		if (error.name === 'AbortError') {
+			console.error('[Embedding] Request timed out');
+		} else {
+			console.error('[Embedding] Error:', error.message);
+		}
+		return null;
+	}
+}
+
+/**
+ * Save embedding to database
+ */
+async function saveArticleEmbedding(supabase: any, articleId: string, embedding: number[]): Promise<boolean> {
+	try {
+		const vectorStr = `[${embedding.join(',')}]`;
+
+		const { error } = await supabase.rpc('update_article_embedding', {
+			article_id: articleId,
+			embedding_vector: vectorStr,
+		});
+
+		if (error) {
+			// Fallback: direct SQL update if RPC doesn't exist
+			const { error: directError } = await supabase
+				.from('articles')
+				.update({ embedding: vectorStr })
+				.eq('id', articleId);
+
+			if (directError) {
+				console.error(`[Embedding] Failed to save embedding for ${articleId}:`, directError.message);
+				return false;
+			}
+		}
+
+		return true;
+	} catch (error: any) {
+		console.error(`[Embedding] Error saving embedding for ${articleId}:`, error.message);
+		return false;
+	}
 }
 
 async function extractOgImage(url: string): Promise<string | null> {
@@ -246,13 +351,23 @@ ${tweetText}
 	}
 }
 
+function createFallbackAnalysis(article: Article): AIAnalysisResult {
+	return {
+		tags: ['Other'],
+		keywords: article.title.split(' ').slice(0, 5),
+		summary_en: article.summary || article.title.substring(0, 100) + '...',
+		summary_cn: article.summary_cn || article.summary || article.title.substring(0, 100) + '...',
+		title_en: article.title,
+		title_cn: article.title_cn || article.title,
+		category: 'Other',
+	};
+}
+
 async function callGeminiForAnalysis(article: Article, openrouterApiKey: string): Promise<AIAnalysisResult> {
 	console.log(`Analyzing article: ${article.title.substring(0, 80)}...`);
 
 	const content = article.content || article.summary || article.title;
-
-	// Add timeout for AI calls to prevent hanging
-	const timeoutMs = 30000; // 30 second timeout
+	const timeoutMs = 30000;
 	const prompt = `作為一個專業的新聞分析師和翻譯師，請分析以下新聞文章並提供結構化的分析結果，包含英文和中文版本。
 		文章資訊：
 		標題: ${article.title}
@@ -288,7 +403,6 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 
 		請只回傳JSON，不要其他文字。`;
 
-	// Create timeout controller
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -304,17 +418,7 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 			},
 			body: JSON.stringify({
 				model: 'google/gemini-2.5-flash-lite',
-				messages: [
-					{
-						role: 'user',
-						content: [
-							{
-								type: 'text',
-								text: prompt,
-							},
-						],
-					},
-				],
+				messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
 				max_tokens: 800,
 				temperature: 0.3,
 			}),
@@ -337,63 +441,38 @@ async function callGeminiForAnalysis(article: Article, openrouterApiKey: string)
 
 		console.log('Raw AI response:', rawContent);
 
-		try {
-			// Try to extract JSON from the response
-			const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-			if (!jsonMatch) {
-				throw new Error('No JSON found in response');
-			}
-
-			const result: AIAnalysisResult = JSON.parse(jsonMatch[0]);
-
-			// Validate the result
-			if (!Array.isArray(result.tags) || !Array.isArray(result.keywords) || !result.summary_en || !result.summary_cn) {
-				throw new Error('Invalid response format');
-			}
-
-			return {
-				tags: result.tags.slice(0, 5), // Limit to 5 tags
-				keywords: result.keywords.slice(0, 8), // Limit to 8 keywords
-				summary_en: result.summary_en,
-				summary_cn: result.summary_cn,
-				title_en: result.title_en,
-				title_cn: result.title_cn,
-				category: result.category || 'Other',
-			};
-		} catch (parseError) {
-			console.error('Failed to parse AI response:', parseError);
-			console.error('Raw content:', rawContent);
-
-			// Fallback: basic analysis
-			return {
-				tags: ['Other'],
-				keywords: article.title.split(' ').slice(0, 5),
-				summary_en: article.summary || article.title.substring(0, 100) + '...',
-				summary_cn: article.summary_cn || article.summary || article.title.substring(0, 100) + '...',
-				title_en: article.title,
-				title_cn: article.title_cn || article.title,
-				category: 'Other',
-			};
+		const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+		if (!jsonMatch) {
+			console.error('No JSON found in response, raw content:', rawContent);
+			return createFallbackAnalysis(article);
 		}
-	} catch (fetchError: any) {
+
+		const result: AIAnalysisResult = JSON.parse(jsonMatch[0]);
+
+		if (!Array.isArray(result.tags) || !Array.isArray(result.keywords) || !result.summary_en || !result.summary_cn) {
+			console.error('Invalid response format');
+			return createFallbackAnalysis(article);
+		}
+
+		return {
+			tags: result.tags.slice(0, 5),
+			keywords: result.keywords.slice(0, 8),
+			summary_en: result.summary_en,
+			summary_cn: result.summary_cn,
+			title_en: result.title_en,
+			title_cn: result.title_cn,
+			category: result.category || 'Other',
+		};
+	} catch (error: any) {
 		clearTimeout(timeoutId);
 
-		if (fetchError.name === 'AbortError') {
+		if (error.name === 'AbortError') {
 			console.error('AI request timed out after', timeoutMs, 'ms');
 		} else {
-			console.error('AI request failed:', fetchError);
+			console.error('AI request failed:', error);
 		}
 
-		// Fallback: basic analysis when network fails
-		return {
-			tags: ['Other'],
-			keywords: article.title.split(' ').slice(0, 5),
-			summary_en: article.summary || article.title.substring(0, 100) + '...',
-			summary_cn: article.summary_cn || article.summary || article.title.substring(0, 100) + '...',
-			title_en: article.title,
-			title_cn: article.title_cn || article.title,
-			category: 'Other',
-		};
+		return createFallbackAnalysis(article);
 	}
 }
 
@@ -537,35 +616,49 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				}
 			}
 
-			// Skip if nothing to update
-			const noUpdates = Object.keys(updateData).length === 0;
-			if (noUpdates) {
-				console.log(`⏭️  Article ${article.id} already processed, skipping`);
-				processedCount++; // Count as processed since it doesn't need work
-				continue;
-			}
+			// Skip database update if nothing changed
+			const hasUpdates = Object.keys(updateData).length > 0;
+			if (hasUpdates) {
+				const { error: updateError } = await supabase.from('articles').update(updateData).eq('id', article.id);
 
-			const { error: updateError } = await supabase.from('articles').update(updateData).eq('id', article.id);
+				if (updateError) {
+					console.error(`Error updating article ${article.id}:`, updateError);
+					errorCount++;
+					continue;
+				}
 
-			if (updateError) {
-				console.error(`Error updating article ${article.id}:`, updateError);
-				errorCount++;
-			} else {
 				console.log(`✅ Successfully processed article ${article.id}`);
 				console.log(`   Updated fields: ${Object.keys(updateData).join(', ')}`);
 				if (updateData.tags) console.log(`   Tags: ${updateData.tags.join(', ')}`);
 				if (updateData.keywords) console.log(`   Keywords: ${updateData.keywords.join(', ')}`);
 				if (updateData.summary_cn) console.log(`   Summary CN: ${updateData.summary_cn.substring(0, 60)}...`);
 				if (updateData.og_image_url) console.log(`   OG Image: ${updateData.og_image_url}`);
-				// Log segment info
 				if (article.content) {
 					const segmentCount = segmentArticleContent(article.id, article.content).length;
 					if (segmentCount > 0) {
 						console.log(`   Segments: ${segmentCount} created`);
 					}
 				}
-				processedCount++;
+			} else {
+				console.log(`⏭️  Article ${article.id} already processed, checking embedding...`);
 			}
+
+			// Generate embedding for all articles (both updated and skipped)
+			const embeddingText = prepareArticleTextForEmbedding({
+				title: article.title,
+				title_cn: updateData.title_cn || article.title_cn,
+				summary: updateData.summary || article.summary,
+				summary_cn: updateData.summary_cn || article.summary_cn,
+			});
+			if (embeddingText) {
+				const embedding = await generateArticleEmbedding(embeddingText, env.OPENROUTER_API_KEY);
+				if (embedding) {
+					const saved = await saveArticleEmbedding(supabase, article.id, embedding);
+					console.log(`   [Embedding] ${saved ? '✅' : '❌'} ${embedding.length} dims`);
+				}
+			}
+
+			processedCount++;
 
 			// Reduced delay to avoid rate limiting while staying under time limits
 			await new Promise((resolve) => setTimeout(resolve, 200)); // 200ms delay (reduced from 500ms)
