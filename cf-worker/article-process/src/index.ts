@@ -6,6 +6,7 @@ interface Env {
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	OPENROUTER_API_KEY: string;
+	AI: Ai; // Workers AI binding
 }
 
 interface Article {
@@ -111,8 +112,9 @@ interface EmbeddingResponse {
 	data: Array<{ embedding: number[]; index: number }>;
 }
 
-const EMBEDDING_MODEL = 'google/gemini-embedding-001';
-const EMBEDDING_DIMENSIONS = 256;
+// Workers AI embedding model (1024 維度，多語言)
+const EMBEDDING_MODEL = '@cf/baai/bge-m3';
+const EMBEDDING_DIMENSIONS = 1024;
 
 /**
  * Prepare article text for embedding
@@ -138,52 +140,35 @@ function normalizeVector(values: number[]): number[] {
 	return values.map((v) => v / norm);
 }
 
+interface AiEmbeddingResult {
+	shape: number[];
+	data: number[][];
+}
+
 /**
- * Generate embedding for article using OpenRouter
+ * Generate embedding for article using Cloudflare Workers AI
+ * Model: @cf/baai/bge-m3 (1024 維度，多語言)
  */
-async function generateArticleEmbedding(text: string, openrouterApiKey: string): Promise<number[] | null> {
+async function generateArticleEmbedding(text: string, ai: Ai): Promise<number[] | null> {
 	if (!text || text.trim().length === 0) {
 		return null;
 	}
 
 	try {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+		const sanitizedText = text.trim().slice(0, 8000);
 
-		const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
-			method: 'POST',
-			signal: controller.signal,
-			headers: {
-				'Content-Type': 'application/json',
-				Authorization: `Bearer ${openrouterApiKey}`,
-			},
-			body: JSON.stringify({
-				model: EMBEDDING_MODEL,
-				input: text.trim().slice(0, 8000),
-				dimensions: EMBEDDING_DIMENSIONS,
-			}),
-		});
+		const result = (await ai.run(EMBEDDING_MODEL as Parameters<Ai['run']>[0], {
+			text: [sanitizedText],
+		})) as AiEmbeddingResult;
 
-		clearTimeout(timeout);
-
-		if (!response.ok) {
-			console.error(`[Embedding] API error: ${response.status}`);
-			return null;
-		}
-
-		const data: EmbeddingResponse = await response.json();
-		if (!data.data?.[0]?.embedding) {
+		if (!result.data?.[0]) {
 			console.error('[Embedding] Invalid response format');
 			return null;
 		}
 
-		return normalizeVector(data.data[0].embedding);
+		return normalizeVector(result.data[0]);
 	} catch (error: any) {
-		if (error.name === 'AbortError') {
-			console.error('[Embedding] Request timed out');
-		} else {
-			console.error('[Embedding] Error:', error.message);
-		}
+		console.error('[Embedding] Workers AI error:', error.message);
 		return null;
 	}
 }
@@ -651,7 +636,7 @@ async function processArticlesByIds(supabase: any, env: Env, articleIds?: string
 				summary_cn: updateData.summary_cn || article.summary_cn,
 			});
 			if (embeddingText) {
-				const embedding = await generateArticleEmbedding(embeddingText, env.OPENROUTER_API_KEY);
+				const embedding = await generateArticleEmbedding(embeddingText, env.AI);
 				if (embedding) {
 					const saved = await saveArticleEmbedding(supabase, article.id, embedding);
 					console.log(`   [Embedding] ${saved ? '✅' : '❌'} ${embedding.length} dims`);

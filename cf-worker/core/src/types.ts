@@ -6,6 +6,7 @@ export interface Env {
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	OPENROUTER_API_KEY: string;
 	KAITO_API_KEY?: string;
+	YOUTUBE_API_KEY?: string;
 	TELEGRAM_BOT_TOKEN?: string;
 	TELEGRAM_CHAT_ID?: string;
 	ARTICLES_TABLE?: string;
@@ -17,6 +18,9 @@ export interface Env {
 
 	// Workflow binding
 	MONITOR_WORKFLOW: any; // Workflow type from cloudflare:workers
+
+	// Workers AI binding
+	AI: Ai;
 }
 
 // Article related types
@@ -34,6 +38,12 @@ export interface Article {
 	tags: string[];
 	keywords: string[];
 	source_type?: string;
+	platform_metadata?: {
+		type?: string;
+		fetchedAt?: string;
+		data?: Record<string, unknown>;
+		enrichments?: Record<string, unknown>;
+	};
 }
 
 // AI Analysis result
