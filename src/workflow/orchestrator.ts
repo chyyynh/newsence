@@ -11,8 +11,9 @@ type MonitorWorkflowParams = {
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWorkflowParams> {
 	async run(event: WorkflowEvent<MonitorWorkflowParams>, step: WorkflowStep) {
 		const supabase = createClient(this.env.SUPABASE_URL, this.env.SUPABASE_SERVICE_ROLE_KEY);
+		const { source, article_ids = [] } = event.payload;
 
-		console.log(`[WORKFLOW] Starting Newsence Monitor Workflow: ${event.instanceId} for source: ${event.payload.source}`);
+		console.log(`[WORKFLOW] Starting Newsence Monitor Workflow: ${event.instanceId} for source: ${source}`);
 
 		await step.do('log-workflow-start', async (): Promise<void> => {
 			await supabase.from('workflow_executions').insert({
@@ -20,47 +21,43 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 				status: 'running',
 				started_at: new Date().toISOString(),
 				metadata: {
-					source: event.payload.source,
+					source,
 					instanceId: event.instanceId,
-					article_count: event.payload.article_ids?.length || 0,
+					article_count: article_ids.length,
 				},
 			});
 		});
 
-		if (event.payload.source === 'rss' || event.payload.source === 'twitter' || event.payload.source === 'manual') {
-			await step.do(
-				'send-to-processing-queue',
-				{
-					retries: { limit: 3, delay: '30 seconds', backoff: 'exponential' },
-					timeout: '5 minutes',
-				},
-				async (): Promise<any> => {
-					const articleIds = event.payload.article_ids || [];
-					console.log(`[WORKFLOW] Sending ${articleIds.length} articles to processing queue individually`);
+		await step.do(
+			'send-to-processing-queue',
+			{
+				retries: { limit: 3, delay: '30 seconds', backoff: 'exponential' },
+				timeout: '5 minutes',
+			},
+			async (): Promise<any> => {
+				console.log(`[WORKFLOW] Sending ${article_ids.length} articles to processing queue individually`);
 
-					for (const articleId of articleIds) {
-						await this.env.ARTICLE_QUEUE.send({
-							type: 'process_articles',
-							source: event.payload.source,
-							article_ids: [articleId],
-							triggered_by: 'workflow-orchestrator',
-							metadata: {
-								workflow_instance: event.instanceId,
-								timestamp: new Date().toISOString(),
-							},
-						});
-
-						console.log(`[WORKFLOW] Sent article ${articleId} to processing queue`);
-					}
-
-					return {
-						total_articles: articleIds.length,
-						source: event.payload.source,
-						processing_approach: 'individual_concurrent',
-					};
+				for (const articleId of article_ids) {
+					await this.env.ARTICLE_QUEUE.send({
+						type: 'process_articles',
+						source,
+						article_ids: [articleId],
+						triggered_by: 'workflow-orchestrator',
+						metadata: {
+							workflow_instance: event.instanceId,
+							timestamp: new Date().toISOString(),
+						},
+					});
+					console.log(`[WORKFLOW] Sent article ${articleId} to processing queue`);
 				}
-			);
-		}
+
+				return {
+					total_articles: article_ids.length,
+					source,
+					processing_approach: 'individual_concurrent',
+				};
+			}
+		);
 
 		await step.do('log-workflow-completion', async (): Promise<void> => {
 			await supabase.from('workflow_executions').insert({
@@ -69,7 +66,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 				started_at: new Date().toISOString(),
 				completed_at: new Date().toISOString(),
 				metadata: {
-					source: event.payload.source,
+					source,
 					instanceId: event.instanceId,
 					triggered_processing: true,
 				},
@@ -80,7 +77,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, MonitorWork
 		return {
 			success: true,
 			instanceId: event.instanceId,
-			source: event.payload.source,
+			source,
 			message: 'Article processing triggered',
 		};
 	}
