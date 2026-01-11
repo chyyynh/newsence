@@ -46,14 +46,14 @@ In an age of information overload, we consume countless news articles, reports, 
                   └───────────────┘
 ```
 
-| Concept | 中文 | Description |
-|---------|------|-------------|
-| **Document** | 文稿 | 核心內容單位 - 文章、筆記、研究報告 |
-| **Citation** | 引用 | 文稿之間的關係連結，形成知識網絡 |
-| **Collection** | 收藏 | 將相關文稿組織成主題集合 |
-| **Tag** | 標籤 | 分類與標記，便於檢索 |
-| **Community** | 社群 | 使用者協作，共同建構知識 |
-| **Collective Memory** | 集體記憶 | 從所有連結中浮現的知識網絡 |
+| Concept               | 中文     | Description                         |
+| --------------------- | -------- | ----------------------------------- |
+| **Document**          | 文稿     | 核心內容單位 - 文章、筆記、研究報告 |
+| **Citation**          | 引用     | 文稿之間的關係連結，形成知識網絡    |
+| **Collection**        | 收藏     | 將相關文稿組織成主題集合            |
+| **Tag**               | 標籤     | 分類與標記，便於檢索                |
+| **Community**         | 社群     | 使用者協作，共同建構知識            |
+| **Collective Memory** | 集體記憶 | 從所有連結中浮現的知識網絡          |
 
 ## Architecture
 
@@ -106,15 +106,15 @@ In an age of information overload, we consume countless news articles, reports, 
 
 ### Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| **Frontend** | Next.js 15, React 19, Zustand, Motion, Lexical Editor |
-| **Backend** | Cloudflare Workers, Next.js API Routes |
-| **Database** | PostgreSQL (Supabase), Prisma ORM |
-| **Auth** | Better Auth |
-| **AI** | OpenAI, Anthropic Claude |
-| **Payments** | Polar.sh |
-| **Analytics** | Statsig |
+| Layer         | Technology                                            |
+| ------------- | ----------------------------------------------------- |
+| **Frontend**  | Next.js 15, React 19, Zustand, Motion, Lexical Editor |
+| **Backend**   | Cloudflare Workers, Next.js API Routes                |
+| **Database**  | PostgreSQL (Supabase), Prisma ORM                     |
+| **Auth**      | Better Auth                                           |
+| **AI**        | OpenAI, Anthropic Claude                              |
+| **Payments**  | Polar.sh                                              |
+| **Analytics** | Statsig                                               |
 
 ## Project Structure
 
@@ -188,13 +188,13 @@ Frontend (Next.js)                          CF Worker (Crawler)
 
 **Adding a New Platform (e.g., GitHub):**
 
-| Step | Frontend | CF Worker |
-|------|----------|-----------|
-| 1. URL Detection | Add patterns to `handlers/github.ts` | Update `utils/url.ts` detectUrlType |
-| 2. Metadata Type | Add `GitHubMetadata` to `types.ts` | Add to `types.ts` ScrapedContent |
-| 3. Handler/Scraper | Create `handlers/github.ts` | Create `scrapers/github.ts` |
-| 4. Card Component | Create `GitHubArticleContent.tsx` | N/A |
-| 5. Registration | Add to `index.ts` registry | Add case in `index.ts` |
+| Step               | Frontend                             | CF Worker                           |
+| ------------------ | ------------------------------------ | ----------------------------------- |
+| 1. URL Detection   | Add patterns to `handlers/github.ts` | Update `utils/url.ts` detectUrlType |
+| 2. Metadata Type   | Add `GitHubMetadata` to `types.ts`   | Add to `types.ts` ScrapedContent    |
+| 3. Handler/Scraper | Create `handlers/github.ts`          | Create `scrapers/github.ts`         |
+| 4. Card Component  | Create `GitHubArticleContent.tsx`    | N/A                                 |
+| 5. Registration    | Add to `index.ts` registry           | Add case in `index.ts`              |
 
 ```typescript
 // Frontend: handlers/github.ts
@@ -235,13 +235,13 @@ frontend/src/lib/ai/prompts/
     └── citation.ts           # Unified citation instructions
 ```
 
-| Component | Description |
-|-----------|-------------|
-| **ContextPipeline** | Composable pipeline for building LLM context |
+| Component              | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| **ContextPipeline**    | Composable pipeline for building LLM context     |
 | **TokenBudgetManager** | Unified token estimation with language awareness |
-| **PromptRegistry** | Version control for prompt templates |
-| **MultiTurnOptimizer** | Handles first message vs follow-up logic |
-| **ABTestingService** | A/B testing different prompt versions |
+| **PromptRegistry**     | Version control for prompt templates             |
+| **MultiTurnOptimizer** | Handles first message vs follow-up logic         |
+| **ABTestingService**   | A/B testing different prompt versions            |
 
 ## Features
 
@@ -258,57 +258,6 @@ frontend/src/lib/ai/prompts/
 - Inline citation support
 - Resource embedding
 - Real-time collaboration (coming soon)
-
-## Quick Start
-
-### Prerequisites
-
-- Node.js 20+
-- pnpm 9+
-- [Cloudflare account](https://dash.cloudflare.com/sign-up)
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-
-### Installation
-
-```bash
-# Install dependencies
-pnpm install
-
-# Setup environment variables
-cd cf-worker
-cp .dev.vars.example .dev.vars
-vim .dev.vars  # Edit with your actual values
-```
-
-### Local Development
-
-```bash
-# Start all workers
-pnpm run dev
-
-# Or start individual worker
-cd cf-worker/article-process
-pnpm run dev
-```
-
-### Deployment
-
-```bash
-# Deploy all workers
-pnpm run deploy
-
-# Deploy individual worker
-pnpm run deploy:article-process
-```
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [QUICK-START.md](./QUICK-START.md) | 5-minute quick start |
-| [WORKERS.md](./WORKERS.md) | Complete workers guide |
-| [CICD-SETUP.md](./CICD-SETUP.md) | CI/CD setup (10 min) |
-| [ENV-SETUP.md](./ENV-SETUP.md) | Environment variables |
 
 ## License
 
