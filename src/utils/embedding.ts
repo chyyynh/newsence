@@ -12,11 +12,19 @@ export function prepareArticleTextForEmbedding(article: {
 	title_cn?: string | null;
 	summary?: string | null;
 	summary_cn?: string | null;
+	tags?: string[] | null;
+	keywords?: string[] | null;
 }): string {
-	return [article.title, article.title_cn, article.summary, article.summary_cn]
-		.filter(Boolean)
-		.join(' ')
-		.slice(0, MAX_TEXT_LENGTH);
+	const textParts = [article.title, article.title_cn, article.summary, article.summary_cn];
+
+	if (article.tags?.length) {
+		textParts.push(article.tags.join(' '));
+	}
+	if (article.keywords?.length) {
+		textParts.push(article.keywords.join(' '));
+	}
+
+	return textParts.filter(Boolean).join(' ').slice(0, MAX_TEXT_LENGTH);
 }
 
 export function normalizeVector(values: number[]): number[] {
