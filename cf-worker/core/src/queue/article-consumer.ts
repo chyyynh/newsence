@@ -73,6 +73,8 @@ async function processSingleArticle(supabase: any, env: Env, table: string, arti
 		title_cn: result.updateData.title_cn ?? article.title_cn,
 		summary: result.updateData.summary ?? article.summary,
 		summary_cn: result.updateData.summary_cn ?? article.summary_cn,
+		tags: result.updateData.tags ?? article.tags,
+		keywords: result.updateData.keywords ?? article.keywords,
 	});
 
 	if (embeddingText && env.AI) {
