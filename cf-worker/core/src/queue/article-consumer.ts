@@ -80,8 +80,8 @@ async function processSingleArticle(supabase: any, env: Env, table: string, arti
 	if (embeddingText && env.AI) {
 		const embedding = await generateArticleEmbedding(embeddingText, env.AI);
 		if (embedding) {
-			const saved = await saveArticleEmbedding(supabase, article.id, embedding);
-			console.log(`[ARTICLE] Embedding ${saved ? 'saved' : 'failed'} (${embedding.length} dims)`);
+			const saved = await saveArticleEmbedding(supabase, article.id, embedding, table);
+			console.log(`[ARTICLE] Embedding ${saved ? 'saved' : 'failed'} (${embedding.length} dims) to ${table}`);
 		}
 	}
 

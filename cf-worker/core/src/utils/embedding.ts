@@ -56,28 +56,24 @@ export async function generateArticleEmbedding(text: string, ai: Ai): Promise<nu
 export async function saveArticleEmbedding(
 	supabase: any,
 	articleId: string,
-	embedding: number[]
+	embedding: number[],
+	table: string = 'articles'
 ): Promise<boolean> {
 	const vectorStr = `[${embedding.join(',')}]`;
 
 	try {
-		const { error } = await supabase.rpc('update_article_embedding', {
-			article_id: articleId,
-			embedding_vector: vectorStr,
-		});
-
-		if (!error) return true;
-
-		const { error: directError } = await supabase
-			.from('articles')
+		// 直接更新指定的表
+		const { error } = await supabase
+			.from(table)
 			.update({ embedding: vectorStr })
 			.eq('id', articleId);
 
-		if (directError) {
-			console.error(`[Embedding] Failed to save for ${articleId}:`, directError.message);
+		if (error) {
+			console.error(`[Embedding] Failed to save for ${articleId} in ${table}:`, error.message);
 			return false;
 		}
 
+		console.log(`[Embedding] Saved to ${table} for ${articleId}`);
 		return true;
 	} catch (error: unknown) {
 		console.error(`[Embedding] Error saving for ${articleId}:`, (error as Error).message);
