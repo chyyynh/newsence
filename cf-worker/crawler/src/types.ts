@@ -3,6 +3,7 @@ export interface Env {
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	KAITO_API_KEY: string;
 	YOUTUBE_API_KEY: string;
+	TRANSCRIPT_API_KEY: string;
 	API_SECRET_KEY: string;
 }
 

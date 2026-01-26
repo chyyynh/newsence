@@ -95,7 +95,7 @@ async function handleScrape(request: Request, env: Env): Promise<Response> {
 			if (!videoId) {
 				return errorResponse('INVALID_URL', 'Could not extract YouTube video ID from URL');
 			}
-			scrapedContent = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
+			scrapedContent = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY, env.TRANSCRIPT_API_KEY);
 		} else if (urlType === 'hackernews') {
 			const itemId = extractHackerNewsId(url);
 			if (!itemId) {
@@ -199,10 +199,12 @@ export default {
 			}
 
 			try {
-				const metadata = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
-				return jsonResponse({
+				const result = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY, env.TRANSCRIPT_API_KEY);
+				return new Response(JSON.stringify({
 					success: true,
-					data: metadata.metadata,
+					data: result.metadata || {},
+				}), {
+					headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
 				});
 			} catch (error) {
 				console.error('[CRAWLER] YouTube metadata error:', error);

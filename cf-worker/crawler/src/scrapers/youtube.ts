@@ -49,10 +49,106 @@ interface YouTubeChannelResponse {
 	}>;
 }
 
+interface TranscriptSegment {
+	startTime: number;
+	duration: number;
+	text: string;
+}
+
+interface TranscriptApiResponse {
+	transcript?: Array<{
+		start: number;
+		duration: number;
+		text: string;
+	}>;
+	language?: string;
+	error?: string;
+}
+
+interface YouTubeChapter {
+	title: string;
+	startTime: number;
+	endTime: number;
+}
+
 /**
- * Scrapes a YouTube video using YouTube Data API v3
+ * Parse chapters from YouTube video description
  */
-export async function scrapeYouTube(videoId: string, apiKey: string): Promise<ScrapedContent> {
+function parseChaptersFromDescription(description: string): YouTubeChapter[] {
+	const chapterRegex = /(?:^|\n)(\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.+?)(?=\n|$)/g;
+	const chapters: YouTubeChapter[] = [];
+
+	let match;
+	while ((match = chapterRegex.exec(description)) !== null) {
+		const hours = match[1] ? parseInt(match[1].replace(':', ''), 10) : 0;
+		const minutes = parseInt(match[2], 10);
+		const seconds = parseInt(match[3], 10);
+		const title = match[4].trim();
+
+		if (title.length < 2 || /^\d+:\d+/.test(title)) continue;
+
+		const startTime = hours * 3600 + minutes * 60 + seconds;
+		chapters.push({ title, startTime, endTime: 0 });
+	}
+
+	for (let i = 0; i < chapters.length; i++) {
+		chapters[i].endTime = chapters[i + 1]?.startTime ?? Number.MAX_SAFE_INTEGER;
+	}
+
+	return chapters.length >= 2 ? chapters : [];
+}
+
+/**
+ * Fetch transcript from transcriptapi.com
+ */
+async function fetchTranscript(
+	videoId: string,
+	transcriptApiKey: string
+): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
+	console.log(`[YOUTUBE-SCRAPER] Fetching transcript for ${videoId}...`);
+
+	const url = `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`;
+
+	const response = await fetch(url, {
+		headers: {
+			Authorization: `Bearer ${transcriptApiKey}`,
+		},
+	});
+
+	if (!response.ok) {
+		console.warn(`[YOUTUBE-SCRAPER] Transcript API returned HTTP ${response.status}`);
+		return { segments: [], language: null };
+	}
+
+	const data: TranscriptApiResponse = await response.json();
+
+	if (data.error) {
+		console.warn(`[YOUTUBE-SCRAPER] Transcript API error: ${data.error}`);
+		return { segments: [], language: null };
+	}
+
+	if (!data.transcript || data.transcript.length === 0) {
+		return { segments: [], language: data.language || null };
+	}
+
+	const segments: TranscriptSegment[] = data.transcript.map((item) => ({
+		startTime: item.start,
+		duration: item.duration,
+		text: item.text,
+	}));
+
+	console.log(`[YOUTUBE-SCRAPER] Got ${segments.length} transcript segments`);
+	return { segments, language: data.language || null };
+}
+
+/**
+ * Scrapes a YouTube video using YouTube Data API v3 + transcript
+ */
+export async function scrapeYouTube(
+	videoId: string,
+	youtubeApiKey: string,
+	transcriptApiKey?: string
+): Promise<ScrapedContent> {
 	console.log(`[YOUTUBE-SCRAPER] Fetching video ${videoId}...`);
 
 	// Fetch video details
@@ -60,7 +156,7 @@ export async function scrapeYouTube(videoId: string, apiKey: string): Promise<Sc
 		`https://www.googleapis.com/youtube/v3/videos?` +
 			`id=${videoId}&` +
 			`part=snippet,contentDetails,statistics&` +
-			`key=${apiKey}`
+			`key=${youtubeApiKey}`
 	);
 
 	if (!videoResponse.ok) {
@@ -88,7 +184,7 @@ export async function scrapeYouTube(videoId: string, apiKey: string): Promise<Sc
 			`https://www.googleapis.com/youtube/v3/channels?` +
 				`id=${snippet.channelId}&` +
 				`part=snippet&` +
-				`key=${apiKey}`
+				`key=${youtubeApiKey}`
 		);
 
 		if (channelResponse.ok) {
@@ -112,6 +208,23 @@ export async function scrapeYouTube(videoId: string, apiKey: string): Promise<Sc
 		snippet.thumbnails.medium?.url ||
 		snippet.thumbnails.default?.url ||
 		null;
+
+	// Parse chapters from description
+	const chapters = parseChaptersFromDescription(snippet.description);
+
+	// Fetch transcript if API key is provided
+	let transcript: TranscriptSegment[] = [];
+	let transcriptLanguage: string | null = null;
+
+	if (transcriptApiKey) {
+		try {
+			const transcriptResult = await fetchTranscript(videoId, transcriptApiKey);
+			transcript = transcriptResult.segments;
+			transcriptLanguage = transcriptResult.language;
+		} catch (e) {
+			console.warn('[YOUTUBE-SCRAPER] Failed to fetch transcript:', e);
+		}
+	}
 
 	// Format content as markdown
 	const content = formatVideoAsMarkdown(video, channelAvatar);
@@ -138,8 +251,12 @@ export async function scrapeYouTube(videoId: string, apiKey: string): Promise<Sc
 			commentCount: stats.commentCount ? parseInt(stats.commentCount) : undefined,
 			tags: snippet.tags || [],
 			publishedAt: snippet.publishedAt,
-			// Full description for chapter parsing and display
 			description: snippet.description || '',
+			// Transcript data
+			transcript,
+			transcriptLanguage,
+			chapters,
+			chaptersFromDescription: chapters.length > 0,
 		},
 	};
 }
@@ -147,10 +264,7 @@ export async function scrapeYouTube(videoId: string, apiKey: string): Promise<Sc
 /**
  * Formats YouTube video as Markdown content
  */
-function formatVideoAsMarkdown(
-	video: YouTubeVideoItem,
-	channelAvatar: string | null
-): string {
+function formatVideoAsMarkdown(video: YouTubeVideoItem, channelAvatar: string | null): string {
 	const snippet = video.snippet;
 	const stats = video.statistics;
 	const duration = formatDuration(video.contentDetails.duration);
@@ -213,4 +327,3 @@ function formatDuration(isoDuration: string): string {
 	}
 	return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
-
