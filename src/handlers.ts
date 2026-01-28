@@ -4,7 +4,7 @@ import { getSupabaseClient, getArticlesTable } from './utils/supabase';
 import { normalizeUrl, scrapeArticleContent, extractOgImage, extractTitleFromHtml } from './utils/rss';
 import { callGeminiForAnalysis } from './utils/ai';
 import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from './utils/embedding';
-import { scrapeUrl, detectPlatformType } from './scrapers';
+import { scrapeUrl, detectPlatformType, scrapeYouTube } from './scrapers';
 
 // ─────────────────────────────────────────────────────────────
 // Health & Status
@@ -13,14 +13,14 @@ import { scrapeUrl, detectPlatformType } from './scrapers';
 export function handleHealth(_env: Env): Response {
 	return Response.json({
 		status: 'ok',
-		worker: 'newsence-core-test',
+		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
 }
 
 export function handleStatus(_env: Env): Response {
 	return Response.json({
-		worker: 'newsence-core-test',
+		worker: 'newsence-core',
 		version: '1.0.0',
 		features: ['rss-monitor', 'twitter-monitor', 'article-process', 'workflow'],
 		timestamp: new Date().toISOString(),
@@ -191,7 +191,7 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 	// Check if already exists
 	const { data: existing } = await supabase
 		.from(table)
-		.select('id, title, title_cn, summary_cn, og_image_url, source_type')
+		.select('id, title, title_cn, content, summary, summary_cn, source, source_type, og_image_url, published_date, author')
 		.eq('url', url)
 		.single();
 	if (existing) {
@@ -199,14 +199,21 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		return Response.json({
 			success: true,
 			alreadyExists: true,
+			existingArticleId: existing.id,
 			data: {
 				articleId: existing.id,
 				url,
+				normalizedUrl: url,
 				title: existing.title,
 				titleCn: existing.title_cn,
+				content: existing.content || '',
+				summary: existing.summary,
 				summaryCn: existing.summary_cn,
-				ogImageUrl: existing.og_image_url,
+				source: existing.source || '',
 				sourceType: existing.source_type || platformType,
+				ogImageUrl: existing.og_image_url,
+				publishedDate: existing.published_date,
+				author: existing.author,
 			},
 		});
 	}
@@ -307,16 +314,53 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		data: {
 			articleId,
 			url,
+			normalizedUrl: url,
 			title: scraped.title,
 			titleCn: aiResult.title_cn,
+			content: scraped.content,
+			summary: aiResult.summary_en || scraped.summary,
 			summaryCn: aiResult.summary_cn,
-			ogImageUrl: scraped.ogImageUrl,
+			source: scraped.siteName || 'User Added',
 			sourceType: platformType,
-			tags: aiResult.tags,
-			category: aiResult.category,
+			ogImageUrl: scraped.ogImageUrl,
+			publishedDate: scraped.publishedDate,
 			author: scraped.author,
+			tags: aiResult.tags,
+			keywords: aiResult.keywords,
+			category: aiResult.category,
 			metadata: scraped.metadata,
 		},
 	});
+}
+
+// ─────────────────────────────────────────────────────────────
+// YouTube Metadata (lightweight, no DB save)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleYouTubeMetadata(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
+	const videoId = url.searchParams.get('videoId');
+
+	if (!videoId) {
+		return Response.json({ success: false, error: { code: 'INVALID_URL', message: 'videoId is required' } }, { status: 400 });
+	}
+
+	if (!env.YOUTUBE_API_KEY) {
+		return Response.json({ success: false, error: { code: 'CONFIG_ERROR', message: 'YouTube API key not configured' } }, { status: 500 });
+	}
+
+	try {
+		const result = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY, env.TRANSCRIPT_API_KEY);
+		return Response.json({
+			success: true,
+			data: result.metadata || {},
+		});
+	} catch (error) {
+		console.error('[YOUTUBE] Metadata error:', error);
+		return Response.json(
+			{ success: false, error: { code: 'FETCH_FAILED', message: String(error) } },
+			{ status: 500 }
+		);
+	}
 }
 

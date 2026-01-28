@@ -1,5 +1,5 @@
 import { Env, ScheduledEvent, ExecutionContext, MessageBatch, QueueMessage } from './types';
-import { handleHealth, handleStatus, handleManualTrigger, handleSubmitUrl, handleScrapeUrl } from './handlers';
+import { handleHealth, handleStatus, handleManualTrigger, handleSubmitUrl, handleScrapeUrl, handleYouTubeMetadata } from './handlers';
 import { handleRSSCron, handleTwitterCron, handleArticleDailyCron } from './cron';
 import { handleRSSQueue, handleTwitterQueue, handleArticleQueue } from './queue';
 import { NewsenceMonitorWorkflow } from './workflow';
@@ -15,6 +15,7 @@ export default {
 		if (url.pathname === '/trigger' && request.method === 'POST') return handleManualTrigger(request, env, ctx);
 		if (url.pathname === '/submit' && request.method === 'POST') return handleSubmitUrl(request, env, ctx);
 		if (url.pathname === '/scrape' && request.method === 'POST') return handleScrapeUrl(request, env);
+		if (url.pathname === '/api/youtube/metadata' && request.method === 'GET') return handleYouTubeMetadata(request, env);
 
 		// Manual cron triggers
 		if (url.pathname === '/cron/rss' && request.method === 'POST') {
