@@ -1,6 +1,55 @@
-import { detectPlatformType, extractHnItemId, extractYouTubeVideoId, extractTweetId } from './platform-detection';
+// ─────────────────────────────────────────────────────────────
+// Platform Detection
+// ─────────────────────────────────────────────────────────────
 
-const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
+
+const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com', 'www.ycombinator.com']);
+const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be']);
+const TWITTER_HOSTS = new Set(['twitter.com', 'x.com', 'www.twitter.com', 'www.x.com', 'mobile.twitter.com']);
+
+export function detectPlatformType(url: string): PlatformType {
+	try {
+		const hostname = new URL(url).hostname.toLowerCase();
+		if (HACKERNEWS_HOSTS.has(hostname)) return 'hackernews';
+		if (YOUTUBE_HOSTS.has(hostname)) return 'youtube';
+		if (TWITTER_HOSTS.has(hostname)) return 'twitter';
+		return 'web';
+	} catch {
+		return 'web';
+	}
+}
+
+function extractHnItemId(url: string): string | null {
+	const match = url.match(/[?&]id=(\d+)/);
+	return match?.[1] ?? null;
+}
+
+const YOUTUBE_PATTERNS = [
+	/[?&]v=([a-zA-Z0-9_-]+)/,
+	/youtu\.be\/([a-zA-Z0-9_-]+)/,
+	/\/embed\/([a-zA-Z0-9_-]+)/,
+	/\/shorts\/([a-zA-Z0-9_-]+)/,
+];
+
+function extractYouTubeVideoId(url: string): string | null {
+	for (const pattern of YOUTUBE_PATTERNS) {
+		const match = url.match(pattern);
+		if (match) return match[1];
+	}
+	return null;
+}
+
+function extractTweetId(url: string): string | null {
+	const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
+	return match?.[1] ?? null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Platform Metadata
+// ─────────────────────────────────────────────────────────────
+
+export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const YOUTUBE_VIDEO_API = 'https://www.googleapis.com/youtube/v3/videos';
 const YOUTUBE_CHANNEL_API = 'https://www.googleapis.com/youtube/v3/channels';
 const KAITO_API = 'https://api.twitterapi.io/twitter/tweets';
@@ -39,7 +88,7 @@ export async function fetchPlatformMetadata(
 			return fetchTwitterMetadata(url, kaitoApiKey);
 		default:
 			if (commentsUrl && detectPlatformType(commentsUrl) === 'hackernews') {
-				console.log(`[PLATFORM-METADATA] Found HN comments URL: ${commentsUrl}`);
+				console.log(`[PLATFORM] Found HN comments URL: ${commentsUrl}`);
 				return fetchHnMetadata(commentsUrl);
 			}
 			return emptyResult('rss');
@@ -53,11 +102,11 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 	try {
 		const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
 		if (!response.ok) {
-			console.error(`[PLATFORM-METADATA] HN API error: ${response.status}`);
+			console.error(`[PLATFORM] HN API error: ${response.status}`);
 			return emptyResult('hackernews');
 		}
 
-		const data = await response.json() as {
+		const data = (await response.json()) as {
 			id: number;
 			author?: string;
 			points?: number;
@@ -76,7 +125,7 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 			}),
 		};
 	} catch (error) {
-		console.error('[PLATFORM-METADATA] Failed to fetch HN metadata:', error);
+		console.error('[PLATFORM] Failed to fetch HN metadata:', error);
 		return emptyResult('hackernews');
 	}
 }
@@ -85,11 +134,11 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 	try {
 		const response = await fetch(`${YOUTUBE_CHANNEL_API}?part=snippet&id=${channelId}&key=${apiKey}`);
 		if (!response.ok) {
-			console.error(`[PLATFORM-METADATA] YouTube Channels API error: ${response.status}`);
+			console.error(`[PLATFORM] YouTube Channels API error: ${response.status}`);
 			return null;
 		}
 
-		const data = await response.json() as {
+		const data = (await response.json()) as {
 			items?: Array<{
 				snippet?: {
 					thumbnails?: {
@@ -103,7 +152,7 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 		const thumbnails = data.items?.[0]?.snippet?.thumbnails;
 		return thumbnails?.medium?.url ?? thumbnails?.default?.url ?? null;
 	} catch (error) {
-		console.error('[PLATFORM-METADATA] Failed to fetch channel avatar:', error);
+		console.error('[PLATFORM] Failed to fetch channel avatar:', error);
 		return null;
 	}
 }
@@ -111,20 +160,18 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<PlatformMetadataResult> {
 	const videoId = extractYouTubeVideoId(url);
 	if (!videoId || !apiKey) {
-		if (!apiKey) console.warn('[PLATFORM-METADATA] YouTube API key not provided');
+		if (!apiKey) console.warn('[PLATFORM] YouTube API key not provided');
 		return emptyResult('youtube');
 	}
 
 	try {
-		const response = await fetch(
-			`${YOUTUBE_VIDEO_API}?part=snippet,statistics,contentDetails&id=${videoId}&key=${apiKey}`
-		);
+		const response = await fetch(`${YOUTUBE_VIDEO_API}?part=snippet,statistics,contentDetails&id=${videoId}&key=${apiKey}`);
 		if (!response.ok) {
-			console.error(`[PLATFORM-METADATA] YouTube API error: ${response.status}`);
+			console.error(`[PLATFORM] YouTube API error: ${response.status}`);
 			return emptyResult('youtube');
 		}
 
-		const data = await response.json() as {
+		const data = (await response.json()) as {
 			items?: Array<{
 				snippet?: {
 					channelTitle?: string;
@@ -150,10 +197,7 @@ async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<Platf
 		const video = data.items?.[0];
 		if (!video) return emptyResult('youtube');
 
-		const channelAvatar = video.snippet?.channelId
-			? await fetchChannelAvatar(video.snippet.channelId, apiKey)
-			: null;
-
+		const channelAvatar = video.snippet?.channelId ? await fetchChannelAvatar(video.snippet.channelId, apiKey) : null;
 		const thumbnails = video.snippet?.thumbnails;
 
 		return {
@@ -172,7 +216,7 @@ async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<Platf
 			}),
 		};
 	} catch (error) {
-		console.error('[PLATFORM-METADATA] Failed to fetch YouTube metadata:', error);
+		console.error('[PLATFORM] Failed to fetch YouTube metadata:', error);
 		return emptyResult('youtube');
 	}
 }
@@ -201,7 +245,7 @@ interface KaitoTweet {
 async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<PlatformMetadataResult> {
 	const tweetId = extractTweetId(url);
 	if (!tweetId || !apiKey) {
-		if (!apiKey) console.warn('[PLATFORM-METADATA] Kaito API key not provided');
+		if (!apiKey) console.warn('[PLATFORM] Kaito API key not provided');
 		return emptyResult('twitter');
 	}
 
@@ -211,7 +255,7 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		});
 
 		if (!response.ok) {
-			console.error(`[PLATFORM-METADATA] Kaito API error: ${response.status}`);
+			console.error(`[PLATFORM] Kaito API error: ${response.status}`);
 			return emptyResult('twitter');
 		}
 
@@ -222,12 +266,12 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		};
 
 		if (data.status !== 'success' || !data.tweets?.length) {
-			console.error(`[PLATFORM-METADATA] Kaito API error: ${data.msg ?? 'Tweet not found'}`);
+			console.error(`[PLATFORM] Kaito API error: ${data.msg ?? 'Tweet not found'}`);
 			return emptyResult('twitter');
 		}
 
 		const tweet = data.tweets[0];
-		console.log(`[PLATFORM-METADATA] Fetched Twitter metadata for @${tweet.author?.userName}`);
+		console.log(`[PLATFORM] Fetched Twitter metadata for @${tweet.author?.userName}`);
 
 		return {
 			sourceType: 'twitter',
@@ -246,7 +290,7 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 			}),
 		};
 	} catch (error) {
-		console.error('[PLATFORM-METADATA] Failed to fetch Twitter metadata:', error);
+		console.error('[PLATFORM] Failed to fetch Twitter metadata:', error);
 		return emptyResult('twitter');
 	}
 }

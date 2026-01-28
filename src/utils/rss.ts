@@ -1,6 +1,54 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
+// ─────────────────────────────────────────────────────────────
+// URL Utilities
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Resolves shortened URLs (t.co, bit.ly, etc.) to their final destination
+ */
+export async function resolveUrl(url: string): Promise<string> {
+	try {
+		const response = await fetch(url, {
+			method: 'HEAD',
+			redirect: 'follow',
+		});
+		return response.url;
+	} catch {
+		return url;
+	}
+}
+
+/**
+ * Checks if a URL is a social media link (should not follow)
+ */
+export function isSocialMediaUrl(url: string): boolean {
+	const socialDomains = ['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net'];
+	try {
+		const hostname = new URL(url).hostname.toLowerCase();
+		return socialDomains.some((d) => hostname.includes(d));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Extracts title from HTML content
+ */
+export function extractTitleFromHtml(html: string): string | null {
+	try {
+		const $ = cheerio.load(html);
+		return $('title').text().trim() || $('h1').first().text().trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// OG Image Extraction
+// ─────────────────────────────────────────────────────────────
+
 /**
  * Extracts Open Graph image URL from a webpage
  */

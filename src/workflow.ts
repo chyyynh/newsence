@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { createClient } from '@supabase/supabase-js';
-import { Env } from '../types';
+import { Env } from './types';
 
 type MonitorWorkflowParams = {
 	source: 'rss' | 'twitter' | 'manual';

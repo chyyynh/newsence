@@ -7,8 +7,7 @@ export interface Env {
 	OPENROUTER_API_KEY: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	TELEGRAM_BOT_TOKEN?: string;
-	TELEGRAM_CHAT_ID?: string;
+	TRANSCRIPT_API_KEY?: string;
 	ARTICLES_TABLE?: string;
 
 	// Queue bindings
@@ -21,6 +20,18 @@ export interface Env {
 
 	// Workers AI binding
 	AI: Ai;
+}
+
+// Scraper types
+export interface ScrapedContent {
+	title: string;
+	content: string;
+	summary?: string;
+	ogImageUrl: string | null;
+	siteName: string | null;
+	author: string | null;
+	publishedDate: string | null;
+	metadata?: Record<string, unknown>;
 }
 
 // Article related types

@@ -1,14 +1,18 @@
-import { getSupabaseClient } from '../utils/supabase';
-import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from '../utils/embedding';
-import { Article, Env, ExecutionContext, MessageBatch, QueueMessage } from '../types';
-import { getProcessor, ProcessorContext } from '../processors';
+import { getSupabaseClient, getArticlesTable } from './utils/supabase';
+import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from './utils/embedding';
+import { Article, Env, ExecutionContext, MessageBatch, QueueMessage } from './types';
+import { getProcessor, ProcessorContext } from './processors';
+
+// ─────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────
 
 const ARTICLE_FIELDS = 'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
 const PROCESSING_DELAY_MS = 200;
 
-function getArticlesTable(env: Env): string {
-	return env.ARTICLES_TABLE || 'articles_test_core';
-}
+// ─────────────────────────────────────────────────────────────
+// Article Processing
+// ─────────────────────────────────────────────────────────────
 
 async function fetchArticlesForProcessing(supabase: any, table: string, articleIds?: string[]): Promise<Article[]> {
 	if (articleIds?.length) {
@@ -123,6 +127,71 @@ export async function processArticlesByIds(env: Env, articleIds?: string[]): Pro
 	}
 
 	console.log(`[ARTICLE] Summary: total=${articles.length}, success=${processedCount}, errors=${errorCount}`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Queue Handlers
+// ─────────────────────────────────────────────────────────────
+
+type QueueSource = 'rss' | 'twitter';
+
+interface QueueConfig {
+	source: QueueSource;
+	messageType: string;
+	logPrefix: string;
+}
+
+const QUEUE_CONFIGS: Record<QueueSource, QueueConfig> = {
+	rss: { source: 'rss', messageType: 'article_scraped', logPrefix: 'RSS-QUEUE' },
+	twitter: { source: 'twitter', messageType: 'tweet_scraped', logPrefix: 'TWITTER-QUEUE' },
+};
+
+async function handleSourceQueue(
+	batch: MessageBatch<QueueMessage>,
+	env: Env,
+	_ctx: ExecutionContext,
+	source: QueueSource
+): Promise<void> {
+	const config = QUEUE_CONFIGS[source];
+	console.log(`[${config.logPrefix}] Received batch of ${batch.messages.length} messages`);
+
+	for (const message of batch.messages) {
+		try {
+			const body = message.body as QueueMessage | undefined;
+			if (!body || body.type !== config.messageType || !body.article_id) {
+				console.warn(`[${config.logPrefix}] Unknown/invalid message, acking`);
+				message.ack();
+				continue;
+			}
+
+			const instance = await env.MONITOR_WORKFLOW.create({
+				params: {
+					source: config.source,
+					article_ids: [body.article_id],
+					metadata: {
+						trigger_time: new Date().toISOString(),
+						message_id: message.id,
+						source: body.source,
+						url: body.url,
+					},
+				},
+			});
+
+			console.log(`[${config.logPrefix}] Started workflow ${instance.id} for ${source === 'twitter' ? 'tweet' : 'article'} ${body.article_id}`);
+			message.ack();
+		} catch (err) {
+			console.error(`[${config.logPrefix}] Error handling message, retrying:`, err);
+			message.retry();
+		}
+	}
+}
+
+export function handleRSSQueue(batch: MessageBatch<QueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
+	return handleSourceQueue(batch, env, ctx, 'rss');
+}
+
+export function handleTwitterQueue(batch: MessageBatch<QueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
+	return handleSourceQueue(batch, env, ctx, 'twitter');
 }
 
 export async function handleArticleQueue(
