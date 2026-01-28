@@ -166,6 +166,7 @@ export async function handleSubmitUrl(request: Request, env: Env, ctx: Execution
 type ScrapeBody = {
 	url: string;
 	userId?: string;
+	skipSave?: boolean; // If true, only scrape without AI analysis or DB save (preview mode)
 };
 
 export async function handleScrapeUrl(request: Request, env: Env): Promise<Response> {
@@ -183,39 +184,43 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 
 	const url = normalizeUrl(body.url);
 	const platformType = detectPlatformType(url);
-	const supabase = getSupabaseClient(env);
-	const table = getArticlesTable(env);
+	const skipSave = body.skipSave === true;
 
-	console.log(`[SCRAPE] Processing ${platformType} URL: ${url}`);
+	console.log(`[SCRAPE] Processing ${platformType} URL: ${url}${skipSave ? ' (preview mode)' : ''}`);
 
-	// Check if already exists
-	const { data: existing } = await supabase
-		.from(table)
-		.select('id, title, title_cn, content, summary, summary_cn, source, source_type, og_image_url, published_date, author')
-		.eq('url', url)
-		.single();
-	if (existing) {
-		console.log(`[SCRAPE] Already exists: ${existing.id}`);
-		return Response.json({
-			success: true,
-			alreadyExists: true,
-			existingArticleId: existing.id,
-			data: {
-				articleId: existing.id,
-				url,
-				normalizedUrl: url,
-				title: existing.title,
-				titleCn: existing.title_cn,
-				content: existing.content || '',
-				summary: existing.summary,
-				summaryCn: existing.summary_cn,
-				source: existing.source || '',
-				sourceType: existing.source_type || platformType,
-				ogImageUrl: existing.og_image_url,
-				publishedDate: existing.published_date,
-				author: existing.author,
-			},
-		});
+	// Check if already exists (skip for preview mode)
+	if (!skipSave) {
+		const supabase = getSupabaseClient(env);
+		const table = getArticlesTable(env);
+
+		const { data: existing } = await supabase
+			.from(table)
+			.select('id, title, title_cn, content, summary, summary_cn, source, source_type, og_image_url, published_date, author')
+			.eq('url', url)
+			.single();
+		if (existing) {
+			console.log(`[SCRAPE] Already exists: ${existing.id}`);
+			return Response.json({
+				success: true,
+				alreadyExists: true,
+				existingArticleId: existing.id,
+				data: {
+					articleId: existing.id,
+					url,
+					normalizedUrl: url,
+					title: existing.title,
+					titleCn: existing.title_cn,
+					content: existing.content || '',
+					summary: existing.summary,
+					summaryCn: existing.summary_cn,
+					source: existing.source || '',
+					sourceType: existing.source_type || platformType,
+					ogImageUrl: existing.og_image_url,
+					publishedDate: existing.published_date,
+					author: existing.author,
+				},
+			});
+		}
 	}
 
 	// Use unified scraper for platform-specific content
@@ -241,7 +246,32 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		);
 	}
 
-	// AI Analysis (translate + summarize)
+	// Preview mode: return scraped data without AI analysis or DB save
+	if (skipSave) {
+		console.log(`[SCRAPE] Preview complete: ${scraped.title.slice(0, 50)}`);
+		return Response.json({
+			success: true,
+			preview: true,
+			data: {
+				url,
+				normalizedUrl: url,
+				title: scraped.title,
+				content: scraped.content,
+				summary: scraped.summary,
+				source: scraped.siteName || 'Unknown',
+				sourceType: platformType,
+				ogImageUrl: scraped.ogImageUrl,
+				publishedDate: scraped.publishedDate,
+				author: scraped.author,
+				metadata: scraped.metadata,
+			},
+		});
+	}
+
+	// Full mode: AI Analysis (translate + summarize)
+	const supabase = getSupabaseClient(env);
+	const table = getArticlesTable(env);
+
 	console.log(`[SCRAPE] Running AI analysis for: ${scraped.title.slice(0, 50)}`);
 	const aiResult = await callGeminiForAnalysis(
 		{

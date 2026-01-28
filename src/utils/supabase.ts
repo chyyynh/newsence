@@ -6,5 +6,5 @@ export function getSupabaseClient(env: Env): SupabaseClient {
 }
 
 export function getArticlesTable(env: Env): string {
-	return env.ARTICLES_TABLE || 'articles_test_core';
+	return env.ARTICLES_TABLE || 'articles';
 }
