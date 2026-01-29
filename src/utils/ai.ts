@@ -313,50 +313,6 @@ const DEFAULT_ASSESSMENT: ContentAssessment = {
 	contentType: 'original_content',
 };
 
-// ─────────────────────────────────────────────────────────────
-// Translation
-// ─────────────────────────────────────────────────────────────
-
-export interface TranslationResult {
-	titleCn: string;
-	summaryCn: string;
-}
-
-export async function translateContent(title: string, content: string, apiKey: string): Promise<TranslationResult | null> {
-	console.log(`[AI] Translating: ${title.substring(0, 50)}...`);
-
-	const contentPreview = content.slice(0, 2000);
-	const prompt = `請將以下文章標題翻譯成繁體中文，並根據內容生成一段繁體中文摘要（100-200字）。
-
-標題: ${title}
-
-內容:
-${contentPreview}
-
-請以 JSON 格式回答：
-{
-  "titleCn": "繁體中文標題",
-  "summaryCn": "繁體中文摘要（100-200字，簡潔說明文章重點）"
-}
-
-只回傳 JSON，不要其他文字。`;
-
-	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 500, temperature: 0.3 });
-	if (!rawContent) return null;
-
-	try {
-		const result = extractJson<TranslationResult>(rawContent);
-		if (!result || !result.titleCn || !result.summaryCn) {
-			throw new Error('Invalid translation format');
-		}
-		console.log(`[AI] Translated: ${result.titleCn.substring(0, 30)}...`);
-		return result;
-	} catch (error) {
-		console.error('[AI] Translation parse failed:', error);
-		return null;
-	}
-}
-
 export async function assessContent(input: ContentInput, apiKey: string): Promise<ContentAssessment> {
 	console.log(`[AI] Assessing: ${input.title?.substring(0, 50) ?? input.text.substring(0, 50)}...`);
 

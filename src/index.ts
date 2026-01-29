@@ -1,7 +1,7 @@
 import { Env, ScheduledEvent, ExecutionContext, MessageBatch, QueueMessage } from './types';
 import { handleHealth, handleStatus, handleManualTrigger, handleSubmitUrl, handleScrapeUrl, handleYouTubeMetadata } from './handlers';
-import { handleRSSCron, handleTwitterCron, handleArticleDailyCron } from './cron';
-import { handleRSSQueue, handleTwitterQueue, handleArticleQueue } from './queue';
+import { handleRSSCron, handleTwitterCron } from './cron';
+import { handleArticleQueue } from './queue';
 import { NewsenceMonitorWorkflow } from './workflow';
 
 export { NewsenceMonitorWorkflow };
@@ -26,11 +26,6 @@ export default {
 			ctx.waitUntil(handleTwitterCron(env, ctx));
 			return Response.json({ status: 'started', cron: 'twitter-monitor' });
 		}
-		if (url.pathname === '/cron/article-daily' && request.method === 'POST') {
-			ctx.waitUntil(handleArticleDailyCron(env, ctx));
-			return Response.json({ status: 'started', cron: 'article-daily' });
-		}
-
 		return new Response(
 			'Newsence Core Worker\n\n' +
 			'Endpoints:\n' +
@@ -39,8 +34,7 @@ export default {
 			'POST /trigger\n' +
 			'POST /submit          - Submit URL: {"url": "...", "source?": "..."}\n' +
 			'POST /cron/rss\n' +
-			'POST /cron/twitter\n' +
-			'POST /cron/article-daily\n',
+			'POST /cron/twitter\n',
 			{ headers: { 'Content-Type': 'text/plain' } }
 		);
 	},
@@ -50,18 +44,10 @@ export default {
 
 		if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
 		else if (event.cron === '0 */6 * * *') ctx.waitUntil(handleTwitterCron(env, ctx));
-		else if (event.cron === '0 3 * * *') ctx.waitUntil(handleArticleDailyCron(env, ctx));
 	},
 
-	async queue(batch: MessageBatch<QueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
+	async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
 		console.log(`[CORE] Queue: ${batch.queue} (${batch.messages.length} messages)`);
-
-		if (batch.queue === 'rss-scraping-queue-core') await handleRSSQueue(batch, env, ctx);
-		else if (batch.queue === 'twitter-processing-queue-core') await handleTwitterQueue(batch, env, ctx);
-		else if (batch.queue === 'article-processing-queue-core') await handleArticleQueue(batch, env, ctx);
-		else {
-			console.warn(`[CORE] Unknown queue: ${batch.queue}`);
-			for (const message of batch.messages) message.ack();
-		}
+		await handleArticleQueue(batch, env);
 	},
 };

@@ -1,55 +1,11 @@
-// ─────────────────────────────────────────────────────────────
-// Platform Detection
-// ─────────────────────────────────────────────────────────────
-
-export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
-
-const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com', 'www.ycombinator.com']);
-const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be']);
-const TWITTER_HOSTS = new Set(['twitter.com', 'x.com', 'www.twitter.com', 'www.x.com', 'mobile.twitter.com']);
-
-export function detectPlatformType(url: string): PlatformType {
-	try {
-		const hostname = new URL(url).hostname.toLowerCase();
-		if (HACKERNEWS_HOSTS.has(hostname)) return 'hackernews';
-		if (YOUTUBE_HOSTS.has(hostname)) return 'youtube';
-		if (TWITTER_HOSTS.has(hostname)) return 'twitter';
-		return 'web';
-	} catch {
-		return 'web';
-	}
-}
-
-function extractHnItemId(url: string): string | null {
-	const match = url.match(/[?&]id=(\d+)/);
-	return match?.[1] ?? null;
-}
-
-const YOUTUBE_PATTERNS = [
-	/[?&]v=([a-zA-Z0-9_-]+)/,
-	/youtu\.be\/([a-zA-Z0-9_-]+)/,
-	/\/embed\/([a-zA-Z0-9_-]+)/,
-	/\/shorts\/([a-zA-Z0-9_-]+)/,
-];
-
-function extractYouTubeVideoId(url: string): string | null {
-	for (const pattern of YOUTUBE_PATTERNS) {
-		const match = url.match(pattern);
-		if (match) return match[1];
-	}
-	return null;
-}
-
-function extractTweetId(url: string): string | null {
-	const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
-	return match?.[1] ?? null;
-}
+import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../scrapers';
+export type { PlatformType } from '../scrapers';
+export { HN_ALGOLIA_API };
 
 // ─────────────────────────────────────────────────────────────
 // Platform Metadata
 // ─────────────────────────────────────────────────────────────
 
-export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const YOUTUBE_VIDEO_API = 'https://www.googleapis.com/youtube/v3/videos';
 const YOUTUBE_CHANNEL_API = 'https://www.googleapis.com/youtube/v3/channels';
 const KAITO_API = 'https://api.twitterapi.io/twitter/tweets';
@@ -96,7 +52,7 @@ export async function fetchPlatformMetadata(
 }
 
 async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
-	const itemId = extractHnItemId(url);
+	const itemId = extractHackerNewsId(url);
 	if (!itemId) return emptyResult('rss');
 
 	try {
@@ -158,7 +114,7 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 }
 
 async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<PlatformMetadataResult> {
-	const videoId = extractYouTubeVideoId(url);
+	const videoId = extractYouTubeId(url);
 	if (!videoId || !apiKey) {
 		if (!apiKey) console.warn('[PLATFORM] YouTube API key not provided');
 		return emptyResult('youtube');

@@ -1,8 +1,7 @@
 import { Env, ExecutionContext } from './types';
-import { processArticlesByIds } from './queue';
 import { getSupabaseClient, getArticlesTable } from './utils/supabase';
 import { normalizeUrl, scrapeArticleContent, extractOgImage, extractTitleFromHtml } from './utils/rss';
-import { callGeminiForAnalysis } from './utils/ai';
+import { getProcessor, ProcessorContext } from './processors';
 import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from './utils/embedding';
 import { scrapeUrl, detectPlatformType, scrapeYouTube } from './scrapers';
 
@@ -37,7 +36,7 @@ type TriggerBody = {
 	triggered_by?: string;
 };
 
-export async function handleManualTrigger(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handleManualTrigger(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
 	let body: TriggerBody = {};
 
 	try {
@@ -47,15 +46,22 @@ export async function handleManualTrigger(request: Request, env: Env, ctx: Execu
 	}
 
 	const articleIds = body.article_ids || [];
-	console.log(`[TRIGGER] Manual trigger received for ${articleIds.length} articles from ${body.triggered_by || 'manual'}`);
+	const triggeredBy = body.triggered_by || 'manual';
+	console.log(`[TRIGGER] Manual trigger received for ${articleIds.length} articles from ${triggeredBy}`);
 
-	ctx.waitUntil(processArticlesByIds(env, articleIds));
+	if (articleIds.length > 0) {
+		await env.ARTICLE_QUEUE.send({
+			type: 'batch_process',
+			article_ids: articleIds,
+			triggered_by: triggeredBy,
+		});
+	}
 
 	return Response.json({
 		status: 'started',
-		message: 'Article processing started',
+		message: 'Article processing queued',
 		article_count: articleIds.length,
-		processing_mode: articleIds.length > 0 ? 'specific_articles' : 'recent_unprocessed',
+		processing_mode: articleIds.length > 0 ? 'specific_articles' : 'none',
 	});
 }
 
@@ -138,13 +144,10 @@ export async function handleSubmitUrl(request: Request, env: Env, ctx: Execution
 
 	// Send to queue for AI processing
 	if (articleId) {
-		await env.RSS_QUEUE.send({
-			type: 'article_scraped',
+		await env.ARTICLE_QUEUE.send({
+			type: 'article_process',
 			article_id: articleId,
-			url,
-			source,
 			source_type: 'rss',
-			timestamp: new Date().toISOString(),
 		});
 	}
 
@@ -268,48 +271,30 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		});
 	}
 
-	// Full mode: AI Analysis (translate + summarize)
+	// Full mode: Insert raw article → Processor AI → Update DB → Embedding
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
 
-	console.log(`[SCRAPE] Running AI analysis for: ${scraped.title.slice(0, 50)}`);
-	const aiResult = await callGeminiForAnalysis(
-		{
-			id: '',
-			title: scraped.title,
-			summary: scraped.summary ?? null,
-			content: scraped.content,
-			url,
-			source: scraped.siteName || 'User Added',
-			published_date: scraped.publishedDate || new Date().toISOString(),
-			tags: [],
-			keywords: [],
-		},
-		env.OPENROUTER_API_KEY
-	);
-
-	// Save to database
-	const articleData = {
+	// Insert raw article first
+	const rawArticleData = {
 		url,
 		title: scraped.title,
-		title_cn: aiResult.title_cn || null,
 		source: scraped.siteName || 'User Added',
 		published_date: scraped.publishedDate || new Date().toISOString(),
 		scraped_date: new Date().toISOString(),
-		summary: aiResult.summary_en || scraped.summary || '',
-		summary_cn: aiResult.summary_cn || null,
+		summary: scraped.summary || '',
 		source_type: platformType,
 		content: scraped.content,
 		og_image_url: scraped.ogImageUrl || null,
-		keywords: aiResult.keywords || [],
-		tags: aiResult.tags || [],
+		keywords: [],
+		tags: [],
 		tokens: [],
 		platform_metadata: scraped.metadata
 			? { type: platformType, fetchedAt: new Date().toISOString(), data: scraped.metadata }
 			: null,
 	};
 
-	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
+	const { data: inserted, error } = await supabase.from(table).insert([rawArticleData]).select('id');
 
 	if (error) {
 		console.error('[SCRAPE] Insert error:', error);
@@ -317,17 +302,57 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 	}
 
 	const articleId = inserted?.[0]?.id;
-	console.log(`[SCRAPE] Saved: ${aiResult.title_cn?.slice(0, 30) || scraped.title.slice(0, 30)}`);
+	console.log(`[SCRAPE] Saved raw article: ${scraped.title.slice(0, 50)}`);
 
-	// Generate and save embedding
+	// Run processor (same path as Workflow Step 2)
+	const article = {
+		id: articleId || '',
+		title: scraped.title,
+		summary: scraped.summary ?? null,
+		content: scraped.content,
+		url,
+		source: scraped.siteName || 'User Added',
+		published_date: scraped.publishedDate || new Date().toISOString(),
+		tags: [] as string[],
+		keywords: [] as string[],
+		source_type: platformType,
+		platform_metadata: rawArticleData.platform_metadata ?? undefined,
+	};
+
+	console.log(`[SCRAPE] Running ${platformType} processor for: ${scraped.title.slice(0, 50)}`);
+	const processor = getProcessor(platformType);
+	const ctx: ProcessorContext = { env, supabase, table };
+	const result = await processor.process(article, ctx);
+
+	// Update DB with processor results (same as Workflow Step 3)
+	if (Object.keys(result.updateData).length > 0) {
+		await supabase.from(table).update(result.updateData).eq('id', articleId);
+	}
+	if (result.enrichments && Object.keys(result.enrichments).length > 0) {
+		const updatedMetadata = {
+			...(rawArticleData.platform_metadata || {}),
+			enrichments: { ...result.enrichments, processedAt: new Date().toISOString() },
+		};
+		await supabase.from(table).update({ platform_metadata: updatedMetadata }).eq('id', articleId);
+	}
+
+	const titleCn = result.updateData.title_cn ?? null;
+	const summary = result.updateData.summary ?? scraped.summary ?? '';
+	const summaryCn = result.updateData.summary_cn ?? null;
+	const tags = result.updateData.tags ?? [];
+	const keywords = result.updateData.keywords ?? [];
+
+	console.log(`[SCRAPE] Processed: ${titleCn?.slice(0, 30) || scraped.title.slice(0, 30)}`);
+
+	// Generate and save embedding (same as Workflow Step 4+5)
 	if (articleId && env.AI) {
 		const embeddingText = prepareArticleTextForEmbedding({
 			title: scraped.title,
-			title_cn: aiResult.title_cn,
-			summary: aiResult.summary_en || scraped.summary,
-			summary_cn: aiResult.summary_cn,
-			tags: aiResult.tags,
-			keywords: aiResult.keywords,
+			title_cn: titleCn,
+			summary,
+			summary_cn: summaryCn,
+			tags,
+			keywords,
 		});
 
 		if (embeddingText) {
@@ -346,18 +371,17 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 			url,
 			normalizedUrl: url,
 			title: scraped.title,
-			titleCn: aiResult.title_cn,
+			titleCn: titleCn,
 			content: scraped.content,
-			summary: aiResult.summary_en || scraped.summary,
-			summaryCn: aiResult.summary_cn,
+			summary,
+			summaryCn: summaryCn,
 			source: scraped.siteName || 'User Added',
 			sourceType: platformType,
 			ogImageUrl: scraped.ogImageUrl,
 			publishedDate: scraped.publishedDate,
 			author: scraped.author,
-			tags: aiResult.tags,
-			keywords: aiResult.keywords,
-			category: aiResult.category,
+			tags,
+			keywords,
 			metadata: scraped.metadata,
 		},
 	});

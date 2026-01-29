@@ -3,7 +3,6 @@ import { Env, ExecutionContext, Tweet, RSSFeed } from './types';
 import { getSupabaseClient, getArticlesTable } from './utils/supabase';
 import { normalizeUrl, scrapeArticleContent, extractOgImage, resolveUrl, isSocialMediaUrl, extractTitleFromHtml } from './utils/rss';
 import { fetchPlatformMetadata } from './utils/platform';
-import { processArticlesByIds } from './queue';
 import { assessContent } from './utils/ai';
 
 // ─────────────────────────────────────────────────────────────
@@ -122,13 +121,10 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 
 	const articleId = inserted?.[0]?.id;
 	if (articleId) {
-		await env.RSS_QUEUE.send({
-			type: 'article_scraped',
+		await env.ARTICLE_QUEUE.send({
+			type: 'article_process',
 			article_id: articleId,
-			url: insert.url,
-			source: insert.source,
 			source_type: insert.source_type,
-			timestamp: new Date().toISOString(),
 		});
 	}
 }
@@ -262,13 +258,10 @@ async function saveScrapedArticle(
 
 	const articleId = inserted?.[0]?.id;
 	if (articleId) {
-		await env.RSS_QUEUE.send({
-			type: 'article_scraped',
+		await env.ARTICLE_QUEUE.send({
+			type: 'article_process',
 			article_id: articleId,
-			url: data.url,
-			source: data.source,
 			source_type: data.sourceType,
-			timestamp: new Date().toISOString(),
 		});
 	}
 
@@ -386,6 +379,22 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			},
 		}),
 		og_image_url: tweet.media?.[0]?.url ?? null,
+		platform_metadata: {
+			type: 'twitter',
+			fetchedAt: new Date().toISOString(),
+			data: {
+				authorName: tweet.author?.name || '',
+				authorUserName: tweet.author?.userName || '',
+				authorProfilePicture: (tweet.author as any)?.profilePicture,
+				authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
+				viewCount: tweet.viewCount || 0,
+				likeCount: tweet.likeCount || 0,
+				retweetCount: tweet.retweetCount || 0,
+				replyCount: tweet.replyCount || 0,
+				mediaUrls: tweet.media?.map((m: any) => m.url).filter(Boolean),
+				createdAt: tweet.createdAt,
+			},
+		},
 	};
 
 	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
@@ -393,13 +402,10 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 
 	const articleId = inserted?.[0]?.id;
 	if (articleId) {
-		await env.TWITTER_QUEUE.send({
-			type: 'tweet_scraped',
+		await env.ARTICLE_QUEUE.send({
+			type: 'article_process',
 			article_id: articleId,
-			url: tweet.url,
-			source: articleData.source,
 			source_type: 'twitter',
-			timestamp: new Date().toISOString(),
 		});
 	}
 
@@ -446,11 +452,3 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 	console.log(`[TWITTER] end, inserted: ${results.reduce((a, b) => a + b, 0)}`);
 }
 
-// ─────────────────────────────────────────────────────────────
-// Article Daily
-// ─────────────────────────────────────────────────────────────
-
-export async function handleArticleDailyCron(env: Env, ctx: ExecutionContext): Promise<void> {
-	console.log('[CRON] Article daily triggered');
-	ctx.waitUntil(processArticlesByIds(env));
-}

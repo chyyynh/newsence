@@ -15,7 +15,7 @@ export interface ProcessorResult {
 		summary_cn?: string;
 		title?: string;
 	};
-	enrichments?: Record<string, unknown>;
+	enrichments?: Record<string, any>;
 }
 
 export interface ProcessorContext {
@@ -83,7 +83,15 @@ class TwitterProcessor implements ArticleProcessor {
 	readonly sourceType = 'twitter';
 
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const tweetText = article.content ?? '';
+		// content may be JSON (from cron) or plain text (from /scrape)
+		let tweetText = article.content ?? '';
+		try {
+			const parsed = JSON.parse(tweetText);
+			if (parsed.text) tweetText = parsed.text;
+		} catch {
+			// Not JSON, use as-is
+		}
+
 		const updateData: ProcessorResult['updateData'] = {};
 
 		if (isEmpty(article.summary)) updateData.summary = tweetText;

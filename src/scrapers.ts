@@ -498,7 +498,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 // HackerNews Scraper
 // ─────────────────────────────────────────────────────────────
 
-const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
 interface HNItem {
 	id: number;
