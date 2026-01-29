@@ -2,6 +2,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { Env, ExecutionContext, Tweet, RSSFeed } from './types';
 import { getSupabaseClient, getArticlesTable } from './utils/supabase';
 import { normalizeUrl, scrapeArticleContent, extractOgImage, resolveUrl, isSocialMediaUrl, extractTitleFromHtml } from './utils/rss';
+import { scrapeTwitterArticle } from './scrapers';
 import { fetchPlatformMetadata } from './utils/platform';
 import { assessContent } from './utils/ai';
 
@@ -276,6 +277,56 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 	const { data: existing } = await supabase.from(table).select('id').eq('url', tweet.url).single();
 	if (existing) return false;
 
+	// Check for Twitter Article via expanded URLs
+	const expandedUrls = (tweet.urls || []).map((u: any) => u.expanded_url || u.url || u).filter(Boolean) as string[];
+	const articleUrl = expandedUrls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
+
+	if (articleUrl) {
+		const tweetId = tweet.id || tweet.url.split('/').pop();
+		if (tweetId) {
+			console.log(`[TWITTER] Detected Twitter Article in tweet ${tweetId}: ${articleUrl}`);
+			const articleContent = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
+			if (articleContent) {
+				const articleData = {
+					url: tweet.url,
+					title: articleContent.title,
+					source: 'Twitter',
+					published_date: articleContent.publishedDate ? new Date(articleContent.publishedDate) : new Date(),
+					scraped_date: new Date(),
+					keywords: [],
+					tags: [],
+					tokens: [],
+					summary: articleContent.summary || '',
+					source_type: 'twitter',
+					content: articleContent.content,
+					og_image_url: articleContent.ogImageUrl || null,
+					platform_metadata: {
+						type: 'twitter_article',
+						fetchedAt: new Date().toISOString(),
+						data: {
+							...articleContent.metadata,
+							authorName: articleContent.metadata?.authorName || tweet.author?.name || '',
+							authorUserName: articleContent.metadata?.authorUserName || tweet.author?.userName || '',
+							authorProfilePicture: articleContent.metadata?.authorProfilePicture || (tweet.author as any)?.profilePicture,
+							authorVerified: articleContent.metadata?.authorVerified ?? tweet.author?.verified,
+						},
+					},
+				};
+
+				const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
+				if (error) return console.error('[TWITTER] Insert article error:', error), false;
+
+				const articleId = inserted?.[0]?.id;
+				if (articleId) {
+					await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'twitter' });
+				}
+				console.log(`[TWITTER] Saved Twitter Article: ${articleContent.title.slice(0, 50)}`);
+				return true;
+			}
+			console.warn(`[TWITTER] Article API failed, falling through to regular tweet handling`);
+		}
+	}
+
 	// Extract links and text without URLs
 	const links = tweet.text.match(/https?:\/\/\S+/g) || [];
 	const textWithoutUrls = tweet.text.replace(/https?:\/\/\S+/g, '').trim();
@@ -286,7 +337,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			title: `@${tweet.author?.userName}`,
 			text: textWithoutUrls,
 			url: tweet.url,
-			source: `Twitter - ${listType}`,
+			source: 'Twitter',
 			sourceType: 'twitter',
 			links,
 			metrics: {
@@ -330,7 +381,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 				title: extractTitleFromHtml(scrapedContent) ?? `Shared by @${tweet.author?.userName}`,
 				text: scrapedContent,
 				url: resolvedUrl,
-				source: `Twitter @${tweet.author?.userName}`,
+				source: 'Twitter',
 				sourceType: 'rss',
 			},
 			env.OPENROUTER_API_KEY
@@ -346,7 +397,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			url: resolvedUrl,
 			title: extractTitleFromHtml(scrapedContent) ?? 'Shared Article',
 			content: scrapedContent,
-			source: `Twitter @${tweet.author?.userName}`,
+			source: 'Twitter',
 			sourceType: 'rss',
 			ogImage,
 			sharedBy: tweet.author?.userName,
@@ -359,7 +410,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 	const articleData = {
 		url: tweet.url,
 		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
-		source: `Twitter - ${listType}`,
+		source: 'Twitter',
 		published_date: new Date(tweet.createdAt),
 		scraped_date: new Date(),
 		keywords: tweet.hashTags || [],

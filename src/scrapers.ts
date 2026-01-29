@@ -354,7 +354,7 @@ interface TwitterArticle {
 	createdAt?: string;
 }
 
-async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<ScrapedContent | null> {
+export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<ScrapedContent | null> {
 	console.log(`[TWITTER] Fetching article for tweet ${tweetId}...`);
 
 	const response = await fetch(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
@@ -388,7 +388,7 @@ async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<Sc
 		content: md,
 		summary: article.preview_text,
 		ogImageUrl: article.cover_media_img_url || article.author?.profilePicture || null,
-		siteName: 'Twitter Article',
+		siteName: 'Twitter',
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
 		metadata: {
@@ -436,6 +436,33 @@ function formatTweetAsMarkdown(
 	return md;
 }
 
+function buildTweetMetadata(
+	tweet: KaitoTweet,
+	hashtags: string[],
+	expandedUrls: string[],
+	media?: Array<{ media_url_https: string; type: string }>,
+	extra?: Record<string, unknown>
+): Record<string, unknown> {
+	return {
+		tweetId: tweet.id,
+		tweetUrl: tweet.url,
+		authorName: tweet.author?.name,
+		authorUserName: tweet.author?.userName,
+		authorProfilePicture: tweet.author?.profilePicture,
+		authorVerified: tweet.author?.isBlueVerified,
+		viewCount: tweet.viewCount || 0,
+		likeCount: tweet.likeCount || 0,
+		retweetCount: tweet.retweetCount || 0,
+		replyCount: tweet.replyCount || 0,
+		quoteCount: tweet.quoteCount || 0,
+		hashtags,
+		expandedUrls,
+		lang: tweet.lang,
+		mediaUrls: media?.map((m) => m.media_url_https) || [],
+		...extra,
+	};
+}
+
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
 	console.log(`[TWITTER] Fetching tweet ${tweetId}...`);
 
@@ -451,17 +478,46 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	}
 
 	const tweet = data.tweets[0];
-
-	// Check if article
-	if (tweet.isArticle) {
-		console.log(`[TWITTER] Tweet is an article, fetching...`);
-		const articleContent = await scrapeTwitterArticle(tweetId, apiKey);
-		if (articleContent) return articleContent;
-	}
-
 	const media = tweet.extendedEntities?.media;
 	const ogImageUrl = media?.length ? media[0].media_url_https : null;
 	const hashtags = tweet.entities?.hashtags?.map((h) => h.text) || [];
+	const expandedUrls = tweet.entities?.urls?.map((u) => u.expanded_url).filter(Boolean) || [];
+
+	const articleUrl = expandedUrls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
+	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+
+	// 1. Twitter Article — detected by expanded_url containing /i/article/
+	if (articleUrl) {
+		console.log(`[TWITTER] Detected Twitter Article via expanded_url: ${articleUrl}`);
+		const articleContent = await scrapeTwitterArticle(tweetId, apiKey);
+		if (articleContent) return articleContent;
+		console.warn(`[TWITTER] Article API failed, falling through to regular tweet handling`);
+	}
+
+	// 2. Tweet has external link — scrape the linked page directly
+	if (externalUrl) {
+		console.log(`[TWITTER] Tweet has external link, scraping: ${externalUrl}`);
+		try {
+			const linked = await scrapeWebPage(externalUrl);
+			if (linked.content && linked.content.length > 100) {
+				console.log(`[TWITTER] Scraped linked article: ${linked.title}`);
+				return {
+					title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
+					content: linked.content,
+					summary: linked.summary || tweet.text,
+					ogImageUrl: linked.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
+					siteName: linked.siteName || 'Twitter',
+					author: tweet.author?.userName || linked.author || null,
+					publishedDate: tweet.createdAt,
+					metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media, { linkedUrl: externalUrl }),
+				};
+			}
+		} catch (e) {
+			console.warn(`[TWITTER] Failed to scrape linked URL: ${externalUrl}`, e);
+		}
+	}
+
+	// 3. Regular tweet — format as markdown
 	const content = formatTweetAsMarkdown(tweet, hashtags, media);
 	const title = `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}${tweet.text.length > 80 ? '...' : ''}`;
 
@@ -471,26 +527,11 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		title,
 		content,
 		summary: tweet.text,
-		ogImageUrl: tweet.author?.profilePicture || null,
+		ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 		siteName: 'Twitter',
 		author: tweet.author?.userName || null,
 		publishedDate: tweet.createdAt,
-		metadata: {
-			tweetId: tweet.id,
-			tweetUrl: tweet.url,
-			authorName: tweet.author?.name,
-			authorUserName: tweet.author?.userName,
-			authorProfilePicture: tweet.author?.profilePicture,
-			authorVerified: tweet.author?.isBlueVerified,
-			viewCount: tweet.viewCount || 0,
-			likeCount: tweet.likeCount || 0,
-			retweetCount: tweet.retweetCount || 0,
-			replyCount: tweet.replyCount || 0,
-			quoteCount: tweet.quoteCount || 0,
-			hashtags,
-			lang: tweet.lang,
-			mediaUrls: media?.map((m) => m.media_url_https) || [],
-		},
+		metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media),
 	};
 }
 

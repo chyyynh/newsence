@@ -1,6 +1,6 @@
 import { Env, ExecutionContext } from './types';
 import { getSupabaseClient, getArticlesTable } from './utils/supabase';
-import { normalizeUrl, scrapeArticleContent, extractOgImage, extractTitleFromHtml } from './utils/rss';
+import { normalizeUrl, scrapeArticleContent, extractOgImage } from './utils/rss';
 import { getProcessor, ProcessorContext } from './processors';
 import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from './utils/embedding';
 import { scrapeUrl, detectPlatformType, scrapeYouTube } from './scrapers';
@@ -111,7 +111,8 @@ export async function handleSubmitUrl(request: Request, env: Env, ctx: Execution
 		return Response.json({ error: 'Failed to scrape content or content too short' }, { status: 422 });
 	}
 
-	const title = extractTitleFromHtml(content) || 'Submitted Article';
+	const titleMatch = content.match(/^#\s+(.+)$/m);
+	const title = titleMatch?.[1]?.trim() || 'Submitted Article';
 
 	// Insert to DB
 	const articleData = {
@@ -290,7 +291,7 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		tags: [],
 		tokens: [],
 		platform_metadata: scraped.metadata
-			? { type: platformType, fetchedAt: new Date().toISOString(), data: scraped.metadata }
+			? { type: scraped.metadata.type || platformType, fetchedAt: new Date().toISOString(), data: scraped.metadata }
 			: null,
 	};
 
@@ -371,10 +372,10 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 			url,
 			normalizedUrl: url,
 			title: scraped.title,
-			titleCn: titleCn,
+			titleCn,
 			content: scraped.content,
 			summary,
-			summaryCn: summaryCn,
+			summaryCn,
 			source: scraped.siteName || 'User Added',
 			sourceType: platformType,
 			ogImageUrl: scraped.ogImageUrl,

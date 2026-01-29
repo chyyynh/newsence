@@ -1,6 +1,7 @@
 import { Article, Env } from './types';
 import { callGeminiForAnalysis, callOpenRouter, AI_MODELS, translateTweet } from './utils/ai';
 import { HN_ALGOLIA_API } from './utils/platform';
+import { scrapeWebPage } from './scrapers';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -13,6 +14,8 @@ export interface ProcessorResult {
 		title_cn?: string;
 		summary?: string;
 		summary_cn?: string;
+		content?: string;
+		content_cn?: string;
 		title?: string;
 	};
 	enrichments?: Record<string, any>;
@@ -83,19 +86,72 @@ class TwitterProcessor implements ArticleProcessor {
 	readonly sourceType = 'twitter';
 
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		// content may be JSON (from cron) or plain text (from /scrape)
-		let tweetText = article.content ?? '';
-		try {
-			const parsed = JSON.parse(tweetText);
-			if (parsed.text) tweetText = parsed.text;
-		} catch {
-			// Not JSON, use as-is
+		const updateData: ProcessorResult['updateData'] = {};
+		const metadata = article.platform_metadata?.data as Record<string, any> | undefined;
+		const isArticle = article.platform_metadata?.type === 'twitter_article';
+
+		// 1. Twitter Article — content is already full text from scrapeTwitterArticle
+		if (isArticle && article.content && article.content.length > 200) {
+			console.log(`[TWITTER-PROCESSOR] Processing Twitter Article: ${article.title.slice(0, 50)}`);
+			const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
+
+			if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
+			if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
+			if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
+			if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
+			if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+
+			// Translate full article content to Chinese
+			const contentCn = await this.translateContent(article.content, ctx.env.OPENROUTER_API_KEY);
+			if (contentCn) updateData.content_cn = contentCn;
+
+			return { updateData };
 		}
 
-		const updateData: ProcessorResult['updateData'] = {};
+		// 2. Extract actual tweet text (prefer summary over full markdown content)
+		let tweetText = article.summary?.trim() || '';
+		if (!tweetText) {
+			tweetText = article.content ?? '';
+			try {
+				const parsed = JSON.parse(tweetText);
+				if (parsed.text) tweetText = parsed.text;
+			} catch {
+				// Not JSON, use as-is
+			}
+		}
 
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
+		// 3. Tweet with external link — scrape linked article for analysis
+		const linkedUrl = this.extractLinkedUrl(tweetText);
+		if (linkedUrl) {
+			try {
+				const linked = await scrapeWebPage(linkedUrl);
+				if (linked.content && linked.content.length > 100) {
+					console.log(`[TWITTER-PROCESSOR] Scraped linked article: ${linked.title}`);
+					updateData.content = linked.content;
+
+					const analysis = await callGeminiForAnalysis(
+						{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
+						ctx.env.OPENROUTER_API_KEY,
+					);
+					if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
+					if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
+					if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
+					if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
+					if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+
+					const contentCn = await this.translateContent(linked.content, ctx.env.OPENROUTER_API_KEY);
+					if (contentCn) updateData.content_cn = contentCn;
+
+					return { updateData };
+				}
+			} catch (e) {
+				console.warn(`[TWITTER-PROCESSOR] Failed to scrape linked URL: ${linkedUrl}`, e);
+			}
+		}
+
+		// 4. Regular tweet — translate tweet text
 		const analysis = await translateTweet(tweetText, ctx.env.OPENROUTER_API_KEY);
 
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
@@ -103,6 +159,27 @@ class TwitterProcessor implements ArticleProcessor {
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
 
 		return { updateData };
+	}
+
+	private extractLinkedUrl(tweetText: string): string | null {
+		const textWithoutUrls = tweetText.replace(/https?:\/\/\S+/g, '').trim();
+		if (textWithoutUrls.length > 50) return null;
+
+		const urlMatch = tweetText.match(/https?:\/\/\S+/);
+		if (urlMatch) {
+			const url = urlMatch[0];
+			if (/(?:twitter\.com|x\.com)/.test(url)) return null;
+			return url;
+		}
+		return null;
+	}
+
+	private async translateContent(content: string, apiKey: string): Promise<string | null> {
+		const prompt = `請將以下文章內容翻譯成繁體中文。保持 Markdown 格式，包括標題、段落、列表等。只翻譯，不要添加任何額外內容。
+
+${content}`;
+
+		return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, maxTokens: 8000 });
 	}
 }
 
