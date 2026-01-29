@@ -1,265 +1,164 @@
 # Cloudflare Workers
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/OpenNews/tree/main/cf-worker/core)
-
-> Consolidated Cloudflare Worker for Newsence - RSS monitoring, Twitter tracking, article processing, and AI analysis.
-
-All Cloudflare Workers in one place.
-
-## 📁 Structure
-
-```
-cf-worker/
-├── .dev.vars              # Shared environment variables (git-ignored)
-├── .dev.vars.example      # Environment template
-├── article-process/       # Article processing worker
-├── rss-feed-monitor/      # RSS feed monitor
-├── twitter-monitor/       # Twitter monitor
-├── websocket-webhook-forwarder/
-├── workflow/
-├── telegram-bot/
-├── telegram-notify/
-└── twitter-summary/
-```
-
-## Overview
-
-This worker consolidates 8 separate workers into one core worker, handling:
-
-- **RSS Feed Monitoring** (every 5 minutes)
-- **Twitter Monitoring** (every 6 hours)
-- **Twitter Summary** (every 5 minutes)
-- **Article Daily Processing** (3 AM daily)
-- **Workflow Orchestration** using Cloudflare Workflows
-- **AI-Powered Article Analysis** using OpenRouter/Gemini
-- **WebSocket Message Processing**
-
-## Features
-
-- ✅ Multi-trigger support (HTTP, Cron, Queue, Workflow)
-- ✅ Cloudflare Queues for reliable message processing
-- ✅ Cloudflare Workflows for orchestration
-- ✅ AI-powered article analysis and translation
-- ✅ RSS feed parsing with content scraping
-- ✅ Twitter high-engagement tweet tracking
-- ✅ Structured logging with module prefixes
-- ✅ Comprehensive error handling and retry mechanisms
+Cloudflare Workers for Newsence - content aggregation and AI-powered article processing.
 
 ## Architecture
 
 ```
-RSS Monitor (cron) → articles table → rss-scraping-queue →
-Workflow → article-processing-queue → Article Consumer (AI Analysis)
-
-Twitter Monitor (cron) → articles table → twitter-processing-queue →
-Workflow → article-processing-queue → Article Consumer (AI Analysis)
-
-WebSocket Client → /webhook → articles table → rss-scraping-queue →
-Workflow → article-processing-queue → Article Consumer (AI Analysis)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           DATA SOURCES                                  │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐           │
+│  │ RSS Feeds │  │  Twitter  │  │  YouTube  │  │ HackerNews│           │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘           │
+└────────┼──────────────┼──────────────┼──────────────┼──────────────────┘
+         │              │              │              │
+         ▼              ▼              ▼              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         CORE WORKER                                     │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                        INGESTION                                  │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐         │  │
+│  │  │ RSS Cron │  │ Twitter  │  │ /scrape  │  │ /submit  │         │  │
+│  │  │  */5min  │  │  */6h    │  │   API    │  │   API    │         │  │
+│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘         │  │
+│  └───────┼─────────────┼─────────────┼─────────────┼────────────────┘  │
+│          │             │             │             │                    │
+│          ▼             ▼             │             ▼                    │
+│  ┌────────────────────────┐         │   ┌────────────────────────┐     │
+│  │      Save to DB        │         │   │      Save to DB        │     │
+│  │  (raw article/tweet)   │         │   │   (raw article)        │     │
+│  └───────────┬────────────┘         │   └───────────┬────────────┘     │
+│              │                      │               │                  │
+│              ▼                      │               ▼                  │
+│  ┌────────────────────────┐         │   ┌────────────────────────┐     │
+│  │    ARTICLE_QUEUE       │         │   │    ARTICLE_QUEUE       │     │
+│  │  { article_process }   │         │   │  { article_process }   │     │
+│  └───────────┬────────────┘         │   └───────────┬────────────┘     │
+│              │                      │               │                  │
+│              ▼                      │               ▼                  │
+│  ┌──────────────────────────────────┼───────────────────────────────┐  │
+│  │         WORKFLOW (per article)   │                                │  │
+│  │                                  │                                │  │
+│  │  Step 1: fetch-article        (read from DB, retry x3)          │  │
+│  │  Step 2: ai-analysis          (translate/tags/summary, retry x3)│  │
+│  │  Step 3: update-db            (write results to DB, retry x3)   │  │
+│  │  Step 4: generate-embedding   (Workers AI BGE-M3, retry x3)    │  │
+│  │  Step 5: save-embedding       (write vector to DB, retry x3)   │  │
+│  │                                  │                                │  │
+│  └──────────────────────────────────┼───────────────────────────────┘  │
+│                                     │                                  │
+│                            /scrape does AI +                           │
+│                            embedding inline                            │
+│                            (no queue/workflow)                          │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        TELEGRAM BOT                                     │
+│                    User URL Submission                                  │
+│                  Calls Core /scrape API                                 │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 🚀 Quick Start
+## Processing Flows
 
-### 1. Setup Environment Variables
-
-All workers share the same environment variables file:
-
-```bash
-# Copy the template
-cp .dev.vars.example .dev.vars
-
-# Edit with your actual values
-vim .dev.vars
-```
-
-**Example .dev.vars:**
-
-```bash
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-key
-OPENROUTER_API_KEY=sk-or-v1-your-key
-TELEGRAM_BOT_TOKEN=your-token
-```
-
-### 2. Local Development
-
-```bash
-# Start a single worker
-cd article-process
-pnpm run dev
-
-# Or start all workers from project root
-cd ../..
-pnpm run dev
-```
-
-### 3. Deploy
-
-#### First-time Setup
-
-Set secrets for staging and production (only need to do this once):
-
-```bash
-# From project root
-pnpm run sync-secrets:staging
-pnpm run sync-secrets:production
-```
-
-This will read `cf-worker/.dev.vars` and set all secrets for every worker.
-
-#### Deploy Workers
-
-```bash
-# From project root
-
-# Deploy all workers
-pnpm run deploy
-
-# Deploy specific worker
-pnpm run deploy:article-process
-```
-
-## 📝 Environment Variables
-
-### How It Works
-
-Wrangler automatically looks up the directory tree for `.dev.vars`:
+### RSS / Twitter / Submit (async, via Queue + Workflow)
 
 ```
-cf-worker/
-├── .dev.vars              ← Wrangler finds this!
-└── article-process/
-    └── src/index.ts       ← Running `pnpm run dev` here
+Cron or API → Scrape content → Save raw article to DB
+  → ARTICLE_QUEUE { type: 'article_process', article_id, source_type }
+    → Workflow instance (1 per article, CF auto-schedules)
+      → Step 1: fetch-article        (DB read)
+      → Step 2: ai-analysis          (Gemini 2.5 Flash)
+      → Step 3: update-db            (translations, tags, keywords)
+      → Step 4: generate-embedding   (BGE-M3 1024d)
+      → Step 5: save-embedding       (vector to DB)
 ```
 
-All workers automatically use the shared `.dev.vars` file.
+Each step retries independently x3 with exponential backoff.
 
-### Local vs Production
+### Scrape API (sync, inline)
 
-- **Local**: Use `.dev.vars` (automatic)
-- **Production**: Use Cloudflare Secrets (via `sync-secrets` script)
-
-### When to Update Secrets
-
-You only need to run `sync-secrets` when:
-
-1. **First deployment** - Initial setup
-2. **New variable added** - Added to `.dev.vars`
-3. **Key rotation** - API key changed
-4. **New worker added** - New worker needs secrets
-
-After that, deployments automatically use the saved secrets.
-
-## 🔧 Common Tasks
-
-### Update Environment Variables
-
-```bash
-# 1. Edit the shared file
-vim cf-worker/.dev.vars
-
-# 2. For local dev: just restart
-pnpm run dev
-
-# 3. For production: sync secrets (if needed)
-pnpm run sync-secrets:production
+```
+POST /scrape → Scrape content → AI analysis → Save to DB → Embedding → Return result
 ```
 
-### Deploy to Staging
+No queue or workflow — full processing inline, returns complete result to caller.
 
-```bash
-# Auto-deploy on merge to main (via GitHub Actions)
-# Or manually:
-pnpm run deploy:staging
-```
-
-### Deploy to Production
-
-```bash
-# Via GitHub Actions (recommended)
-# Go to Actions → Deploy to Production → Run workflow
-
-# Or locally:
-pnpm run deploy:production
-```
-
-### Check Deployed Secrets
-
-```bash
-cd article-process
-pnpm wrangler secret list --env staging
-pnpm wrangler secret list --env production
-```
-
-### View Logs
-
-```bash
-cd article-process
-pnpm wrangler tail --env staging
-pnpm wrangler tail --env production
-```
-
-## 💡 Tips
-
-### Worker-Specific Variables
-
-If a worker needs different values, create its own `.dev.vars`:
+## Workers
 
 ```
 cf-worker/
-├── .dev.vars                    # Shared (fallback)
-└── article-process/
-    └── .dev.vars                # Overrides shared values
+├── core/             # Main worker - content aggregation + AI processing
+├── telegram-bot/     # Telegram bot - URL submission via chat
+├── embedding-proxy/  # Embedding proxy service
+└── imageproxy/       # Image proxy service
 ```
 
-### Use in Code
+### Core Worker
 
-```typescript
-export interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
-  OPENROUTER_API_KEY: string;
-}
+Unified content processing service:
 
-export default {
-  async fetch(request: Request, env: Env) {
-    // Variables automatically available in env
-    const url = env.SUPABASE_URL;
-    const key = env.OPENROUTER_API_KEY;
+| Feature | Description |
+|---------|-------------|
+| RSS Monitor | Fetch RSS feeds every 5 minutes |
+| Twitter Monitor | Track high-engagement tweets every 6 hours |
+| Scrape API | Full scraping with AI translation for any URL |
+| AI Processing | Translation, tagging, summarization (Gemini 2.5 Flash) |
+| Embeddings | Vector generation (BGE-M3, 1024 dims) |
+| Queue | Single `ARTICLE_QUEUE` for all async processing |
+| Workflow | Per-article 5-step pipeline with independent retry |
 
-    return new Response('OK');
-  },
-};
-```
+**URL:** `https://newsence-core.chinyuhsu1023.workers.dev`
 
-## 🎯 Deployment Workflow
+### Telegram Bot
 
-### Development
+Receives URLs from users, calls Core's `/scrape` API, returns Chinese title + summary + OG image.
+
+**URL:** `https://newsence-telegram-bot.chinyuhsu1023.workers.dev`
+
+## Quick Start
 
 ```bash
-1. Edit cf-worker/.dev.vars
-2. cd cf-worker/article-process
-3. pnpm run dev
+cd core
+pnpm install
+pnpm dev          # Local development
+pnpm run deploy   # Deploy to Cloudflare
+pnpm wrangler tail # View logs
 ```
 
-### First Deploy
+## Environment Variables
 
-```bash
-1. Edit cf-worker/.dev.vars
-2. pnpm run sync-secrets:staging      # One-time
-3. pnpm run sync-secrets:production   # One-time
-4. pnpm run deploy
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter API key (Gemini) |
+| `YOUTUBE_API_KEY` | No | YouTube Data API key |
+| `KAITO_API_KEY` | No | Kaito API key (Twitter) |
+| `TRANSCRIPT_API_KEY` | No | Transcript API key (YouTube captions) |
 
-### Daily Deploy
+## Queue
 
-```bash
-# Secrets already set, just deploy
-pnpm run deploy
-```
+| Queue | Purpose |
+|-------|---------|
+| `article-processing-queue-core` | All article processing (RSS, Twitter, submit, manual trigger) |
+| `article-processing-dlq-core` | Dead letter queue |
 
-## 📚 Learn More
+## API Endpoints
 
-- [Wrangler Configuration](https://developers.cloudflare.com/workers/wrangler/configuration/)
-- [Environment Variables](https://developers.cloudflare.com/workers/configuration/environment-variables/)
-- [Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
+### Core Worker
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/status` | Worker status |
+| POST | `/scrape` | Scrape URL with full AI processing (sync) |
+| POST | `/submit` | Submit URL → DB + queue for async processing |
+| POST | `/trigger` | Manual batch processing for specific article IDs |
+| GET | `/api/youtube/metadata` | YouTube metadata only |
+| POST | `/cron/rss` | Manually trigger RSS cron |
+| POST | `/cron/twitter` | Manually trigger Twitter cron |
+| POST | `/cron/article-daily` | Manually trigger daily catch-up processing |

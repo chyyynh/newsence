@@ -7,13 +7,10 @@ export interface Env {
 	OPENROUTER_API_KEY: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	TELEGRAM_BOT_TOKEN?: string;
-	TELEGRAM_CHAT_ID?: string;
+	TRANSCRIPT_API_KEY?: string;
 	ARTICLES_TABLE?: string;
 
-	// Queue bindings
-	RSS_QUEUE: Queue;
-	TWITTER_QUEUE: Queue;
+	// Queue binding
 	ARTICLE_QUEUE: Queue;
 
 	// Workflow binding
@@ -41,8 +38,8 @@ export interface Article {
 	platform_metadata?: {
 		type?: string;
 		fetchedAt?: string;
-		data?: Record<string, unknown>;
-		enrichments?: Record<string, unknown>;
+		data?: Record<string, any>;
+		enrichments?: Record<string, any>;
 	};
 }
 
@@ -104,21 +101,9 @@ export interface Tweet {
 }
 
 // Queue message types
-export interface QueueMessage {
-	type: string;
-	article_id?: string;
-	url?: string;
-	source?: string;
-	source_type?: string;
-	timestamp?: string;
-	article_ids?: string[];
-	triggered_by?: string;
-	batch_info?: {
-		batch_size: number;
-		total_batches: number;
-	};
-	metadata?: any;
-}
+export type QueueMessage =
+	| { type: 'article_process'; article_id: string; source_type: string }
+	| { type: 'batch_process'; article_ids: string[]; triggered_by: string };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };

@@ -1,9 +1,0 @@
-{
-	"dependencies": {
-		"@hono/node-server": "^1.14.1",
-		"@hono/oauth-providers": "^0.7.1",
-		"dotenv": "^16.5.0",
-		"hono": "^4.7.8",
-		"x": "link:@hono/oauth-providers/x"
-	}
-}

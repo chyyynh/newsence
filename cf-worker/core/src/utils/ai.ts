@@ -1,7 +1,34 @@
 import { Article, AIAnalysisResult, OpenRouterResponse } from '../types';
 
+// ─────────────────────────────────────────────────────────────
+// Content Assessment Types
+// ─────────────────────────────────────────────────────────────
+
+export interface ContentInput {
+	title?: string;
+	text: string;
+	url: string;
+	source: string;
+	sourceType: 'twitter' | 'rss' | 'hackernews' | 'arxiv';
+	links?: string[];
+	metrics?: {
+		viewCount?: number;
+		likeCount?: number;
+	};
+}
+
+export interface ContentAssessment {
+	action: 'save' | 'follow_link' | 'discard';
+	score: number;
+	reason: string;
+	contentType: 'original_content' | 'link_share' | 'discussion' | 'announcement';
+}
+
+// ─────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────
+
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
-const AI_MODEL = 'google/gemini-2.5-flash-lite';
 const TIMEOUT_MS = 30000;
 const MAX_CONTENT_LENGTH = 2000;
 
@@ -11,31 +38,50 @@ const OPENROUTER_HEADERS = {
 	'X-Title': 'app.newsence.xyz',
 };
 
-function createFallbackResult(article: Article): AIAnalysisResult {
-	return {
-		tags: ['Other'],
-		keywords: article.title.split(' ').slice(0, 5),
-		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
-		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
-		title_en: article.title,
-		title_cn: article.title_cn ?? article.title,
-		category: 'Other',
-	};
+// Available models
+export const AI_MODELS = {
+	FLASH_LITE: 'google/gemini-2.5-flash-lite',
+	FLASH: 'google/gemini-2.0-flash-001',
+} as const;
+
+// ─────────────────────────────────────────────────────────────
+// Core API Functions
+// ─────────────────────────────────────────────────────────────
+
+interface CallOpenRouterOptions {
+	apiKey: string;
+	model?: string;
+	maxTokens?: number;
+	temperature?: number;
+	systemPrompt?: string;
+	timeoutMs?: number;
 }
 
-function extractJson<T>(text: string): T | null {
-	const match = text.match(/\{[\s\S]*\}/);
-	if (!match) return null;
-	return JSON.parse(match[0]) as T;
-}
-
-async function callOpenRouter(
+/**
+ * Unified OpenRouter API call
+ */
+export async function callOpenRouter(
 	prompt: string,
-	apiKey: string,
-	maxTokens: number
+	options: CallOpenRouterOptions
 ): Promise<string | null> {
+	const {
+		apiKey,
+		model = AI_MODELS.FLASH_LITE,
+		maxTokens = 500,
+		temperature = 0.3,
+		systemPrompt,
+		timeoutMs = TIMEOUT_MS,
+	} = options;
+
 	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+	const messages = systemPrompt
+		? [
+				{ role: 'system', content: systemPrompt },
+				{ role: 'user', content: prompt },
+		  ]
+		: [{ role: 'user', content: [{ type: 'text', text: prompt }] }];
 
 	try {
 		const response = await fetch(OPENROUTER_API, {
@@ -43,10 +89,10 @@ async function callOpenRouter(
 			signal: controller.signal,
 			headers: { ...OPENROUTER_HEADERS, Authorization: `Bearer ${apiKey}` },
 			body: JSON.stringify({
-				model: AI_MODEL,
-				messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+				model,
+				messages,
 				max_tokens: maxTokens,
-				temperature: 0.3,
+				temperature,
 			}),
 		});
 
@@ -67,6 +113,36 @@ async function callOpenRouter(
 		return null;
 	}
 }
+
+// ─────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────
+
+export function extractJson<T>(text: string): T | null {
+	const match = text.match(/\{[\s\S]*\}/);
+	if (!match) return null;
+	try {
+		return JSON.parse(match[0]) as T;
+	} catch {
+		return null;
+	}
+}
+
+function createFallbackResult(article: Article): AIAnalysisResult {
+	return {
+		tags: ['Other'],
+		keywords: article.title.split(' ').slice(0, 5),
+		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
+		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
+		title_en: article.title,
+		title_cn: article.title_cn ?? article.title,
+		category: 'Other',
+	};
+}
+
+// ─────────────────────────────────────────────────────────────
+// High-level Analysis Functions
+// ─────────────────────────────────────────────────────────────
 
 export async function callGeminiForAnalysis(article: Article, apiKey: string): Promise<AIAnalysisResult> {
 	console.log(`[AI] Analyzing: ${article.title.substring(0, 80)}...`);
@@ -107,7 +183,7 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 
 請只回傳JSON,不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, apiKey, 800);
+	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 800 });
 	if (!rawContent?.trim()) return createFallbackResult(article);
 
 	console.log('[AI] Response:', rawContent);
@@ -164,7 +240,7 @@ ${tweetText}
 
 請只回傳JSON，不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, apiKey, 500);
+	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 500 });
 	if (!rawContent) return { ...TWEET_FALLBACK, summary_cn: tweetText };
 
 	try {
@@ -179,5 +255,95 @@ ${tweetText}
 	} catch (error) {
 		console.error('[AI] Tweet translation failed:', error);
 		return { ...TWEET_FALLBACK, summary_cn: tweetText };
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Content Assessment
+// ─────────────────────────────────────────────────────────────
+
+const CONTENT_ASSESSMENT_PROMPT = `你是內容品質評估專家。判斷這則內容應該如何處理。
+
+【內容資訊】
+來源: {source}
+類型: {sourceType}
+標題: {title}
+文字長度: {textLength} 字
+文字內容: {text}
+包含連結: {links}
+互動數據: viewCount={viewCount}, likeCount={likeCount}
+
+【判斷標準】
+
+1. save (直接儲存) - 分數 >= 60
+   - 有實質內容 (>100字有意義的文字)
+   - 原創分析、技術討論、官方公告
+   - 包含具體數據、研究結果、技術細節
+
+2. follow_link (抓取連結內容) - 分數 40-59
+   - 文字很短但分享了可能有價值的連結
+   - 例如: "這篇很棒: [連結]"、"重要更新: [連結]"
+   - 連結不是社群媒體 (twitter/instagram/tiktok)
+
+3. discard (丟棄) - 分數 < 40
+   - 純宣傳無實質內容 ("試試 X！")
+   - 語意不明、低品質
+   - 連結是其他社群媒體
+   - 重複/垃圾內容
+
+【評分維度】
+- 內容完整性 (0-40): 有實質內容得高分
+- 信息價值 (0-35): 有具體數據/分析得高分
+- 來源可信度 (0-25): 官方/知名來源得高分
+
+【回傳 JSON】
+{
+  "action": "save" | "follow_link" | "discard",
+  "score": 0-100,
+  "reason": "簡短說明 (20字內)",
+  "contentType": "original_content" | "link_share" | "discussion" | "announcement"
+}
+
+只回傳 JSON，不要其他文字。`;
+
+const DEFAULT_ASSESSMENT: ContentAssessment = {
+	action: 'save',
+	score: 50,
+	reason: 'AI evaluation failed, default save',
+	contentType: 'original_content',
+};
+
+export async function assessContent(input: ContentInput, apiKey: string): Promise<ContentAssessment> {
+	console.log(`[AI] Assessing: ${input.title?.substring(0, 50) ?? input.text.substring(0, 50)}...`);
+
+	const prompt = CONTENT_ASSESSMENT_PROMPT
+		.replace('{source}', input.source)
+		.replace('{sourceType}', input.sourceType)
+		.replace('{title}', input.title ?? 'N/A')
+		.replace('{textLength}', String(input.text.length))
+		.replace('{text}', input.text.substring(0, 1000))
+		.replace('{links}', input.links?.join(', ') ?? 'None')
+		.replace('{viewCount}', String(input.metrics?.viewCount ?? 'N/A'))
+		.replace('{likeCount}', String(input.metrics?.likeCount ?? 'N/A'));
+
+	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 200, temperature: 0.1 });
+	if (!rawContent) return DEFAULT_ASSESSMENT;
+
+	try {
+		const result = extractJson<ContentAssessment>(rawContent);
+		if (!result || !result.action || typeof result.score !== 'number') {
+			throw new Error('Invalid assessment format');
+		}
+
+		console.log(`[AI] Assessment: action=${result.action}, score=${result.score}, reason=${result.reason}`);
+		return {
+			action: result.action,
+			score: result.score,
+			reason: result.reason ?? '',
+			contentType: result.contentType ?? 'original_content',
+		};
+	} catch (error) {
+		console.error('[AI] Assessment parse failed:', error);
+		return DEFAULT_ASSESSMENT;
 	}
 }
