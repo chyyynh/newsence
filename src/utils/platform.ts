@@ -194,7 +194,10 @@ interface KaitoTweet {
 		profilePicture?: string;
 	};
 	extendedEntities?: {
-		media?: Array<{ media_url_https: string }>;
+		media?: Array<{ media_url_https: string; type: string }>;
+	};
+	entities?: {
+		urls?: Array<{ expanded_url: string }>;
 	};
 }
 
@@ -229,6 +232,11 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		const tweet = data.tweets[0];
 		console.log(`[PLATFORM] Fetched Twitter metadata for @${tweet.author?.userName}`);
 
+		const tweetMedia = tweet.extendedEntities?.media;
+		const externalUrl = tweet.entities?.urls
+			?.map((u) => u.expanded_url)
+			.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+
 		return {
 			sourceType: 'twitter',
 			platformMetadata: createMetadata('twitter', {
@@ -241,7 +249,9 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 				retweetCount: tweet.retweetCount ?? 0,
 				replyCount: tweet.replyCount ?? 0,
 				quoteCount: tweet.quoteCount ?? 0,
-				mediaUrls: tweet.extendedEntities?.media?.map((m) => m.media_url_https) ?? [],
+				mediaUrls: tweetMedia?.map((m) => m.media_url_https) ?? [],
+				media: tweetMedia?.map((m) => ({ url: m.media_url_https, type: m.type })) ?? [],
+				...(externalUrl ? { externalUrl } : {}),
 				createdAt: tweet.createdAt,
 			}),
 		};

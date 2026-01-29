@@ -222,6 +222,17 @@ async function saveScrapedArticle(
 		sharedBy?: string;
 		originalTweetUrl?: string;
 		viewCount?: number;
+		tweetText?: string;
+		authorName?: string;
+		authorUserName?: string;
+		authorProfilePicture?: string;
+		authorVerified?: boolean;
+		likeCount?: number;
+		retweetCount?: number;
+		replyCount?: number;
+		quoteCount?: number;
+		media?: Array<{ url: string; type: string }>;
+		createdAt?: string;
 	}
 ): Promise<boolean> {
 	const table = getArticlesTable(env);
@@ -230,7 +241,7 @@ async function saveScrapedArticle(
 		url: data.url,
 		title: data.title,
 		source: data.source,
-		published_date: new Date(),
+		published_date: data.createdAt ? new Date(data.createdAt) : new Date(),
 		scraped_date: new Date(),
 		keywords: [],
 		tags: [],
@@ -245,7 +256,19 @@ async function saveScrapedArticle(
 			data: {
 				sharedBy: data.sharedBy,
 				originalTweetUrl: data.originalTweetUrl,
-				viewCount: data.viewCount,
+				tweetText: data.tweetText,
+				authorName: data.authorName || '',
+				authorUserName: data.authorUserName || '',
+				authorProfilePicture: data.authorProfilePicture,
+				authorVerified: data.authorVerified,
+				viewCount: data.viewCount || 0,
+				likeCount: data.likeCount || 0,
+				retweetCount: data.retweetCount || 0,
+				replyCount: data.replyCount || 0,
+				quoteCount: data.quoteCount || 0,
+				mediaUrls: data.media?.map((m) => m.url).filter(Boolean),
+				media: data.media || [],
+				createdAt: data.createdAt,
 			},
 		},
 	};
@@ -402,11 +425,42 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			ogImage,
 			sharedBy: tweet.author?.userName,
 			originalTweetUrl: tweet.url,
+			tweetText: textWithoutUrls,
+			authorName: tweet.author?.name,
+			authorUserName: tweet.author?.userName,
+			authorProfilePicture: (tweet.author as any)?.profilePicture,
+			authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
 			viewCount: tweet.viewCount,
+			likeCount: tweet.likeCount,
+			retweetCount: tweet.retweetCount,
+			replyCount: tweet.replyCount,
+			quoteCount: tweet.quoteCount,
+			media: tweet.media?.map((m: any) => ({ url: m.url, type: m.type })),
+			createdAt: tweet.createdAt,
 		});
 	}
 
-	// assessment.action === 'save' - Save as Twitter article
+	// assessment.action === 'save' - Save as tweet
+	// Detect if tweet has external link → twitter_shared, otherwise → twitter
+	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+	const metaType = externalUrl ? 'twitter_shared' : 'twitter';
+
+	// Fetch external link's og:image and title for twitter_shared
+	let externalOgImage: string | null = null;
+	let externalTitle: string | null = null;
+	if (externalUrl) {
+		try {
+			const [ogImage, scrapedHtml] = await Promise.all([
+				extractOgImage(externalUrl),
+				scrapeArticleContent(externalUrl),
+			]);
+			externalOgImage = ogImage;
+			externalTitle = extractTitleFromHtml(scrapedHtml);
+		} catch {
+			console.warn(`[TWITTER] Failed to fetch external link metadata: ${externalUrl}`);
+		}
+	}
+
 	const articleData = {
 		url: tweet.url,
 		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
@@ -429,9 +483,9 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 				quoteCount: tweet.quoteCount || 0,
 			},
 		}),
-		og_image_url: tweet.media?.[0]?.url ?? null,
+		og_image_url: tweet.media?.[0]?.url ?? externalOgImage ?? null,
 		platform_metadata: {
-			type: 'twitter',
+			type: metaType,
 			fetchedAt: new Date().toISOString(),
 			data: {
 				authorName: tweet.author?.name || '',
@@ -443,6 +497,10 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 				retweetCount: tweet.retweetCount || 0,
 				replyCount: tweet.replyCount || 0,
 				mediaUrls: tweet.media?.map((m: any) => m.url).filter(Boolean),
+				media: tweet.media?.map((m: any) => ({ url: m.url, type: m.type })).filter((m: any) => m.url) || [],
+				...(externalUrl ? { externalUrl, externalOgImage, externalTitle } : {}),
+				...(externalUrl ? { tweetText: textWithoutUrls } : {}),
+				...(externalUrl ? { sharedBy: tweet.author?.userName, originalTweetUrl: tweet.url } : {}),
 				createdAt: tweet.createdAt,
 			},
 		},

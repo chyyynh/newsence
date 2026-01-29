@@ -320,7 +320,6 @@ interface KaitoTweet {
 	replyCount?: number;
 	quoteCount?: number;
 	lang?: string;
-	isArticle?: boolean;
 	author?: {
 		userName: string;
 		name: string;
@@ -443,6 +442,7 @@ function buildTweetMetadata(
 	media?: Array<{ media_url_https: string; type: string }>,
 	extra?: Record<string, unknown>
 ): Record<string, unknown> {
+	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 	return {
 		tweetId: tweet.id,
 		tweetUrl: tweet.url,
@@ -459,6 +459,8 @@ function buildTweetMetadata(
 		expandedUrls,
 		lang: tweet.lang,
 		mediaUrls: media?.map((m) => m.media_url_https) || [],
+		media: media?.map((m) => ({ url: m.media_url_https, type: m.type })) || [],
+		...(externalUrl ? { externalUrl } : {}),
 		...extra,
 	};
 }
