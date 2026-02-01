@@ -38,7 +38,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		// Step 2: AI analysis (translate / tags / summary)
 		const processorResult = await step.do(
 			'ai-analysis',
-			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
 				const processor = getProcessor(source_type);
 				const supabase = getSupabaseClient(this.env);

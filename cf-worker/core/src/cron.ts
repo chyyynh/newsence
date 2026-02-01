@@ -297,6 +297,14 @@ async function saveScrapedArticle(
 	return true;
 }
 
+function extractTweetMedia(tweet: Tweet): Array<{ url: string; type: string }> {
+	return (
+		tweet.extendedEntities?.media?.flatMap((m) =>
+			m.media_url_https ? [{ url: m.media_url_https, type: m.type }] : []
+		) ?? []
+	);
+}
+
 async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env): Promise<boolean> {
 	const table = getArticlesTable(env);
 
@@ -341,7 +349,10 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 				};
 
 				const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
-				if (error) return console.error('[TWITTER] Insert article error:', error), false;
+				if (error) {
+					console.error('[TWITTER] Insert article error:', error);
+					return false;
+				}
 
 				const articleId = inserted?.[0]?.id;
 				if (articleId) {
@@ -439,7 +450,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			retweetCount: tweet.retweetCount,
 			replyCount: tweet.replyCount,
 			quoteCount: tweet.quoteCount,
-			media: tweet.media?.map((m: any) => ({ url: m.url, type: m.type })),
+			media: extractTweetMedia(tweet),
 			createdAt: tweet.createdAt,
 		});
 	}
@@ -465,7 +476,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 		}
 	}
 
-	const tweetMedia = tweet.media?.map((m: any) => ({ url: m.url, type: m.type })).filter((m: any) => m.url) || [];
+	const tweetMedia = extractTweetMedia(tweet);
 
 	const articleData = {
 		url: tweet.url,
@@ -519,7 +530,10 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 	};
 
 	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
-	if (error) return console.error('[TWITTER] insert error:', error), false;
+	if (error) {
+		console.error('[TWITTER] insert error:', error);
+		return false;
+	}
 
 	const articleId = inserted?.[0]?.id;
 	if (articleId) {
@@ -572,4 +586,3 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 	);
 	console.log(`[TWITTER] end, inserted: ${results.reduce((a, b) => a + b, 0)}`);
 }
-
