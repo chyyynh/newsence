@@ -67,7 +67,7 @@ export async function callOpenRouter(
 	const {
 		apiKey,
 		model = AI_MODELS.FLASH_LITE,
-		maxTokens = 500,
+		maxTokens,
 		temperature = 0.3,
 		systemPrompt,
 		timeoutMs = TIMEOUT_MS,
@@ -91,12 +91,10 @@ export async function callOpenRouter(
 			body: JSON.stringify({
 				model,
 				messages,
-				max_tokens: maxTokens,
+				...(maxTokens != null && { max_tokens: maxTokens }),
 				temperature,
 			}),
 		});
-
-		clearTimeout(timeoutId);
 
 		if (!response.ok) {
 			const errorBody = await response.text();
@@ -107,10 +105,11 @@ export async function callOpenRouter(
 		const data: OpenRouterResponse = await response.json();
 		return data.choices?.[0]?.message?.content ?? null;
 	} catch (error: unknown) {
-		clearTimeout(timeoutId);
 		const err = error as Error;
 		console.error(`[AI] Request ${err.name === 'AbortError' ? 'timed out' : 'failed'}:`, err.message);
 		return null;
+	} finally {
+		clearTimeout(timeoutId);
 	}
 }
 
@@ -240,7 +239,7 @@ ${tweetText}
 
 請只回傳JSON，不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 500 });
+	const rawContent = await callOpenRouter(prompt, { apiKey });
 	if (!rawContent) return { ...TWEET_FALLBACK, summary_cn: tweetText };
 
 	try {
