@@ -90,7 +90,9 @@ export interface Tweet {
 	retweetCount?: number;
 	replyCount?: number;
 	quoteCount?: number;
-	media?: any[];
+	extendedEntities?: {
+		media?: Array<{ media_url_https: string; type: string }>;
+	};
 	hashTags?: string[];
 	mentions?: any[];
 	urls?: any[];
