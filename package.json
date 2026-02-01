@@ -11,18 +11,18 @@
 		"cf-typegen": "wrangler types"
 	},
 	"dependencies": {
-		"@supabase/supabase-js": "^2.55.0",
-		"axios": "^1.8.4",
-		"cheerio": "^1.0.0",
-		"fast-xml-parser": "^5.2.0"
+		"@supabase/supabase-js": "^2.93.3",
+		"axios": "^1.13.4",
+		"cheerio": "^1.2.0",
+		"fast-xml-parser": "^5.3.4"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
-		"@cloudflare/workers-types": "^4.20251014.0",
-		"@types/node": "^22.14.0",
-		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.51.0"
+		"@cloudflare/vitest-pool-workers": "^0.8.71",
+		"@cloudflare/workers-types": "^4.20260131.0",
+		"@types/node": "^22.19.7",
+		"typescript": "^5.9.3",
+		"vitest": "~3.2.4",
+		"wrangler": "^4.61.1"
 	},
 	"packageManager": "pnpm@9.1.4",
 	"engines": {
