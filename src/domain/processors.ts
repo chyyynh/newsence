@@ -107,10 +107,10 @@ class TwitterProcessor implements ArticleProcessor {
 
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const updateData: ProcessorResult['updateData'] = {};
-		const isArticle = article.platform_metadata?.type === 'twitter_article';
+		const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
 		// 1. Twitter Article — content is already full text from scrapeTwitterArticle
-		if (isArticle && article.content && article.content.length > 200) {
+		if (hasFullContent) {
 			console.log(`[TWITTER-PROCESSOR] Processing Twitter Article: ${article.title.slice(0, 50)}`);
 			const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
 
@@ -121,7 +121,7 @@ class TwitterProcessor implements ArticleProcessor {
 			if (!article.keywords?.length) updateData.keywords = analysis.keywords;
 
 			// Translate full article content to Chinese
-			const contentCn = await translateContent(article.content, ctx.env.OPENROUTER_API_KEY);
+			const contentCn = await translateContent(article.content!, ctx.env.OPENROUTER_API_KEY);
 			if (contentCn) updateData.content_cn = contentCn;
 
 			return { updateData };

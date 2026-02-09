@@ -342,16 +342,12 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
 		metadata: {
-			type: 'twitter_article',
+			variant: 'article',
 			tweetId,
 			authorName: article.author?.name,
 			authorUserName: article.author?.userName,
 			authorProfilePicture: article.author?.profilePicture,
 			authorVerified: article.author?.isBlueVerified,
-			viewCount: article.viewCount || 0,
-			likeCount: article.likeCount || 0,
-			replyCount: article.replyCount || 0,
-			quoteCount: article.quoteCount || 0,
 		},
 	};
 }
@@ -373,11 +369,6 @@ function buildTweetMetadata(
 		authorUserName: tweet.author?.userName,
 		authorProfilePicture: tweet.author?.profilePicture,
 		authorVerified: tweet.author?.isBlueVerified,
-		viewCount: tweet.viewCount || 0,
-		likeCount: tweet.likeCount || 0,
-		retweetCount: tweet.retweetCount || 0,
-		replyCount: tweet.replyCount || 0,
-		quoteCount: tweet.quoteCount || 0,
 		hashtags,
 		expandedUrls,
 		lang: tweet.lang,
@@ -440,7 +431,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 					author: tweet.author?.userName || linked.author || null,
 					publishedDate: tweet.createdAt,
 					metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media, {
-					type: 'twitter_shared',
+					variant: 'shared',
 					linkedUrl: externalUrl,
 					externalOgImage: linked.ogImageUrl || null,
 					externalTitle: linked.title || null,

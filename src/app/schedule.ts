@@ -188,16 +188,11 @@ async function saveScrapedArticle(
 		ogImage: string | null;
 		sharedBy?: string;
 		originalTweetUrl?: string;
-		viewCount?: number;
 		tweetText?: string;
 		authorName?: string;
 		authorUserName?: string;
 		authorProfilePicture?: string;
 		authorVerified?: boolean;
-		likeCount?: number;
-		retweetCount?: number;
-		replyCount?: number;
-		quoteCount?: number;
 		media?: Array<{ url: string; type: string }>;
 		createdAt?: string;
 	}
@@ -218,22 +213,17 @@ async function saveScrapedArticle(
 		content: data.content,
 		og_image_url: data.ogImage,
 		platform_metadata: {
-			type: 'twitter_shared',
+			type: 'twitter',
 			fetchedAt: new Date().toISOString(),
 			data: {
+				variant: 'shared',
 				authorName: data.authorName || '',
 				authorUserName: data.authorUserName || '',
 				authorProfilePicture: data.authorProfilePicture,
 				authorVerified: data.authorVerified,
-				viewCount: data.viewCount || 0,
-				likeCount: data.likeCount || 0,
-				retweetCount: data.retweetCount || 0,
-				replyCount: data.replyCount || 0,
-				quoteCount: data.quoteCount || 0,
 				mediaUrls: data.media?.map((m) => m.url).filter(Boolean),
 				media: data.media || [],
 				createdAt: data.createdAt,
-				// twitter_shared specific fields
 				tweetText: data.tweetText,
 				sharedBy: data.sharedBy,
 				originalTweetUrl: data.originalTweetUrl,
@@ -303,7 +293,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 					content: articleContent.content,
 					og_image_url: articleContent.ogImageUrl || null,
 					platform_metadata: {
-						type: 'twitter_article',
+						type: 'twitter',
 						fetchedAt: new Date().toISOString(),
 						data: {
 							...articleContent.metadata,
@@ -387,7 +377,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 				text: scrapedContent,
 				url: resolvedUrl,
 				source: 'Twitter',
-				sourceType: 'rss',
+				sourceType: 'twitter',
 			},
 			env.OPENROUTER_API_KEY
 		);
@@ -397,13 +387,12 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			return false;
 		}
 
-		// Save as regular article (not Twitter)
 		return saveScrapedArticle(supabase, env, {
 			url: resolvedUrl,
 			title: extractTitleFromHtml(scrapedContent) ?? 'Shared Article',
 			content: scrapedContent,
 			source: 'Twitter',
-			sourceType: 'rss',
+			sourceType: 'twitter',
 			ogImage,
 			sharedBy: tweet.author?.userName,
 			originalTweetUrl: tweet.url,
@@ -412,22 +401,15 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			authorUserName: tweet.author?.userName,
 			authorProfilePicture: (tweet.author as any)?.profilePicture,
 			authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-			viewCount: tweet.viewCount,
-			likeCount: tweet.likeCount,
-			retweetCount: tweet.retweetCount,
-			replyCount: tweet.replyCount,
-			quoteCount: tweet.quoteCount,
 			media: extractTweetMedia(tweet),
 			createdAt: tweet.createdAt,
 		});
 	}
 
 	// assessment.action === 'save' - Save as tweet
-	// Detect if tweet has external link → twitter_shared, otherwise → twitter
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
-	const metaType = externalUrl ? 'twitter_shared' : 'twitter';
 
-	// Fetch external link's og:image and title for twitter_shared
+	// Fetch external link's og:image and title
 	let externalOgImage: string | null = null;
 	let externalTitle: string | null = null;
 	if (externalUrl) {
@@ -459,22 +441,18 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		content: null,
 		og_image_url: tweetMedia[0]?.url ?? externalOgImage ?? null,
 		platform_metadata: {
-			type: metaType,
+			type: 'twitter',
 			fetchedAt: new Date().toISOString(),
 			data: {
 				authorName: tweet.author?.name || '',
 				authorUserName: tweet.author?.userName || '',
 				authorProfilePicture: (tweet.author as any)?.profilePicture,
 				authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-				viewCount: tweet.viewCount || 0,
-				likeCount: tweet.likeCount || 0,
-				retweetCount: tweet.retweetCount || 0,
-				replyCount: tweet.replyCount || 0,
 				mediaUrls: tweetMedia.map((m) => m.url),
 				media: tweetMedia,
 				createdAt: tweet.createdAt,
-				// twitter_shared specific fields (only when external URL detected)
 				...(externalUrl && {
+					variant: 'shared',
 					externalUrl,
 					externalOgImage,
 					externalTitle,
