@@ -1,8 +1,6 @@
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;
 
-export const EMBEDDING_DIMENSIONS = 1024;
-
 interface AiEmbeddingResult {
 	data: number[][];
 }

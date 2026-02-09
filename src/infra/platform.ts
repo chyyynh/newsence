@@ -1,6 +1,4 @@
-import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../scrapers';
-export type { PlatformType } from '../scrapers';
-export { HN_ALGOLIA_API };
+import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../domain/scrapers';
 
 // ─────────────────────────────────────────────────────────────
 // Platform Metadata
@@ -10,7 +8,7 @@ const YOUTUBE_VIDEO_API = 'https://www.googleapis.com/youtube/v3/videos';
 const YOUTUBE_CHANNEL_API = 'https://www.googleapis.com/youtube/v3/channels';
 const KAITO_API = 'https://api.twitterapi.io/twitter/tweets';
 
-export interface PlatformMetadataResult {
+interface PlatformMetadataResult {
 	sourceType: string;
 	platformMetadata: {
 		type: string;

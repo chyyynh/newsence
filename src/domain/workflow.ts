@@ -1,8 +1,13 @@
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { Env, Article } from './types';
-import { getSupabaseClient, getArticlesTable } from './utils/supabase';
-import { getProcessor, ProcessorContext, ProcessorResult } from './processors';
-import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from './utils/embedding';
+import { Env, Article, MessageBatch, QueueMessage } from '../models/types';
+import { getSupabaseClient, getArticlesTable } from '../infra/db';
+import {
+	ProcessorResult,
+	runArticleProcessor,
+	persistProcessorResult,
+	buildEmbeddingTextForArticle,
+} from './processors';
+import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 
 const ARTICLE_FIELDS = 'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
 
@@ -10,6 +15,68 @@ type WorkflowParams = {
 	article_id: string;
 	source_type: string;
 };
+
+const SOURCE_TYPE_BATCH_SIZE = 200;
+const SOURCE_TYPE_FALLBACK = 'default';
+
+async function fetchSourceTypeMap(articleIds: string[], env: Env): Promise<Map<string, string>> {
+	if (articleIds.length === 0) return new Map();
+
+	const supabase = getSupabaseClient(env);
+	const table = getArticlesTable(env);
+	const sourceTypes = new Map<string, string>();
+
+	for (let i = 0; i < articleIds.length; i += SOURCE_TYPE_BATCH_SIZE) {
+		const batchIds = articleIds.slice(i, i + SOURCE_TYPE_BATCH_SIZE);
+		const { data, error } = await supabase.from(table).select('id, source_type').in('id', batchIds);
+		if (error) {
+			console.warn('[ARTICLE-QUEUE] Failed to fetch source types:', error);
+			continue;
+		}
+		for (const row of data ?? []) {
+			if (row.id && row.source_type) sourceTypes.set(row.id, row.source_type);
+		}
+	}
+
+	return sourceTypes;
+}
+
+export async function handleArticleQueue(
+	batch: MessageBatch<QueueMessage>,
+	env: Env
+): Promise<void> {
+	console.log(`[ARTICLE-QUEUE] Received batch of ${batch.messages.length} messages`);
+
+	for (const message of batch.messages) {
+		const body = message.body;
+
+		try {
+			if (body.type === 'article_process') {
+				await env.MONITOR_WORKFLOW.create({
+					params: { article_id: body.article_id, source_type: body.source_type },
+				});
+				console.log(`[ARTICLE-QUEUE] Created workflow for article ${body.article_id}`);
+				message.ack();
+			} else if (body.type === 'batch_process') {
+				const sourceTypeMap = await fetchSourceTypeMap(body.article_ids, env);
+				for (const id of body.article_ids) {
+					const sourceType = sourceTypeMap.get(id) ?? SOURCE_TYPE_FALLBACK;
+					await env.MONITOR_WORKFLOW.create({
+						params: { article_id: id, source_type: sourceType },
+					});
+				}
+				console.log(`[ARTICLE-QUEUE] Created ${body.article_ids.length} workflows (batch from ${body.triggered_by})`);
+				message.ack();
+			} else {
+				console.warn('[ARTICLE-QUEUE] Unknown message type, acking');
+				message.ack();
+			}
+		} catch (err) {
+			console.error('[ARTICLE-QUEUE] Error handling message, retrying:', err);
+			message.retry();
+		}
+	}
+}
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
@@ -40,10 +107,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const processor = getProcessor(source_type);
 				const supabase = getSupabaseClient(this.env);
-				const ctx: ProcessorContext = { env: this.env, supabase, table };
-				return await processor.process(article, ctx);
+				return await runArticleProcessor(article, source_type, {
+					env: this.env,
+					supabase,
+					table,
+				});
 			}
 		) as ProcessorResult;
 
@@ -53,27 +122,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				const supabase = getSupabaseClient(this.env);
-
-				// Update article fields
+				await persistProcessorResult(article_id, article, processorResult, {
+					env: this.env,
+					supabase,
+					table,
+				});
 				if (Object.keys(processorResult.updateData).length > 0) {
-					const { error } = await supabase.from(table).update(processorResult.updateData).eq('id', article_id);
-					if (error) throw new Error(`Failed to update article ${article_id}: ${error.message}`);
 					console.log(`[WORKFLOW] Updated fields: ${Object.keys(processorResult.updateData).join(', ')}`);
 				}
-
-				// Update enrichments
 				if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
-					const existingMetadata = article.platform_metadata || {};
-					const updatedMetadata = {
-						...existingMetadata,
-						enrichments: {
-							...(existingMetadata.enrichments || {}),
-							...processorResult.enrichments,
-							processedAt: new Date().toISOString(),
-						},
-					};
-					const { error } = await supabase.from(table).update({ platform_metadata: updatedMetadata }).eq('id', article_id);
-					if (error) throw new Error(`Failed to update enrichments for ${article_id}: ${error.message}`);
 					console.log(`[WORKFLOW] Enrichments saved: ${Object.keys(processorResult.enrichments).join(', ')}`);
 				}
 			}
@@ -84,14 +141,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				const text = prepareArticleTextForEmbedding({
-					title: article.title,
-					title_cn: processorResult.updateData.title_cn ?? article.title_cn,
-					summary: processorResult.updateData.summary ?? article.summary,
-					summary_cn: processorResult.updateData.summary_cn ?? article.summary_cn,
-					tags: processorResult.updateData.tags ?? article.tags,
-					keywords: processorResult.updateData.keywords ?? article.keywords,
-				});
+				const text = buildEmbeddingTextForArticle(article, processorResult);
 				if (!text || !this.env.AI) return null;
 				return await generateArticleEmbedding(text, this.env.AI);
 			}

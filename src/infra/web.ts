@@ -136,7 +136,7 @@ export async function scrapeArticleContent(url: string): Promise<string> {
 		let content = ''; // for accumulating content
 		const title = $('title').text();
 		content += `# ${title}\n\n`; // Add title to content
-		const elements = $('p, img, a, h1, h2, h3'); // Select relevant elements including h2, h3
+		const elements = $('p, img, h1, h2, h3'); // Select relevant elements including h2, h3
 		const errors: string[] = []; // Array to collect errors during element processing
 
 		for (const el of elements) {
@@ -174,7 +174,6 @@ export async function scrapeArticleContent(url: string): Promise<string> {
 						}
 					}
 				}
-				// Note: 'a' tags are selected but not explicitly processed, they are ignored.
 			} catch (elementError: any) {
 				// Catch errors during processing of a single element
 				errors.push(`Error processing element: ${elementError.message}`);

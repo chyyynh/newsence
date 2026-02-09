@@ -18,20 +18,22 @@
 
 ```
 src/
-├── index.ts          # 入口 - HTTP/Cron/Queue 路由
-├── types.ts          # 型別定義
-├── handlers.ts       # HTTP 端點處理
-├── cron.ts           # 定時任務 (RSS/Twitter/Daily)
-├── queue.ts          # Queue 消費者
-├── workflow.ts       # Workflow 編排
-├── processors.ts     # 平台處理器 (Default/Twitter/HN)
-├── scrapers.ts       # 平台抓取器 (YouTube/Twitter/HN/Web)
-└── utils/
-    ├── ai.ts         # OpenRouter AI 分析
-    ├── embedding.ts  # Workers AI embedding
-    ├── supabase.ts   # Supabase 客戶端
-    ├── rss.ts        # RSS 解析與內容抓取
-    └── platform.ts   # 平台偵測與 metadata
+├── index.ts              # 入口 - HTTP/Cron/Queue 路由
+├── app/
+│   ├── http.ts           # HTTP 端點處理
+│   └── schedule.ts       # 定時任務 (RSS/Twitter)
+├── domain/
+│   ├── workflow.ts       # Workflow + Queue 消費者
+│   ├── processors.ts     # 平台處理器 + 共用處理流程
+│   └── scrapers.ts       # 平台抓取器 (YouTube/Twitter/HN/Web)
+├── infra/
+│   ├── ai.ts             # OpenRouter AI 分析
+│   ├── embedding.ts      # Workers AI embedding
+│   ├── db.ts             # Supabase 客戶端
+│   ├── web.ts            # 網頁抓取與 URL 工具
+│   └── platform.ts       # 平台 metadata 抓取
+└── models/
+    └── types.ts          # 型別定義
 ```
 
 ## HTTP 端點
@@ -39,19 +41,12 @@ src/
 | Method | Path | 說明 |
 |--------|------|------|
 | GET | `/health` | 健康檢查 |
-| GET | `/status` | Worker 狀態 |
-| POST | `/trigger` | 手動觸發文章處理 |
-| POST | `/submit` | 提交 URL (輕量) |
-| POST | `/scrape` | Scrape URL (完整 AI 處理) |
-| GET | `/api/youtube/metadata` | YouTube metadata |
-| POST | `/cron/rss` | 手動觸發 RSS 監控 |
-| POST | `/cron/twitter` | 手動觸發 Twitter 監控 |
-| POST | `/cron/article-daily` | 手動觸發每日處理 |
+| POST | `/submit` | 提交 URL (完整 crawl + AI 處理) |
 
-## Scrape API
+## Submit API
 
 ```bash
-curl -X POST https://newsence-core.chinyuhsu1023.workers.dev/scrape \
+curl -X POST https://newsence-core.chinyuhsu1023.workers.dev/submit \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/article"}'
 ```
@@ -81,15 +76,12 @@ curl -X POST https://newsence-core.chinyuhsu1023.workers.dev/scrape \
 |------|------|------|
 | `*/5 * * * *` | RSS Monitor | 每 5 分鐘抓取 RSS feeds |
 | `0 */6 * * *` | Twitter Monitor | 每 6 小時追蹤高互動推文 |
-| `0 3 * * *` | Article Daily | 每日 3AM 處理未完成文章 |
 
 ## Queue 系統
 
 | Queue | 訊息類型 | 用途 |
 |-------|---------|------|
-| `rss-scraping-queue-core` | `article_scraped` | RSS 文章 |
-| `twitter-processing-queue-core` | `tweet_scraped` | Twitter 推文 |
-| `article-processing-queue-core` | `process_articles` | AI 分析 |
+| `article-processing-queue-core` | `article_process` / `batch_process` | 觸發 Workflow 進行 AI 分析與 embedding |
 
 配置：
 - `max_batch_size`: 10
@@ -123,6 +115,9 @@ curl -X POST https://newsence-core.chinyuhsu1023.workers.dev/scrape \
 | `SUPABASE_URL` | Yes | Supabase URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase key |
 | `OPENROUTER_API_KEY` | Yes | OpenRouter API key |
+| `CORE_WORKER_INTERNAL_TOKEN` | No | 啟用 `/submit` 驗證用的內部 token (header: `X-Internal-Token`) |
+| `SUBMIT_RATE_LIMIT_MAX` | No | `/submit` 單一 key 於時間窗內最大請求數 (預設: `20`) |
+| `SUBMIT_RATE_LIMIT_WINDOW_SEC` | No | `/submit` 限流時間窗秒數 (預設: `60`) |
 | `ARTICLES_TABLE` | No | Table 名稱 (預設: `articles`) |
 | `YOUTUBE_API_KEY` | No | YouTube Data API |
 | `KAITO_API_KEY` | No | Kaito API (Twitter) |
@@ -157,8 +152,8 @@ pnpm wrangler tail
        │               │                │            │
        ▼               ▼                ▼            │
   ┌─────────┐    ┌──────────┐    ┌──────────┐       │
-  │RSS Cron │    │Twitter   │    │ /scrape  │       │
-  │ */5min  │    │ */6h     │    │ /submit  │       │
+  │RSS Cron │    │Twitter   │    │ /submit  │       │
+  │ */5min  │    │ */6h     │    │   API    │       │
   └────┬────┘    └────┬─────┘    └────┬─────┘       │
        │              │               │             │
        └──────────────┼───────────────┘             │

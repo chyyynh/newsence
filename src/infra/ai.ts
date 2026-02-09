@@ -1,15 +1,15 @@
-import { Article, AIAnalysisResult, OpenRouterResponse } from '../types';
+import { Article, AIAnalysisResult, OpenRouterResponse } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
 // Content Assessment Types
 // ─────────────────────────────────────────────────────────────
 
-export interface ContentInput {
+interface ContentInput {
 	title?: string;
 	text: string;
 	url: string;
 	source: string;
-	sourceType: 'twitter' | 'rss' | 'hackernews' | 'arxiv';
+	sourceType: 'twitter' | 'rss' | 'hackernews';
 	links?: string[];
 	metrics?: {
 		viewCount?: number;
@@ -17,7 +17,7 @@ export interface ContentInput {
 	};
 }
 
-export interface ContentAssessment {
+interface ContentAssessment {
 	action: 'save' | 'follow_link' | 'discard';
 	score: number;
 	reason: string;
