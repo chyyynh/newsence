@@ -1,4 +1,4 @@
-import { Env, ExecutionContext } from './types';
+import { Article, Env, ExecutionContext } from './types';
 import { getSupabaseClient, getArticlesTable } from './utils/supabase';
 import { normalizeUrl, scrapeArticleContent, extractOgImage } from './utils/rss';
 import { getProcessor, ProcessorContext } from './processors';
@@ -173,6 +173,20 @@ type ScrapeBody = {
 	skipSave?: boolean; // If true, only scrape without AI analysis or DB save (preview mode)
 };
 
+function normalizePlatformMetadata(
+	metadata: Record<string, unknown> | undefined,
+	fallbackType: string
+): Article['platform_metadata'] | null {
+	if (!metadata) return null;
+	const rawType = metadata.type;
+	const type = typeof rawType === 'string' && rawType.trim().length > 0 ? rawType : fallbackType;
+	return {
+		type,
+		fetchedAt: new Date().toISOString(),
+		data: metadata,
+	};
+}
+
 export async function handleScrapeUrl(request: Request, env: Env): Promise<Response> {
 	let body: ScrapeBody;
 
@@ -275,6 +289,7 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 	// Full mode: Insert raw article → Processor AI → Update DB → Embedding
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
+	const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
 
 	// Insert raw article first
 	const rawArticleData = {
@@ -290,9 +305,7 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		keywords: [],
 		tags: [],
 		tokens: [],
-		platform_metadata: scraped.metadata
-			? { type: scraped.metadata.type || platformType, fetchedAt: new Date().toISOString(), data: scraped.metadata }
-			: null,
+		platform_metadata: normalizedPlatformMetadata,
 	};
 
 	const { data: inserted, error } = await supabase.from(table).insert([rawArticleData]).select('id');
@@ -317,7 +330,7 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 		tags: [] as string[],
 		keywords: [] as string[],
 		source_type: platformType,
-		platform_metadata: rawArticleData.platform_metadata ?? undefined,
+		platform_metadata: normalizedPlatformMetadata ?? undefined,
 	};
 
 	console.log(`[SCRAPE] Running ${platformType} processor for: ${scraped.title.slice(0, 50)}`);
@@ -331,7 +344,7 @@ export async function handleScrapeUrl(request: Request, env: Env): Promise<Respo
 	}
 	if (result.enrichments && Object.keys(result.enrichments).length > 0) {
 		const updatedMetadata = {
-			...(rawArticleData.platform_metadata || {}),
+			...(normalizedPlatformMetadata || {}),
 			enrichments: { ...result.enrichments, processedAt: new Date().toISOString() },
 		};
 		await supabase.from(table).update({ platform_metadata: updatedMetadata }).eq('id', articleId);
@@ -418,4 +431,3 @@ export async function handleYouTubeMetadata(request: Request, env: Env): Promise
 		);
 	}
 }
-
