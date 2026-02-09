@@ -19,7 +19,7 @@
 		"crons": [
 			"*/5 * * * *", // RSS monitor (every 5 minutes)
 			"0 */6 * * *", // Twitter monitor (every 6 hours)
-			"*/5 * * * *" // Backup Article daily processing (3 AM daily)
+			"0 3 * * *" // Retry failed articles (daily 3 AM UTC)
 		]
 	},
 	/**

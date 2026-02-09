@@ -1,6 +1,6 @@
 import { Env, ScheduledEvent, ExecutionContext, MessageBatch, QueueMessage } from './models/types';
 import { handleHealth, handleSubmitUrl } from './app/http';
-import { handleRSSCron, handleTwitterCron } from './app/schedule';
+import { handleRSSCron, handleTwitterCron, handleRetryCron } from './app/schedule';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 
 export { NewsenceMonitorWorkflow };
@@ -26,6 +26,7 @@ export default {
 
 		if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
 		else if (event.cron === '0 */6 * * *') ctx.waitUntil(handleTwitterCron(env, ctx));
+		else if (event.cron === '0 3 * * *') ctx.waitUntil(handleRetryCron(env, ctx));
 	},
 
 	async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {

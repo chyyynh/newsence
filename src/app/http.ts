@@ -115,7 +115,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 
 	const { data: existing } = await supabase
 		.from(table)
-		.select('id, title, title_cn, content, summary, summary_cn, source, source_type, og_image_url, published_date, author')
+		.select('id, title, title_cn, content, summary, summary_cn, source, source_type, og_image_url, published_date')
 		.eq('url', url)
 		.single();
 	if (existing) {
@@ -137,7 +137,6 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 				sourceType: existing.source_type || platformType,
 				ogImageUrl: existing.og_image_url,
 				publishedDate: existing.published_date,
-				author: existing.author,
 			},
 		});
 	}

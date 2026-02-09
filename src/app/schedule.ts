@@ -521,3 +521,35 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 	);
 	console.log(`[TWITTER] end, inserted: ${results.reduce((a, b) => a + b, 0)}`);
 }
+
+// ─────────────────────────────────────────────────────────────
+// Retry Failed Articles
+// ─────────────────────────────────────────────────────────────
+
+const RETRY_BATCH_SIZE = 20;
+
+export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+	console.log('[RETRY] start');
+	const supabase = getSupabaseClient(env);
+	const table = getArticlesTable(env);
+	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
+	const { data, error } = await supabase
+		.from(table)
+		.select('id')
+		.gte('scraped_date', since)
+		.or('title_cn.is.null,summary_cn.is.null,embedding.is.null');
+
+	if (error) return console.error('[RETRY] query failed:', error);
+	if (!data?.length) return console.log('[RETRY] no incomplete articles');
+
+	const ids: string[] = data.map((r: { id: string }) => r.id);
+	for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
+		await env.ARTICLE_QUEUE.send({
+			type: 'batch_process',
+			article_ids: ids.slice(i, i + RETRY_BATCH_SIZE),
+			triggered_by: 'retry_cron',
+		});
+	}
+	console.log(`[RETRY] queued ${ids.length} articles in ${Math.ceil(ids.length / RETRY_BATCH_SIZE)} batches`);
+}
