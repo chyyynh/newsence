@@ -1,10 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
-import { Env, ExecutionContext, Tweet, RSSFeed } from './types';
-import { getSupabaseClient, getArticlesTable } from './utils/supabase';
-import { normalizeUrl, scrapeArticleContent, extractOgImage, resolveUrl, isSocialMediaUrl, extractTitleFromHtml } from './utils/rss';
-import { scrapeTwitterArticle } from './scrapers';
-import { fetchPlatformMetadata } from './utils/platform';
-import { assessContent } from './utils/ai';
+import { Env, ExecutionContext, Tweet, RSSFeed } from '../models/types';
+import { getSupabaseClient, getArticlesTable } from '../infra/db';
+import { normalizeUrl, scrapeArticleContent, extractOgImage, resolveUrl, isSocialMediaUrl, extractTitleFromHtml } from '../infra/web';
+import { scrapeTwitterArticle } from '../domain/scrapers';
+import { fetchPlatformMetadata } from '../infra/platform';
+import { assessContent } from '../infra/ai';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -14,35 +14,9 @@ type RSSItem = Record<string, any>;
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
-function extractUrlFromItem(item: RSSItem, isArxiv: boolean): string | null {
-	if (isArxiv) {
-		if (item.id) return item.id;
-		if (typeof item.link === 'string') return item.link;
-		if (Array.isArray(item.link)) {
-			const absLink = item.link.find((l: any) => l['@_href']?.includes('/abs/'));
-			return absLink?.['@_href'] ?? item.link[0]?.['@_href'] ?? null;
-		}
-		return item.link?.['@_href'] ?? null;
-	}
+function extractUrlFromItem(item: RSSItem): string | null {
 	if (typeof item.link === 'string') return item.link;
 	return item.link?.['@_href'] ?? item.link?.href ?? item.url ?? null;
-}
-
-function extractArxivExtensions(item: RSSItem): string {
-	let ext = '';
-	if (item.author) {
-		const authors = Array.isArray(item.author)
-			? item.author.map((a: any) => a.name ?? a).join(', ')
-			: item.author.name ?? item.author;
-		if (authors) ext += `\n\nAuthors: ${authors}`;
-	}
-	if (item.category) {
-		const cats = Array.isArray(item.category)
-			? item.category.map((c: any) => c['@_term'] ?? c).join(', ')
-			: item.category['@_term'] ?? item.category;
-		if (cats) ext += `\n\nArXiv Categories: ${cats}`;
-	}
-	return ext;
 }
 
 function extractItemsFromFeed(data: any): RSSItem[] {
@@ -51,8 +25,7 @@ function extractItemsFromFeed(data: any): RSSItem[] {
 }
 
 async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, feed: RSSFeed): Promise<void> {
-	const isArxiv = feed.name?.toLowerCase().includes('arxiv');
-	const rawUrl = extractUrlFromItem(item, isArxiv);
+	const rawUrl = extractUrlFromItem(item);
 	const url = rawUrl ? normalizeUrl(rawUrl) : null;
 	if (!url) return;
 
@@ -84,7 +57,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 	}
 
 	// Scrape content for regular RSS
-	if (!isArxiv && sourceType === 'rss') {
+	if (sourceType === 'rss') {
 		try {
 			[crawledContent, ogImageUrl] = await Promise.all([
 				scrapeArticleContent(url),
@@ -93,12 +66,10 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		} catch {}
 	}
 
-	if (isArxiv) sourceType = 'arxiv';
-
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
-	const content = isArxiv
-		? (item.description ?? item.summary ?? '') + extractArxivExtensions(item)
-		: crawledContent || item.description || item.summary || '';
+	const content = sourceType === 'youtube'
+		? null
+		: (crawledContent || null);
 
 	const insert = {
 		url,
@@ -109,7 +80,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		keywords: [],
 		tags: [],
 		tokens: [],
-		summary: enrichedSummary ?? '',
+		summary: enrichedSummary ?? item.description ?? item.summary ?? '',
 		source_type: sourceType,
 		content,
 		og_image_url: ogImageUrl,
@@ -133,7 +104,6 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
-	const isArxiv = feed.name?.toLowerCase().includes('arxiv');
 	const res = await fetch(feed.RSSLink, {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/xml, text/xml, */*' },
 	});
@@ -145,10 +115,10 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 	// Limit items
 	const isAnthropic = feed.name?.toLowerCase().includes('anthropic');
 	if (isAnthropic && items.length > 30) items = items.slice(-30);
-	else if (!isArxiv && items.length > 30) items = items.slice(0, 30);
+	else if (items.length > 30) items = items.slice(0, 30);
 
 	// Filter existing URLs
-	const urls = items.map((item) => extractUrlFromItem(item, isArxiv)).filter(Boolean).map((u) => normalizeUrl(u!));
+	const urls = items.map((item) => extractUrlFromItem(item)).filter(Boolean).map((u) => normalizeUrl(u!));
 	const table = getArticlesTable(env);
 	const batchSize = feed.name?.toLowerCase().includes('stratechery') ? 5 : 50;
 	const existingUrls: string[] = [];
@@ -160,7 +130,7 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 
 	const existingSet = new Set(existingUrls);
 	const newItems = items.filter((item) => {
-		const url = extractUrlFromItem(item, isArxiv);
+		const url = extractUrlFromItem(item);
 		return url && !existingSet.has(normalizeUrl(url));
 	});
 
@@ -193,10 +163,7 @@ interface TwitterApiResponse {
 
 const TWITTER_API = 'https://api.twitterapi.io/twitter/list/tweets';
 const VIEW_THRESHOLD = 10000;
-const TWITTER_LISTS = [
-	{ id: '1894659296388157547', type: 'Core' },
-	{ id: '1920007527703662678', type: 'Application' },
-];
+const TWITTER_LISTS = ['1894659296388157547', '1920007527703662678'];
 
 async function getLastTwitterTime(supabase: any, env: Env): Promise<Date> {
 	const { data } = await supabase
@@ -221,16 +188,11 @@ async function saveScrapedArticle(
 		ogImage: string | null;
 		sharedBy?: string;
 		originalTweetUrl?: string;
-		viewCount?: number;
 		tweetText?: string;
 		authorName?: string;
 		authorUserName?: string;
 		authorProfilePicture?: string;
 		authorVerified?: boolean;
-		likeCount?: number;
-		retweetCount?: number;
-		replyCount?: number;
-		quoteCount?: number;
 		media?: Array<{ url: string; type: string }>;
 		createdAt?: string;
 	}
@@ -251,22 +213,17 @@ async function saveScrapedArticle(
 		content: data.content,
 		og_image_url: data.ogImage,
 		platform_metadata: {
-			type: 'twitter_shared',
+			type: 'twitter',
 			fetchedAt: new Date().toISOString(),
 			data: {
+				variant: 'shared',
 				authorName: data.authorName || '',
 				authorUserName: data.authorUserName || '',
 				authorProfilePicture: data.authorProfilePicture,
 				authorVerified: data.authorVerified,
-				viewCount: data.viewCount || 0,
-				likeCount: data.likeCount || 0,
-				retweetCount: data.retweetCount || 0,
-				replyCount: data.replyCount || 0,
-				quoteCount: data.quoteCount || 0,
 				mediaUrls: data.media?.map((m) => m.url).filter(Boolean),
 				media: data.media || [],
 				createdAt: data.createdAt,
-				// twitter_shared specific fields
 				tweetText: data.tweetText,
 				sharedBy: data.sharedBy,
 				originalTweetUrl: data.originalTweetUrl,
@@ -305,7 +262,7 @@ function extractTweetMedia(tweet: Tweet): Array<{ url: string; type: string }> {
 	);
 }
 
-async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env): Promise<boolean> {
+async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean> {
 	const table = getArticlesTable(env);
 
 	// Check for duplicates
@@ -336,7 +293,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 					content: articleContent.content,
 					og_image_url: articleContent.ogImageUrl || null,
 					platform_metadata: {
-						type: 'twitter_article',
+						type: 'twitter',
 						fetchedAt: new Date().toISOString(),
 						data: {
 							...articleContent.metadata,
@@ -420,7 +377,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 				text: scrapedContent,
 				url: resolvedUrl,
 				source: 'Twitter',
-				sourceType: 'rss',
+				sourceType: 'twitter',
 			},
 			env.OPENROUTER_API_KEY
 		);
@@ -430,13 +387,12 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			return false;
 		}
 
-		// Save as regular article (not Twitter)
 		return saveScrapedArticle(supabase, env, {
 			url: resolvedUrl,
 			title: extractTitleFromHtml(scrapedContent) ?? 'Shared Article',
 			content: scrapedContent,
 			source: 'Twitter',
-			sourceType: 'rss',
+			sourceType: 'twitter',
 			ogImage,
 			sharedBy: tweet.author?.userName,
 			originalTweetUrl: tweet.url,
@@ -445,22 +401,15 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 			authorUserName: tweet.author?.userName,
 			authorProfilePicture: (tweet.author as any)?.profilePicture,
 			authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-			viewCount: tweet.viewCount,
-			likeCount: tweet.likeCount,
-			retweetCount: tweet.retweetCount,
-			replyCount: tweet.replyCount,
-			quoteCount: tweet.quoteCount,
 			media: extractTweetMedia(tweet),
 			createdAt: tweet.createdAt,
 		});
 	}
 
 	// assessment.action === 'save' - Save as tweet
-	// Detect if tweet has external link → twitter_shared, otherwise → twitter
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
-	const metaType = externalUrl ? 'twitter_shared' : 'twitter';
 
-	// Fetch external link's og:image and title for twitter_shared
+	// Fetch external link's og:image and title
 	let externalOgImage: string | null = null;
 	let externalTitle: string | null = null;
 	if (externalUrl) {
@@ -489,35 +438,21 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 		tokens: [],
 		summary: tweet.text,
 		source_type: 'twitter',
-		content: JSON.stringify({
-			text: tweet.text,
-			author: tweet.author,
-			metrics: {
-				viewCount: tweet.viewCount || 0,
-				likeCount: tweet.likeCount || 0,
-				retweetCount: tweet.retweetCount || 0,
-				replyCount: tweet.replyCount || 0,
-				quoteCount: tweet.quoteCount || 0,
-			},
-		}),
+		content: null,
 		og_image_url: tweetMedia[0]?.url ?? externalOgImage ?? null,
 		platform_metadata: {
-			type: metaType,
+			type: 'twitter',
 			fetchedAt: new Date().toISOString(),
 			data: {
 				authorName: tweet.author?.name || '',
 				authorUserName: tweet.author?.userName || '',
 				authorProfilePicture: (tweet.author as any)?.profilePicture,
 				authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-				viewCount: tweet.viewCount || 0,
-				likeCount: tweet.likeCount || 0,
-				retweetCount: tweet.retweetCount || 0,
-				replyCount: tweet.replyCount || 0,
 				mediaUrls: tweetMedia.map((m) => m.url),
 				media: tweetMedia,
 				createdAt: tweet.createdAt,
-				// twitter_shared specific fields (only when external URL detected)
 				...(externalUrl && {
+					variant: 'shared',
 					externalUrl,
 					externalOgImage,
 					externalTitle,
@@ -548,7 +483,7 @@ async function saveTweet(tweet: Tweet, listType: string, supabase: any, env: Env
 	return true;
 }
 
-async function fetchHighViewTweets(apiKey: string, listId: string, listType: string, supabase: any, env: Env): Promise<number> {
+async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any, env: Env): Promise<number> {
 	const lastTime = await getLastTwitterTime(supabase, env);
 	const sinceTime = Math.floor((lastTime.getTime() - 60 * 60 * 1000) / 1000);
 	let cursor: string | null = null;
@@ -567,7 +502,7 @@ async function fetchHighViewTweets(apiKey: string, listId: string, listType: str
 		if (data.status !== 'success') break;
 
 		for (const tweet of data.tweets || []) {
-			if (tweet.viewCount > VIEW_THRESHOLD && (await saveTweet(tweet, listType, supabase, env))) count++;
+			if (tweet.viewCount > VIEW_THRESHOLD && (await saveTweet(tweet, supabase, env))) count++;
 		}
 
 		if (!data.has_next_page) break;
@@ -582,7 +517,39 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 	console.log('[TWITTER] start');
 	const supabase = getSupabaseClient(env);
 	const results = await Promise.all(
-		TWITTER_LISTS.map((list) => fetchHighViewTweets(env.KAITO_API_KEY || '', list.id, list.type, supabase, env))
+		TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, supabase, env))
 	);
 	console.log(`[TWITTER] end, inserted: ${results.reduce((a, b) => a + b, 0)}`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Retry Failed Articles
+// ─────────────────────────────────────────────────────────────
+
+const RETRY_BATCH_SIZE = 20;
+
+export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+	console.log('[RETRY] start');
+	const supabase = getSupabaseClient(env);
+	const table = getArticlesTable(env);
+	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
+	const { data, error } = await supabase
+		.from(table)
+		.select('id')
+		.gte('scraped_date', since)
+		.or('title_cn.is.null,summary_cn.is.null,embedding.is.null');
+
+	if (error) return console.error('[RETRY] query failed:', error);
+	if (!data?.length) return console.log('[RETRY] no incomplete articles');
+
+	const ids: string[] = data.map((r: { id: string }) => r.id);
+	for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
+		await env.ARTICLE_QUEUE.send({
+			type: 'batch_process',
+			article_ids: ids.slice(i, i + RETRY_BATCH_SIZE),
+			triggered_by: 'retry_cron',
+		});
+	}
+	console.log(`[RETRY] queued ${ids.length} articles in ${Math.ceil(ids.length / RETRY_BATCH_SIZE)} batches`);
 }

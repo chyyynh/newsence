@@ -6,11 +6,11 @@ import {
 	extractTweetId,
 	extractYouTubeId,
 	extractHackerNewsId,
-} from '../src/scrapers';
-import { normalizeUrl, isSocialMediaUrl, extractTitleFromHtml } from '../src/utils/rss';
-import { prepareArticleTextForEmbedding, normalizeVector } from '../src/utils/embedding';
-import { extractJson } from '../src/utils/ai';
-import { isEmpty, getProcessor } from '../src/processors';
+} from '../src/domain/scrapers';
+import { normalizeUrl, isSocialMediaUrl, extractTitleFromHtml } from '../src/infra/web';
+import { prepareArticleTextForEmbedding, normalizeVector } from '../src/infra/embedding';
+import { extractJson } from '../src/infra/ai';
+import { isEmpty, getProcessor } from '../src/domain/processors';
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
@@ -21,7 +21,7 @@ const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 // ═════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────
-// scrapers.ts — Platform Detection & ID Extraction
+// domain/scrapers.ts — Platform Detection & ID Extraction
 // ─────────────────────────────────────────────────────────────
 
 describe('detectPlatformType', () => {
@@ -111,7 +111,7 @@ describe('extractHackerNewsId', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// utils/rss.ts — URL Normalization & Helpers
+// infra/web.ts — URL Normalization & Helpers
 // ─────────────────────────────────────────────────────────────
 
 describe('normalizeUrl', () => {
@@ -180,7 +180,7 @@ describe('extractTitleFromHtml', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// utils/embedding.ts — Text Preparation & Vector Normalization
+// infra/embedding.ts — Text Preparation & Vector Normalization
 // ─────────────────────────────────────────────────────────────
 
 describe('prepareArticleTextForEmbedding', () => {
@@ -233,7 +233,7 @@ describe('normalizeVector', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// utils/ai.ts — JSON Extraction
+// infra/ai.ts — JSON Extraction
 // ─────────────────────────────────────────────────────────────
 
 describe('extractJson', () => {
@@ -257,7 +257,7 @@ describe('extractJson', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// processors.ts — isEmpty & getProcessor
+// domain/processors.ts — isEmpty & getProcessor
 // ─────────────────────────────────────────────────────────────
 
 describe('isEmpty', () => {
@@ -311,12 +311,11 @@ describe('core worker HTTP endpoints', () => {
 		expect(await response.json()).toMatchObject({ status: 'ok', worker: 'newsence-core' });
 	});
 
-	it('returns worker status meta', async () => {
+	it('GET /status returns landing page (endpoint removed)', async () => {
 		const response = await SELF.fetch('https://example.com/status');
 		expect(response.status).toBe(200);
-		const body = await response.json();
-		expect(body.worker).toBe('newsence-core');
-		expect(body.features).toContain('article-process');
+		const text = await response.text();
+		expect(text).toContain('Newsence Core Worker');
 	});
 
 	it('falls back to default landing page', async () => {
@@ -350,30 +349,17 @@ describe('core worker HTTP endpoints', () => {
 		expect(body.error).toContain('url');
 	});
 
-	// ── POST /scrape validation ──────────────────────────────
+	// ── POST /scrape removed ──────────────────────────────────
 
-	it('POST /scrape with invalid JSON returns 400', async () => {
+	it('POST /scrape returns landing page (endpoint removed)', async () => {
 		const response = await SELF.fetch('https://example.com/scrape', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: 'bad-json',
+			body: JSON.stringify({ url: 'https://example.com' }),
 		});
-		expect(response.status).toBe(400);
-		const body: any = await response.json();
-		expect(body.success).toBe(false);
-		expect(body.error.code).toBe('INVALID_BODY');
-	});
-
-	it('POST /scrape missing url returns 400', async () => {
-		const response = await SELF.fetch('https://example.com/scrape', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({}),
-		});
-		expect(response.status).toBe(400);
-		const body: any = await response.json();
-		expect(body.success).toBe(false);
-		expect(body.error.code).toBe('INVALID_URL');
+		expect(response.status).toBe(200);
+		const text = await response.text();
+		expect(text).toContain('Newsence Core Worker');
 	});
 
 	// ── GET /trigger falls through to landing page ───────────
@@ -385,14 +371,13 @@ describe('core worker HTTP endpoints', () => {
 		expect(text).toContain('Newsence Core Worker');
 	});
 
-	// ── GET /api/youtube/metadata validation ─────────────────
+	// ── GET /api/youtube/metadata removed ────────────────────
 
-	it('GET /api/youtube/metadata without videoId returns 400', async () => {
+	it('GET /api/youtube/metadata returns landing page (endpoint removed)', async () => {
 		const response = await SELF.fetch('https://example.com/api/youtube/metadata');
-		expect(response.status).toBe(400);
-		const body: any = await response.json();
-		expect(body.success).toBe(false);
-		expect(body.error.code).toBe('INVALID_URL');
+		expect(response.status).toBe(200);
+		const text = await response.text();
+		expect(text).toContain('Newsence Core Worker');
 	});
 
 	// ── Unknown routes ───────────────────────────────────────

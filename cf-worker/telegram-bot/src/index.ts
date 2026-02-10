@@ -1,6 +1,7 @@
 interface Env {
 	TELEGRAM_BOT_TOKEN: string;
 	CORE: Fetcher; // Service Binding to newsence-core
+	CORE_WORKER_INTERNAL_TOKEN?: string;
 }
 
 interface TelegramUpdate {
@@ -139,14 +140,17 @@ function formatArticleMessage(data: ScrapeResponse['data'], isNew: boolean): str
 }
 
 // Submit URL to core worker (via Service Binding)
-async function scrapeUrl(env: Env, url: string, userId: string): Promise<ScrapeResponse> {
-	console.log('[CORE] Calling /scrape for URL:', url);
+async function submitUrlToCore(env: Env, url: string, userId: string): Promise<ScrapeResponse> {
+	console.log('[CORE] Calling /submit for URL:', url);
 
 	try {
-		const response = await env.CORE.fetch('https://core/scrape', {
+		const response = await env.CORE.fetch('https://core/submit', {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ url, userId, skipSave: false }),
+			headers: {
+				'Content-Type': 'application/json',
+				...(env.CORE_WORKER_INTERNAL_TOKEN ? { 'X-Internal-Token': env.CORE_WORKER_INTERNAL_TOKEN } : {}),
+			},
+			body: JSON.stringify({ url, userId }),
 		});
 
 		const text = await response.text();
@@ -181,7 +185,7 @@ export default {
 			await sendMessage(
 				env.TELEGRAM_BOT_TOKEN,
 				chatId,
-				'傳送連結給我，我會幫你儲存到 Newsence。\n\n支援：\n- 網頁文章\n- Twitter/X\n- YouTube 影片\n- HackerNews'
+				'傳送連結給我，我會幫你儲存到 newsence。\n\n支援：\n- 網頁文章\n- Twitter/X\n- YouTube 影片\n- HackerNews'
 			);
 			return new Response('ok');
 		}
@@ -212,7 +216,7 @@ export default {
 		for (const url of urls) {
 			const pendingMsgId = await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `⏳ 正在處理: ${url}`);
 
-			const result = await scrapeUrl(env, url, `telegram_${username}`);
+			const result = await submitUrlToCore(env, url, `telegram_${username}`);
 
 			if (result.success && result.data) {
 				const isNew = !result.alreadyExists;

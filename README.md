@@ -1,6 +1,6 @@
-# Newsence
+# newsence
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/Newsence)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/newsence)
 [![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://app.newsence.xyz)
 
 A knowledge management platform that turns scattered news and articles into a connected knowledge network through citations and collections.
@@ -45,5 +45,5 @@ This repo contains open-source Cloudflare Workers for news monitoring, article p
 ---
 
 <p align="center">
-  <strong>Newsence</strong> — Where knowledge finds context.
+  <strong>newsence</strong> — Where knowledge finds context.
 </p>

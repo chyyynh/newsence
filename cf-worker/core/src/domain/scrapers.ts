@@ -163,54 +163,6 @@ async function fetchTranscript(
 	return { segments, language: data.language || null };
 }
 
-function formatDuration(isoDuration: string): string {
-	const match = isoDuration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-	if (!match) return isoDuration;
-
-	const hours = match[1] ? parseInt(match[1]) : 0;
-	const minutes = match[2] ? parseInt(match[2]) : 0;
-	const seconds = match[3] ? parseInt(match[3]) : 0;
-
-	if (hours > 0) {
-		return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-	}
-	return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-function formatVideoAsMarkdown(video: YouTubeVideoItem, channelAvatar: string | null): string {
-	const snippet = video.snippet;
-	const stats = video.statistics;
-	const duration = formatDuration(video.contentDetails.duration);
-
-	let md = `# ${snippet.title}\n\n`;
-
-	const thumbnail = snippet.thumbnails.high?.url || snippet.thumbnails.medium?.url;
-	if (thumbnail) {
-		md += `![Thumbnail](${thumbnail})\n\n`;
-	}
-
-	md += `**Channel:** ${snippet.channelTitle}\n`;
-	md += `**Published:** ${new Date(snippet.publishedAt).toLocaleDateString()}\n`;
-	md += `**Duration:** ${duration}\n`;
-	md += '\n---\n\n';
-
-	if (snippet.description) {
-		const desc = snippet.description.substring(0, 1000);
-		md += `## Description\n\n${desc}${snippet.description.length > 1000 ? '...' : ''}\n\n`;
-	}
-
-	md += '## Statistics\n\n';
-	if (stats.viewCount) md += `- **Views:** ${parseInt(stats.viewCount).toLocaleString()}\n`;
-	if (stats.likeCount) md += `- **Likes:** ${parseInt(stats.likeCount).toLocaleString()}\n`;
-	if (stats.commentCount) md += `- **Comments:** ${parseInt(stats.commentCount).toLocaleString()}\n`;
-
-	if (snippet.tags?.length) {
-		md += `\n**Tags:** ${snippet.tags.slice(0, 10).join(', ')}\n`;
-	}
-
-	return md;
-}
-
 export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
@@ -273,12 +225,11 @@ export async function scrapeYouTube(
 		}
 	}
 
-	const content = formatVideoAsMarkdown(video, channelAvatar);
 	console.log(`[YOUTUBE] Fetched: ${snippet.title}`);
 
 	return {
 		title: snippet.title,
-		content,
+		content: '',
 		summary: snippet.description.substring(0, 500) || undefined,
 		ogImageUrl: thumbnailUrl,
 		siteName: 'YouTube',
@@ -391,48 +342,14 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
 		metadata: {
-			type: 'twitter_article',
+			variant: 'article',
 			tweetId,
 			authorName: article.author?.name,
 			authorUserName: article.author?.userName,
 			authorProfilePicture: article.author?.profilePicture,
 			authorVerified: article.author?.isBlueVerified,
-			viewCount: article.viewCount || 0,
-			likeCount: article.likeCount || 0,
-			replyCount: article.replyCount || 0,
-			quoteCount: article.quoteCount || 0,
 		},
 	};
-}
-
-function formatTweetAsMarkdown(
-	tweet: KaitoTweet,
-	hashtags: string[],
-	media?: Array<{ media_url_https: string; type: string }>
-): string {
-	let md = `# Tweet by @${tweet.author?.userName}\n\n`;
-	md += `> ${tweet.text.replace(/\n/g, '\n> ')}\n\n`;
-	md += `**Author:** ${tweet.author?.name || 'Unknown'}`;
-	if (tweet.author?.isBlueVerified) md += ' (Verified)';
-	md += `\n**Handle:** @${tweet.author?.userName}\n`;
-	if (tweet.createdAt) md += `**Posted:** ${new Date(tweet.createdAt).toLocaleString()}\n`;
-
-	md += '\n---\n\n**Engagement:**\n';
-	md += `- Views: ${(tweet.viewCount || 0).toLocaleString()}\n`;
-	md += `- Likes: ${(tweet.likeCount || 0).toLocaleString()}\n`;
-	md += `- Retweets: ${(tweet.retweetCount || 0).toLocaleString()}\n`;
-	md += `- Replies: ${(tweet.replyCount || 0).toLocaleString()}\n`;
-	md += `- Quotes: ${(tweet.quoteCount || 0).toLocaleString()}\n`;
-
-	if (hashtags.length) md += `\n**Hashtags:** ${hashtags.map((h) => `#${h}`).join(' ')}\n`;
-	if (media?.length) {
-		md += '\n**Media:**\n';
-		media.forEach((m, idx) => {
-			md += `![Media ${idx + 1}](${m.media_url_https})\n`;
-		});
-	}
-
-	return md;
 }
 
 function buildTweetMetadata(
@@ -452,11 +369,6 @@ function buildTweetMetadata(
 		authorUserName: tweet.author?.userName,
 		authorProfilePicture: tweet.author?.profilePicture,
 		authorVerified: tweet.author?.isBlueVerified,
-		viewCount: tweet.viewCount || 0,
-		likeCount: tweet.likeCount || 0,
-		retweetCount: tweet.retweetCount || 0,
-		replyCount: tweet.replyCount || 0,
-		quoteCount: tweet.quoteCount || 0,
 		hashtags,
 		expandedUrls,
 		lang: tweet.lang,
@@ -518,7 +430,13 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 					siteName: linked.siteName || 'Twitter',
 					author: tweet.author?.userName || linked.author || null,
 					publishedDate: tweet.createdAt,
-					metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media, { linkedUrl: externalUrl }),
+					metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media, {
+					variant: 'shared',
+					linkedUrl: externalUrl,
+					externalOgImage: linked.ogImageUrl || null,
+					externalTitle: linked.title || null,
+					originalTweetUrl: tweet.url,
+				}),
 				};
 			}
 		} catch (e) {
@@ -526,15 +444,14 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		}
 	}
 
-	// 3. Regular tweet — format as markdown
-	const content = formatTweetAsMarkdown(tweet, hashtags, media);
+	// 3. Regular tweet — no full content, summary carries the tweet text
 	const title = `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}${tweet.text.length > 80 ? '...' : ''}`;
 
 	console.log(`[TWITTER] Fetched tweet from @${tweet.author?.userName}`);
 
 	return {
 		title,
-		content,
+		content: '',
 		summary: tweet.text,
 		ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 		siteName: 'Twitter',
@@ -612,7 +529,7 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 }
 
 // ─────────────────────────────────────────────────────────────
-// Web Scraper (uses cheerio from utils/rss.ts)
+// Web Scraper (cheerio-based extraction)
 // ─────────────────────────────────────────────────────────────
 
 import * as cheerio from 'cheerio';

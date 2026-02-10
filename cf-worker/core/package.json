@@ -7,7 +7,9 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev --test-scheduled",
 		"start": "wrangler dev --test-scheduled",
-		"test": "vitest",
+		"test": "pnpm run test:unit",
+		"test:unit": "vitest --config vitest.unit.config.mts --run",
+		"test:integration": "vitest --config vitest.config.mts --run",
 		"cf-typegen": "wrangler types"
 	},
 	"dependencies": {

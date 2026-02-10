@@ -19,7 +19,7 @@
 		"crons": [
 			"*/5 * * * *", // RSS monitor (every 5 minutes)
 			"0 */6 * * *", // Twitter monitor (every 6 hours)
-			"*/5 * * * *" // Article daily processing (3 AM daily)
+			"0 3 * * *" // Retry failed articles (daily 3 AM UTC)
 		]
 	},
 	/**
@@ -78,6 +78,9 @@
 	],
 	"vars": {
 		"ARTICLES_TABLE": "",
+		"CORE_WORKER_INTERNAL_TOKEN": "",
+		"SUBMIT_RATE_LIMIT_MAX": "20",
+		"SUBMIT_RATE_LIMIT_WINDOW_SEC": "60",
 		"KAITO_API_KEY": "",
 		"OPENROUTER_API_KEY": "",
 		"SUPABASE_SERVICE_ROLE_KEY": "",

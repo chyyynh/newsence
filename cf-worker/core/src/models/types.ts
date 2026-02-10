@@ -5,6 +5,9 @@ export interface Env {
 	SUPABASE_URL: string;
 	SUPABASE_SERVICE_ROLE_KEY: string;
 	OPENROUTER_API_KEY: string;
+	CORE_WORKER_INTERNAL_TOKEN?: string;
+	SUBMIT_RATE_LIMIT_MAX?: string;
+	SUBMIT_RATE_LIMIT_WINDOW_SEC?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
 	TRANSCRIPT_API_KEY?: string;
@@ -28,6 +31,7 @@ export interface Article {
 	summary: string | null;
 	summary_cn?: string | null;
 	content: string | null;
+	content_cn?: string | null;
 	url: string;
 	source: string;
 	published_date: string;

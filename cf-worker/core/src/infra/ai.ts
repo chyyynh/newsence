@@ -1,15 +1,15 @@
-import { Article, AIAnalysisResult, OpenRouterResponse } from '../types';
+import { Article, AIAnalysisResult, OpenRouterResponse } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
 // Content Assessment Types
 // ─────────────────────────────────────────────────────────────
 
-export interface ContentInput {
+interface ContentInput {
 	title?: string;
 	text: string;
 	url: string;
 	source: string;
-	sourceType: 'twitter' | 'rss' | 'hackernews' | 'arxiv';
+	sourceType: 'twitter' | 'rss' | 'hackernews';
 	links?: string[];
 	metrics?: {
 		viewCount?: number;
@@ -17,7 +17,7 @@ export interface ContentInput {
 	};
 }
 
-export interface ContentAssessment {
+interface ContentAssessment {
 	action: 'save' | 'follow_link' | 'discard';
 	score: number;
 	reason: string;
@@ -169,7 +169,8 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 - title_en: 將標題翻譯成自然流暢的英文
 - title_cn: 將標題翻譯成自然流暢的繁體中文
 - summary_en: 用英文寫簡潔的摘要
-- summary_cn: 用繁體中文寫簡潔的摘要
+- summary_cn: 用繁體中文直接翻譯摘要，保持原文語氣和人稱，不要改寫成第三人稱描述
+- 所有翻譯結果不要使用 Markdown 格式（不要用 **粗體**、- 列表、# 標題等），純文字即可
 
 標籤規則:
 - AI相關: AI, MachineLearning, DeepLearning, NLP, ComputerVision, LLM, GenerativeAI
@@ -219,14 +220,20 @@ const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywo
 export async function translateTweet(tweetText: string, apiKey: string): Promise<TweetAnalysis> {
 	console.log(`[AI] Translating tweet: ${tweetText.substring(0, 60)}...`);
 
-	const prompt = `請翻譯以下推文成繁體中文，並提供標籤和關鍵字。
+	const prompt = `請將以下推文直接翻譯成繁體中文，並提供標籤和關鍵字。
+
+翻譯規則：
+- 直接翻譯原文，保持原文的第一人稱或語氣，不要改寫成第三人稱描述
+- 不要用「這則推文」、「作者認為」、「該推文提到」等第三角度描述
+- 不要使用任何 Markdown 格式（不要用 **粗體**、- 列表、# 標題等）
+- 純文字翻譯，忠實呈現原文意思即可
 
 推文內容：
 ${tweetText}
 
 請以JSON格式回答：
 {
-  "summary_cn": "繁體中文翻譯",
+  "summary_cn": "繁體中文直接翻譯",
   "tags": ["標籤1", "標籤2", "標籤3"],
   "keywords": ["關鍵字1", "關鍵字2", "關鍵字3"]
 }

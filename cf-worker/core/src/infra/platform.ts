@@ -1,6 +1,4 @@
-import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../scrapers';
-export type { PlatformType } from '../scrapers';
-export { HN_ALGOLIA_API };
+import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../domain/scrapers';
 
 // ─────────────────────────────────────────────────────────────
 // Platform Metadata
@@ -10,7 +8,7 @@ const YOUTUBE_VIDEO_API = 'https://www.googleapis.com/youtube/v3/videos';
 const YOUTUBE_CHANNEL_API = 'https://www.googleapis.com/youtube/v3/channels';
 const KAITO_API = 'https://api.twitterapi.io/twitter/tweets';
 
-export interface PlatformMetadataResult {
+interface PlatformMetadataResult {
 	sourceType: string;
 	platformMetadata: {
 		type: string;
@@ -244,11 +242,6 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 				authorUserName: tweet.author?.userName ?? '',
 				authorProfilePicture: tweet.author?.profilePicture,
 				authorVerified: tweet.author?.isBlueVerified,
-				viewCount: tweet.viewCount ?? 0,
-				likeCount: tweet.likeCount ?? 0,
-				retweetCount: tweet.retweetCount ?? 0,
-				replyCount: tweet.replyCount ?? 0,
-				quoteCount: tweet.quoteCount ?? 0,
 				mediaUrls: tweetMedia?.map((m) => m.media_url_https) ?? [],
 				media: tweetMedia?.map((m) => ({ url: m.media_url_https, type: m.type })) ?? [],
 				...(externalUrl ? { externalUrl } : {}),

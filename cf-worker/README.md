@@ -1,6 +1,6 @@
 # Cloudflare Workers
 
-Cloudflare Workers for Newsence - content aggregation and AI-powered article processing.
+Cloudflare Workers for newsence - content aggregation and AI-powered article processing.
 
 ## Architecture
 
@@ -19,12 +19,12 @@ Cloudflare Workers for Newsence - content aggregation and AI-powered article pro
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        INGESTION                                  │  │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐         │  │
-│  │  │ RSS Cron │  │ Twitter  │  │ /scrape  │  │ /submit  │         │  │
-│  │  │  */5min  │  │  */6h    │  │   API    │  │   API    │         │  │
-│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘         │  │
-│  └───────┼─────────────┼─────────────┼─────────────┼────────────────┘  │
-│          │             │             │             │                    │
-│          ▼             ▼             │             ▼                    │
+│  │  │ RSS Cron │  │ Twitter  │  │ /submit  │                         │  │
+│  │  │  */5min  │  │  */6h    │  │   API    │                         │  │
+│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘                         │  │
+│  └───────┼─────────────┼─────────────┼───────────────────────────────┘  │
+│          │             │             │                                  │
+│          ▼             ▼             ▼                                  │
 │  ┌────────────────────────┐         │   ┌────────────────────────┐     │
 │  │      Save to DB        │         │   │      Save to DB        │     │
 │  │  (raw article/tweet)   │         │   │   (raw article)        │     │
@@ -48,9 +48,9 @@ Cloudflare Workers for Newsence - content aggregation and AI-powered article pro
 │  │                                  │                                │  │
 │  └──────────────────────────────────┼───────────────────────────────┘  │
 │                                     │                                  │
-│                            /scrape does AI +                           │
+│                            /submit does AI +                           │
 │                            embedding inline                            │
-│                            (no queue/workflow)                          │
+│                            (sync response path)                         │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
          │
@@ -58,7 +58,7 @@ Cloudflare Workers for Newsence - content aggregation and AI-powered article pro
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        TELEGRAM BOT                                     │
 │                    User URL Submission                                  │
-│                  Calls Core /scrape API                                 │
+│                  Calls Core /submit API                                 │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -79,10 +79,10 @@ Cron or API → Scrape content → Save raw article to DB
 
 Each step retries independently x3 with exponential backoff.
 
-### Scrape API (sync, inline)
+### Submit API (sync, inline)
 
 ```
-POST /scrape → Scrape content → AI analysis → Save to DB → Embedding → Return result
+POST /submit → Crawl content → AI analysis → Save to DB → Embedding → Return result
 ```
 
 No queue or workflow — full processing inline, returns complete result to caller.
@@ -105,7 +105,7 @@ Unified content processing service:
 |---------|-------------|
 | RSS Monitor | Fetch RSS feeds every 5 minutes |
 | Twitter Monitor | Track high-engagement tweets every 6 hours |
-| Scrape API | Full scraping with AI translation for any URL |
+| Submit API | Full crawl with AI translation for any URL |
 | AI Processing | Translation, tagging, summarization (Gemini 2.5 Flash) |
 | Embeddings | Vector generation (BGE-M3, 1024 dims) |
 | Queue | Single `ARTICLE_QUEUE` for all async processing |
@@ -115,7 +115,7 @@ Unified content processing service:
 
 ### Telegram Bot
 
-Receives URLs from users, calls Core's `/scrape` API, returns Chinese title + summary + OG image.
+Receives URLs from users, calls Core's `/submit` API, returns Chinese title + summary + OG image.
 
 **URL:** `https://newsence-telegram-bot.chinyuhsu1023.workers.dev`
 
@@ -144,7 +144,7 @@ pnpm wrangler tail # View logs
 
 | Queue | Purpose |
 |-------|---------|
-| `article-processing-queue-core` | All article processing (RSS, Twitter, submit, manual trigger) |
+| `article-processing-queue-core` | All article processing (RSS, Twitter, submit) |
 | `article-processing-dlq-core` | Dead letter queue |
 
 ## API Endpoints
@@ -154,11 +154,4 @@ pnpm wrangler tail # View logs
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| GET | `/status` | Worker status |
-| POST | `/scrape` | Scrape URL with full AI processing (sync) |
-| POST | `/submit` | Submit URL → DB + queue for async processing |
-| POST | `/trigger` | Manual batch processing for specific article IDs |
-| GET | `/api/youtube/metadata` | YouTube metadata only |
-| POST | `/cron/rss` | Manually trigger RSS cron |
-| POST | `/cron/twitter` | Manually trigger Twitter cron |
-| POST | `/cron/article-daily` | Manually trigger daily catch-up processing |
+| POST | `/submit` | Submit URL with full crawl + AI processing (sync) |
