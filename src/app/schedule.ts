@@ -14,6 +14,18 @@ type RSSItem = Record<string, any>;
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
+function stripHtml(raw: string): string {
+	return raw
+		.replace(/<[^>]*>/g, ' ')
+		.replace(/&quot;/g, '"')
+		.replace(/&#x27;|&#39;/g, "'")
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
 function extractUrlFromItem(item: RSSItem): string | null {
 	if (typeof item.link === 'string') return item.link;
 	return item.link?.['@_href'] ?? item.link?.href ?? item.url ?? null;
@@ -80,7 +92,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		keywords: [],
 		tags: [],
 		tokens: [],
-		summary: enrichedSummary ?? item.description ?? item.summary ?? '',
+		summary: enrichedSummary ?? (sourceType === 'hackernews' ? '' : stripHtml(item.description ?? item.summary ?? '')),
 		source_type: sourceType,
 		content,
 		og_image_url: ogImageUrl,
