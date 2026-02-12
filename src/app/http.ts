@@ -386,6 +386,38 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	});
 }
 
+// ─────────────────────────────────────────────────────────────
+// Telegram account lookup
+// ─────────────────────────────────────────────────────────────
+
+export async function handleTelegramLookup(request: Request, env: Env): Promise<Response> {
+	if (!isSubmitAuthorized(request, env)) {
+		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { telegramId?: string };
+	try {
+		body = (await request.json()) as { telegramId?: string };
+	} catch {
+		return Response.json({ found: false, error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.telegramId) {
+		return Response.json({ found: false, error: 'Missing telegramId' }, { status: 400 });
+	}
+
+	const supabase = getSupabaseClient(env);
+	const { data } = await supabase
+		.from('account')
+		.select('userId')
+		.eq('providerId', 'telegram')
+		.eq('accountId', body.telegramId)
+		.single();
+
+	if (!data) return Response.json({ found: false });
+	return Response.json({ found: true, userId: data.userId });
+}
+
 function normalizePlatformMetadata(
 	metadata: Record<string, unknown> | undefined,
 	fallbackType: string
