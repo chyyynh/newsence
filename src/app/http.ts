@@ -418,6 +418,128 @@ export async function handleTelegramLookup(request: Request, env: Env): Promise<
 	return Response.json({ found: true, userId: data.userId });
 }
 
+// ─────────────────────────────────────────────────────────────
+// Telegram: fetch user collections
+// ─────────────────────────────────────────────────────────────
+
+export async function handleTelegramCollections(request: Request, env: Env): Promise<Response> {
+	if (!isSubmitAuthorized(request, env)) {
+		return Response.json({ collections: [], error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { userId?: string };
+	try {
+		body = (await request.json()) as { userId?: string };
+	} catch {
+		return Response.json({ collections: [], error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.userId) {
+		return Response.json({ collections: [], error: 'Missing userId' }, { status: 400 });
+	}
+
+	const supabase = getSupabaseClient(env);
+	const { data, error } = await supabase
+		.from('collections')
+		.select('id, name, icon, is_default, is_system')
+		.eq('user_id', body.userId)
+		.order('is_system', { ascending: false })
+		.order('is_default', { ascending: false })
+		.order('updated_at', { ascending: false })
+		.limit(10);
+
+	if (error) {
+		console.error('[TELEGRAM] Collections query error:', error);
+		return Response.json({ collections: [] });
+	}
+
+	const collections = (data ?? []).map((c) => ({
+		id: c.id,
+		name: c.name,
+		icon: c.icon,
+		isDefault: c.is_default,
+		isSystem: c.is_system,
+	}));
+
+	return Response.json({ collections });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Telegram: add article to collection
+// ─────────────────────────────────────────────────────────────
+
+export async function handleTelegramAddToCollection(request: Request, env: Env): Promise<Response> {
+	if (!isSubmitAuthorized(request, env)) {
+		return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { userId?: string; articleId?: string; collectionId?: string };
+	try {
+		body = (await request.json()) as { userId?: string; articleId?: string; collectionId?: string };
+	} catch {
+		return Response.json({ success: false, error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	const { userId, articleId, collectionId } = body;
+	if (!userId || !articleId || !collectionId) {
+		return Response.json({ success: false, error: 'Missing required fields' }, { status: 400 });
+	}
+
+	const supabase = getSupabaseClient(env);
+
+	// Check if already exists
+	const { data: existing } = await supabase
+		.from('citations')
+		.select('id')
+		.eq('from_type', 'collection')
+		.eq('from_id', collectionId)
+		.eq('to_type', 'article')
+		.eq('to_id', articleId)
+		.eq('user_id', userId)
+		.single();
+
+	if (existing) {
+		return Response.json({ success: false, error: 'already_exists' });
+	}
+
+	// Insert citation
+	const { error: insertError } = await supabase.from('citations').insert({
+		from_type: 'collection',
+		from_id: collectionId,
+		to_type: 'article',
+		to_id: articleId,
+		relation_type: 'resource',
+		user_id: userId,
+	});
+
+	if (insertError) {
+		console.error('[TELEGRAM] Citation insert error:', insertError);
+		return Response.json({ success: false, error: 'Insert failed' }, { status: 500 });
+	}
+
+	// Increment article_count
+	const { error: updateError } = await supabase.rpc('increment_collection_article_count', {
+		collection_id: collectionId,
+	});
+
+	if (updateError) {
+		// Fallback: manual increment
+		const { data: col } = await supabase
+			.from('collections')
+			.select('article_count')
+			.eq('id', collectionId)
+			.single();
+		if (col) {
+			await supabase
+				.from('collections')
+				.update({ article_count: (col.article_count ?? 0) + 1 })
+				.eq('id', collectionId);
+		}
+	}
+
+	return Response.json({ success: true });
+}
+
 function normalizePlatformMetadata(
 	metadata: Record<string, unknown> | undefined,
 	fallbackType: string
