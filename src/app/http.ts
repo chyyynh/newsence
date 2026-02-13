@@ -389,6 +389,16 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	}
 
 	// Full mode: Synchronous AI processing (legacy behavior, single URL only)
+	if (urlsToProcess.length > 1) {
+		return Response.json(
+			{
+				success: false,
+				error: { code: 'INVALID_REQUEST', message: 'Full mode supports exactly one URL. Use mode "fast" for batches.' },
+			},
+			{ status: 400 }
+		);
+	}
+
 	const url = urlsToProcess[0];
 	const result = await processUrlFull(url, env);
 
