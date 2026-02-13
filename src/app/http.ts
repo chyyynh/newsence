@@ -104,9 +104,25 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 	const table = getArticlesTable(env);
 
 	// 1. Check if already exists
-	const { data: existing } = await supabase.from(table).select('id').eq('url', url).single();
+	const { data: existing } = await supabase
+		.from(table)
+		.select('id, title_cn, source_type')
+		.eq('url', url)
+		.single();
 	if (existing) {
-		console.log(`[SUBMIT/fast] Already exists: ${existing.id}`);
+		// Re-queue if article exists but hasn't been processed (missing title_cn indicates unprocessed)
+		if (!existing.title_cn) {
+			console.log(`[SUBMIT/fast] Re-queuing unprocessed article: ${existing.id}`);
+			try {
+				await env.ARTICLE_QUEUE.send({
+					type: 'article_process',
+					article_id: existing.id,
+					source_type: existing.source_type || 'article',
+				});
+			} catch (queueErr) {
+				console.error(`[SUBMIT/fast] Re-queue failed for ${existing.id}:`, queueErr);
+			}
+		}
 		return { url, articleId: existing.id, alreadyExists: true };
 	}
 
@@ -156,12 +172,17 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 	const articleId = inserted[0].id;
 	console.log(`[SUBMIT/fast] Saved raw article: ${scraped.title.slice(0, 50)}`);
 
-	// 4. Queue for background AI processing
-	await env.ARTICLE_QUEUE.send({
-		type: 'article_process',
-		article_id: articleId,
-		source_type: platformType,
-	});
+	// 4. Queue for background AI processing (best-effort, retry will re-queue if needed)
+	try {
+		await env.ARTICLE_QUEUE.send({
+			type: 'article_process',
+			article_id: articleId,
+			source_type: platformType,
+		});
+	} catch (queueErr) {
+		console.error(`[SUBMIT/fast] Queue send failed for ${articleId}:`, queueErr);
+		// Article is saved; retry will detect it as existing and re-queue
+	}
 
 	return { url, articleId, alreadyExists: false };
 }
