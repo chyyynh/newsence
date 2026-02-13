@@ -103,10 +103,9 @@ export function normalizeUrl(url: string): string {
 	try {
 		const urlObj = new URL(url);
 
-		// Remove tracking, auth tokens, and cache-busting parameters
+		// Remove tracking and cache-busting parameters only
+		// Avoid removing semantic params like key, token, auth that may define resource identity
 		const paramsToRemove = [
-			// Auth tokens (Stratechery, newsletters, etc.)
-			'access_token', 'token', 'auth', 'key', 'apikey',
 			// UTM tracking
 			'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
 			// Social/ad tracking
