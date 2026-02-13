@@ -96,26 +96,33 @@ export async function extractOgImage(url: string): Promise<string | null> {
 }
 
 /**
- * Normalizes URL by removing tracking and cache-busting parameters
+ * Normalizes URL by removing tracking, auth, and cache-busting parameters
  * This prevents duplicate articles with different URL parameters
  */
 export function normalizeUrl(url: string): string {
 	try {
 		const urlObj = new URL(url);
 
-		// Remove common tracking and cache-busting parameters
+		// Remove tracking and cache-busting parameters only
+		// Avoid removing semantic params like key, token, auth that may define resource identity
 		const paramsToRemove = [
+			// UTM tracking
 			'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+			// Social/ad tracking
+			'ref', 'fbclid', 'gclid', 'mc_eid', 'mc_cid',
+			// Cache busting
 			'_', '__', 'nc', 'cachebust', 'noCache', 'cache', 'rand', 'random',
 			'_rnd', '_refresh', '_t', '_ts', '_dc', '_q', '_nocache',
-			'timestamp', 'ts', 'time', 'cb', 'r', 'sid', 'ttl', 'vfff', 'ttt'
+			'timestamp', 'ts', 'time', 'cb', 'r', 'sid', 'ttl', 'vfff', 'ttt',
 		];
 
 		paramsToRemove.forEach(param => {
 			urlObj.searchParams.delete(param);
 		});
 
-		// Return the clean URL
+		// Sort remaining params for consistent comparison
+		urlObj.searchParams.sort();
+
 		return urlObj.toString();
 	} catch (e) {
 		// If URL parsing fails, return the original
