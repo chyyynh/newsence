@@ -11,6 +11,8 @@
 - 多平台 Scraping (YouTube/Twitter/HackerNews/Web)
 - AI 翻譯與摘要 (Gemini 2.5 Flash)
 - Embedding 生成 (BGE-M3)
+- **Topic 聚類** — 自動將相似文章歸類到同一主題
+- **Topic 摘要合成** — AI 生成主題標題與描述
 - Queue 異步處理
 - Workflow 編排
 
@@ -25,7 +27,8 @@ src/
 ├── domain/
 │   ├── workflow.ts       # Workflow + Queue 消費者
 │   ├── processors.ts     # 平台處理器 + 共用處理流程
-│   └── scrapers.ts       # 平台抓取器 (YouTube/Twitter/HN/Web)
+│   ├── scrapers.ts       # 平台抓取器 (YouTube/Twitter/HN/Web)
+│   └── topics.ts         # Topic 聚類與摘要合成
 ├── infra/
 │   ├── ai.ts             # OpenRouter AI 分析
 │   ├── embedding.ts      # Workers AI embedding
@@ -108,6 +111,19 @@ curl -X POST https://newsence-core.chinyuhsu1023.workers.dev/submit \
 - **維度:** 1024
 - **輸入:** title + title_cn + summary + summary_cn + tags
 
+### Topic 聚類
+- **相似度門檻:** 0.85 (cosine similarity)
+- **時間窗口:** 7 天內的文章
+- **流程:**
+  1. 文章 embedding 生成後，搜尋相似文章
+  2. 若有相似文章已有 topic → 加入該 topic
+  3. 若無 → 建立新 topic，將所有相似文章歸類
+
+### Topic 摘要合成
+- **觸發時機:** topic 文章數達到 2, 3, 5, 10 篇時
+- **輸出:** 綜合標題 (EN/CN) + 描述 (EN/CN)
+- **目的:** 生成概括性標題，而非直接複製第一篇文章的標題
+
 ## 環境變數
 
 | 變數 | 必要 | 說明 |
@@ -142,6 +158,18 @@ pnpm run deploy
 pnpm wrangler tail
 ```
 
+## Workflow 步驟
+
+| Step | 名稱 | 說明 |
+|------|------|------|
+| 1 | `fetch-article` | 從 DB 讀取文章 |
+| 2 | `ai-analysis` | AI 翻譯、標籤、摘要 |
+| 3 | `update-db` | 更新分析結果到 DB |
+| 4 | `generate-embedding` | 生成 1024 維向量 |
+| 5 | `save-embedding` | 儲存 embedding |
+| 6 | `assign-topic` | 聚類到 topic |
+| 7 | `synthesize-topic` | AI 合成 topic 摘要 (條件觸發) |
+
 ## 資料流
 
 ```
@@ -171,21 +199,19 @@ pnpm wrangler tail
          │ Queue Message          │
          └───────────┬────────────┘
                      ▼
-         ┌────────────────────────┐
-         │ Workflow Orchestrator  │
-         └───────────┬────────────┘
-                     ▼
-         ┌────────────────────────┐
-         │ AI Analysis (Gemini)   │
-         │ → 翻譯、標籤、摘要      │
-         └───────────┬────────────┘
-                     ▼
-         ┌────────────────────────┐
-         │ Embedding (BGE-M3)     │
-         │ → 1024 維向量          │
-         └───────────┬────────────┘
-                     ▼
-         ┌────────────────────────┐
-         │ Update Supabase        │
-         └────────────────────────┘
+    ┌────────────────────────────────────┐
+    │        Workflow (7 Steps)          │
+    ├────────────────────────────────────┤
+    │ 1. fetch-article                   │
+    │ 2. ai-analysis (Gemini)            │
+    │    → 翻譯、標籤、摘要               │
+    │ 3. update-db                       │
+    │ 4. generate-embedding (BGE-M3)     │
+    │    → 1024 維向量                   │
+    │ 5. save-embedding                  │
+    │ 6. assign-topic                    │
+    │    → 相似度 > 0.85 歸類到 topic     │
+    │ 7. synthesize-topic (條件觸發)     │
+    │    → AI 合成主題標題與描述          │
+    └────────────────────────────────────┘
 ```

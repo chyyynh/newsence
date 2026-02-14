@@ -8,6 +8,7 @@ import {
 	buildEmbeddingTextForArticle,
 } from './processors';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
+import { assignArticleTopic, synthesizeTopicSummary, TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS = 'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
 
@@ -159,6 +160,33 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					console.log(`[WORKFLOW] Embedding saved for ${article_id}`);
 				}
 			);
+
+			// Step 6: Assign topic (cluster similar articles)
+			const topicResult = await step.do(
+				'assign-topic',
+				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				async () => {
+					const supabase = getSupabaseClient(this.env);
+					return await assignArticleTopic(supabase, article_id, table);
+				}
+			) as TopicAssignmentResult;
+
+			// Step 7: Synthesize topic summary if needed
+			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
+				await step.do(
+					'synthesize-topic',
+					{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+					async () => {
+						const supabase = getSupabaseClient(this.env);
+						await synthesizeTopicSummary(
+							supabase,
+							topicResult.topicId!,
+							table,
+							this.env.OPENROUTER_API_KEY
+						);
+					}
+				);
+			}
 		}
 
 		console.log(`[WORKFLOW] Completed for article ${article_id}`);
