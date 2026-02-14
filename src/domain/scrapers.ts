@@ -97,6 +97,40 @@ interface TranscriptSegment {
 	text: string;
 }
 
+/**
+ * Merge short transcript segments into longer, more readable chunks.
+ * Breaks on: sentence-ending punctuation, speaker changes (>>), or long pauses (> 1.5s)
+ */
+function mergeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+	if (segments.length === 0) return [];
+
+	const merged: TranscriptSegment[] = [];
+	let current = { ...segments[0] };
+
+	for (let i = 1; i < segments.length; i++) {
+		const seg = segments[i];
+		const currentEndTime = current.startTime + current.duration;
+		const gap = seg.startTime - currentEndTime;
+
+		// Break conditions
+		const endsWithSentence = /[.!?。！？]\s*$/.test(current.text);
+		const nextStartsWithSpeaker = /^>>/.test(seg.text.trim());
+		const hasLongPause = gap > 1.5;
+
+		if (endsWithSentence || nextStartsWithSpeaker || hasLongPause) {
+			merged.push(current);
+			current = { ...seg };
+		} else {
+			// Merge: combine text and extend duration
+			current.text = current.text.trimEnd() + ' ' + seg.text.trimStart();
+			current.duration = seg.startTime + seg.duration - current.startTime;
+		}
+	}
+
+	merged.push(current);
+	return merged;
+}
+
 interface YouTubeChapter {
 	title: string;
 	startTime: number;
@@ -153,13 +187,14 @@ async function fetchTranscript(
 		return { segments: [], language: data.language || null };
 	}
 
-	const segments = data.transcript.map((item) => ({
+	const rawSegments = data.transcript.map((item) => ({
 		startTime: item.start,
 		duration: item.duration,
 		text: item.text,
 	}));
 
-	console.log(`[YOUTUBE] Got ${segments.length} transcript segments`);
+	const segments = mergeTranscriptSegments(rawSegments);
+	console.log(`[YOUTUBE] Got ${rawSegments.length} raw segments, merged to ${segments.length}`);
 	return { segments, language: data.language || null };
 }
 
