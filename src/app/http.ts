@@ -601,7 +601,7 @@ function normalizePlatformMetadata(
 
 /**
  * Extract transcript data from YouTube metadata and save to youtube_transcripts table
- * Returns cleaned metadata without transcript fields
+ * Returns cleaned metadata without transcript fields only when transcript table write succeeds
  */
 async function saveYouTubeTranscript(
 	metadata: Record<string, unknown>,
@@ -616,11 +616,12 @@ async function saveYouTubeTranscript(
 	const chaptersFromDescription = metadata.chaptersFromDescription as boolean | undefined;
 
 	// Only save if we have transcript data
+	let persistedToTranscriptTable = false;
 	if (transcript && Array.isArray(transcript) && transcript.length > 0) {
 		const supabase = getSupabaseClient(env);
 
 		try {
-			await supabase.from('youtube_transcripts').upsert(
+			const { error } = await supabase.from('youtube_transcripts').upsert(
 				{
 					video_id: videoId,
 					transcript,
@@ -631,13 +632,25 @@ async function saveYouTubeTranscript(
 				},
 				{ onConflict: 'video_id' }
 			);
-			console.log(`[YOUTUBE] Saved transcript for ${videoId} (${(transcript as unknown[]).length} segments)`);
+
+			if (error) {
+				console.error(`[YOUTUBE] Failed to save transcript for ${videoId}:`, error);
+			} else {
+				persistedToTranscriptTable = true;
+				console.log(`[YOUTUBE] Saved transcript for ${videoId} (${(transcript as unknown[]).length} segments)`);
+			}
 		} catch (err) {
 			console.error(`[YOUTUBE] Failed to save transcript for ${videoId}:`, err);
 		}
 	}
 
-	// Return metadata without transcript fields (keep it lightweight)
+	// Keep transcript/chapter fields in platform_metadata when write failed or wasn't attempted.
+	// This prevents permanent data loss for legacy/fallback reads.
+	if (!persistedToTranscriptTable) {
+		return metadata;
+	}
+
+	// Return metadata without transcript fields (keep it lightweight) after successful persistence
 	const { transcript: _t, chapters: _c, transcriptLanguage: _l, chaptersFromDescription: _d, ...cleanMetadata } =
 		metadata;
 	return cleanMetadata;
