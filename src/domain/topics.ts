@@ -149,24 +149,32 @@ export async function assignArticleTopic(
 			console.warn(`[TOPIC] Failed to create topic: ${createError?.message}`);
 			return noResult;
 		}
+		const topicId = (topic as { id: string }).id;
 
 		// Assign all similar articles + current article to the new topic
 		const allIds = [articleId, ...candidates.map((c) => c.article_id)];
 		const { error: batchUpdateError } = await supabase
 			.from(table)
-			.update({ topic_id: topic.id })
+			.update({ topic_id: topicId })
 			.in('id', allIds);
 
 		if (batchUpdateError) {
 			console.warn(`[TOPIC] Failed to batch update articles: ${batchUpdateError.message}`);
+			const { error: cleanupError } = await supabase
+				.from('topics')
+				.delete()
+				.eq('id', topicId);
+			if (cleanupError) {
+				console.warn(`[TOPIC] Failed to cleanup orphan topic ${topicId}: ${cleanupError.message}`);
+			}
 			return noResult;
 		}
 
 		const needsSynthesis = shouldSynthesizeTopic(articleCount, true);
-		console.log(`[TOPIC] Created new topic ${topic.id} with ${allIds.length} articles`);
+		console.log(`[TOPIC] Created new topic ${topicId} with ${allIds.length} articles`);
 
 		return {
-			topicId: (topic as { id: string }).id,
+			topicId,
 			isNewTopic: true,
 			articleCount,
 			needsSynthesis,
