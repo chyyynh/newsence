@@ -170,13 +170,23 @@ export async function assignArticleTopic(
 			return noResult;
 		}
 
-		const needsSynthesis = shouldSynthesizeTopic(articleCount, true);
-		console.log(`[TOPIC] Created new topic ${topicId} with ${allIds.length} articles`);
+		// Recompute topic stats from actual assigned articles (count + first/last seen timestamps).
+		await updateTopicStats(supabase, topicId);
+
+		const { data: topicData } = await supabase
+			.from('topics')
+			.select('article_count')
+			.eq('id', topicId)
+			.single();
+
+		const actualArticleCount = (topicData as { article_count: number } | null)?.article_count ?? articleCount;
+		const needsSynthesis = shouldSynthesizeTopic(actualArticleCount, true);
+		console.log(`[TOPIC] Created new topic ${topicId} with ${actualArticleCount} articles`);
 
 		return {
 			topicId,
 			isNewTopic: true,
-			articleCount,
+			articleCount: actualArticleCount,
 			needsSynthesis,
 		};
 	}
