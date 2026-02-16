@@ -14,8 +14,29 @@ type RSSItem = Record<string, any>;
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
-function stripHtml(raw: string): string {
-	return raw
+function toPlainText(value: unknown): string {
+	if (value === null || value === undefined) return '';
+	if (typeof value === 'string') return value;
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	if (Array.isArray(value)) {
+		return value.map(toPlainText).filter(Boolean).join(' ');
+	}
+	if (typeof value === 'object') {
+		const record = value as Record<string, unknown>;
+		const preferredKeys = ['#text', '_text', 'text', 'value', 'content', 'summary', 'description'];
+		for (const key of preferredKeys) {
+			const text = toPlainText(record[key]);
+			if (text) return text;
+		}
+		return Object.values(record).map(toPlainText).filter(Boolean).join(' ');
+	}
+	return '';
+}
+
+function stripHtml(raw: unknown): string {
+	const text = toPlainText(raw);
+	if (!text) return '';
+	return text
 		.replace(/<[^>]*>/g, ' ')
 		.replace(/&quot;/g, '"')
 		.replace(/&#x27;|&#39;/g, "'")

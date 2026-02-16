@@ -7,10 +7,10 @@ Cloudflare Workers for newsence - content aggregation and AI-powered article pro
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           DATA SOURCES                                  │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐           │
-│  │ RSS Feeds │  │  Twitter  │  │  YouTube  │  │ HackerNews│           │
-│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘           │
-└────────┼──────────────┼──────────────┼──────────────┼──────────────────┘
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐             │
+│  │ RSS Feeds │  │  Twitter  │  │  YouTube  │  │ HackerNews│             │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘             │
+└────────┼──────────────┼──────────────┼──────────────┼───────────────────┘
          │              │              │              │
          ▼              ▼              ▼              ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -18,38 +18,40 @@ Cloudflare Workers for newsence - content aggregation and AI-powered article pro
 │                                                                         │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        INGESTION                                  │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐         │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐           │  │
 │  │  │ RSS Cron │  │ Twitter  │  │ /submit  │                         │  │
 │  │  │  */5min  │  │  */6h    │  │   API    │                         │  │
 │  │  └────┬─────┘  └────┬─────┘  └────┬─────┘                         │  │
 │  └───────┼─────────────┼─────────────┼───────────────────────────────┘  │
 │          │             │             │                                  │
 │          ▼             ▼             ▼                                  │
-│  ┌────────────────────────┐         │   ┌────────────────────────┐     │
-│  │      Save to DB        │         │   │      Save to DB        │     │
-│  │  (raw article/tweet)   │         │   │   (raw article)        │     │
-│  └───────────┬────────────┘         │   └───────────┬────────────┘     │
-│              │                      │               │                  │
-│              ▼                      │               ▼                  │
-│  ┌────────────────────────┐         │   ┌────────────────────────┐     │
-│  │    ARTICLE_QUEUE       │         │   │    ARTICLE_QUEUE       │     │
-│  │  { article_process }   │         │   │  { article_process }   │     │
-│  └───────────┬────────────┘         │   └───────────┬────────────┘     │
-│              │                      │               │                  │
-│              ▼                      │               ▼                  │
-│  ┌──────────────────────────────────┼───────────────────────────────┐  │
+│  ┌────────────────────────┐         │   ┌────────────────────────┐      │
+│  │      Save to DB        │         │   │      Save to DB        │      │
+│  │  (raw article/tweet)   │         │   │   (raw article)        │      │
+│  └───────────┬────────────┘         │   └───────────┬────────────┘      │
+│              │                      │               │                   │
+│              ▼                      │               ▼                   │
+│  ┌────────────────────────┐         │   ┌────────────────────────┐      │
+│  │    ARTICLE_QUEUE       │         │   │    ARTICLE_QUEUE       │      │
+│  │  { article_process }   │         │   │  { article_process }   │      │
+│  └───────────┬────────────┘         │   └───────────┬────────────┘      │
+│              │                      │               │                   │
+│              ▼                      │               ▼                   │
+│  ┌──────────────────────────────────┼────────────────────────────────┐  │
 │  │         WORKFLOW (per article)   │                                │  │
 │  │                                  │                                │  │
-│  │  Step 1: fetch-article        (read from DB, retry x3)          │  │
-│  │  Step 2: ai-analysis          (translate/tags/summary, retry x3)│  │
-│  │  Step 3: update-db            (write results to DB, retry x3)   │  │
-│  │  Step 4: generate-embedding   (Workers AI BGE-M3, retry x3)    │  │
-│  │  Step 5: save-embedding       (write vector to DB, retry x3)   │  │
+│  │  Step 1: fetch-article        (read from DB, retry x3)            │  │
+│  │  Step 2: ai-analysis          (translate/tags/summary, retry x3)  │  │
+│  │  Step 3: update-db            (write results to DB, retry x3)     │  │
+│  │  Step 4: generate-embedding   (Workers AI BGE-M3, retry x3)       │  │
+│  │  Step 5: save-embedding       (write vector to DB, retry x3)      │  │
+│  │  Step 6: assign-topic         (cluster by similarity > 0.85)      │  │
+│  │  Step 7: synthesize-topic     (AI generate topic summary)         │  │
 │  │                                  │                                │  │
-│  └──────────────────────────────────┼───────────────────────────────┘  │
-│                                     │                                  │
-│                            /submit does AI +                           │
-│                            embedding inline                            │
+│  └──────────────────────────────────┼────────────────────────────────┘  │
+│                                     │                                   │
+│                            /submit does AI +                            │
+│                            embedding inline                             │
 │                            (sync response path)                         │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -75,6 +77,8 @@ Cron or API → Scrape content → Save raw article to DB
       → Step 3: update-db            (translations, tags, keywords)
       → Step 4: generate-embedding   (BGE-M3 1024d)
       → Step 5: save-embedding       (vector to DB)
+      → Step 6: assign-topic         (cluster similar articles, similarity > 0.85)
+      → Step 7: synthesize-topic     (AI summary when count = 2,3,5,10)
 ```
 
 Each step retries independently x3 with exponential backoff.
@@ -108,8 +112,10 @@ Unified content processing service:
 | Submit API | Full crawl with AI translation for any URL |
 | AI Processing | Translation, tagging, summarization (Gemini 2.5 Flash) |
 | Embeddings | Vector generation (BGE-M3, 1024 dims) |
+| Topic Clustering | Auto-group similar articles (cosine similarity > 0.85) |
+| Topic Synthesis | AI-generated topic title & description |
 | Queue | Single `ARTICLE_QUEUE` for all async processing |
-| Workflow | Per-article 5-step pipeline with independent retry |
+| Workflow | Per-article 7-step pipeline with independent retry |
 
 **URL:** `https://newsence-core.chinyuhsu1023.workers.dev`
 

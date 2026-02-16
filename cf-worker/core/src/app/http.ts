@@ -92,6 +92,7 @@ type SubmitResultFull = {
 	publishedDate?: string;
 	tags?: string[];
 	keywords?: string[];
+	metadata?: Record<string, unknown>;
 };
 
 /**
@@ -145,8 +146,14 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 		return { url, error: 'Content too short' };
 	}
 
-	// 3. Insert raw article
-	const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
+	// 3. For YouTube, save transcript to separate table
+	let cleanedMetadata = scraped.metadata;
+	if (platformType === 'youtube' && scraped.metadata) {
+		cleanedMetadata = await saveYouTubeTranscript(scraped.metadata, env);
+	}
+
+	// 4. Insert raw article (without heavy transcript data)
+	const normalizedPlatformMetadata = normalizePlatformMetadata(cleanedMetadata, platformType);
 	const rawArticleData = {
 		url,
 		title: scraped.title,
@@ -248,8 +255,14 @@ async function processUrlFull(
 		return { success: false, error: 'Content too short' };
 	}
 
-	// Insert raw article
-	const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
+	// For YouTube, save transcript to separate table
+	let cleanedMetadata = scraped.metadata;
+	if (platformType === 'youtube' && scraped.metadata) {
+		cleanedMetadata = await saveYouTubeTranscript(scraped.metadata, env);
+	}
+
+	// Insert raw article (without heavy transcript data)
+	const normalizedPlatformMetadata = normalizePlatformMetadata(cleanedMetadata, platformType);
 	const rawArticleData = {
 		url,
 		title: scraped.title,
@@ -338,6 +351,7 @@ async function processUrlFull(
 			publishedDate: scraped.publishedDate ?? undefined,
 			tags,
 			keywords,
+			metadata: cleanedMetadata,
 		},
 	};
 }
@@ -583,4 +597,61 @@ function normalizePlatformMetadata(
 		fetchedAt: new Date().toISOString(),
 		data: metadata,
 	};
+}
+
+/**
+ * Extract transcript data from YouTube metadata and save to youtube_transcripts table
+ * Returns cleaned metadata without transcript fields only when transcript table write succeeds
+ */
+async function saveYouTubeTranscript(
+	metadata: Record<string, unknown>,
+	env: Env
+): Promise<Record<string, unknown>> {
+	const videoId = metadata.videoId as string | undefined;
+	if (!videoId) return metadata;
+
+	const transcript = metadata.transcript;
+	const chapters = metadata.chapters;
+	const transcriptLanguage = metadata.transcriptLanguage as string | undefined;
+	const chaptersFromDescription = metadata.chaptersFromDescription as boolean | undefined;
+
+	// Only save if we have transcript data
+	let persistedToTranscriptTable = false;
+	if (transcript && Array.isArray(transcript) && transcript.length > 0) {
+		const supabase = getSupabaseClient(env);
+
+		try {
+			const { error } = await supabase.from('youtube_transcripts').upsert(
+				{
+					video_id: videoId,
+					transcript,
+					language: transcriptLanguage || null,
+					chapters: chapters || [],
+					chapters_from_description: chaptersFromDescription || false,
+					fetched_at: new Date().toISOString(),
+				},
+				{ onConflict: 'video_id' }
+			);
+
+			if (error) {
+				console.error(`[YOUTUBE] Failed to save transcript for ${videoId}:`, error);
+			} else {
+				persistedToTranscriptTable = true;
+				console.log(`[YOUTUBE] Saved transcript for ${videoId} (${(transcript as unknown[]).length} segments)`);
+			}
+		} catch (err) {
+			console.error(`[YOUTUBE] Failed to save transcript for ${videoId}:`, err);
+		}
+	}
+
+	// Keep transcript/chapter fields in platform_metadata when write failed or wasn't attempted.
+	// This prevents permanent data loss for legacy/fallback reads.
+	if (!persistedToTranscriptTable) {
+		return metadata;
+	}
+
+	// Return metadata without transcript fields (keep it lightweight) after successful persistence
+	const { transcript: _t, chapters: _c, transcriptLanguage: _l, chaptersFromDescription: _d, ...cleanMetadata } =
+		metadata;
+	return cleanMetadata;
 }
