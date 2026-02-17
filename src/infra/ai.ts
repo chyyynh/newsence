@@ -1,4 +1,5 @@
 import { Article, AIAnalysisResult, OpenRouterResponse } from '../models/types';
+import { logInfo, logError } from './log';
 
 // ─────────────────────────────────────────────────────────────
 // Content Assessment Types
@@ -29,7 +30,7 @@ interface ContentAssessment {
 // ─────────────────────────────────────────────────────────────
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
-const TIMEOUT_MS = 30000;
+const TIMEOUT_MS = 60_000;
 const MAX_CONTENT_LENGTH = 2000;
 
 const OPENROUTER_HEADERS = {
@@ -41,7 +42,7 @@ const OPENROUTER_HEADERS = {
 // Available models
 export const AI_MODELS = {
 	FLASH_LITE: 'google/gemini-2.5-flash-lite',
-	FLASH: 'google/gemini-2.0-flash-001',
+	FLASH: 'google/gemini-3-flash-preview',
 } as const;
 
 // ─────────────────────────────────────────────────────────────
@@ -66,7 +67,7 @@ export async function callOpenRouter(
 ): Promise<string | null> {
 	const {
 		apiKey,
-		model = AI_MODELS.FLASH_LITE,
+		model = AI_MODELS.FLASH,
 		maxTokens,
 		temperature = 0.3,
 		systemPrompt,
@@ -98,7 +99,7 @@ export async function callOpenRouter(
 
 		if (!response.ok) {
 			const errorBody = await response.text();
-			console.error('[AI] OpenRouter error:', response.status, errorBody);
+			logError('AI', 'OpenRouter error', { status: response.status, body: errorBody });
 			return null;
 		}
 
@@ -106,7 +107,7 @@ export async function callOpenRouter(
 		return data.choices?.[0]?.message?.content ?? null;
 	} catch (error: unknown) {
 		const err = error as Error;
-		console.error(`[AI] Request ${err.name === 'AbortError' ? 'timed out' : 'failed'}:`, err.message);
+		logError('AI', 'Request failed', { type: err.name === 'AbortError' ? 'timeout' : 'error', error: err.message });
 		return null;
 	} finally {
 		clearTimeout(timeoutId);
@@ -144,14 +145,14 @@ function createFallbackResult(article: Article): AIAnalysisResult {
 // ─────────────────────────────────────────────────────────────
 
 export async function callGeminiForAnalysis(article: Article, apiKey: string): Promise<AIAnalysisResult> {
-	console.log(`[AI] Analyzing: ${article.title.substring(0, 80)}...`);
+	logInfo('AI', 'Analyzing', { title: article.title.substring(0, 80) });
 
-	const content = article.content ?? article.summary ?? article.title;
+	const content = article.content || article.summary || article.title;
 	const prompt = `作為一個專業的新聞分析師和翻譯師,請分析以下新聞文章並提供結構化的分析結果,包含英文和中文版本。
 文章資訊:
 標題: ${article.title}
 來源: ${article.source}
-摘要: ${article.summary ?? article.summary_cn ?? '無摘要'}
+摘要: ${article.summary || article.summary_cn || '無摘要'}
 內容: ${content.substring(0, MAX_CONTENT_LENGTH)}...
 
 請以JSON格式回答,包含以下欄位:
@@ -186,7 +187,7 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 800 });
 	if (!rawContent?.trim()) return createFallbackResult(article);
 
-	console.log('[AI] Response:', rawContent);
+	logInfo('AI', 'Response', { content: rawContent });
 
 	try {
 		const result = extractJson<AIAnalysisResult>(rawContent);
@@ -204,7 +205,7 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 			category: result.category ?? 'Other',
 		};
 	} catch (error) {
-		console.error('[AI] Parse failed:', error);
+		logError('AI', 'Parse failed', { error: String(error) });
 		return createFallbackResult(article);
 	}
 }
@@ -218,7 +219,7 @@ interface TweetAnalysis {
 const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [] };
 
 export async function translateTweet(tweetText: string, apiKey: string): Promise<TweetAnalysis> {
-	console.log(`[AI] Translating tweet: ${tweetText.substring(0, 60)}...`);
+	logInfo('AI', 'Translating tweet', { text: tweetText.substring(0, 60) });
 
 	const prompt = `請將以下推文直接翻譯成繁體中文，並提供標籤和關鍵字。
 
@@ -259,7 +260,7 @@ ${tweetText}
 			keywords: (result.keywords ?? []).slice(0, 8),
 		};
 	} catch (error) {
-		console.error('[AI] Tweet translation failed:', error);
+		logError('AI', 'Tweet translation failed', { error: String(error) });
 		return { ...TWEET_FALLBACK, summary_cn: tweetText };
 	}
 }
@@ -320,7 +321,7 @@ const DEFAULT_ASSESSMENT: ContentAssessment = {
 };
 
 export async function assessContent(input: ContentInput, apiKey: string): Promise<ContentAssessment> {
-	console.log(`[AI] Assessing: ${input.title?.substring(0, 50) ?? input.text.substring(0, 50)}...`);
+	logInfo('AI', 'Assessing', { title: input.title?.substring(0, 50) ?? input.text.substring(0, 50) });
 
 	const prompt = CONTENT_ASSESSMENT_PROMPT
 		.replace('{source}', input.source)
@@ -341,7 +342,7 @@ export async function assessContent(input: ContentInput, apiKey: string): Promis
 			throw new Error('Invalid assessment format');
 		}
 
-		console.log(`[AI] Assessment: action=${result.action}, score=${result.score}, reason=${result.reason}`);
+		logInfo('AI', 'Assessment result', { action: result.action, score: result.score, reason: result.reason });
 		return {
 			action: result.action,
 			score: result.score,
@@ -349,7 +350,7 @@ export async function assessContent(input: ContentInput, apiKey: string): Promis
 			contentType: result.contentType ?? 'original_content',
 		};
 	} catch (error) {
-		console.error('[AI] Assessment parse failed:', error);
+		logError('AI', 'Assessment parse failed', { error: String(error) });
 		return DEFAULT_ASSESSMENT;
 	}
 }

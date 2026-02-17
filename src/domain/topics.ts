@@ -1,8 +1,9 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { callOpenRouter, extractJson } from '../infra/ai';
+import { logInfo, logWarn } from '../infra/log';
 
 const TOPIC_CONFIG = {
-	SIMILARITY_THRESHOLD: 0.85,
+	SIMILARITY_THRESHOLD: 0.725,
 	TIME_WINDOW_DAYS: 7,
 	MAX_SIMILAR_RESULTS: 10,
 	SYNTHESIZE_THRESHOLDS: [2, 3, 5, 10], // Re-synthesize when article count reaches these
@@ -56,7 +57,7 @@ export async function assignArticleTopic(
 		.single();
 
 	if (fetchError || !article) {
-		console.log(`[TOPIC] Article ${articleId} not found or error: ${fetchError?.message}`);
+		logInfo('TOPIC', 'Article not found or error', { articleId, error: fetchError?.message });
 		return noResult;
 	}
 
@@ -64,12 +65,12 @@ export async function assignArticleTopic(
 
 	// Skip if no embedding or already has topic
 	if (!typedArticle.embedding) {
-		console.log(`[TOPIC] Article ${articleId} has no embedding, skipping`);
+		logInfo('TOPIC', 'Article has no embedding, skipping', { articleId });
 		return noResult;
 	}
 
 	if (typedArticle.topic_id) {
-		console.log(`[TOPIC] Article ${articleId} already has topic ${typedArticle.topic_id}`);
+		logInfo('TOPIC', 'Article already has topic', { articleId, topicId: typedArticle.topic_id });
 		return noResult;
 	}
 
@@ -83,17 +84,17 @@ export async function assignArticleTopic(
 	});
 
 	if (rpcError) {
-		console.warn(`[TOPIC] RPC error for ${articleId}: ${rpcError.message}`);
+		logWarn('TOPIC', 'RPC error', { articleId, error: rpcError.message });
 		return noResult;
 	}
 
 	const candidates = (similar as SimilarArticle[]) || [];
 	if (candidates.length === 0) {
-		console.log(`[TOPIC] No similar articles found for ${articleId}`);
+		logInfo('TOPIC', 'No similar articles found', { articleId });
 		return noResult;
 	}
 
-	console.log(`[TOPIC] Found ${candidates.length} similar articles for ${articleId}`);
+	logInfo('TOPIC', 'Found similar articles', { articleId, count: candidates.length });
 
 	// 3. Check for existing topic among similar articles
 	const withTopic = candidates.find((c) => c.topic_id);
@@ -106,7 +107,7 @@ export async function assignArticleTopic(
 			.eq('id', articleId);
 
 		if (updateError) {
-			console.warn(`[TOPIC] Failed to assign topic: ${updateError.message}`);
+			logWarn('TOPIC', 'Failed to assign topic', { error: updateError.message });
 			return noResult;
 		}
 
@@ -123,7 +124,7 @@ export async function assignArticleTopic(
 		const articleCount = (topicData as { article_count: number } | null)?.article_count ?? 0;
 		const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
 
-		console.log(`[TOPIC] Assigned article ${articleId} to existing topic ${withTopic.topic_id} (count: ${articleCount})`);
+		logInfo('TOPIC', 'Assigned article to existing topic', { articleId, topicId: withTopic.topic_id, articleCount });
 
 		return {
 			topicId: withTopic.topic_id!,
@@ -146,7 +147,7 @@ export async function assignArticleTopic(
 			.single();
 
 		if (createError || !topic) {
-			console.warn(`[TOPIC] Failed to create topic: ${createError?.message}`);
+			logWarn('TOPIC', 'Failed to create topic', { error: createError?.message });
 			return noResult;
 		}
 		const topicId = (topic as { id: string }).id;
@@ -159,13 +160,13 @@ export async function assignArticleTopic(
 			.in('id', allIds);
 
 		if (batchUpdateError) {
-			console.warn(`[TOPIC] Failed to batch update articles: ${batchUpdateError.message}`);
+			logWarn('TOPIC', 'Failed to batch update articles', { error: batchUpdateError.message });
 			const { error: cleanupError } = await supabase
 				.from('topics')
 				.delete()
 				.eq('id', topicId);
 			if (cleanupError) {
-				console.warn(`[TOPIC] Failed to cleanup orphan topic ${topicId}: ${cleanupError.message}`);
+				logWarn('TOPIC', 'Failed to cleanup orphan topic', { topicId, error: cleanupError.message });
 			}
 			return noResult;
 		}
@@ -181,7 +182,7 @@ export async function assignArticleTopic(
 
 		const actualArticleCount = (topicData as { article_count: number } | null)?.article_count ?? articleCount;
 		const needsSynthesis = shouldSynthesizeTopic(actualArticleCount, true);
-		console.log(`[TOPIC] Created new topic ${topicId} with ${actualArticleCount} articles`);
+		logInfo('TOPIC', 'Created new topic', { topicId, articleCount: actualArticleCount });
 
 		return {
 			topicId,
@@ -195,7 +196,7 @@ export async function assignArticleTopic(
 async function updateTopicStats(supabase: SupabaseClient, topicId: string): Promise<void> {
 	const { error } = await supabase.rpc('update_topic_stats', { p_topic_id: topicId });
 	if (error) {
-		console.warn(`[TOPIC] Failed to update topic stats: ${error.message}`);
+		logWarn('TOPIC', 'Failed to update topic stats', { error: error.message });
 	}
 }
 
@@ -271,7 +272,7 @@ export async function synthesizeTopicSummary(
 	table: string,
 	apiKey: string
 ): Promise<boolean> {
-	console.log(`[TOPIC] Synthesizing summary for topic ${topicId}`);
+	logInfo('TOPIC', 'Synthesizing summary for topic', { topicId });
 
 	// Fetch all articles for this topic
 	const { data: articles, error: fetchError } = await supabase
@@ -282,12 +283,12 @@ export async function synthesizeTopicSummary(
 		.limit(20); // Limit to avoid prompt overflow
 
 	if (fetchError || !articles?.length) {
-		console.warn(`[TOPIC] Failed to fetch articles for topic ${topicId}: ${fetchError?.message}`);
+		logWarn('TOPIC', 'Failed to fetch articles for topic', { topicId, error: fetchError?.message });
 		return false;
 	}
 
 	const typedArticles = articles as TopicArticle[];
-	console.log(`[TOPIC] Found ${typedArticles.length} articles for synthesis`);
+	logInfo('TOPIC', 'Found articles for synthesis', { topicId, count: typedArticles.length });
 
 	// Build prompt
 	const articleList = buildArticleListForPrompt(typedArticles);
@@ -301,18 +302,18 @@ export async function synthesizeTopicSummary(
 	});
 
 	if (!rawContent) {
-		console.warn(`[TOPIC] AI synthesis failed for topic ${topicId}`);
+		logWarn('TOPIC', 'AI synthesis failed for topic', { topicId });
 		return false;
 	}
 
 	// Parse response
 	const result = extractJson<SynthesizedTopic>(rawContent);
 	if (!result || !result.title || !result.title_cn) {
-		console.warn(`[TOPIC] Invalid synthesis response for topic ${topicId}`);
+		logWarn('TOPIC', 'Invalid synthesis response for topic', { topicId });
 		return false;
 	}
 
-	console.log(`[TOPIC] Synthesized: "${result.title_cn}" / "${result.title}"`);
+	logInfo('TOPIC', 'Synthesized topic title', { topicId, title: result.title, title_cn: result.title_cn });
 
 	// Update topic
 	const { error: updateError } = await supabase
@@ -327,11 +328,11 @@ export async function synthesizeTopicSummary(
 		.eq('id', topicId);
 
 	if (updateError) {
-		console.warn(`[TOPIC] Failed to update topic ${topicId}: ${updateError.message}`);
+		logWarn('TOPIC', 'Failed to update topic', { topicId, error: updateError.message });
 		return false;
 	}
 
-	console.log(`[TOPIC] Successfully updated topic ${topicId} with synthesized summary`);
+	logInfo('TOPIC', 'Successfully updated topic with synthesized summary', { topicId });
 	return true;
 }
 

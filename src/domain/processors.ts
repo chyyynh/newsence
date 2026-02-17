@@ -1,8 +1,9 @@
 import { Article, Env } from '../models/types';
-import { callGeminiForAnalysis, callOpenRouter, AI_MODELS, translateTweet, extractJson } from '../infra/ai';
+import { callGeminiForAnalysis, callOpenRouter, AI_MODELS, translateTweet } from '../infra/ai';
 import { scrapeWebPage } from './scrapers';
 import { prepareArticleTextForEmbedding } from '../infra/embedding';
 import { HN_ALGOLIA_API } from './scrapers';
+import { logInfo, logWarn, logError } from '../infra/log';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -66,7 +67,7 @@ async function translateContent(content: string, apiKey: string): Promise<string
 
 ${content}`;
 
-	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, maxTokens: 8000 });
+	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, maxTokens: 16_000, timeoutMs: 180_000 });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -111,7 +112,7 @@ class TwitterProcessor implements ArticleProcessor {
 
 		// 1. Twitter Article — content is already full text from scrapeTwitterArticle
 		if (hasFullContent) {
-			console.log(`[TWITTER-PROCESSOR] Processing Twitter Article: ${article.title.slice(0, 50)}`);
+			logInfo('TWITTER-PROCESSOR', 'Processing Twitter Article', { title: article.title.slice(0, 50) });
 			const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
 
 			if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
@@ -147,7 +148,7 @@ class TwitterProcessor implements ArticleProcessor {
 			try {
 				const linked = await scrapeWebPage(linkedUrl);
 				if (linked.content && linked.content.length > 100) {
-					console.log(`[TWITTER-PROCESSOR] Scraped linked article: ${linked.title}`);
+					logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
 					updateData.content = linked.content;
 
 					const analysis = await callGeminiForAnalysis(
@@ -166,7 +167,7 @@ class TwitterProcessor implements ArticleProcessor {
 					return { updateData };
 				}
 			} catch (e) {
-				console.warn(`[TWITTER-PROCESSOR] Failed to scrape linked URL: ${linkedUrl}`, e);
+				logWarn('TWITTER-PROCESSOR', 'Failed to scrape linked URL', { url: linkedUrl, error: String(e) });
 			}
 		}
 
@@ -224,31 +225,6 @@ interface HnCollectedComment {
 	text: string;
 }
 
-interface HnSourceRef {
-	id: string;
-	label: string;
-	url: string;
-}
-
-interface StructuredHnFocus {
-	title: string;
-	detail: string;
-	sources?: string[];
-}
-
-interface StructuredHnTerm {
-	term: string;
-	definition: string;
-}
-
-interface StructuredHnOutput {
-	title_line: string;
-	hook: string;
-	background: string;
-	focuses: StructuredHnFocus[];
-	terms: StructuredHnTerm[];
-}
-
 function cleanHtmlText(raw: string): string {
 	return raw
 		.replace(/<[^>]*>/g, ' ')
@@ -281,168 +257,122 @@ export function collectAllComments(children: HnComment[]): HnCollectedComment[] 
 	return comments;
 }
 
-async function summarizeDiscussion(apiKey: string, title: string, comments: HnCollectedComment[]): Promise<string | null> {
-	if (comments.length === 0) return null;
-
-	const allText = comments
-		.map((comment, index) => `${index + 1}. ${comment.author ? `${comment.author}: ` : ''}${comment.text}`)
-		.join('\n---\n')
-		.slice(0, 25000);
-	const systemPrompt = 'You summarize Hacker News discussions. Extract key insights, main arguments, and interesting perspectives. Be concise (150-200 words). Use bullet points. Write in English.';
-	const userPrompt = `Summarize the discussion about: "${title}"\n\nComments:\n${allText}`;
-
-	return callOpenRouterChat(apiKey, systemPrompt, userPrompt, 400);
-}
-
-function buildHnSources(
-	hnData: HnItemData,
-	comments: HnCollectedComment[],
-	externalPageTitle?: string | null
-): HnSourceRef[] {
-	const hnUrl = `https://news.ycombinator.com/item?id=${hnData.id}`;
-	const sources: HnSourceRef[] = [{ id: 'hn', label: 'Hacker News discussion', url: hnUrl }];
-
-	if (hnData.url) {
-		sources.unshift({
-			id: 'article',
-			label: externalPageTitle?.trim() || hnData.title || hnData.url,
-			url: hnData.url,
-		});
+function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | null): string[] {
+	const seen = new Set<string>();
+	const urls: string[] = [];
+	if (externalUrl) { seen.add(externalUrl); urls.push(externalUrl); }
+	if (hnTextHtml) {
+		const hrefMatches = hnTextHtml.match(/href="([^"]+)"/g);
+		for (const m of hrefMatches ?? []) {
+			const raw = m.slice(6, -1).replace(/&#x2F;/g, '/').replace(/&amp;/g, '&');
+			if (!seen.has(raw) && raw.startsWith('http')) { seen.add(raw); urls.push(raw); }
+		}
 	}
-
-	const topComments = comments.filter((comment) => comment.text.length >= 40).slice(0, 6);
-	for (let i = 0; i < topComments.length; i++) {
-		const comment = topComments[i];
-		sources.push({
-			id: `c${i + 1}`,
-			label: `HN comment ${i + 1}${comment.author ? ` by ${comment.author}` : ''}`,
-			url: comment.id ? `${hnUrl}#${comment.id}` : hnUrl,
-		});
-	}
-
-	return sources;
+	return urls;
 }
 
-function shouldBuildRichContent(comments: HnCollectedComment[], externalPageContent?: string | null): boolean {
-	if (comments.length >= 4) return true;
-	return Boolean(externalPageContent && externalPageContent.length >= 600);
+interface EditorialPrompts {
+	system: string;
+	instruction: string;
+	rules: string[];
 }
 
-async function buildStructuredHnContent(
+const EDITORIAL_CN: EditorialPrompts = {
+	system: '你是一位專業的科技新聞編輯，負責將 Hacker News 討論串整理成深度筆記。只使用提供的素材，直接輸出繁體中文 Markdown。',
+	instruction: `請用繁體中文撰寫 500-800 字的整理筆記，用段落式敘述，不要用條列式重點。格式：
+
+## 背景
+2-3 句介紹文章脈絡，讓沒看過原文的人快速了解在討論什麼。
+
+## 社群觀點
+最重要的部分。用連貫的段落整理 HN 留言者的觀點，包括主要的支持與反對意見、有趣的補充觀點、值得注意的爭論或共識。像寫一篇短評一樣自然地串接不同觀點。
+
+## 延伸閱讀
+留言中提到的有價值的資源、工具、連結。沒有就省略此段。`,
+	rules: [
+		'繁體中文，嚴禁簡體',
+		'不要使用任何 emoji',
+		'重點是社群怎麼看，不是複述原文',
+		'引用留言觀點做歸納，不逐字翻譯',
+		'語氣中立客觀但不死板',
+		'直接輸出 Markdown，不要包在 code block 裡',
+	],
+};
+
+const EDITORIAL_EN: EditorialPrompts = {
+	system: 'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.',
+	instruction: `Write a 400-600 word editorial note in English using flowing paragraphs, not bullet points. Format:
+
+## Background
+2-3 sentences of context so a reader unfamiliar with the article can quickly understand what is being discussed.
+
+## Community Perspectives
+The most important section. Summarize HN commenters' viewpoints in coherent paragraphs — major arguments for and against, interesting supplementary perspectives, and notable debates or consensus. Weave different viewpoints together naturally, like a short commentary piece.
+
+## Further Reading
+Valuable resources, tools, or links mentioned in the comments. Omit this section if none.`,
+	rules: [
+		'Write in English',
+		'Do not use any emoji',
+		'Focus on how the community reacted, not restating the article',
+		'Synthesize and paraphrase commenter opinions — do not translate verbatim',
+		'Maintain a neutral, objective but engaging tone',
+		'Output Markdown directly, do not wrap in a code block',
+	],
+};
+
+function buildEditorialPrompt(
+	prompts: EditorialPrompts,
+	title: string,
+	hnText: string,
+	commentInput: string,
+	commentCount: number,
+	pageExcerpt: string,
+): { system: string; user: string } {
+	const rulesBlock = prompts.rules.map((r) => `- ${r}`).join('\n');
+	const user = `Title: ${title}
+Article excerpt (${pageExcerpt.length} chars):
+${pageExcerpt || 'N/A'}
+
+HN post text:
+${cleanHtmlText(hnText).slice(0, 1200) || 'N/A'}
+
+HN comments (${commentCount} total):
+${commentInput}
+
+${prompts.instruction}
+
+Rules:
+${rulesBlock}`;
+	return { system: prompts.system, user };
+}
+
+async function generateHnEditorial(
 	apiKey: string,
-	article: Article,
-	hnData: HnItemData,
+	title: string,
+	hnText: string,
 	comments: HnCollectedComment[],
-	sources: HnSourceRef[],
 	externalPageContent?: string | null
-): Promise<string | null> {
-	if (!shouldBuildRichContent(comments, externalPageContent)) return null;
+): Promise<{ en: string | null; cn: string | null }> {
+	if (comments.length < 4 && !(externalPageContent && externalPageContent.length >= 600)) {
+		return { en: null, cn: null };
+	}
 
-	const sourceCatalog = sources.map((source) => `- ${source.id}: ${source.label} (${source.url})`).join('\n');
 	const commentInput = comments
-		.slice(0, 24)
-		.map((comment, index) => `c${index + 1}: ${comment.author ? `${comment.author}: ` : ''}${comment.text}`)
-		.join('\n');
+		.map((c) => `${c.author ? `${c.author}: ` : ''}${c.text}`)
+		.join('\n')
+		.slice(0, 30000);
 	const pageExcerpt = externalPageContent?.slice(0, 6000) ?? '';
 
-	const systemPrompt =
-		'You structure Hacker News threads into concise Chinese editorial notes. Use only provided material. Output strict JSON.';
-	const userPrompt = `根據資料整理成繁體中文內容，回傳 JSON，不要其他文字。
+	const cnPrompt = buildEditorialPrompt(EDITORIAL_CN, title, hnText, commentInput, comments.length, pageExcerpt);
+	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
-標題: ${article.title}
-HN 主文簡介: ${cleanHtmlText(hnData.text || '').slice(0, 1200) || '無'}
-外部文章節錄:
-${pageExcerpt || '無'}
+	const [cn, en] = await Promise.all([
+		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user, 1200),
+		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user, 1000),
+	]);
 
-留言樣本:
-${commentInput || '無'}
-
-可用來源 ID:
-${sourceCatalog}
-
-輸出格式:
-{
-  "title_line": "一句警示或重點標題",
-  "hook": "一句短副標",
-  "background": "2-4 句背景",
-  "focuses": [
-    {
-      "title": "焦點標題",
-      "detail": "3-6 句重點整理",
-      "sources": ["article", "hn", "c1"]
-    }
-  ],
-  "terms": [
-    {
-      "term": "術語",
-      "definition": "1-2 句簡短解釋"
-    }
-  ]
-}
-
-限制:
-- focuses 3-6 個
-- terms 3-8 個
-- sources 只能用可用來源 ID
-- detail 不要抄原文，做歸納
-- 不要產生虛構來源 ID`;
-
-	const raw = await callOpenRouterChat(apiKey, systemPrompt, userPrompt, 1800);
-	if (!raw) return null;
-
-	const parsed = extractJson<StructuredHnOutput>(raw);
-	if (!parsed || !parsed.title_line || !parsed.background || !Array.isArray(parsed.focuses) || parsed.focuses.length === 0) {
-		return null;
-	}
-
-	return renderStructuredHnContent(parsed, sources);
-}
-
-export function renderStructuredHnContent(parsed: StructuredHnOutput, sources: HnSourceRef[]): string {
-	const sourceIndex = new Map<string, number>();
-	sources.forEach((source, index) => sourceIndex.set(source.id, index + 1));
-
-	const lines: string[] = [];
-	lines.push('---');
-	lines.push(`⚠️${parsed.title_line.trim()}`);
-	lines.push(parsed.hook?.trim() || '');
-	lines.push('');
-	lines.push('🎯 討論背景');
-	lines.push(parsed.background.trim());
-	lines.push('');
-	lines.push('📌 討論焦點');
-
-	for (const focus of parsed.focuses) {
-		const title = focus.title?.trim();
-		const detail = focus.detail?.trim();
-		if (!title || !detail) continue;
-		lines.push(title);
-		lines.push(detail);
-		const refs = (focus.sources ?? [])
-			.map((sourceId) => sourceIndex.get(sourceId))
-			.filter((value): value is number => typeof value === 'number')
-			.map((num) => `[來源${num}]`);
-		if (refs.length > 0) lines.push(refs.join(' '));
-		lines.push('');
-	}
-
-	if (Array.isArray(parsed.terms) && parsed.terms.length > 0) {
-		lines.push('📚 術語解釋');
-		for (const term of parsed.terms) {
-			const termName = term.term?.trim();
-			const definition = term.definition?.trim();
-			if (!termName || !definition) continue;
-			lines.push(`${termName}: ${definition}`);
-		}
-		lines.push('');
-	}
-
-	lines.push('🔗 來源');
-	sources.forEach((source, index) => {
-		lines.push(`[來源${index + 1}] ${source.label} (${source.url})`);
-	});
-
-	return lines.join('\n').trim();
+	return { en, cn };
 }
 
 function extractItemId(article: Article): string | null {
@@ -459,90 +389,77 @@ class HackerNewsProcessor implements ArticleProcessor {
 		const updateData: ProcessorResult['updateData'] = {};
 
 		// 1. 從 HN API 取得完整資料（包含評論）
-		let hnData: HnItemData | null = null;
-		if (itemId) {
-			try {
-				const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
-				if (response.ok) {
-					hnData = (await response.json()) as HnItemData;
-				}
-			} catch (error) {
-				console.error('[HN-PROCESSOR] Failed to fetch HN data:', error);
-			}
+		const hnData = await this.fetchHnData(itemId);
+
+		// 2. 收集評論與外部文章
+		const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
+		if (comments.length > 0) {
+			logInfo('HN-PROCESSOR', 'Collected comments', { count: comments.length, title: article.title.slice(0, 50) });
 		}
 
-		// 2. 收集評論與外部文章（若有）
-		let comments: HnCollectedComment[] = [];
-		if (hnData?.children?.length) {
-			comments = collectAllComments(hnData.children);
-			console.log(`[HN-PROCESSOR] Collected ${comments.length} comments for ${article.title.slice(0, 50)}...`);
-		}
+		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url);
 
-		let externalPageTitle: string | null = null;
-		let externalPageContent: string | null = null;
-		if (hnData?.url) {
-			try {
-				const page = await scrapeWebPage(hnData.url);
-				externalPageTitle = page.title || null;
-				externalPageContent = page.content || null;
-			} catch (error) {
-				console.warn('[HN-PROCESSOR] Failed to scrape linked webpage:', error);
-			}
-		}
-
-		// 3. 留言摘要
-		if (hnData?.children?.length) {
-			if (comments.length > 0) {
-				const summary = await summarizeDiscussion(ctx.env.OPENROUTER_API_KEY, article.title, comments);
-				if (summary) {
-					enrichments.discussionSummary = summary;
-					console.log(`[HN-PROCESSOR] Generated discussion summary (${summary.length} chars)`);
-				}
-			}
-		}
-
-		// 4. 生成結構化 content（含網頁背景 + 留言整理）
+		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
 		if (hnData) {
-			const sources = buildHnSources(hnData, comments, externalPageTitle);
-			const structuredContent = await buildStructuredHnContent(
+			const editorial = await generateHnEditorial(
 				ctx.env.OPENROUTER_API_KEY,
-				article,
-				hnData,
+				article.title,
+				hnData.text || '',
 				comments,
-				sources,
-				externalPageContent
+				externalPageContent,
 			);
-
-			if (structuredContent) {
-				updateData.content_cn = structuredContent;
-				enrichments.structuredSourceCount = sources.length;
-				console.log(`[HN-PROCESSOR] Generated structured content_cn (${structuredContent.length} chars)`);
+			if (editorial.cn) {
+				updateData.content_cn = editorial.cn;
+				logInfo('HN-PROCESSOR', 'Generated editorial content_cn', { chars: editorial.cn.length });
 			}
-			if (externalPageContent) {
-				updateData.content = externalPageContent;
-				console.log(`[HN-PROCESSOR] Set content from external page (${externalPageContent.length} chars)`);
+			if (editorial.en) {
+				updateData.content = editorial.en;
+				logInfo('HN-PROCESSOR', 'Generated editorial content', { chars: editorial.en.length });
 			}
-		}
 
-		// 5. 存儲額外的 HN 資訊
-		if (hnData) {
 			enrichments.hnUrl = `https://news.ycombinator.com/item?id=${hnData.id}`;
 			enrichments.externalUrl = hnData.url || null;
 			enrichments.hnText = hnData.text || null;
+			enrichments.commentCount = comments.length;
+			enrichments.links = extractPostLinks(hnData.url, hnData.text);
 		}
 
-		// 6. 呼叫通用 AI 分析
-		const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
-
+		// 4. callGeminiForAnalysis — 用外部文章（若有）做分析，品質更好
+		const articleForAnalysis = externalPageContent
+			? { ...article, content: externalPageContent, summary: null }
+			: article;
+		const analysis = await callGeminiForAnalysis(articleForAnalysis, ctx.env.OPENROUTER_API_KEY);
 		const allTags = [...new Set([...analysis.tags, analysis.category, 'HackerNews'])];
 
 		if (!article.tags?.length) updateData.tags = allTags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
 		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-		if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
-		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
+		updateData.summary = analysis.summary_en;
+		updateData.summary_cn = analysis.summary_cn;
 
 		return { updateData, enrichments };
+	}
+
+	private async fetchHnData(itemId: string | null): Promise<HnItemData | null> {
+		if (!itemId) return null;
+		try {
+			const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
+			return response.ok ? ((await response.json()) as HnItemData) : null;
+		} catch (error) {
+			logError('HN-PROCESSOR', 'Failed to fetch HN data', { error: String(error) });
+			return null;
+		}
+	}
+
+	private async fetchExternalPage(url?: string): Promise<{ title: string | null; content: string | null }> {
+		if (!url) return { title: null, content: null };
+		try {
+			const page = await scrapeWebPage(url);
+			return { title: page.title || null, content: page.content || null };
+		} catch (error) {
+			logWarn('HN-PROCESSOR', 'Failed to scrape linked webpage', { error: String(error) });
+			return { title: null, content: null };
+		}
 	}
 }
 

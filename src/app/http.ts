@@ -4,6 +4,7 @@ import { normalizeUrl } from '../infra/web';
 import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { scrapeUrl, detectPlatformType } from '../domain/scrapers';
 import { runArticleProcessor, persistProcessorResult } from '../domain/processors';
+import { logInfo, logWarn, logError } from '../infra/log';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
 const DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC = 60;
@@ -15,11 +16,21 @@ function getInternalToken(request: Request): string | null {
 	return request.headers.get('x-internal-token') ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? null;
 }
 
-function isSubmitAuthorized(request: Request, env: Env): boolean {
+async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+	const encoder = new TextEncoder();
+	const [hashA, hashB] = await Promise.all([
+		crypto.subtle.digest('SHA-256', encoder.encode(a)),
+		crypto.subtle.digest('SHA-256', encoder.encode(b)),
+	]);
+	return crypto.subtle.timingSafeEqual(hashA, hashB);
+}
+
+async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) return true; // Backward-compatible when token is not configured yet
 	const provided = getInternalToken(request)?.trim();
-	return Boolean(provided && provided === expected);
+	if (!provided) return false;
+	return timingSafeEqual(provided, expected);
 }
 
 function getSubmitRateKey(request: Request, userId?: string): string {
@@ -113,7 +124,7 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 	if (existing) {
 		// Re-queue if article exists but hasn't been processed (missing title_cn indicates unprocessed)
 		if (!existing.title_cn) {
-			console.log(`[SUBMIT/fast] Re-queuing unprocessed article: ${existing.id}`);
+			logInfo('SUBMIT', 'Re-queuing unprocessed article', { mode: 'fast', id: existing.id });
 			try {
 				await env.ARTICLE_QUEUE.send({
 					type: 'article_process',
@@ -121,7 +132,7 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 					source_type: existing.source_type || 'article',
 				});
 			} catch (queueErr) {
-				console.error(`[SUBMIT/fast] Re-queue failed for ${existing.id}:`, queueErr);
+				logError('SUBMIT', 'Re-queue failed', { mode: 'fast', id: existing.id, error: String(queueErr) });
 			}
 		}
 		return { url, articleId: existing.id, alreadyExists: true };
@@ -137,7 +148,7 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 			kaitoApiKey: env.KAITO_API_KEY,
 		});
 	} catch (err) {
-		console.error(`[SUBMIT/fast] Scrape failed for ${url}:`, err);
+		logError('SUBMIT', 'Scrape failed', { mode: 'fast', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 
@@ -172,12 +183,12 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 
 	const { data: inserted, error } = await supabase.from(table).insert([rawArticleData]).select('id');
 	if (error || !inserted?.[0]?.id) {
-		console.error(`[SUBMIT/fast] DB insert failed for ${url}:`, error);
+		logError('SUBMIT', 'DB insert failed', { mode: 'fast', url, error: String(error) });
 		return { url, error: 'DB insert failed' };
 	}
 
 	const articleId = inserted[0].id;
-	console.log(`[SUBMIT/fast] Saved raw article: ${scraped.title.slice(0, 50)}`);
+	logInfo('SUBMIT', 'Saved raw article', { mode: 'fast', title: scraped.title.slice(0, 50) });
 
 	// 4. Queue for background AI processing (best-effort, retry will re-queue if needed)
 	try {
@@ -187,7 +198,7 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 			source_type: platformType,
 		});
 	} catch (queueErr) {
-		console.error(`[SUBMIT/fast] Queue send failed for ${articleId}:`, queueErr);
+		logError('SUBMIT', 'Queue send failed', { mode: 'fast', articleId, error: String(queueErr) });
 		// Article is saved; retry will detect it as existing and re-queue
 	}
 
@@ -207,7 +218,7 @@ async function processUrlFull(
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
 
-	console.log(`[SUBMIT/full] Processing ${platformType} URL: ${url}`);
+	logInfo('SUBMIT', 'Processing URL', { mode: 'full', platformType, url });
 
 	// Check if already exists
 	const { data: existing } = await supabase
@@ -217,7 +228,7 @@ async function processUrlFull(
 		.single();
 
 	if (existing) {
-		console.log(`[SUBMIT/full] Already exists: ${existing.id}`);
+		logInfo('SUBMIT', 'Already exists', { mode: 'full', id: existing.id });
 		return {
 			success: true,
 			alreadyExists: true,
@@ -246,7 +257,7 @@ async function processUrlFull(
 			kaitoApiKey: env.KAITO_API_KEY,
 		});
 	} catch (error) {
-		console.error('[SUBMIT/full] Crawl error:', error);
+		logError('SUBMIT', 'Crawl error', { mode: 'full', error: String(error) });
 		return { success: false, error: `Crawl failed: ${error}` };
 	}
 
@@ -281,12 +292,12 @@ async function processUrlFull(
 
 	const { data: inserted, error } = await supabase.from(table).insert([rawArticleData]).select('id');
 	if (error) {
-		console.error('[SUBMIT/full] Insert error:', error);
+		logError('SUBMIT', 'Insert error', { mode: 'full', error: String(error) });
 		return { success: false, error: 'Failed to save article' };
 	}
 
 	const articleId = inserted?.[0]?.id;
-	console.log(`[SUBMIT/full] Saved raw article: ${scraped.title.slice(0, 50)}`);
+	logInfo('SUBMIT', 'Saved raw article', { mode: 'full', title: scraped.title.slice(0, 50) });
 
 	// Run AI processor
 	const article = {
@@ -303,7 +314,7 @@ async function processUrlFull(
 		platform_metadata: normalizedPlatformMetadata ?? undefined,
 	};
 
-	console.log(`[SUBMIT/full] Running ${platformType} processor`);
+	logInfo('SUBMIT', 'Running processor', { mode: 'full', platformType });
 	const result = await runArticleProcessor(article, platformType, { env, supabase, table });
 	await persistProcessorResult(articleId, article, result, { env, supabase, table });
 
@@ -329,7 +340,7 @@ async function processUrlFull(
 			const embedding = await generateArticleEmbedding(embeddingText, env.AI);
 			if (embedding) {
 				const saved = await saveArticleEmbedding(supabase, articleId, embedding, table);
-				console.log(`[SUBMIT/full] Embedding ${saved ? 'saved' : 'failed'}`);
+				logInfo('SUBMIT', 'Embedding result', { mode: 'full', saved });
 			}
 		}
 	}
@@ -357,7 +368,7 @@ async function processUrlFull(
 }
 
 export async function handleSubmitUrl(request: Request, env: Env): Promise<Response> {
-	if (!isSubmitAuthorized(request, env)) {
+	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json(
 			{ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' } },
 			{ status: 401 }
@@ -397,7 +408,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 
 	// Fast mode: Queue-based background processing, returns immediately
 	if (mode === 'fast') {
-		console.log(`[SUBMIT/fast] Processing ${urlsToProcess.length} URLs`);
+		logInfo('SUBMIT', 'Processing URLs', { mode: 'fast', count: urlsToProcess.length });
 		const results = await Promise.all(urlsToProcess.map((url) => processUrlFast(url, env)));
 		return Response.json({ success: true, results });
 	}
@@ -436,7 +447,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramLookup(request: Request, env: Env): Promise<Response> {
-	if (!isSubmitAuthorized(request, env)) {
+	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -468,7 +479,7 @@ export async function handleTelegramLookup(request: Request, env: Env): Promise<
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramCollections(request: Request, env: Env): Promise<Response> {
-	if (!isSubmitAuthorized(request, env)) {
+	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json({ collections: [], error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -494,7 +505,7 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 		.limit(10);
 
 	if (error) {
-		console.error('[TELEGRAM] Collections query error:', error);
+		logError('TELEGRAM', 'Collections query error', { error: String(error) });
 		return Response.json({ collections: [] });
 	}
 
@@ -514,7 +525,7 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramAddToCollection(request: Request, env: Env): Promise<Response> {
-	if (!isSubmitAuthorized(request, env)) {
+	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -558,7 +569,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 	});
 
 	if (insertError) {
-		console.error('[TELEGRAM] Citation insert error:', insertError);
+		logError('TELEGRAM', 'Citation insert error', { error: String(insertError) });
 		return Response.json({ success: false, error: 'Insert failed' }, { status: 500 });
 	}
 
@@ -634,13 +645,13 @@ async function saveYouTubeTranscript(
 			);
 
 			if (error) {
-				console.error(`[YOUTUBE] Failed to save transcript for ${videoId}:`, error);
+				logError('YOUTUBE', 'Failed to save transcript', { videoId, error: String(error) });
 			} else {
 				persistedToTranscriptTable = true;
-				console.log(`[YOUTUBE] Saved transcript for ${videoId} (${(transcript as unknown[]).length} segments)`);
+				logInfo('YOUTUBE', 'Saved transcript', { videoId, segments: (transcript as unknown[]).length });
 			}
 		} catch (err) {
-			console.error(`[YOUTUBE] Failed to save transcript for ${videoId}:`, err);
+			logError('YOUTUBE', 'Failed to save transcript', { videoId, error: String(err) });
 		}
 	}
 

@@ -2,6 +2,8 @@
 // Platform Scrapers (merged from crawler)
 // ─────────────────────────────────────────────────────────────
 
+import { logInfo, logWarn } from '../infra/log';
+
 export interface ScrapedContent {
 	title: string;
 	content: string;
@@ -165,14 +167,14 @@ async function fetchTranscript(
 	videoId: string,
 	transcriptApiKey: string
 ): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	console.log(`[YOUTUBE] Fetching transcript for ${videoId}...`);
+	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
 
 	const response = await fetch(`https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`, {
 		headers: { Authorization: `Bearer ${transcriptApiKey}` },
 	});
 
 	if (!response.ok) {
-		console.warn(`[YOUTUBE] Transcript API returned HTTP ${response.status}`);
+		logWarn('YOUTUBE', 'Transcript API returned error', { status: response.status });
 		return { segments: [], language: null };
 	}
 
@@ -183,7 +185,7 @@ async function fetchTranscript(
 	};
 
 	if (data.error || !data.transcript?.length) {
-		console.warn(`[YOUTUBE] Transcript: ${data.error || 'empty'}`);
+		logWarn('YOUTUBE', 'Transcript unavailable', { error: data.error || 'empty' });
 		return { segments: [], language: data.language || null };
 	}
 
@@ -194,7 +196,7 @@ async function fetchTranscript(
 	}));
 
 	const segments = mergeTranscriptSegments(rawSegments);
-	console.log(`[YOUTUBE] Got ${rawSegments.length} raw segments, merged to ${segments.length}`);
+	logInfo('YOUTUBE', 'Transcript merged', { rawCount: rawSegments.length, mergedCount: segments.length });
 	return { segments, language: data.language || null };
 }
 
@@ -203,7 +205,7 @@ export async function scrapeYouTube(
 	youtubeApiKey: string,
 	transcriptApiKey?: string
 ): Promise<ScrapedContent> {
-	console.log(`[YOUTUBE] Fetching video ${videoId}...`);
+	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
 		`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,contentDetails,statistics&key=${youtubeApiKey}`
@@ -235,7 +237,7 @@ export async function scrapeYouTube(
 			channelAvatar = channelData.items?.[0]?.snippet?.thumbnails?.medium?.url ?? null;
 		}
 	} catch (e) {
-		console.warn('[YOUTUBE] Failed to fetch channel avatar:', e);
+		logWarn('YOUTUBE', 'Failed to fetch channel avatar', { error: String(e) });
 	}
 
 	const thumbnailUrl =
@@ -256,11 +258,11 @@ export async function scrapeYouTube(
 			transcript = result.segments;
 			transcriptLanguage = result.language;
 		} catch (e) {
-			console.warn('[YOUTUBE] Failed to fetch transcript:', e);
+			logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
 		}
 	}
 
-	console.log(`[YOUTUBE] Fetched: ${snippet.title}`);
+	logInfo('YOUTUBE', 'Video fetched', { title: snippet.title });
 
 	return {
 		title: snippet.title,
@@ -340,7 +342,7 @@ interface TwitterArticle {
 }
 
 export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<ScrapedContent | null> {
-	console.log(`[TWITTER] Fetching article for tweet ${tweetId}...`);
+	logInfo('TWITTER', 'Fetching article for tweet', { tweetId });
 
 	const response = await fetch(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
 		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
@@ -366,7 +368,7 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 	md += `- Likes: ${(article.likeCount || 0).toLocaleString()}\n`;
 	md += `- Replies: ${(article.replyCount || 0).toLocaleString()}\n`;
 
-	console.log(`[TWITTER] Fetched article: ${article.title}`);
+	logInfo('TWITTER', 'Article fetched', { title: article.title });
 
 	return {
 		title: article.title,
@@ -420,7 +422,7 @@ function buildTweetMetadata(
 }
 
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
-	console.log(`[TWITTER] Fetching tweet ${tweetId}...`);
+	logInfo('TWITTER', 'Fetching tweet', { tweetId });
 
 	const response = await fetch(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
 		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
@@ -444,19 +446,19 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 
 	// 1. Twitter Article — detected by expanded_url containing /i/article/
 	if (articleUrl) {
-		console.log(`[TWITTER] Detected Twitter Article via expanded_url: ${articleUrl}`);
+		logInfo('TWITTER', 'Detected Twitter Article', { articleUrl });
 		const articleContent = await scrapeTwitterArticle(tweetId, apiKey);
 		if (articleContent) return articleContent;
-		console.warn(`[TWITTER] Article API failed, falling through to regular tweet handling`);
+		logWarn('TWITTER', 'Article API failed, falling through to regular tweet handling', {});
 	}
 
 	// 2. Tweet has external link — scrape the linked page directly
 	if (externalUrl) {
-		console.log(`[TWITTER] Tweet has external link, scraping: ${externalUrl}`);
+		logInfo('TWITTER', 'Tweet has external link, scraping', { externalUrl });
 		try {
 			const linked = await scrapeWebPage(externalUrl);
 			if (linked.content && linked.content.length > 100) {
-				console.log(`[TWITTER] Scraped linked article: ${linked.title}`);
+				logInfo('TWITTER', 'Scraped linked article', { title: linked.title });
 				return {
 					title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
 					content: linked.content,
@@ -475,14 +477,14 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 				};
 			}
 		} catch (e) {
-			console.warn(`[TWITTER] Failed to scrape linked URL: ${externalUrl}`, e);
+			logWarn('TWITTER', 'Failed to scrape linked URL', { externalUrl, error: String(e) });
 		}
 	}
 
 	// 3. Regular tweet — no full content, summary carries the tweet text
 	const title = `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}${tweet.text.length > 80 ? '...' : ''}`;
 
-	console.log(`[TWITTER] Fetched tweet from @${tweet.author?.userName}`);
+	logInfo('TWITTER', 'Tweet fetched', { userName: tweet.author?.userName });
 
 	return {
 		title,
@@ -532,7 +534,7 @@ function buildHnMarkdown(item: HNItem): string {
 }
 
 export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
-	console.log(`[HN] Fetching item ${itemId}...`);
+	logInfo('HN', 'Fetching item', { itemId });
 
 	const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
 	if (!response.ok) throw new Error(`HN API error: ${response.status}`);
@@ -542,7 +544,7 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 	let summary = item.text?.slice(0, 200) || item.title;
 	if (item.text && item.text.length > 200) summary += '...';
 
-	console.log(`[HN] Fetched: ${item.title}`);
+	logInfo('HN', 'Item fetched', { title: item.title });
 
 	return {
 		title: item.title || `HN Item ${itemId}`,
@@ -570,7 +572,7 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 import * as cheerio from 'cheerio';
 
 export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
-	console.log(`[WEB] Scraping ${url}...`);
+	logInfo('WEB', 'Scraping', { url });
 
 	const response = await fetch(url, {
 		headers: {
@@ -657,11 +659,11 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 				if (imgSrc) content += `![${element.attr('alt') || 'Image'}](${imgSrc})\n\n`;
 			}
 		} catch (error) {
-			console.warn('[WEB] Error processing element:', error);
+			logWarn('WEB', 'Error processing element', { error: String(error) });
 		}
 	}
 
-	console.log(`[WEB] Scraped ${url} (${content.length} chars)`);
+	logInfo('WEB', 'Scraped', { url, chars: content.length });
 
 	return {
 		title: title.trim(),
