@@ -96,6 +96,7 @@ export async function extractOgImage(url: string): Promise<string | null> {
 const TRACKING_PARAMS = [
 	'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
 	'ref', 'fbclid', 'gclid', 'mc_eid', 'mc_cid',
+	'access_token', 'token', 'auth_token', 'api_key',
 	'_', '__', 'nc', 'cachebust', 'noCache', 'cache', 'rand', 'random',
 	'_rnd', '_refresh', '_t', '_ts', '_dc', '_q', '_nocache',
 	'timestamp', 'ts', 'time', 'cb', 'r', 'sid', 'ttl', 'vfff', 'ttt',
