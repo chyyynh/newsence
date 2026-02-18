@@ -52,9 +52,11 @@ export function extractTitleFromHtml(html: string): string | null {
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 function resolveRelativeUrl(src: string, base: string): string | null {
-	if (src.startsWith('http')) return src;
+	const normalized = src.trim();
+	if (!normalized) return null;
+	if (/^https?:\/\//i.test(normalized)) return normalized;
 	try {
-		return new URL(src, new URL(base).origin).toString();
+		return new URL(normalized, base).toString();
 	} catch {
 		return null;
 	}

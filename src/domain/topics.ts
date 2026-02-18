@@ -23,11 +23,116 @@ interface ArticleWithEmbedding {
 	topic_id?: string | null;
 }
 
+interface ArticleTopicRow {
+	topic_id: string | null;
+}
+
 export interface TopicAssignmentResult {
 	topicId: string | null;
 	isNewTopic: boolean;
 	articleCount: number;
 	needsSynthesis: boolean;
+}
+
+function uniqueSortedIds(ids: string[]): string[] {
+	return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+}
+
+async function getArticleTopicId(
+	supabase: SupabaseClient,
+	table: string,
+	articleId: string
+): Promise<string | null> {
+	const { data, error } = await supabase
+		.from(table)
+		.select('topic_id')
+		.eq('id', articleId)
+		.maybeSingle();
+
+	if (error) {
+		logWarn('TOPIC', 'Failed to get article topic', { articleId, error: error.message });
+		return null;
+	}
+
+	return (data as ArticleTopicRow | null)?.topic_id ?? null;
+}
+
+async function attachArticleToTopic(
+	supabase: SupabaseClient,
+	table: string,
+	articleId: string,
+	topicId: string
+): Promise<string | null> {
+	const { error } = await supabase
+		.from(table)
+		.update({ topic_id: topicId })
+		.eq('id', articleId)
+		.is('topic_id', null);
+
+	if (error) {
+		logWarn('TOPIC', 'Failed to attach article to topic', { articleId, topicId, error: error.message });
+	}
+
+	return getArticleTopicId(supabase, table, articleId);
+}
+
+async function getAnyAssignedTopicId(
+	supabase: SupabaseClient,
+	table: string,
+	articleIds: string[]
+): Promise<string | null> {
+	if (articleIds.length === 0) return null;
+
+	const { data, error } = await supabase
+		.from(table)
+		.select('topic_id')
+		.in('id', articleIds)
+		.not('topic_id', 'is', null)
+		.limit(1);
+
+	if (error) {
+		logWarn('TOPIC', 'Failed to re-check assigned topic in cluster', { error: error.message });
+		return null;
+	}
+
+	return (data?.[0] as ArticleTopicRow | undefined)?.topic_id ?? null;
+}
+
+async function getTopicArticleCount(supabase: SupabaseClient, topicId: string): Promise<number> {
+	const { data } = await supabase
+		.from('topics')
+		.select('article_count')
+		.eq('id', topicId)
+		.maybeSingle();
+
+	return (data as { article_count: number } | null)?.article_count ?? 0;
+}
+
+async function cleanupTopicIfUnused(
+	supabase: SupabaseClient,
+	table: string,
+	topicId: string
+): Promise<void> {
+	const { count, error: countError } = await supabase
+		.from(table)
+		.select('id', { count: 'exact', head: true })
+		.eq('topic_id', topicId);
+
+	if (countError) {
+		logWarn('TOPIC', 'Failed to count topic usage for cleanup', { topicId, error: countError.message });
+		return;
+	}
+
+	if ((count ?? 0) > 0) return;
+
+	const { error: cleanupError } = await supabase
+		.from('topics')
+		.delete()
+		.eq('id', topicId);
+
+	if (cleanupError) {
+		logWarn('TOPIC', 'Failed to cleanup unused topic', { topicId, error: cleanupError.message });
+	}
 }
 
 /**
@@ -100,48 +205,59 @@ export async function assignArticleTopic(
 	const withTopic = candidates.find((c) => c.topic_id);
 
 	if (withTopic) {
-		// Join existing topic
-		const { error: updateError } = await supabase
-			.from(table)
-			.update({ topic_id: withTopic.topic_id })
-			.eq('id', articleId);
+		const finalTopicId = await attachArticleToTopic(supabase, table, articleId, withTopic.topic_id!);
+		if (!finalTopicId) return noResult;
 
-		if (updateError) {
-			logWarn('TOPIC', 'Failed to assign topic', { error: updateError.message });
-			return noResult;
-		}
-
-		// Update topic stats and get new count
-		await updateTopicStats(supabase, withTopic.topic_id!);
-
-		// Get updated article count
-		const { data: topicData } = await supabase
-			.from('topics')
-			.select('article_count')
-			.eq('id', withTopic.topic_id)
-			.single();
-
-		const articleCount = (topicData as { article_count: number } | null)?.article_count ?? 0;
+		await updateTopicStats(supabase, finalTopicId);
+		const articleCount = await getTopicArticleCount(supabase, finalTopicId);
 		const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
 
-		logInfo('TOPIC', 'Assigned article to existing topic', { articleId, topicId: withTopic.topic_id, articleCount });
+		logInfo('TOPIC', 'Assigned article to existing topic', { articleId, topicId: finalTopicId, articleCount });
 
 		return {
-			topicId: withTopic.topic_id!,
+			topicId: finalTopicId,
 			isNewTopic: false,
 			articleCount,
 			needsSynthesis,
 		};
 	} else {
-		// Create new topic with this article as canonical
-		const articleCount = candidates.length + 1;
+		const allIds = uniqueSortedIds([articleId, ...candidates.map((c) => c.article_id)]);
+		const lockArticleId = allIds[0];
+		if (!lockArticleId) return noResult;
+
+		// Re-check before creating, because another workflow may have assigned a topic already.
+		const racedTopicId = await getAnyAssignedTopicId(supabase, table, allIds);
+		if (racedTopicId) {
+			const finalTopicId = await attachArticleToTopic(supabase, table, articleId, racedTopicId);
+			if (!finalTopicId) return noResult;
+
+			await updateTopicStats(supabase, finalTopicId);
+			const articleCount = await getTopicArticleCount(supabase, finalTopicId);
+			const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
+
+			logInfo('TOPIC', 'Joined topic created by concurrent workflow', {
+				articleId,
+				topicId: finalTopicId,
+				lockArticleId,
+			});
+
+			return {
+				topicId: finalTopicId,
+				isNewTopic: false,
+				articleCount,
+				needsSynthesis,
+			};
+		}
+
+		// Create new topic with deterministic canonical article to reduce split races.
+		const expectedArticleCount = allIds.length;
 		const { data: topic, error: createError } = await supabase
 			.from('topics')
 			.insert({
 				title: typedArticle.title,
 				title_cn: typedArticle.title_cn,
-				canonical_article_id: articleId,
-				article_count: articleCount,
+				canonical_article_id: lockArticleId,
+				article_count: expectedArticleCount,
 			})
 			.select('id')
 			.single();
@@ -152,41 +268,88 @@ export async function assignArticleTopic(
 		}
 		const topicId = (topic as { id: string }).id;
 
-		// Assign all similar articles + current article to the new topic
-		const allIds = [articleId, ...candidates.map((c) => c.article_id)];
-		const { error: batchUpdateError } = await supabase
+		// Cluster lock: only one worker should claim the same lock article.
+		const { data: lockClaim, error: lockClaimError } = await supabase
 			.from(table)
 			.update({ topic_id: topicId })
-			.in('id', allIds);
+			.eq('id', lockArticleId)
+			.is('topic_id', null)
+			.select('id')
+			.maybeSingle();
+
+		if (lockClaimError) {
+			logWarn('TOPIC', 'Failed to claim lock article for topic creation', {
+				articleId,
+				topicId,
+				lockArticleId,
+				error: lockClaimError.message,
+			});
+			await cleanupTopicIfUnused(supabase, table, topicId);
+			return noResult;
+		}
+
+		if (!lockClaim) {
+			// Lost race: another worker assigned cluster first.
+			await cleanupTopicIfUnused(supabase, table, topicId);
+
+			const winnerTopicId = await getArticleTopicId(supabase, table, lockArticleId);
+			if (!winnerTopicId) return noResult;
+
+			const finalTopicId = await attachArticleToTopic(supabase, table, articleId, winnerTopicId);
+			if (!finalTopicId) return noResult;
+
+			await updateTopicStats(supabase, winnerTopicId);
+			const articleCount = await getTopicArticleCount(supabase, winnerTopicId);
+			const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
+
+			logInfo('TOPIC', 'Lost topic creation race and joined winner topic', {
+				articleId,
+				winnerTopicId,
+				lockArticleId,
+			});
+
+			return {
+				topicId: finalTopicId,
+				isNewTopic: false,
+				articleCount,
+				needsSynthesis,
+			};
+		}
+
+		// Assign remaining similar articles + current article to the new topic without overwriting existing assignments.
+		const peerIds = allIds.filter((id) => id !== lockArticleId);
+		const { error: batchUpdateError } = peerIds.length === 0
+			? { error: null as null | { message: string } }
+			: await supabase
+			.from(table)
+			.update({ topic_id: topicId })
+			.in('id', peerIds)
+			.is('topic_id', null);
 
 		if (batchUpdateError) {
-			logWarn('TOPIC', 'Failed to batch update articles', { error: batchUpdateError.message });
-			const { error: cleanupError } = await supabase
-				.from('topics')
-				.delete()
-				.eq('id', topicId);
-			if (cleanupError) {
-				logWarn('TOPIC', 'Failed to cleanup orphan topic', { topicId, error: cleanupError.message });
-			}
+			logWarn('TOPIC', 'Failed to batch update peer articles', { topicId, error: batchUpdateError.message });
+		}
+
+		const finalTopicId = await attachArticleToTopic(supabase, table, articleId, topicId);
+		if (!finalTopicId) {
+			await cleanupTopicIfUnused(supabase, table, topicId);
 			return noResult;
 		}
 
 		// Recompute topic stats from actual assigned articles (count + first/last seen timestamps).
-		await updateTopicStats(supabase, topicId);
+		await updateTopicStats(supabase, finalTopicId);
 
-		const { data: topicData } = await supabase
-			.from('topics')
-			.select('article_count')
-			.eq('id', topicId)
-			.single();
-
-		const actualArticleCount = (topicData as { article_count: number } | null)?.article_count ?? articleCount;
-		const needsSynthesis = shouldSynthesizeTopic(actualArticleCount, true);
-		logInfo('TOPIC', 'Created new topic', { topicId, articleCount: actualArticleCount });
+		const actualArticleCount = await getTopicArticleCount(supabase, finalTopicId);
+		const isNewTopic = finalTopicId === topicId;
+		const needsSynthesis = shouldSynthesizeTopic(actualArticleCount, isNewTopic);
+		if (!isNewTopic) {
+			await cleanupTopicIfUnused(supabase, table, topicId);
+		}
+		logInfo('TOPIC', 'Created new topic', { topicId: finalTopicId, articleCount: actualArticleCount, isNewTopic });
 
 		return {
-			topicId,
-			isNewTopic: true,
+			topicId: finalTopicId,
+			isNewTopic,
 			articleCount: actualArticleCount,
 			needsSynthesis,
 		};
