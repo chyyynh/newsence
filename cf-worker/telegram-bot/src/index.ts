@@ -2,8 +2,10 @@ interface Env {
 	TELEGRAM_BOT_TOKEN: string;
 	CORE: Fetcher; // Service Binding to newsence-core
 	CORE_WORKER_INTERNAL_TOKEN?: string;
-	WEBAPP_URL?: string; // e.g. https://app.newsence.xyz
+	WEBAPP_URL?: string; // e.g. https://www.newsence.xyz
 }
+
+const DEFAULT_WEBAPP_URL = 'https://www.newsence.xyz';
 
 interface TelegramUpdate {
 	message?: {
@@ -447,7 +449,7 @@ async function handleMe(env: Env, chatId: number, telegramId: string, firstName:
 				'透過 Bot 儲存的文章會自動歸到你的 newsence 帳號。',
 		);
 	} else {
-		const webappUrl = env.WEBAPP_URL || 'https://app.newsence.xyz';
+		const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 		await sendMessage(
 			env.TELEGRAM_BOT_TOKEN,
 			chatId,
@@ -486,7 +488,7 @@ async function handleLink(
 	username: string,
 ): Promise<void> {
 	const lookup = await lookupTelegramAccount(env, telegramId);
-	const webappUrl = env.WEBAPP_URL || 'https://app.newsence.xyz';
+	const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 
 	if (lookup.found) {
 		await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, '✅ 你的 Telegram 帳號已經綁定 newsence 了！');
@@ -534,7 +536,7 @@ async function handleUrlSubmission(
 ): Promise<void> {
 	await sendChatAction(env.TELEGRAM_BOT_TOKEN, chatId, 'typing');
 	const { userId, linked } = await resolveUser(env, telegramId, username);
-	const webappUrl = env.WEBAPP_URL || 'https://app.newsence.xyz';
+	const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 
 	for (const url of urls) {
 		const pendingMsgId = await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `⏳ 正在處理: ${url}`);

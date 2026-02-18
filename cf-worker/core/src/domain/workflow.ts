@@ -9,6 +9,7 @@ import {
 } from './processors';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { assignArticleTopic, synthesizeTopicSummary, TopicAssignmentResult } from './topics';
+import { logInfo, logWarn, logError } from '../infra/log';
 
 const ARTICLE_FIELDS = 'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
 
@@ -31,7 +32,7 @@ async function fetchSourceTypeMap(articleIds: string[], env: Env): Promise<Map<s
 		const batchIds = articleIds.slice(i, i + SOURCE_TYPE_BATCH_SIZE);
 		const { data, error } = await supabase.from(table).select('id, source_type').in('id', batchIds);
 		if (error) {
-			console.warn('[ARTICLE-QUEUE] Failed to fetch source types:', error);
+			logWarn('ARTICLE-QUEUE', 'Failed to fetch source types', { error: String(error) });
 			continue;
 		}
 		for (const row of data ?? []) {
@@ -46,7 +47,7 @@ export async function handleArticleQueue(
 	batch: MessageBatch<QueueMessage>,
 	env: Env
 ): Promise<void> {
-	console.log(`[ARTICLE-QUEUE] Received batch of ${batch.messages.length} messages`);
+	logInfo('ARTICLE-QUEUE', 'Received batch', { count: batch.messages.length });
 
 	for (const message of batch.messages) {
 		const body = message.body;
@@ -56,7 +57,7 @@ export async function handleArticleQueue(
 				await env.MONITOR_WORKFLOW.create({
 					params: { article_id: body.article_id, source_type: body.source_type },
 				});
-				console.log(`[ARTICLE-QUEUE] Created workflow for article ${body.article_id}`);
+				logInfo('ARTICLE-QUEUE', 'Created workflow for article', { article_id: body.article_id });
 				message.ack();
 			} else if (body.type === 'batch_process') {
 				const sourceTypeMap = await fetchSourceTypeMap(body.article_ids, env);
@@ -66,14 +67,14 @@ export async function handleArticleQueue(
 						params: { article_id: id, source_type: sourceType },
 					});
 				}
-				console.log(`[ARTICLE-QUEUE] Created ${body.article_ids.length} workflows (batch from ${body.triggered_by})`);
+				logInfo('ARTICLE-QUEUE', 'Created workflows (batch)', { count: body.article_ids.length, triggered_by: body.triggered_by });
 				message.ack();
 			} else {
-				console.warn('[ARTICLE-QUEUE] Unknown message type, acking');
+				logWarn('ARTICLE-QUEUE', 'Unknown message type, acking');
 				message.ack();
 			}
 		} catch (err) {
-			console.error('[ARTICLE-QUEUE] Error handling message, retrying:', err);
+			logError('ARTICLE-QUEUE', 'Error handling message, retrying', { error: String(err) });
 			message.retry();
 		}
 	}
@@ -84,7 +85,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		const { article_id, source_type } = event.payload;
 		const table = getArticlesTable(this.env);
 
-		console.log(`[WORKFLOW] Starting for article ${article_id} (${source_type})`);
+		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
 
 		// Step 1: Fetch article from DB
 		const article = await step.do(
@@ -99,7 +100,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		) as Article;
 
 		if (!article) {
-			console.log(`[WORKFLOW] Article ${article_id} not found`);
+			logWarn('WORKFLOW', 'Article not found', { article_id });
 			return { success: false, article_id, reason: 'not_found' };
 		}
 
@@ -129,10 +130,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					table,
 				});
 				if (Object.keys(processorResult.updateData).length > 0) {
-					console.log(`[WORKFLOW] Updated fields: ${Object.keys(processorResult.updateData).join(', ')}`);
+					logInfo('WORKFLOW', 'Updated fields', { fields: Object.keys(processorResult.updateData).join(', ') });
 				}
 				if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
-					console.log(`[WORKFLOW] Enrichments saved: ${Object.keys(processorResult.enrichments).join(', ')}`);
+					logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
 				}
 			}
 		);
@@ -157,7 +158,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					const supabase = getSupabaseClient(this.env);
 					const saved = await saveArticleEmbedding(supabase, article_id, embedding, table);
 					if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
-					console.log(`[WORKFLOW] Embedding saved for ${article_id}`);
+					logInfo('WORKFLOW', 'Embedding saved', { article_id });
 				}
 			);
 
@@ -189,7 +190,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		}
 
-		console.log(`[WORKFLOW] Completed for article ${article_id}`);
+		logInfo('WORKFLOW', 'Completed', { article_id });
 		return { success: true, article_id };
 	}
 }

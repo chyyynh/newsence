@@ -8,6 +8,7 @@ import {
 } from './app/http';
 import { handleRSSCron, handleTwitterCron, handleRetryCron } from './app/schedule';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
+import { logInfo } from './infra/log';
 
 export { NewsenceMonitorWorkflow };
 
@@ -34,7 +35,7 @@ export default {
 	},
 
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-		console.log(`[CORE] Scheduled: ${event.cron}`);
+		logInfo('CORE', 'Scheduled', { cron: event.cron });
 
 		if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
 		else if (event.cron === '0 */6 * * *') ctx.waitUntil(handleTwitterCron(env, ctx));
@@ -42,7 +43,7 @@ export default {
 	},
 
 	async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
-		console.log(`[CORE] Queue: ${batch.queue} (${batch.messages.length} messages)`);
+		logInfo('CORE', 'Queue received', { queue: batch.queue, count: batch.messages.length });
 		await handleArticleQueue(batch, env);
 	},
 };

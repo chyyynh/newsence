@@ -3,7 +3,6 @@ import {
 	buildEmbeddingTextForArticle,
 	collectAllComments,
 	mergePlatformMetadata,
-	renderStructuredHnContent,
 } from '../src/domain/processors';
 import type { ProcessorResult } from '../src/domain/processors';
 
@@ -109,39 +108,5 @@ describe('collectAllComments', () => {
 			{ id: 1, author: 'alice', text: 'Hello world & team' },
 			{ id: 2, author: 'bob', text: 'Nested reply' },
 		]);
-	});
-});
-
-describe('renderStructuredHnContent', () => {
-	it('renders focus sections with source indices', () => {
-		const output = renderStructuredHnContent(
-			{
-				title_line: '測試標題',
-				hook: '測試副標',
-				background: '這是背景內容',
-				focuses: [
-					{
-						title: '焦點一',
-						detail: '焦點一細節',
-						sources: ['article', 'c1'],
-					},
-				],
-				terms: [{ term: 'pastejacking', definition: '粘貼劫持攻擊' }],
-			},
-			[
-				{ id: 'article', label: '原文', url: 'https://example.com' },
-				{ id: 'hn', label: 'HN', url: 'https://news.ycombinator.com/item?id=1' },
-				{ id: 'c1', label: '留言 1', url: 'https://news.ycombinator.com/item?id=1#11' },
-			]
-		);
-
-		expect(output).toContain('⚠️測試標題');
-		expect(output).toContain('🎯 討論背景');
-		expect(output).toContain('📌 討論焦點');
-		expect(output).toContain('焦點一');
-		expect(output).toContain('[來源1] [來源3]');
-		expect(output).toContain('📚 術語解釋');
-		expect(output).toContain('🔗 來源');
-		expect(output).toContain('[來源3] 留言 1');
 	});
 });

@@ -1,3 +1,6 @@
+# AI Agents
+.agents
+
 # API Keys and Secrets
 .env
 .env.local

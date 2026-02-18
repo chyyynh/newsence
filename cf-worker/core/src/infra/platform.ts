@@ -1,4 +1,5 @@
 import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../domain/scrapers';
+import { logInfo, logWarn, logError } from './log';
 
 // ─────────────────────────────────────────────────────────────
 // Platform Metadata
@@ -42,7 +43,7 @@ export async function fetchPlatformMetadata(
 			return fetchTwitterMetadata(url, kaitoApiKey);
 		default:
 			if (commentsUrl && detectPlatformType(commentsUrl) === 'hackernews') {
-				console.log(`[PLATFORM] Found HN comments URL: ${commentsUrl}`);
+				logInfo('PLATFORM', 'Found HN comments URL', { url: commentsUrl });
 				return fetchHnMetadata(commentsUrl);
 			}
 			return emptyResult('rss');
@@ -56,7 +57,7 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 	try {
 		const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
 		if (!response.ok) {
-			console.error(`[PLATFORM] HN API error: ${response.status}`);
+			logError('PLATFORM', 'HN API error', { status: response.status });
 			return emptyResult('hackernews');
 		}
 
@@ -79,7 +80,7 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 			}),
 		};
 	} catch (error) {
-		console.error('[PLATFORM] Failed to fetch HN metadata:', error);
+		logError('PLATFORM', 'Failed to fetch HN metadata', { error: String(error) });
 		return emptyResult('hackernews');
 	}
 }
@@ -88,7 +89,7 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 	try {
 		const response = await fetch(`${YOUTUBE_CHANNEL_API}?part=snippet&id=${channelId}&key=${apiKey}`);
 		if (!response.ok) {
-			console.error(`[PLATFORM] YouTube Channels API error: ${response.status}`);
+			logError('PLATFORM', 'YouTube Channels API error', { status: response.status });
 			return null;
 		}
 
@@ -106,7 +107,7 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 		const thumbnails = data.items?.[0]?.snippet?.thumbnails;
 		return thumbnails?.medium?.url ?? thumbnails?.default?.url ?? null;
 	} catch (error) {
-		console.error('[PLATFORM] Failed to fetch channel avatar:', error);
+		logError('PLATFORM', 'Failed to fetch channel avatar', { error: String(error) });
 		return null;
 	}
 }
@@ -114,14 +115,14 @@ async function fetchChannelAvatar(channelId: string, apiKey: string): Promise<st
 async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<PlatformMetadataResult> {
 	const videoId = extractYouTubeId(url);
 	if (!videoId || !apiKey) {
-		if (!apiKey) console.warn('[PLATFORM] YouTube API key not provided');
+		if (!apiKey) logWarn('PLATFORM', 'YouTube API key not provided');
 		return emptyResult('youtube');
 	}
 
 	try {
 		const response = await fetch(`${YOUTUBE_VIDEO_API}?part=snippet,statistics,contentDetails&id=${videoId}&key=${apiKey}`);
 		if (!response.ok) {
-			console.error(`[PLATFORM] YouTube API error: ${response.status}`);
+			logError('PLATFORM', 'YouTube API error', { status: response.status });
 			return emptyResult('youtube');
 		}
 
@@ -170,7 +171,7 @@ async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<Platf
 			}),
 		};
 	} catch (error) {
-		console.error('[PLATFORM] Failed to fetch YouTube metadata:', error);
+		logError('PLATFORM', 'Failed to fetch YouTube metadata', { error: String(error) });
 		return emptyResult('youtube');
 	}
 }
@@ -202,7 +203,7 @@ interface KaitoTweet {
 async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<PlatformMetadataResult> {
 	const tweetId = extractTweetId(url);
 	if (!tweetId || !apiKey) {
-		if (!apiKey) console.warn('[PLATFORM] Kaito API key not provided');
+		if (!apiKey) logWarn('PLATFORM', 'Kaito API key not provided');
 		return emptyResult('twitter');
 	}
 
@@ -212,7 +213,7 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		});
 
 		if (!response.ok) {
-			console.error(`[PLATFORM] Kaito API error: ${response.status}`);
+			logError('PLATFORM', 'Kaito API error', { status: response.status });
 			return emptyResult('twitter');
 		}
 
@@ -223,12 +224,12 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		};
 
 		if (data.status !== 'success' || !data.tweets?.length) {
-			console.error(`[PLATFORM] Kaito API error: ${data.msg ?? 'Tweet not found'}`);
+			logError('PLATFORM', 'Kaito API error', { msg: data.msg ?? 'Tweet not found' });
 			return emptyResult('twitter');
 		}
 
 		const tweet = data.tweets[0];
-		console.log(`[PLATFORM] Fetched Twitter metadata for @${tweet.author?.userName}`);
+		logInfo('PLATFORM', 'Fetched Twitter metadata', { author: tweet.author?.userName });
 
 		const tweetMedia = tweet.extendedEntities?.media;
 		const externalUrl = tweet.entities?.urls
@@ -249,7 +250,7 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 			}),
 		};
 	} catch (error) {
-		console.error('[PLATFORM] Failed to fetch Twitter metadata:', error);
+		logError('PLATFORM', 'Failed to fetch Twitter metadata', { error: String(error) });
 		return emptyResult('twitter');
 	}
 }

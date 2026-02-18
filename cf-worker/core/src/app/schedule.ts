@@ -5,6 +5,7 @@ import { normalizeUrl, scrapeArticleContent, extractOgImage, resolveUrl, isSocia
 import { scrapeTwitterArticle } from '../domain/scrapers';
 import { fetchPlatformMetadata } from '../infra/platform';
 import { assessContent } from '../infra/ai';
+import { logInfo, logWarn, logError } from '../infra/log';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -86,7 +87,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 			}
 		}
 	} catch (err) {
-		console.warn(`[${feed.name}] metadata fetch failed:`, err);
+		logWarn('RSS', 'Metadata fetch failed', { feed: feed.name, error: String(err) });
 	}
 
 	// Scrape content for regular RSS
@@ -122,7 +123,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 
 	const table = getArticlesTable(env);
 	const { data: inserted, error } = await supabase.from(table).insert([insert]).select('id');
-	if (error) return console.error(`[${feed.name}] insert error:`, error);
+	if (error) return logError('RSS', 'Insert error', { feed: feed.name, error: String(error) });
 
 	const articleId = inserted?.[0]?.id;
 	if (articleId) {
@@ -140,7 +141,7 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 	const res = await fetch(feed.RSSLink, {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/xml, text/xml, */*' },
 	});
-	if (!res.ok) return console.warn(`[${feed.name}] fetch failed: ${res.status}`);
+	if (!res.ok) return logWarn('RSS', 'Feed fetch failed', { feed: feed.name, status: res.status });
 
 	let items = extractItemsFromFeed(parser.parse(await res.text()));
 	if (!items.length) return;
@@ -167,19 +168,19 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 		return url && !existingSet.has(normalizeUrl(url));
 	});
 
-	console.log(`[${feed.name}] ${newItems.length}/${items.length} new`);
+	logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
 	for (const item of newItems) await processAndInsertArticle(supabase, env, item, feed);
 	await supabase.from('RssList').update({ scraped_at: new Date() }).eq('id', feed.id);
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
-	console.log('[RSS] start');
+	logInfo('RSS', 'start');
 	const supabase = getSupabaseClient(env);
 	const parser = new XMLParser({ ignoreAttributes: false });
 	const { data: feeds, error } = await supabase.from('RssList').select('id, name, RSSLink, url, type');
-	if (error) return console.error('[RSS] fetch feeds failed:', error);
+	if (error) return logError('RSS', 'Fetch feeds failed', { error: String(error) });
 	await Promise.allSettled((feeds ?? []).map((feed: RSSFeed) => processFeed(supabase, env, feed, parser)));
-	console.log('[RSS] end');
+	logInfo('RSS', 'end');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -270,7 +271,7 @@ async function saveScrapedArticle(
 	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
 
 	if (error) {
-		console.error('[TWITTER] Insert scraped article error:', error);
+		logError('TWITTER', 'Insert scraped article error', { error: String(error) });
 		return false;
 	}
 
@@ -283,7 +284,7 @@ async function saveScrapedArticle(
 		});
 	}
 
-	console.log(`[TWITTER] Saved scraped article: ${data.title.slice(0, 50)}`);
+	logInfo('TWITTER', 'Saved scraped article', { title: data.title.slice(0, 50) });
 	return true;
 }
 
@@ -309,7 +310,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 	if (articleUrl) {
 		const tweetId = tweet.id || tweet.url.split('/').pop();
 		if (tweetId) {
-			console.log(`[TWITTER] Detected Twitter Article in tweet ${tweetId}: ${articleUrl}`);
+			logInfo('TWITTER', 'Detected Twitter Article', { tweetId, articleUrl });
 			const articleContent = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
 			if (articleContent) {
 				const articleData = {
@@ -340,7 +341,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 				const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
 				if (error) {
-					console.error('[TWITTER] Insert article error:', error);
+					logError('TWITTER', 'Insert article error', { error: String(error) });
 					return false;
 				}
 
@@ -348,10 +349,10 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 				if (articleId) {
 					await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'twitter' });
 				}
-				console.log(`[TWITTER] Saved Twitter Article: ${articleContent.title.slice(0, 50)}`);
+				logInfo('TWITTER', 'Saved Twitter Article', { title: articleContent.title.slice(0, 50) });
 				return true;
 			}
-			console.warn(`[TWITTER] Article API failed, falling through to regular tweet handling`);
+			logWarn('TWITTER', 'Article API failed, falling through to regular tweet handling');
 		}
 	}
 
@@ -378,7 +379,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 	// Handle based on assessment
 	if (assessment.action === 'discard') {
-		console.log(`[TWITTER] Filtered: @${tweet.author?.userName} - ${assessment.reason}`);
+		logInfo('TWITTER', 'Filtered tweet', { author: tweet.author?.userName, reason: assessment.reason });
 		return false;
 	}
 
@@ -388,14 +389,14 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 		// Skip social media links
 		if (isSocialMediaUrl(resolvedUrl)) {
-			console.log(`[TWITTER] Skipped social media link: ${resolvedUrl}`);
+			logInfo('TWITTER', 'Skipped social media link', { url: resolvedUrl });
 			return false;
 		}
 
 		// Check if link already exists
 		const { data: linkExists } = await supabase.from(table).select('id').eq('url', resolvedUrl).single();
 		if (linkExists) {
-			console.log(`[TWITTER] Link already exists: ${resolvedUrl}`);
+			logInfo('TWITTER', 'Link already exists', { url: resolvedUrl });
 			return false;
 		}
 
@@ -416,7 +417,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		);
 
 		if (scrapedAssessment.action === 'discard') {
-			console.log(`[TWITTER] Scraped content filtered: ${scrapedAssessment.reason}`);
+			logInfo('TWITTER', 'Scraped content filtered', { reason: scrapedAssessment.reason });
 			return false;
 		}
 
@@ -454,7 +455,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			externalOgImage = ogImage;
 			externalTitle = extractTitleFromHtml(scrapedHtml);
 		} catch {
-			console.warn(`[TWITTER] Failed to fetch external link metadata: ${externalUrl}`);
+			logWarn('TWITTER', 'Failed to fetch external link metadata', { url: externalUrl });
 		}
 	}
 
@@ -499,7 +500,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
 	if (error) {
-		console.error('[TWITTER] insert error:', error);
+		logError('TWITTER', 'Insert error', { error: String(error) });
 		return false;
 	}
 
@@ -512,7 +513,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		});
 	}
 
-	console.log(`[TWITTER] Saved tweet: @${tweet.author?.userName} (score: ${assessment.score})`);
+	logInfo('TWITTER', 'Saved tweet', { author: tweet.author?.userName, score: assessment.score });
 	return true;
 }
 
@@ -547,12 +548,12 @@ async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any
 }
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
-	console.log('[TWITTER] start');
+	logInfo('TWITTER', 'start');
 	const supabase = getSupabaseClient(env);
 	const results = await Promise.all(
 		TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, supabase, env))
 	);
-	console.log(`[TWITTER] end, inserted: ${results.reduce((a, b) => a + b, 0)}`);
+	logInfo('TWITTER', 'end', { inserted: results.reduce((a, b) => a + b, 0) });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -562,7 +563,7 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 const RETRY_BATCH_SIZE = 20;
 
 export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
-	console.log('[RETRY] start');
+	logInfo('RETRY', 'start');
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
 	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
@@ -573,8 +574,8 @@ export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise
 		.gte('scraped_date', since)
 		.or('title_cn.is.null,summary_cn.is.null,embedding.is.null');
 
-	if (error) return console.error('[RETRY] query failed:', error);
-	if (!data?.length) return console.log('[RETRY] no incomplete articles');
+	if (error) return logError('RETRY', 'Query failed', { error: String(error) });
+	if (!data?.length) return logInfo('RETRY', 'No incomplete articles');
 
 	const ids: string[] = data.map((r: { id: string }) => r.id);
 	for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
@@ -584,5 +585,5 @@ export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise
 			triggered_by: 'retry_cron',
 		});
 	}
-	console.log(`[RETRY] queued ${ids.length} articles in ${Math.ceil(ids.length / RETRY_BATCH_SIZE)} batches`);
+	logInfo('RETRY', 'Queued articles for retry', { count: ids.length, batches: Math.ceil(ids.length / RETRY_BATCH_SIZE) });
 }

@@ -1,3 +1,5 @@
+import { logInfo, logError } from './log';
+
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;
 
@@ -40,13 +42,13 @@ export async function generateArticleEmbedding(text: string, ai: Ai): Promise<nu
 		})) as AiEmbeddingResult;
 
 		if (!result.data?.[0]) {
-			console.error('[Embedding] Invalid response format');
+			logError('EMBEDDING', 'Invalid response format');
 			return null;
 		}
 
 		return normalizeVector(result.data[0]);
 	} catch (error: unknown) {
-		console.error('[Embedding] Workers AI error:', (error as Error).message);
+		logError('EMBEDDING', 'Workers AI error', { error: (error as Error).message });
 		return null;
 	}
 }
@@ -67,14 +69,14 @@ export async function saveArticleEmbedding(
 			.eq('id', articleId);
 
 		if (error) {
-			console.error(`[Embedding] Failed to save for ${articleId} in ${table}:`, error.message);
+			logError('EMBEDDING', 'Failed to save', { articleId, table, error: error.message });
 			return false;
 		}
 
-		console.log(`[Embedding] Saved to ${table} for ${articleId}`);
+		logInfo('EMBEDDING', 'Saved', { articleId, table });
 		return true;
 	} catch (error: unknown) {
-		console.error(`[Embedding] Error saving for ${articleId}:`, (error as Error).message);
+		logError('EMBEDDING', 'Error saving', { articleId, error: (error as Error).message });
 		return false;
 	}
 }
