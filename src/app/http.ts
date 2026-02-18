@@ -4,6 +4,7 @@ import { normalizeUrl } from '../infra/web';
 import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { scrapeUrl, detectPlatformType } from '../domain/scrapers';
 import { runArticleProcessor, persistProcessorResult } from '../domain/processors';
+import { assignArticleTopic, synthesizeTopicSummary } from '../domain/topics';
 import { logInfo, logWarn, logError } from '../infra/log';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
@@ -352,6 +353,24 @@ async function processUrlFull(
 			if (embedding) {
 				const saved = await saveArticleEmbedding(supabase, articleId, embedding, table);
 				logInfo('SUBMIT', 'Embedding result', { mode: 'full', saved });
+				if (saved) {
+					try {
+						const topicResult = await assignArticleTopic(supabase, articleId, table);
+						if (topicResult.needsSynthesis && topicResult.topicId && env.OPENROUTER_API_KEY) {
+							await synthesizeTopicSummary(
+								supabase,
+								topicResult.topicId,
+								table,
+								env.OPENROUTER_API_KEY
+							);
+						}
+					} catch (topicError) {
+						logWarn('SUBMIT', 'Topic pipeline failed in full mode', {
+							articleId,
+							error: String(topicError),
+						});
+					}
+				}
 			}
 		}
 	}
@@ -554,6 +573,23 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 
 	const supabase = getSupabaseClient(env);
 
+	// Ensure the target collection belongs to the requesting user.
+	const { data: ownedCollection, error: collectionError } = await supabase
+		.from('collections')
+		.select('id')
+		.eq('id', collectionId)
+		.eq('user_id', userId)
+		.maybeSingle();
+
+	if (collectionError) {
+		logError('TELEGRAM', 'Collection ownership check failed', { collectionId, userId, error: String(collectionError) });
+		return Response.json({ success: false, error: 'Collection lookup failed' }, { status: 500 });
+	}
+
+	if (!ownedCollection) {
+		return Response.json({ success: false, error: 'Invalid collection for user' }, { status: 403 });
+	}
+
 	// Check if already exists
 	const { data: existing } = await supabase
 		.from('citations')
@@ -595,12 +631,14 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 			.from('collections')
 			.select('article_count')
 			.eq('id', collectionId)
+			.eq('user_id', userId)
 			.single();
 		if (col) {
 			await supabase
 				.from('collections')
 				.update({ article_count: (col.article_count ?? 0) + 1 })
-				.eq('id', collectionId);
+				.eq('id', collectionId)
+				.eq('user_id', userId);
 		}
 	}
 

@@ -3,7 +3,7 @@ import { callOpenRouter, extractJson } from '../infra/ai';
 import { logInfo, logWarn } from '../infra/log';
 
 const TOPIC_CONFIG = {
-	SIMILARITY_THRESHOLD: 0.725,
+	SIMILARITY_THRESHOLD: 0.75,
 	TIME_WINDOW_DAYS: 7,
 	MAX_SIMILAR_RESULTS: 10,
 	SYNTHESIZE_THRESHOLDS: [2, 3, 5, 10], // Re-synthesize when article count reaches these
