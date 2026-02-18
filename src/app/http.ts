@@ -33,6 +33,17 @@ async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> 
 	return timingSafeEqual(provided, expected);
 }
 
+async function isTelegramAuthorized(request: Request, env: Env): Promise<boolean> {
+	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
+	if (!expected) {
+		logWarn('TELEGRAM', 'CORE_WORKER_INTERNAL_TOKEN is not configured; denying request');
+		return false;
+	}
+	const provided = getInternalToken(request)?.trim();
+	if (!provided) return false;
+	return timingSafeEqual(provided, expected);
+}
+
 function getSubmitRateKey(request: Request, userId?: string): string {
 	const normalizedUserId = userId?.trim();
 	if (normalizedUserId) return `user:${normalizedUserId}`;
@@ -447,7 +458,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramLookup(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
+	if (!(await isTelegramAuthorized(request, env))) {
 		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -479,7 +490,7 @@ export async function handleTelegramLookup(request: Request, env: Env): Promise<
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramCollections(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
+	if (!(await isTelegramAuthorized(request, env))) {
 		return Response.json({ collections: [], error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -525,7 +536,7 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramAddToCollection(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
+	if (!(await isTelegramAuthorized(request, env))) {
 		return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
