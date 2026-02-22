@@ -587,6 +587,13 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		return Response.json({ success: false, error: 'Invalid collection for user' }, { status: 403 });
 	}
 
+	// Verify article exists
+	const table = getArticlesTable(env);
+	const { data: articleExists } = await supabase.from(table).select('id').eq('id', articleId).maybeSingle();
+	if (!articleExists) {
+		return Response.json({ success: false, error: 'Article not found' }, { status: 404 });
+	}
+
 	// Check if already exists
 	const { data: existing } = await supabase
 		.from('citations')
