@@ -96,12 +96,44 @@ export async function extractOgImage(url: string): Promise<string | null> {
 // ─────────────────────────────────────────────────────────────
 
 const TRACKING_PARAMS = [
-	'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
-	'ref', 'fbclid', 'gclid', 'mc_eid', 'mc_cid',
-	'access_token', 'token', 'auth_token', 'api_key',
-	'_', '__', 'nc', 'cachebust', 'noCache', 'cache', 'rand', 'random',
-	'_rnd', '_refresh', '_t', '_ts', '_dc', '_q', '_nocache',
-	'timestamp', 'ts', 'time', 'cb', 'r', 'sid', 'ttl', 'vfff', 'ttt',
+	'utm_source',
+	'utm_medium',
+	'utm_campaign',
+	'utm_content',
+	'utm_term',
+	'ref',
+	'fbclid',
+	'gclid',
+	'mc_eid',
+	'mc_cid',
+	'access_token',
+	'token',
+	'auth_token',
+	'api_key',
+	'_',
+	'__',
+	'nc',
+	'cachebust',
+	'noCache',
+	'cache',
+	'rand',
+	'random',
+	'_rnd',
+	'_refresh',
+	'_t',
+	'_ts',
+	'_dc',
+	'_q',
+	'_nocache',
+	'timestamp',
+	'ts',
+	'time',
+	'cb',
+	'r',
+	'sid',
+	'ttl',
+	'vfff',
+	'ttt',
 ];
 
 /**
@@ -122,11 +154,7 @@ export function normalizeUrl(url: string): string {
 // Article Content Scraping
 // ─────────────────────────────────────────────────────────────
 
-function processHtmlElement(
-	$: cheerio.CheerioAPI,
-	el: Parameters<cheerio.CheerioAPI>[0],
-	baseUrl: string
-): string {
+function processHtmlElement($: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0], baseUrl: string): string {
 	const element = $(el);
 	if (element.is('p')) return element.text().trim() + '\n\n';
 	if (element.is('h1')) return `## ${element.text().trim()}\n\n`;

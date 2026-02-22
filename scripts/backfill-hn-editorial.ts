@@ -9,7 +9,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -56,8 +56,17 @@ function parseFlags() {
 
 // ── HN helpers (mirrors processors.ts) ──────────────────────
 
-interface HnComment { id?: number; author?: string; text?: string; children?: HnComment[] }
-interface HnCollectedComment { id?: number; author?: string; text: string }
+interface HnComment {
+	id?: number;
+	author?: string;
+	text?: string;
+	children?: HnComment[];
+}
+interface HnCollectedComment {
+	id?: number;
+	author?: string;
+	text: string;
+}
 
 function cleanHtmlText(raw: string): string {
 	return raw
@@ -86,11 +95,20 @@ function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | null): string[] {
 	const seen = new Set<string>();
 	const urls: string[] = [];
-	if (externalUrl) { seen.add(externalUrl); urls.push(externalUrl); }
+	if (externalUrl) {
+		seen.add(externalUrl);
+		urls.push(externalUrl);
+	}
 	if (hnTextHtml) {
 		for (const m of hnTextHtml.match(/href="([^"]+)"/g) ?? []) {
-			const raw = m.slice(6, -1).replace(/&#x2F;/g, '/').replace(/&amp;/g, '&');
-			if (!seen.has(raw) && raw.startsWith('http')) { seen.add(raw); urls.push(raw); }
+			const raw = m
+				.slice(6, -1)
+				.replace(/&#x2F;/g, '/')
+				.replace(/&amp;/g, '&');
+			if (!seen.has(raw) && raw.startsWith('http')) {
+				seen.add(raw);
+				urls.push(raw);
+			}
 		}
 	}
 	return urls;
@@ -98,9 +116,7 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 
 // ── OpenRouter ───────────────────────────────────────────────
 
-async function callOpenRouter(
-	apiKey: string, systemPrompt: string, userPrompt: string, maxTokens: number,
-): Promise<string | null> {
+async function callOpenRouter(apiKey: string, systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string | null> {
 	const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 		method: 'POST',
 		headers: {
@@ -118,8 +134,11 @@ async function callOpenRouter(
 			temperature: 0.3,
 		}),
 	});
-	if (!res.ok) { console.error('  OpenRouter error:', res.status, await res.text()); return null; }
-	const data = await res.json() as any;
+	if (!res.ok) {
+		console.error('  OpenRouter error:', res.status, await res.text());
+		return null;
+	}
+	const data = (await res.json()) as any;
 	return data.choices?.[0]?.message?.content ?? null;
 }
 
@@ -159,7 +178,8 @@ Rules:
 }
 
 function buildEnPrompt(title: string, hnText: string, commentInput: string, commentCount: number, pageExcerpt: string) {
-	const system = 'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
+	const system =
+		'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
 	const user = `Title: ${title}
 Article excerpt (${pageExcerpt.length} chars):
 ${pageExcerpt || 'N/A'}
@@ -202,19 +222,16 @@ async function supabaseGet(cfg: Config, query: string): Promise<any[]> {
 }
 
 async function supabasePatch(cfg: Config, id: string, body: Record<string, unknown>): Promise<void> {
-	const res = await fetch(
-		`${cfg.supabaseUrl}/rest/v1/${cfg.articlesTable}?id=eq.${id}`,
-		{
-			method: 'PATCH',
-			headers: {
-				apikey: cfg.supabaseKey,
-				Authorization: `Bearer ${cfg.supabaseKey}`,
-				'Content-Type': 'application/json',
-				Prefer: 'return=minimal',
-			},
-			body: JSON.stringify(body),
+	const res = await fetch(`${cfg.supabaseUrl}/rest/v1/${cfg.articlesTable}?id=eq.${id}`, {
+		method: 'PATCH',
+		headers: {
+			apikey: cfg.supabaseKey,
+			Authorization: `Bearer ${cfg.supabaseKey}`,
+			'Content-Type': 'application/json',
+			Prefer: 'return=minimal',
 		},
-	);
+		body: JSON.stringify(body),
+	});
 	if (!res.ok) throw new Error(`Supabase PATCH error: ${res.status} ${await res.text()}`);
 }
 
@@ -261,7 +278,7 @@ async function main() {
 			skipped++;
 			continue;
 		}
-		const hn = await hnRes.json() as any;
+		const hn = (await hnRes.json()) as any;
 		const comments = collectAllComments(hn.children ?? []);
 		console.log(`  comments: ${comments.length}, externalUrl: ${hn.url || '(none)'}`);
 
@@ -330,4 +347,7 @@ async function main() {
 	console.log(`\nDone: ${success} success, ${skipped} skipped, ${failed} failed`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+	console.error(e);
+	process.exit(1);
+});

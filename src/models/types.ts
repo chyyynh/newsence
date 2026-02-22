@@ -1,4 +1,4 @@
-import { ScheduledEvent, ExecutionContext, Queue, MessageBatch } from '@cloudflare/workers-types';
+import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 
 // Environment variables
 export interface Env {

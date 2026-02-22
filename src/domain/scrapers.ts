@@ -165,7 +165,7 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 
 async function fetchTranscript(
 	videoId: string,
-	transcriptApiKey: string
+	transcriptApiKey: string,
 ): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
 	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
 
@@ -200,15 +200,11 @@ async function fetchTranscript(
 	return { segments, language: data.language || null };
 }
 
-export async function scrapeYouTube(
-	videoId: string,
-	youtubeApiKey: string,
-	transcriptApiKey?: string
-): Promise<ScrapedContent> {
+export async function scrapeYouTube(videoId: string, youtubeApiKey: string, transcriptApiKey?: string): Promise<ScrapedContent> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
-		`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,contentDetails,statistics&key=${youtubeApiKey}`
+		`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,contentDetails,statistics&key=${youtubeApiKey}`,
 	);
 
 	if (!videoResponse.ok) {
@@ -228,7 +224,7 @@ export async function scrapeYouTube(
 	let channelAvatar: string | null = null;
 	try {
 		const channelResponse = await fetch(
-			`https://www.googleapis.com/youtube/v3/channels?id=${snippet.channelId}&part=snippet&key=${youtubeApiKey}`
+			`https://www.googleapis.com/youtube/v3/channels?id=${snippet.channelId}&part=snippet&key=${youtubeApiKey}`,
 		);
 		if (channelResponse.ok) {
 			const channelData = (await channelResponse.json()) as {
@@ -394,7 +390,7 @@ function buildTweetMetadata(
 	hashtags: string[],
 	expandedUrls: string[],
 	media?: Array<{ media_url_https: string; type: string }>,
-	extra?: Record<string, unknown>
+	extra?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 	const tweetText = tweet.text.replace(/https?:\/\/\S+/g, '').trim();
@@ -468,12 +464,12 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 					author: tweet.author?.userName || linked.author || null,
 					publishedDate: tweet.createdAt,
 					metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media, {
-					variant: 'shared',
-					linkedUrl: externalUrl,
-					externalOgImage: linked.ogImageUrl || null,
-					externalTitle: linked.title || null,
-					originalTweetUrl: tweet.url,
-				}),
+						variant: 'shared',
+						linkedUrl: externalUrl,
+						externalOgImage: linked.ogImageUrl || null,
+						externalTitle: linked.title || null,
+						originalTweetUrl: tweet.url,
+					}),
 				};
 			}
 		} catch (e) {
@@ -576,8 +572,7 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 
 	const response = await fetch(url, {
 		headers: {
-			'User-Agent':
-				'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 		},
@@ -589,10 +584,7 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 	const $ = cheerio.load(html);
 
 	const title =
-		$('meta[property="og:title"]').attr('content') ||
-		$('meta[name="twitter:title"]').attr('content') ||
-		$('title').text() ||
-		'';
+		$('meta[property="og:title"]').attr('content') || $('meta[name="twitter:title"]').attr('content') || $('title').text() || '';
 
 	let ogImageUrl =
 		$('meta[property="og:image"]').attr('content') ||
@@ -608,16 +600,13 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 		}
 	}
 
-	const description =
-		$('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || null;
+	const description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || null;
 
 	const siteName = $('meta[property="og:site_name"]').attr('content') || new URL(url).hostname;
 
-	const author =
-		$('meta[name="author"]').attr('content') || $('meta[property="article:author"]').attr('content') || null;
+	const author = $('meta[name="author"]').attr('content') || $('meta[property="article:author"]').attr('content') || null;
 
-	const publishedDate =
-		$('meta[property="article:published_time"]').attr('content') || $('time').attr('datetime') || null;
+	const publishedDate = $('meta[property="article:published_time"]').attr('content') || $('time').attr('datetime') || null;
 
 	// Extract content
 	$('script, style, nav, footer, header, aside, .ad, .advertisement, .social-share').remove();
