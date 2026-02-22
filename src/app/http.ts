@@ -52,21 +52,25 @@ function getSubmitRateKey(request: Request, userId?: string): string {
 	return ip ? `ip:${ip}` : 'anon';
 }
 
-function hitSubmitRateLimit(key: string, max: number, windowSec: number): { limited: boolean; retryAfterSec: number } {
+function hitSubmitRateLimit(key: string, max: number, windowSec: number, cost = 1): { limited: boolean; retryAfterSec: number } {
 	const now = Date.now();
 	const windowMs = Math.max(windowSec, 1) * 1000;
 	const existing = submitRateBuckets.get(key);
 
 	if (!existing || existing.resetAt <= now) {
-		submitRateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+		if (cost > max) {
+			const retryAfterSec = existing ? Math.max(Math.ceil((existing.resetAt - now) / 1000), 1) : Math.max(windowSec, 1);
+			return { limited: true, retryAfterSec };
+		}
+		submitRateBuckets.set(key, { count: cost, resetAt: now + windowMs });
 		return { limited: false, retryAfterSec: 0 };
 	}
 
-	if (existing.count >= max) {
+	if (existing.count + cost > max) {
 		return { limited: true, retryAfterSec: Math.max(Math.ceil((existing.resetAt - now) / 1000), 1) };
 	}
 
-	existing.count += 1;
+	existing.count += cost;
 	submitRateBuckets.set(key, existing);
 	return { limited: false, retryAfterSec: 0 };
 }
@@ -409,10 +413,21 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 		return Response.json({ error: 'Missing url or urls field' }, { status: 400 });
 	}
 
+	const MAX_BATCH_SIZE = 20;
+	if (urls.length > MAX_BATCH_SIZE) {
+		return Response.json(
+			{
+				success: false,
+				error: { code: 'BATCH_TOO_LARGE', message: `Maximum ${MAX_BATCH_SIZE} URLs per request, got ${urls.length}` },
+			},
+			{ status: 400 },
+		);
+	}
+
 	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
 	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
 	const rateKey = getSubmitRateKey(request, body.userId);
-	const rateResult = hitSubmitRateLimit(rateKey, Math.max(max, 1), Math.max(windowSec, 1));
+	const rateResult = hitSubmitRateLimit(rateKey, Math.max(max, 1), Math.max(windowSec, 1), urls.length);
 	if (rateResult.limited) {
 		return Response.json(
 			{
@@ -424,7 +439,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	}
 
 	const mode = body.mode ?? 'full';
-	const urlsToProcess = urls.slice(0, 20);
+	const urlsToProcess = urls;
 
 	// Fast mode: Queue-based background processing, returns immediately
 	if (mode === 'fast') {
