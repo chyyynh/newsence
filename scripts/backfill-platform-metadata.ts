@@ -162,6 +162,9 @@ function isAlreadyCanonical(meta: RawMetadata): boolean {
 	const data = meta.data;
 
 	switch (meta.type) {
+		case 'twitter_shared':
+		case 'twitter_article':
+			return false; // Legacy type — always needs migration
 		case 'twitter':
 			// Not canonical if it has legacy fields
 			if ('mediaUrls' in data || 'linkedUrl' in data || 'sharedBy' in data || 'tweetUrl' in data || 'hashtags' in data || 'expandedUrls' in data || 'lang' in data) {
@@ -242,10 +245,14 @@ async function main() {
 
 			try {
 				let normalizedData: Record<string, any>;
+				let canonicalType = meta.type!;
 
 				switch (meta.type) {
 					case 'twitter':
+					case 'twitter_shared':
+					case 'twitter_article':
 						normalizedData = normalizeTwitterData(meta.data);
+						canonicalType = 'twitter';
 						stats.twitter++;
 						break;
 					case 'youtube':
@@ -262,7 +269,7 @@ async function main() {
 				}
 
 				const updated: RawMetadata = {
-					type: meta.type,
+					type: canonicalType,
 					fetchedAt: meta.fetchedAt || new Date().toISOString(),
 					data: normalizedData,
 					...(meta.enrichments && { enrichments: meta.enrichments }),
