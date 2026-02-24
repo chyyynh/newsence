@@ -5,6 +5,8 @@ import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { fetchPlatformMetadata } from '../infra/platform';
 import { extractOgImage, extractTitleFromHtml, isSocialMediaUrl, normalizeUrl, resolveUrl, scrapeArticleContent } from '../infra/web';
+import type { TwitterMedia } from '../models/platform-metadata';
+import { buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../models/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
@@ -76,14 +78,13 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		sourceType = result.sourceType;
 
 		if (platformMetadata?.data) {
-			const data = platformMetadata.data as Record<string, unknown>;
 			if (platformMetadata.type === 'youtube') {
-				ogImageUrl = (data.thumbnailUrl as string) || null;
-				const desc = data.description as string;
-				if (desc?.length > 50) enrichedSummary = desc.slice(0, 500);
+				ogImageUrl = platformMetadata.data.thumbnailUrl || null;
+				const desc = platformMetadata.data.description;
+				if (desc && desc.length > 50) enrichedSummary = desc.slice(0, 500);
 			} else if (platformMetadata.type === 'twitter') {
-				const mediaUrls = data.mediaUrls as string[];
-				if (mediaUrls?.length) ogImageUrl = mediaUrls[0];
+				const media = 'media' in platformMetadata.data ? platformMetadata.data.media : undefined;
+				if (media?.length) ogImageUrl = media[0].url;
 			}
 		}
 	} catch (err) {
@@ -224,14 +225,13 @@ async function saveScrapedArticle(
 		source: string;
 		sourceType: string;
 		ogImage: string | null;
-		sharedBy?: string;
 		originalTweetUrl?: string;
 		tweetText?: string;
 		authorName?: string;
 		authorUserName?: string;
 		authorProfilePicture?: string;
 		authorVerified?: boolean;
-		media?: Array<{ url: string; type: string }>;
+		media?: TwitterMedia[];
 		createdAt?: string;
 	},
 ): Promise<boolean> {
@@ -250,26 +250,23 @@ async function saveScrapedArticle(
 		source_type: data.sourceType,
 		content: data.content,
 		og_image_url: data.ogImage,
-		platform_metadata: {
-			type: 'twitter',
-			fetchedAt: new Date().toISOString(),
-			data: {
-				variant: 'shared',
+		platform_metadata: buildTwitterShared(
+			{
 				authorName: data.authorName || '',
 				authorUserName: data.authorUserName || '',
 				authorProfilePicture: data.authorProfilePicture,
 				authorVerified: data.authorVerified,
-				mediaUrls: data.media?.map((m) => m.url).filter(Boolean),
+			},
+			{
 				media: data.media || [],
 				createdAt: data.createdAt,
 				tweetText: data.tweetText,
-				sharedBy: data.sharedBy,
-				originalTweetUrl: data.originalTweetUrl,
 				externalUrl: data.url,
 				externalOgImage: data.ogImage,
 				externalTitle: data.title,
+				originalTweetUrl: data.originalTweetUrl,
 			},
-		},
+		),
 	};
 
 	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
@@ -292,8 +289,18 @@ async function saveScrapedArticle(
 	return true;
 }
 
-function extractTweetMedia(tweet: Tweet): Array<{ url: string; type: string }> {
-	return tweet.extendedEntities?.media?.flatMap((m) => (m.media_url_https ? [{ url: m.media_url_https, type: m.type }] : [])) ?? [];
+function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
+	return tweet.extendedEntities?.media?.flatMap((m) =>
+		m.media_url_https ? [{ url: m.media_url_https, type: m.type as TwitterMedia['type'] }] : [],
+	) ?? [];
+}
+
+/** Check if any of the given URLs already exist as article.url in the DB */
+async function checkDuplicateByContent(supabase: any, table: string, urls: string[]): Promise<boolean> {
+	const normalized = urls.map(normalizeUrl).filter(Boolean);
+	if (normalized.length === 0) return false;
+	const { data } = await supabase.from(table).select('id').in('url', normalized).limit(1);
+	return (data?.length ?? 0) > 0;
 }
 
 async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean> {
@@ -313,6 +320,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			logInfo('TWITTER', 'Detected Twitter Article', { tweetId, articleUrl });
 			const articleContent = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
 			if (articleContent) {
+				const meta = articleContent.metadata as Record<string, any> | undefined;
 				const articleData = {
 					url: tweet.url,
 					title: articleContent.title,
@@ -326,17 +334,15 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 					source_type: 'twitter',
 					content: articleContent.content,
 					og_image_url: articleContent.ogImageUrl || null,
-					platform_metadata: {
-						type: 'twitter',
-						fetchedAt: new Date().toISOString(),
-						data: {
-							...articleContent.metadata,
-							authorName: articleContent.metadata?.authorName || tweet.author?.name || '',
-							authorUserName: articleContent.metadata?.authorUserName || tweet.author?.userName || '',
-							authorProfilePicture: articleContent.metadata?.authorProfilePicture || (tweet.author as any)?.profilePicture,
-							authorVerified: articleContent.metadata?.authorVerified ?? tweet.author?.verified,
+					platform_metadata: buildTwitterArticle(
+						{
+							authorName: meta?.authorName || tweet.author?.name || '',
+							authorUserName: meta?.authorUserName || tweet.author?.userName || '',
+							authorProfilePicture: meta?.authorProfilePicture || (tweet.author as any)?.profilePicture,
+							authorVerified: meta?.authorVerified ?? tweet.author?.verified,
 						},
-					},
+						tweetId,
+					),
 				};
 
 				const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
@@ -393,10 +399,9 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			return false;
 		}
 
-		// Check if link already exists
-		const { data: linkExists } = await supabase.from(table).select('id').eq('url', resolvedUrl).single();
-		if (linkExists) {
-			logInfo('TWITTER', 'Link already exists', { url: resolvedUrl });
+		// Cross-source dedup: check if resolved URL or normalized form already exists
+		if (await checkDuplicateByContent(supabase, table, [resolvedUrl])) {
+			logInfo('TWITTER', 'Link already exists (dedup)', { url: resolvedUrl });
 			return false;
 		}
 
@@ -428,7 +433,6 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			source: 'Twitter',
 			sourceType: 'twitter',
 			ogImage,
-			sharedBy: tweet.author?.userName,
 			originalTweetUrl: tweet.url,
 			tweetText: textWithoutUrls,
 			authorName: tweet.author?.name,
@@ -442,6 +446,12 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 	// assessment.action === 'save' - Save as tweet
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+
+	// Cross-source dedup: if tweet shares an external URL, check if it already exists
+	if (externalUrl && (await checkDuplicateByContent(supabase, table, [externalUrl]))) {
+		logInfo('TWITTER', 'External URL already exists (dedup)', { url: externalUrl });
+		return false;
+	}
 
 	// Fetch external link's og:image and title
 	let externalOgImage: string | null = null;
@@ -458,6 +468,28 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 	const tweetMedia = extractTweetMedia(tweet);
 
+	const tweetAuthor = {
+		authorName: tweet.author?.name || '',
+		authorUserName: tweet.author?.userName || '',
+		authorProfilePicture: (tweet.author as any)?.profilePicture,
+		authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
+	};
+
+	const tweetPlatformMetadata = externalUrl
+		? buildTwitterShared(tweetAuthor, {
+				media: tweetMedia,
+				createdAt: tweet.createdAt,
+				tweetText: textWithoutUrls,
+				externalUrl,
+				externalOgImage,
+				externalTitle,
+				originalTweetUrl: tweet.url,
+			})
+		: buildTwitterStandard(tweetAuthor, {
+				media: tweetMedia,
+				createdAt: tweet.createdAt,
+			});
+
 	const articleData = {
 		url: tweet.url,
 		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
@@ -471,28 +503,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		source_type: 'twitter',
 		content: null,
 		og_image_url: tweetMedia[0]?.url ?? externalOgImage ?? null,
-		platform_metadata: {
-			type: 'twitter',
-			fetchedAt: new Date().toISOString(),
-			data: {
-				authorName: tweet.author?.name || '',
-				authorUserName: tweet.author?.userName || '',
-				authorProfilePicture: (tweet.author as any)?.profilePicture,
-				authorVerified: tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-				mediaUrls: tweetMedia.map((m) => m.url),
-				media: tweetMedia,
-				createdAt: tweet.createdAt,
-				...(externalUrl && {
-					variant: 'shared',
-					externalUrl,
-					externalOgImage,
-					externalTitle,
-					tweetText: textWithoutUrls,
-					sharedBy: tweet.author?.userName,
-					originalTweetUrl: tweet.url,
-				}),
-			},
-		},
+		platform_metadata: tweetPlatformMetadata,
 	};
 
 	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');

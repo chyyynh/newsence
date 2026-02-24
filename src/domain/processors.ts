@@ -1,6 +1,7 @@
 import { AI_MODELS, callGeminiForAnalysis, callOpenRouter, translateTweet } from '../infra/ai';
 import { prepareArticleTextForEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
+import type { PlatformEnrichments, PlatformMetadata } from '../models/platform-metadata';
 import type { Article, Env } from '../models/types';
 import { HN_ALGOLIA_API, scrapeWebPage } from './scrapers';
 
@@ -19,7 +20,7 @@ export interface ProcessorResult {
 		content_cn?: string;
 		title?: string;
 	};
-	enrichments?: Record<string, any>;
+	enrichments?: PlatformEnrichments;
 }
 
 export interface ProcessorContext {
@@ -384,8 +385,9 @@ async function generateHnEditorial(
 }
 
 function extractItemId(article: Article): string | null {
-	const metadata = article.platform_metadata as { data?: { itemId?: string } } | undefined;
-	return metadata?.data?.itemId || null;
+	const metadata = article.platform_metadata;
+	if (metadata?.type === 'hackernews') return metadata.data.itemId || null;
+	return null;
 }
 
 class HackerNewsProcessor implements ArticleProcessor {
@@ -393,7 +395,7 @@ class HackerNewsProcessor implements ArticleProcessor {
 
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const itemId = extractItemId(article);
-		const enrichments: Record<string, unknown> = {};
+		const enrichments: PlatformEnrichments = {};
 		const updateData: ProcessorResult['updateData'] = {};
 
 		// 1. 從 HN API 取得完整資料（包含評論）
@@ -484,17 +486,17 @@ export function getProcessor(sourceType: string | undefined): ArticleProcessor {
 }
 
 export function mergePlatformMetadata(
-	baseMetadata: Article['platform_metadata'] | null | undefined,
-	enrichments?: Record<string, unknown>,
-): Article['platform_metadata'] | null {
+	baseMetadata: PlatformMetadata | null | undefined,
+	enrichments?: PlatformEnrichments,
+): PlatformMetadata | null {
 	if (!baseMetadata && (!enrichments || Object.keys(enrichments).length === 0)) return baseMetadata ?? null;
 	if (!enrichments || Object.keys(enrichments).length === 0) return baseMetadata ?? null;
+	if (!baseMetadata) return null;
 
-	const metadata = baseMetadata ?? {};
 	return {
-		...metadata,
+		...baseMetadata,
 		enrichments: {
-			...(metadata.enrichments || {}),
+			...(baseMetadata.enrichments || {}),
 			...enrichments,
 			processedAt: new Date().toISOString(),
 		},
