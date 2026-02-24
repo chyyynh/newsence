@@ -5,6 +5,8 @@ import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
+import type { PlatformMetadata } from '../models/platform-metadata';
+import { buildDefault, buildHackerNews, buildTwitterStandard, buildYouTube } from '../models/platform-metadata';
 import type { Article, Env } from '../models/types';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
@@ -647,15 +649,53 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 function normalizePlatformMetadata(
 	metadata: Record<string, unknown> | undefined,
 	fallbackType: string,
-): Article['platform_metadata'] | null {
+): PlatformMetadata | null {
 	if (!metadata) return null;
 	const rawType = metadata.type;
 	const type = typeof rawType === 'string' && rawType.trim().length > 0 ? rawType : fallbackType;
-	return {
-		type,
-		fetchedAt: new Date().toISOString(),
-		data: metadata,
-	};
+
+	switch (type) {
+		case 'youtube':
+			return buildYouTube({
+				videoId: (metadata.videoId as string) || '',
+				channelName: (metadata.channelName as string) || '',
+				channelId: metadata.channelId as string | undefined,
+				channelAvatar: metadata.channelAvatar as string | undefined,
+				duration: metadata.duration as string | undefined,
+				thumbnailUrl: metadata.thumbnailUrl as string | undefined,
+				viewCount: metadata.viewCount as number | undefined,
+				likeCount: metadata.likeCount as number | undefined,
+				commentCount: metadata.commentCount as number | undefined,
+				publishedAt: metadata.publishedAt as string | undefined,
+				description: metadata.description as string | undefined,
+				tags: metadata.tags as string[] | undefined,
+			});
+		case 'hackernews':
+			return buildHackerNews({
+				itemId: (metadata.itemId as string) || '',
+				author: (metadata.author as string) || '',
+				points: (metadata.points as number) || 0,
+				commentCount: (metadata.commentCount as number) || 0,
+				itemType: metadata.itemType as 'story' | 'ask' | 'show' | 'job' | undefined,
+				storyUrl: metadata.storyUrl as string | null | undefined,
+			});
+		case 'twitter':
+			return buildTwitterStandard(
+				{
+					authorName: (metadata.authorName as string) || '',
+					authorUserName: (metadata.authorUserName as string) || '',
+					authorProfilePicture: metadata.authorProfilePicture as string | undefined,
+					authorVerified: metadata.authorVerified as boolean | undefined,
+				},
+				{
+					tweetId: metadata.tweetId as string | undefined,
+					media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
+					createdAt: metadata.createdAt as string | undefined,
+				},
+			);
+		default:
+			return buildDefault();
+	}
 }
 
 /**

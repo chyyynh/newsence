@@ -2,6 +2,7 @@
 // Platform Scrapers (merged from crawler)
 // ─────────────────────────────────────────────────────────────
 
+import type { TwitterMedia } from '../models/platform-metadata';
 import { logInfo, logWarn } from '../infra/log';
 
 export interface ScrapedContent {
@@ -377,41 +378,54 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 		metadata: {
 			variant: 'article',
 			tweetId,
-			authorName: article.author?.name,
-			authorUserName: article.author?.userName,
+			authorName: article.author?.name ?? '',
+			authorUserName: article.author?.userName ?? '',
 			authorProfilePicture: article.author?.profilePicture,
 			authorVerified: article.author?.isBlueVerified,
 		},
 	};
 }
 
+interface TweetAuthor {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	authorVerified?: boolean;
+}
+
+function extractTweetAuthor(tweet: KaitoTweet): TweetAuthor {
+	return {
+		authorName: tweet.author?.name ?? '',
+		authorUserName: tweet.author?.userName ?? '',
+		authorProfilePicture: tweet.author?.profilePicture,
+		authorVerified: tweet.author?.isBlueVerified,
+	};
+}
+
+function extractMedia(media?: Array<{ media_url_https: string; type: string }>): TwitterMedia[] {
+	return media?.map((m) => ({ url: m.media_url_https, type: m.type as TwitterMedia['type'] })) ?? [];
+}
+
 function buildTweetMetadata(
 	tweet: KaitoTweet,
-	hashtags: string[],
+	_hashtags: string[],
 	expandedUrls: string[],
 	media?: Array<{ media_url_https: string; type: string }>,
 	extra?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 	const tweetText = tweet.text.replace(/https?:\/\/\S+/g, '').trim();
+	const tweetMedia = extractMedia(media);
 
 	return {
 		tweetId: tweet.id,
-		tweetUrl: tweet.url,
-		authorName: tweet.author?.name,
-		authorUserName: tweet.author?.userName,
-		authorProfilePicture: tweet.author?.profilePicture,
-		authorVerified: tweet.author?.isBlueVerified,
-		hashtags,
-		expandedUrls,
-		lang: tweet.lang,
-		mediaUrls: media?.map((m) => m.media_url_https) || [],
-		media: media?.map((m) => ({ url: m.media_url_https, type: m.type })) || [],
+		...extractTweetAuthor(tweet),
+		media: tweetMedia,
 		createdAt: tweet.createdAt,
 		...(externalUrl && {
+			variant: 'shared',
 			externalUrl,
 			tweetText,
-			sharedBy: tweet.author?.userName,
 		}),
 		...extra,
 	};
@@ -463,13 +477,18 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 					siteName: linked.siteName || 'Twitter',
 					author: tweet.author?.userName || linked.author || null,
 					publishedDate: tweet.createdAt,
-					metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media, {
+					metadata: {
 						variant: 'shared',
-						linkedUrl: externalUrl,
+						tweetId: tweet.id,
+						...extractTweetAuthor(tweet),
+						media: extractMedia(media),
+						createdAt: tweet.createdAt,
+						tweetText: tweet.text.replace(/https?:\/\/\S+/g, '').trim(),
+						externalUrl,
 						externalOgImage: linked.ogImageUrl || null,
 						externalTitle: linked.title || null,
 						originalTweetUrl: tweet.url,
-					}),
+					},
 				};
 			}
 		} catch (e) {

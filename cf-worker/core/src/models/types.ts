@@ -1,4 +1,5 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
+import type { PlatformMetadata } from './platform-metadata';
 
 // Environment variables
 export interface Env {
@@ -39,12 +40,7 @@ export interface Article {
 	tags: string[];
 	keywords: string[];
 	source_type?: string;
-	platform_metadata?: {
-		type?: string;
-		fetchedAt?: string;
-		data?: Record<string, any>;
-		enrichments?: Record<string, any>;
-	};
+	platform_metadata?: PlatformMetadata;
 }
 
 // AI Analysis result

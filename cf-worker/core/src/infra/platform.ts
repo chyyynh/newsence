@@ -1,4 +1,6 @@
 import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, HN_ALGOLIA_API } from '../domain/scrapers';
+import type { PlatformMetadata, SourceType } from '../models/platform-metadata';
+import { buildHackerNews, buildTwitterShared, buildTwitterStandard, buildYouTube } from '../models/platform-metadata';
 import { logError, logInfo, logWarn } from './log';
 
 // ─────────────────────────────────────────────────────────────
@@ -9,20 +11,12 @@ const YOUTUBE_VIDEO_API = 'https://www.googleapis.com/youtube/v3/videos';
 const YOUTUBE_CHANNEL_API = 'https://www.googleapis.com/youtube/v3/channels';
 const KAITO_API = 'https://api.twitterapi.io/twitter/tweets';
 
-interface PlatformMetadataResult {
-	sourceType: string;
-	platformMetadata: {
-		type: string;
-		fetchedAt: string;
-		data: Record<string, unknown>;
-	} | null;
+export interface PlatformMetadataResult {
+	sourceType: SourceType | 'rss';
+	platformMetadata: PlatformMetadata | null;
 }
 
-function createMetadata(type: string, data: Record<string, unknown>): PlatformMetadataResult['platformMetadata'] {
-	return { type, fetchedAt: new Date().toISOString(), data };
-}
-
-function emptyResult(sourceType: string): PlatformMetadataResult {
+function emptyResult(sourceType: SourceType | 'rss'): PlatformMetadataResult {
 	return { sourceType, platformMetadata: null };
 }
 
@@ -71,12 +65,12 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 
 		return {
 			sourceType: 'hackernews',
-			platformMetadata: createMetadata('hackernews', {
+			platformMetadata: buildHackerNews({
 				author: data.author ?? '',
 				points: data.points ?? 0,
 				commentCount: data.descendants ?? 0,
 				itemId: data.id.toString(),
-				itemType: data.type ?? 'story',
+				itemType: (data.type as 'story' | 'ask' | 'show' | 'job') ?? 'story',
 			}),
 		};
 	} catch (error) {
@@ -157,7 +151,7 @@ async function fetchYouTubeMetadata(url: string, apiKey?: string): Promise<Platf
 
 		return {
 			sourceType: 'youtube',
-			platformMetadata: createMetadata('youtube', {
+			platformMetadata: buildYouTube({
 				videoId,
 				channelName: video.snippet?.channelTitle ?? '',
 				channelId: video.snippet?.channelId ?? '',
@@ -232,21 +226,21 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		logInfo('PLATFORM', 'Fetched Twitter metadata', { author: tweet.author?.userName });
 
 		const tweetMedia = tweet.extendedEntities?.media;
+		const media = tweetMedia?.map((m) => ({ url: m.media_url_https, type: m.type as 'photo' | 'video' | 'animated_gif' })) ?? [];
 		const externalUrl = tweet.entities?.urls?.map((u) => u.expanded_url).find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 
-		return {
-			sourceType: 'twitter',
-			platformMetadata: createMetadata('twitter', {
-				authorName: tweet.author?.name ?? '',
-				authorUserName: tweet.author?.userName ?? '',
-				authorProfilePicture: tweet.author?.profilePicture,
-				authorVerified: tweet.author?.isBlueVerified,
-				mediaUrls: tweetMedia?.map((m) => m.media_url_https) ?? [],
-				media: tweetMedia?.map((m) => ({ url: m.media_url_https, type: m.type })) ?? [],
-				...(externalUrl ? { externalUrl } : {}),
-				createdAt: tweet.createdAt,
-			}),
+		const author = {
+			authorName: tweet.author?.name ?? '',
+			authorUserName: tweet.author?.userName ?? '',
+			authorProfilePicture: tweet.author?.profilePicture,
+			authorVerified: tweet.author?.isBlueVerified,
 		};
+
+		const platformMetadata = externalUrl
+			? buildTwitterShared(author, { media, externalUrl, createdAt: tweet.createdAt })
+			: buildTwitterStandard(author, { media, createdAt: tweet.createdAt });
+
+		return { sourceType: 'twitter', platformMetadata };
 	} catch (error) {
 		logError('PLATFORM', 'Failed to fetch Twitter metadata', { error: String(error) });
 		return emptyResult('twitter');
