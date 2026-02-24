@@ -9,7 +9,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -25,8 +25,17 @@ function loadApiKey(): string {
 
 // ── 從 processors.ts 複製的最小邏輯 ────────────────────────
 
-interface HnComment { id?: number; author?: string; text?: string; children?: HnComment[] }
-interface HnCollectedComment { id?: number; author?: string; text: string }
+interface HnComment {
+	id?: number;
+	author?: string;
+	text?: string;
+	children?: HnComment[];
+}
+interface HnCollectedComment {
+	id?: number;
+	author?: string;
+	text: string;
+}
 
 function cleanHtmlText(raw: string): string {
 	return raw
@@ -54,14 +63,12 @@ function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 
 // ── OpenRouter 呼叫 ─────────────────────────────────────────
 
-async function callOpenRouter(
-	apiKey: string, systemPrompt: string, userPrompt: string, maxTokens: number
-): Promise<string | null> {
+async function callOpenRouter(apiKey: string, systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string | null> {
 	const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
-			'Authorization': `Bearer ${apiKey}`,
+			Authorization: `Bearer ${apiKey}`,
 			'HTTP-Referer': 'https://app.newsence.xyz',
 		},
 		body: JSON.stringify({
@@ -74,8 +81,11 @@ async function callOpenRouter(
 			temperature: 0.3,
 		}),
 	});
-	if (!res.ok) { console.error('OpenRouter error:', res.status, await res.text()); return null; }
-	const data = await res.json() as any;
+	if (!res.ok) {
+		console.error('OpenRouter error:', res.status, await res.text());
+		return null;
+	}
+	const data = (await res.json()) as any;
 	return data.choices?.[0]?.message?.content ?? null;
 }
 
@@ -87,8 +97,11 @@ async function main() {
 
 	console.log(`\n🔍 Fetching HN item ${itemId} ...\n`);
 	const hnRes = await fetch(`https://hn.algolia.com/api/v1/items/${itemId}`);
-	if (!hnRes.ok) { console.error('Algolia error:', hnRes.status); process.exit(1); }
-	const hn = await hnRes.json() as any;
+	if (!hnRes.ok) {
+		console.error('Algolia error:', hnRes.status);
+		process.exit(1);
+	}
+	const hn = (await hnRes.json()) as any;
 
 	const comments = collectAllComments(hn.children ?? []);
 
@@ -99,12 +112,21 @@ async function main() {
 	// 抓主文連結（和 processors.ts extractPostLinks 一樣）
 	const seen = new Set<string>();
 	const links: string[] = [];
-	if (hn.url) { seen.add(hn.url); links.push(hn.url); }
+	if (hn.url) {
+		seen.add(hn.url);
+		links.push(hn.url);
+	}
 	if (hn.text) {
 		const hrefMatches = (hn.text as string).match(/href="([^"]+)"/g);
 		for (const m of hrefMatches ?? []) {
-			const raw = m.slice(6, -1).replace(/&#x2F;/g, '/').replace(/&amp;/g, '&');
-			if (!seen.has(raw) && raw.startsWith('http')) { seen.add(raw); links.push(raw); }
+			const raw = m
+				.slice(6, -1)
+				.replace(/&#x2F;/g, '/')
+				.replace(/&amp;/g, '&');
+			if (!seen.has(raw) && raw.startsWith('http')) {
+				seen.add(raw);
+				links.push(raw);
+			}
 		}
 	}
 	console.log(`\nPost links (${links.length}):`);
@@ -156,7 +178,8 @@ Rules:
 - 直接輸出 Markdown，不要包在 code block 裡`;
 
 	// ── EN prompt ──
-	const enSystem = 'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
+	const enSystem =
+		'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
 	const enUser = `Title: ${hn.title}
 Article excerpt (${pageExcerpt.length} chars):
 ${pageExcerpt || 'N/A'}
@@ -206,4 +229,7 @@ Rules:
 	console.log(`\nEN length: ${enResult?.length ?? 0} chars`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch((e) => {
+	console.error(e);
+	process.exit(1);
+});

@@ -1,16 +1,11 @@
-import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect } from 'vitest';
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
+import { describe, expect, it } from 'vitest';
+import { getProcessor, isEmpty } from '../src/domain/processors';
+import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId } from '../src/domain/scrapers';
 import worker from '../src/index';
-import {
-	detectPlatformType,
-	extractTweetId,
-	extractYouTubeId,
-	extractHackerNewsId,
-} from '../src/domain/scrapers';
-import { normalizeUrl, isSocialMediaUrl, extractTitleFromHtml } from '../src/infra/web';
-import { prepareArticleTextForEmbedding, normalizeVector } from '../src/infra/embedding';
 import { extractJson } from '../src/infra/ai';
-import { isEmpty, getProcessor } from '../src/domain/processors';
+import { normalizeVector, prepareArticleTextForEmbedding } from '../src/infra/embedding';
+import { extractTitleFromHtml, isSocialMediaUrl, normalizeUrl } from '../src/infra/web';
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.

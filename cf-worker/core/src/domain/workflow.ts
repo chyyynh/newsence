@@ -1,17 +1,13 @@
-import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
-import { Env, Article, MessageBatch, QueueMessage } from '../models/types';
-import { getSupabaseClient, getArticlesTable } from '../infra/db';
-import {
-	ProcessorResult,
-	runArticleProcessor,
-	persistProcessorResult,
-	buildEmbeddingTextForArticle,
-} from './processors';
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
-import { assignArticleTopic, synthesizeTopicSummary, TopicAssignmentResult } from './topics';
-import { logInfo, logWarn, logError } from '../infra/log';
+import { logError, logInfo, logWarn } from '../infra/log';
+import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
+import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor } from './processors';
+import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
-const ARTICLE_FIELDS = 'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
+const ARTICLE_FIELDS =
+	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
 
 type WorkflowParams = {
 	article_id: string;
@@ -43,10 +39,7 @@ async function fetchSourceTypeMap(articleIds: string[], env: Env): Promise<Map<s
 	return sourceTypes;
 }
 
-export async function handleArticleQueue(
-	batch: MessageBatch<QueueMessage>,
-	env: Env
-): Promise<void> {
+export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
 	logInfo('ARTICLE-QUEUE', 'Received batch', { count: batch.messages.length });
 
 	for (const message of batch.messages) {
@@ -88,7 +81,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
 
 		// Step 1: Fetch article from DB
-		const article = await step.do(
+		const article = (await step.do(
 			'fetch-article',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
@@ -96,8 +89,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				const { data, error } = await supabase.from(table).select(ARTICLE_FIELDS).eq('id', article_id).single();
 				if (error) throw new Error(`Failed to fetch article ${article_id}: ${error.message}`);
 				return data as Article;
-			}
-		) as Article;
+			},
+		)) as Article;
 
 		if (!article) {
 			logWarn('WORKFLOW', 'Article not found', { article_id });
@@ -105,7 +98,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		}
 
 		// Step 2: AI analysis (translate / tags / summary)
-		const processorResult = await step.do(
+		const processorResult = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
@@ -115,39 +108,35 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					supabase,
 					table,
 				});
-			}
-		) as ProcessorResult;
+			},
+		)) as ProcessorResult;
 
 		// Step 3: Update DB with AI results
-		await step.do(
-			'update-db',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => {
-				const supabase = getSupabaseClient(this.env);
-				await persistProcessorResult(article_id, article, processorResult, {
-					env: this.env,
-					supabase,
-					table,
-				});
-				if (Object.keys(processorResult.updateData).length > 0) {
-					logInfo('WORKFLOW', 'Updated fields', { fields: Object.keys(processorResult.updateData).join(', ') });
-				}
-				if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
-					logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
-				}
+		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
+			const supabase = getSupabaseClient(this.env);
+			await persistProcessorResult(article_id, article, processorResult, {
+				env: this.env,
+				supabase,
+				table,
+			});
+			if (Object.keys(processorResult.updateData).length > 0) {
+				logInfo('WORKFLOW', 'Updated fields', { fields: Object.keys(processorResult.updateData).join(', ') });
 			}
-		);
+			if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
+				logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
+			}
+		});
 
 		// Step 4: Generate embedding
-		const embedding = await step.do(
+		const embedding = (await step.do(
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				const text = buildEmbeddingTextForArticle(article, processorResult);
 				if (!text || !this.env.AI) return null;
 				return await generateArticleEmbedding(text, this.env.AI);
-			}
-		) as number[] | null;
+			},
+		)) as number[] | null;
 
 		// Step 5: Save embedding
 		if (embedding) {
@@ -159,18 +148,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					const saved = await saveArticleEmbedding(supabase, article_id, embedding, table);
 					if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
 					logInfo('WORKFLOW', 'Embedding saved', { article_id });
-				}
+				},
 			);
 
 			// Step 6: Assign topic (cluster similar articles)
-			const topicResult = await step.do(
+			const topicResult = (await step.do(
 				'assign-topic',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () => {
 					const supabase = getSupabaseClient(this.env);
 					return await assignArticleTopic(supabase, article_id, table);
-				}
-			) as TopicAssignmentResult;
+				},
+			)) as TopicAssignmentResult;
 
 			// Step 7: Synthesize topic summary if needed
 			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
@@ -179,13 +168,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 					async () => {
 						const supabase = getSupabaseClient(this.env);
-						await synthesizeTopicSummary(
-							supabase,
-							topicResult.topicId!,
-							table,
-							this.env.OPENROUTER_API_KEY
-						);
-					}
+						await synthesizeTopicSummary(supabase, topicResult.topicId!, table, this.env.OPENROUTER_API_KEY);
+					},
 				);
 			}
 		}

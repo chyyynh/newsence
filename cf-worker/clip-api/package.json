@@ -1,21 +1,21 @@
 {
-	"name": "imageproxy",
-	"version": "0.0.0",
+	"name": "clip-api",
 	"private": true,
 	"scripts": {
+		"cf-typegen": "wrangler types",
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
-		"test": "vitest",
-		"cf-typegen": "wrangler types",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write ."
 	},
+	"dependencies": {
+		"@cloudflare/containers": "0.0.30",
+		"hono": "4.11.1"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.4",
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
-		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.56.0"
+		"typescript": "5.9.3",
+		"wrangler": "4.56.0"
 	}
 }

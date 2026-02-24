@@ -1,5 +1,5 @@
-import { detectPlatformType, extractHackerNewsId, extractYouTubeId, extractTweetId, HN_ALGOLIA_API } from '../domain/scrapers';
-import { logInfo, logWarn, logError } from './log';
+import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, HN_ALGOLIA_API } from '../domain/scrapers';
+import { logError, logInfo, logWarn } from './log';
 
 // ─────────────────────────────────────────────────────────────
 // Platform Metadata
@@ -30,7 +30,7 @@ export async function fetchPlatformMetadata(
 	url: string,
 	youtubeApiKey?: string,
 	commentsUrl?: string,
-	kaitoApiKey?: string
+	kaitoApiKey?: string,
 ): Promise<PlatformMetadataResult> {
 	const platformType = detectPlatformType(url);
 
@@ -232,9 +232,7 @@ async function fetchTwitterMetadata(url: string, apiKey?: string): Promise<Platf
 		logInfo('PLATFORM', 'Fetched Twitter metadata', { author: tweet.author?.userName });
 
 		const tweetMedia = tweet.extendedEntities?.media;
-		const externalUrl = tweet.entities?.urls
-			?.map((u) => u.expanded_url)
-			.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+		const externalUrl = tweet.entities?.urls?.map((u) => u.expanded_url).find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 
 		return {
 			sourceType: 'twitter',

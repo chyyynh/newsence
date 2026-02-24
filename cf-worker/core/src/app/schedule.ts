@@ -1,11 +1,11 @@
 import { XMLParser } from 'fast-xml-parser';
-import { Env, ExecutionContext, Tweet, RSSFeed } from '../models/types';
-import { getSupabaseClient, getArticlesTable } from '../infra/db';
-import { normalizeUrl, scrapeArticleContent, extractOgImage, resolveUrl, isSocialMediaUrl, extractTitleFromHtml } from '../infra/web';
 import { scrapeTwitterArticle } from '../domain/scrapers';
-import { fetchPlatformMetadata } from '../infra/platform';
 import { assessContent } from '../infra/ai';
-import { logInfo, logWarn, logError } from '../infra/log';
+import { getArticlesTable, getSupabaseClient } from '../infra/db';
+import { logError, logInfo, logWarn } from '../infra/log';
+import { fetchPlatformMetadata } from '../infra/platform';
+import { extractOgImage, extractTitleFromHtml, isSocialMediaUrl, normalizeUrl, resolveUrl, scrapeArticleContent } from '../infra/web';
+import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -101,9 +101,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 	}
 
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
-	const content = sourceType === 'youtube'
-		? null
-		: (crawledContent || null);
+	const content = sourceType === 'youtube' ? null : crawledContent || null;
 
 	const insert = {
 		url,
@@ -152,13 +150,19 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 	else if (items.length > 30) items = items.slice(0, 30);
 
 	// Filter existing URLs
-	const urls = items.map((item) => extractUrlFromItem(item)).filter(Boolean).map((u) => normalizeUrl(u!));
+	const urls = items
+		.map((item) => extractUrlFromItem(item))
+		.filter(Boolean)
+		.map((u) => normalizeUrl(u!));
 	const table = getArticlesTable(env);
 	const batchSize = feed.name?.toLowerCase().includes('stratechery') ? 5 : 50;
 	const existingUrls: string[] = [];
 
 	for (let i = 0; i < urls.length; i += batchSize) {
-		const { data } = await supabase.from(table).select('url').in('url', urls.slice(i, i + batchSize));
+		const { data } = await supabase
+			.from(table)
+			.select('url')
+			.in('url', urls.slice(i, i + batchSize));
 		if (data) existingUrls.push(...data.map((e: { url: string }) => normalizeUrl(e.url)));
 	}
 
@@ -229,7 +233,7 @@ async function saveScrapedArticle(
 		authorVerified?: boolean;
 		media?: Array<{ url: string; type: string }>;
 		createdAt?: string;
-	}
+	},
 ): Promise<boolean> {
 	const table = getArticlesTable(env);
 
@@ -289,11 +293,7 @@ async function saveScrapedArticle(
 }
 
 function extractTweetMedia(tweet: Tweet): Array<{ url: string; type: string }> {
-	return (
-		tweet.extendedEntities?.media?.flatMap((m) =>
-			m.media_url_https ? [{ url: m.media_url_https, type: m.type }] : []
-		) ?? []
-	);
+	return tweet.extendedEntities?.media?.flatMap((m) => (m.media_url_https ? [{ url: m.media_url_https, type: m.type }] : [])) ?? [];
 }
 
 async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean> {
@@ -374,7 +374,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 				likeCount: tweet.likeCount,
 			},
 		},
-		env.OPENROUTER_API_KEY
+		env.OPENROUTER_API_KEY,
 	);
 
 	// Handle based on assessment
@@ -413,7 +413,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 				source: 'Twitter',
 				sourceType: 'twitter',
 			},
-			env.OPENROUTER_API_KEY
+			env.OPENROUTER_API_KEY,
 		);
 
 		if (scrapedAssessment.action === 'discard') {
@@ -448,10 +448,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 	let externalTitle: string | null = null;
 	if (externalUrl) {
 		try {
-			const [ogImage, scrapedHtml] = await Promise.all([
-				extractOgImage(externalUrl),
-				scrapeArticleContent(externalUrl),
-			]);
+			const [ogImage, scrapedHtml] = await Promise.all([extractOgImage(externalUrl), scrapeArticleContent(externalUrl)]);
 			externalOgImage = ogImage;
 			externalTitle = extractTitleFromHtml(scrapedHtml);
 		} catch {
@@ -550,9 +547,7 @@ async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('TWITTER', 'start');
 	const supabase = getSupabaseClient(env);
-	const results = await Promise.all(
-		TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, supabase, env))
-	);
+	const results = await Promise.all(TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, supabase, env)));
 	logInfo('TWITTER', 'end', { inserted: results.reduce((a, b) => a + b, 0) });
 }
 

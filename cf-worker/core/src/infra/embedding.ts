@@ -1,4 +1,4 @@
-import { logInfo, logError } from './log';
+import { logError, logInfo } from './log';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;
@@ -57,16 +57,13 @@ export async function saveArticleEmbedding(
 	supabase: any,
 	articleId: string,
 	embedding: number[],
-	table: string = 'articles'
+	table: string = 'articles',
 ): Promise<boolean> {
 	const vectorStr = `[${embedding.join(',')}]`;
 
 	try {
 		// 直接更新指定的表
-		const { error } = await supabase
-			.from(table)
-			.update({ embedding: vectorStr })
-			.eq('id', articleId);
+		const { error } = await supabase.from(table).update({ embedding: vectorStr }).eq('id', articleId);
 
 		if (error) {
 			logError('EMBEDDING', 'Failed to save', { articleId, table, error: error.message });

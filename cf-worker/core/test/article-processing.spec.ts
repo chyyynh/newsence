@@ -1,10 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import {
-	buildEmbeddingTextForArticle,
-	collectAllComments,
-	mergePlatformMetadata,
-} from '../src/domain/processors';
+import { describe, expect, it } from 'vitest';
 import type { ProcessorResult } from '../src/domain/processors';
+import { buildEmbeddingTextForArticle, collectAllComments, mergePlatformMetadata } from '../src/domain/processors';
 
 describe('mergePlatformMetadata', () => {
 	it('returns null when both metadata and enrichments are empty', () => {

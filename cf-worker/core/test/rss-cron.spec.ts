@@ -88,12 +88,14 @@ describe('handleRSSCron', () => {
 		getSupabaseClientMock.mockReturnValue(supabase);
 		vi.stubGlobal(
 			'fetch',
-			vi.fn().mockResolvedValue(
-				new Response(
-					`<?xml version="1.0"?><rss><channel><item><title>Hello</title><link>https://example.com/a</link><description>Desc</description><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item></channel></rss>`,
-					{ status: 200, headers: { 'content-type': 'application/rss+xml' } }
-				)
-			)
+			vi
+				.fn()
+				.mockResolvedValue(
+					new Response(
+						`<?xml version="1.0"?><rss><channel><item><title>Hello</title><link>https://example.com/a</link><description>Desc</description><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item></channel></rss>`,
+						{ status: 200, headers: { 'content-type': 'application/rss+xml' } },
+					),
+				),
 		);
 
 		const sendMock = vi.fn().mockResolvedValue(undefined);
@@ -125,12 +127,14 @@ describe('handleRSSCron', () => {
 		getSupabaseClientMock.mockReturnValue(supabase);
 		vi.stubGlobal(
 			'fetch',
-			vi.fn().mockResolvedValue(
-				new Response(
-					`<?xml version="1.0"?><rss><channel><item><title>Hello</title><link>https://example.com/a</link><description>Desc</description></item></channel></rss>`,
-					{ status: 200, headers: { 'content-type': 'application/rss+xml' } }
-				)
-			)
+			vi
+				.fn()
+				.mockResolvedValue(
+					new Response(
+						`<?xml version="1.0"?><rss><channel><item><title>Hello</title><link>https://example.com/a</link><description>Desc</description></item></channel></rss>`,
+						{ status: 200, headers: { 'content-type': 'application/rss+xml' } },
+					),
+				),
 		);
 
 		const sendMock = vi.fn().mockResolvedValue(undefined);
@@ -141,5 +145,4 @@ describe('handleRSSCron', () => {
 		expect(insertRowsMock).not.toHaveBeenCalled();
 		expect(sendMock).not.toHaveBeenCalled();
 	});
-
 });

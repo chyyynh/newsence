@@ -1,5 +1,5 @@
-import { Article, AIAnalysisResult, OpenRouterResponse } from '../models/types';
-import { logInfo, logError } from './log';
+import type { AIAnalysisResult, Article, OpenRouterResponse } from '../models/types';
+import { logError, logInfo } from './log';
 
 // ─────────────────────────────────────────────────────────────
 // Content Assessment Types
@@ -61,18 +61,8 @@ interface CallOpenRouterOptions {
 /**
  * Unified OpenRouter API call
  */
-export async function callOpenRouter(
-	prompt: string,
-	options: CallOpenRouterOptions
-): Promise<string | null> {
-	const {
-		apiKey,
-		model = AI_MODELS.FLASH,
-		maxTokens,
-		temperature = 0.3,
-		systemPrompt,
-		timeoutMs = TIMEOUT_MS,
-	} = options;
+export async function callOpenRouter(prompt: string, options: CallOpenRouterOptions): Promise<string | null> {
+	const { apiKey, model = AI_MODELS.FLASH, maxTokens, temperature = 0.3, systemPrompt, timeoutMs = TIMEOUT_MS } = options;
 
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -81,7 +71,7 @@ export async function callOpenRouter(
 		? [
 				{ role: 'system', content: systemPrompt },
 				{ role: 'user', content: prompt },
-		  ]
+			]
 		: [{ role: 'user', content: [{ type: 'text', text: prompt }] }];
 
 	try {
@@ -323,8 +313,7 @@ const DEFAULT_ASSESSMENT: ContentAssessment = {
 export async function assessContent(input: ContentInput, apiKey: string): Promise<ContentAssessment> {
 	logInfo('AI', 'Assessing', { title: input.title?.substring(0, 50) ?? input.text.substring(0, 50) });
 
-	const prompt = CONTENT_ASSESSMENT_PROMPT
-		.replace('{source}', input.source)
+	const prompt = CONTENT_ASSESSMENT_PROMPT.replace('{source}', input.source)
 		.replace('{sourceType}', input.sourceType)
 		.replace('{title}', input.title ?? 'N/A')
 		.replace('{textLength}', String(input.text.length))

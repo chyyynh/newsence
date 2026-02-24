@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { callOpenRouter, extractJson } from '../infra/ai';
 import { logInfo, logWarn } from '../infra/log';
 
@@ -38,16 +38,8 @@ function uniqueSortedIds(ids: string[]): string[] {
 	return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
 }
 
-async function getArticleTopicId(
-	supabase: SupabaseClient,
-	table: string,
-	articleId: string
-): Promise<string | null> {
-	const { data, error } = await supabase
-		.from(table)
-		.select('topic_id')
-		.eq('id', articleId)
-		.maybeSingle();
+async function getArticleTopicId(supabase: SupabaseClient, table: string, articleId: string): Promise<string | null> {
+	const { data, error } = await supabase.from(table).select('topic_id').eq('id', articleId).maybeSingle();
 
 	if (error) {
 		logWarn('TOPIC', 'Failed to get article topic', { articleId, error: error.message });
@@ -57,17 +49,8 @@ async function getArticleTopicId(
 	return (data as ArticleTopicRow | null)?.topic_id ?? null;
 }
 
-async function attachArticleToTopic(
-	supabase: SupabaseClient,
-	table: string,
-	articleId: string,
-	topicId: string
-): Promise<string | null> {
-	const { error } = await supabase
-		.from(table)
-		.update({ topic_id: topicId })
-		.eq('id', articleId)
-		.is('topic_id', null);
+async function attachArticleToTopic(supabase: SupabaseClient, table: string, articleId: string, topicId: string): Promise<string | null> {
+	const { error } = await supabase.from(table).update({ topic_id: topicId }).eq('id', articleId).is('topic_id', null);
 
 	if (error) {
 		logWarn('TOPIC', 'Failed to attach article to topic', { articleId, topicId, error: error.message });
@@ -76,19 +59,10 @@ async function attachArticleToTopic(
 	return getArticleTopicId(supabase, table, articleId);
 }
 
-async function getAnyAssignedTopicId(
-	supabase: SupabaseClient,
-	table: string,
-	articleIds: string[]
-): Promise<string | null> {
+async function getAnyAssignedTopicId(supabase: SupabaseClient, table: string, articleIds: string[]): Promise<string | null> {
 	if (articleIds.length === 0) return null;
 
-	const { data, error } = await supabase
-		.from(table)
-		.select('topic_id')
-		.in('id', articleIds)
-		.not('topic_id', 'is', null)
-		.limit(1);
+	const { data, error } = await supabase.from(table).select('topic_id').in('id', articleIds).not('topic_id', 'is', null).limit(1);
 
 	if (error) {
 		logWarn('TOPIC', 'Failed to re-check assigned topic in cluster', { error: error.message });
@@ -99,24 +73,13 @@ async function getAnyAssignedTopicId(
 }
 
 async function getTopicArticleCount(supabase: SupabaseClient, topicId: string): Promise<number> {
-	const { data } = await supabase
-		.from('topics')
-		.select('article_count')
-		.eq('id', topicId)
-		.maybeSingle();
+	const { data } = await supabase.from('topics').select('article_count').eq('id', topicId).maybeSingle();
 
 	return (data as { article_count: number } | null)?.article_count ?? 0;
 }
 
-async function cleanupTopicIfUnused(
-	supabase: SupabaseClient,
-	table: string,
-	topicId: string
-): Promise<void> {
-	const { count, error: countError } = await supabase
-		.from(table)
-		.select('id', { count: 'exact', head: true })
-		.eq('topic_id', topicId);
+async function cleanupTopicIfUnused(supabase: SupabaseClient, table: string, topicId: string): Promise<void> {
+	const { count, error: countError } = await supabase.from(table).select('id', { count: 'exact', head: true }).eq('topic_id', topicId);
 
 	if (countError) {
 		logWarn('TOPIC', 'Failed to count topic usage for cleanup', { topicId, error: countError.message });
@@ -125,10 +88,7 @@ async function cleanupTopicIfUnused(
 
 	if ((count ?? 0) > 0) return;
 
-	const { error: cleanupError } = await supabase
-		.from('topics')
-		.delete()
-		.eq('id', topicId);
+	const { error: cleanupError } = await supabase.from('topics').delete().eq('id', topicId);
 
 	if (cleanupError) {
 		logWarn('TOPIC', 'Failed to cleanup unused topic', { topicId, error: cleanupError.message });
@@ -143,11 +103,7 @@ async function cleanupTopicIfUnused(
  *
  * Returns info about the assignment for synthesis decisions.
  */
-export async function assignArticleTopic(
-	supabase: SupabaseClient,
-	articleId: string,
-	table: string
-): Promise<TopicAssignmentResult> {
+export async function assignArticleTopic(supabase: SupabaseClient, articleId: string, table: string): Promise<TopicAssignmentResult> {
 	const noResult: TopicAssignmentResult = {
 		topicId: null,
 		isNewTopic: false,
@@ -318,13 +274,10 @@ export async function assignArticleTopic(
 
 		// Assign remaining similar articles + current article to the new topic without overwriting existing assignments.
 		const peerIds = allIds.filter((id) => id !== lockArticleId);
-		const { error: batchUpdateError } = peerIds.length === 0
-			? { error: null as null | { message: string } }
-			: await supabase
-			.from(table)
-			.update({ topic_id: topicId })
-			.in('id', peerIds)
-			.is('topic_id', null);
+		const { error: batchUpdateError } =
+			peerIds.length === 0
+				? { error: null as null | { message: string } }
+				: await supabase.from(table).update({ topic_id: topicId }).in('id', peerIds).is('topic_id', null);
 
 		if (batchUpdateError) {
 			logWarn('TOPIC', 'Failed to batch update peer articles', { topicId, error: batchUpdateError.message });
@@ -429,12 +382,7 @@ function buildArticleListForPrompt(articles: TopicArticle[]): string {
  * Synthesizes a topic title and description from all its articles using AI.
  * Called when a topic is created or reaches certain article count thresholds.
  */
-export async function synthesizeTopicSummary(
-	supabase: SupabaseClient,
-	topicId: string,
-	table: string,
-	apiKey: string
-): Promise<boolean> {
+export async function synthesizeTopicSummary(supabase: SupabaseClient, topicId: string, table: string, apiKey: string): Promise<boolean> {
 	logInfo('TOPIC', 'Synthesizing summary for topic', { topicId });
 
 	// Fetch all articles for this topic

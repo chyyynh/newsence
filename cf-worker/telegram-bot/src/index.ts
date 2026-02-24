@@ -113,9 +113,7 @@ async function sendMessage(botToken: string, chatId: number, text: string): Prom
 }
 
 // Send message with inline keyboard
-async function sendMessageWithKeyboard(
-	botToken: string, chatId: number, text: string, keyboard: InlineKeyboard,
-): Promise<number | null> {
+async function sendMessageWithKeyboard(botToken: string, chatId: number, text: string, keyboard: InlineKeyboard): Promise<number | null> {
 	const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -150,7 +148,10 @@ async function editMessage(botToken: string, chatId: number, messageId: number, 
 
 // Edit message reply markup (remove keyboard by passing null)
 async function editMessageReplyMarkup(
-	botToken: string, chatId: number, messageId: number, keyboard: InlineKeyboard | null,
+	botToken: string,
+	chatId: number,
+	messageId: number,
+	keyboard: InlineKeyboard | null,
 ): Promise<boolean> {
 	const response = await fetch(`https://api.telegram.org/bot${botToken}/editMessageReplyMarkup`, {
 		method: 'POST',
@@ -190,7 +191,11 @@ async function sendPhoto(botToken: string, chatId: number, photoUrl: string, cap
 
 // Send photo with caption and inline keyboard
 async function sendPhotoWithKeyboard(
-	botToken: string, chatId: number, photoUrl: string, caption: string, keyboard: InlineKeyboard,
+	botToken: string,
+	chatId: number,
+	photoUrl: string,
+	caption: string,
+	keyboard: InlineKeyboard,
 ): Promise<boolean> {
 	const response = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
 		method: 'POST',
@@ -262,7 +267,10 @@ async function fetchUserCollections(env: Env, userId: string): Promise<Collectio
 
 // Add article to collection via core worker
 async function addToCollection(
-	env: Env, userId: string, articleId: string, collectionId: string,
+	env: Env,
+	userId: string,
+	articleId: string,
+	collectionId: string,
 ): Promise<{ success: boolean; error?: string }> {
 	try {
 		const response = await env.CORE.fetch('https://core/telegram/add-to-collection', {
@@ -312,9 +320,7 @@ async function submitUrlToCore(env: Env, url: string, userId: string): Promise<S
 // Collection keyboard helpers
 // ─────────────────────────────────────────────────────────────
 
-function buildCollectionKeyboard(
-	otherCollections: CollectionItem[], articleId: string, webappUrl: string,
-): InlineKeyboard {
+function buildCollectionKeyboard(otherCollections: CollectionItem[], articleId: string, webappUrl: string): InlineKeyboard {
 	const keyboard: InlineKeyboard = [];
 
 	// Other collections: 2 per row, max 6
@@ -350,9 +356,7 @@ function parseArticleId(text?: string | null): string | null {
 // Message formatting
 // ─────────────────────────────────────────────────────────────
 
-function formatArticleMessage(
-	data: ScrapeResponse['data'], articleId?: string, savedTo?: string,
-): string {
+function formatArticleMessage(data: ScrapeResponse['data'], articleId?: string, savedTo?: string): string {
 	if (!data) return '';
 
 	const status = savedTo ? `✅ 已儲存到「${savedTo}」` : '✅ 已儲存';
@@ -391,9 +395,7 @@ function formatArticleMessage(
 // Resolve userId
 // ─────────────────────────────────────────────────────────────
 
-async function resolveUser(
-	env: Env, telegramId: string, username: string,
-): Promise<{ userId: string; linked: boolean }> {
+async function resolveUser(env: Env, telegramId: string, username: string): Promise<{ userId: string; linked: boolean }> {
 	const lookup = await lookupTelegramAccount(env, telegramId);
 	if (lookup.found && lookup.userId) return { userId: lookup.userId, linked: true };
 	return { userId: `telegram_${username}`, linked: false };
@@ -444,28 +446,20 @@ async function handleMe(env: Env, chatId: number, telegramId: string, firstName:
 		await sendMessage(
 			env.TELEGRAM_BOT_TOKEN,
 			chatId,
-			`👤 <b>${firstName}</b>\n\n` +
-				'✅ 帳號已綁定\n' +
-				'透過 Bot 儲存的文章會自動歸到你的 newsence 帳號。',
+			`👤 <b>${firstName}</b>\n\n` + '✅ 帳號已綁定\n' + '透過 Bot 儲存的文章會自動歸到你的 newsence 帳號。',
 		);
 	} else {
 		const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 		await sendMessage(
 			env.TELEGRAM_BOT_TOKEN,
 			chatId,
-			`👤 <b>${firstName}</b>\n\n` +
-				'⚠️ 帳號尚未綁定\n' +
-				'你可以到 newsence 設定頁面綁定 Telegram 帳號。\n\n' +
-				`🔗 ${webappUrl}`,
+			`👤 <b>${firstName}</b>\n\n` + '⚠️ 帳號尚未綁定\n' + '你可以到 newsence 設定頁面綁定 Telegram 帳號。\n\n' + `🔗 ${webappUrl}`,
 		);
 	}
 }
 
 // Compute Telegram Login-compatible HMAC-SHA256 hash (Web Crypto API)
-async function computeTelegramHash(
-	botToken: string,
-	data: Record<string, string | number>,
-): Promise<string> {
+async function computeTelegramHash(botToken: string, data: Record<string, string | number>): Promise<string> {
 	const checkString = Object.entries(data)
 		.filter(([, v]) => v !== undefined)
 		.sort(([a], [b]) => a.localeCompare(b))
@@ -473,20 +467,12 @@ async function computeTelegramHash(
 		.join('\n');
 
 	const secretKey = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(botToken));
-	const cryptoKey = await crypto.subtle.importKey('raw', secretKey, { name: 'HMAC', hash: 'SHA-256' }, false, [
-		'sign',
-	]);
+	const cryptoKey = await crypto.subtle.importKey('raw', secretKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
 	const sig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(checkString));
 	return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function handleLink(
-	env: Env,
-	chatId: number,
-	telegramId: string,
-	firstName: string,
-	username: string,
-): Promise<void> {
+async function handleLink(env: Env, chatId: number, telegramId: string, firstName: string, username: string): Promise<void> {
 	const lookup = await lookupTelegramAccount(env, telegramId);
 	const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 
@@ -517,9 +503,7 @@ async function handleLink(
 	await sendMessage(
 		env.TELEGRAM_BOT_TOKEN,
 		chatId,
-		'🔗 <b>綁定 Telegram 帳號</b>\n\n' +
-			'點擊下方連結完成綁定（15 分鐘內有效）：\n\n' +
-			`👉 ${linkUrl}`,
+		'🔗 <b>綁定 Telegram 帳號</b>\n\n' + '點擊下方連結完成綁定（15 分鐘內有效）：\n\n' + `👉 ${linkUrl}`,
 	);
 }
 
@@ -527,13 +511,7 @@ async function handleLink(
 // URL submission flow
 // ─────────────────────────────────────────────────────────────
 
-async function handleUrlSubmission(
-	env: Env,
-	chatId: number,
-	urls: string[],
-	telegramId: string,
-	username: string,
-): Promise<void> {
+async function handleUrlSubmission(env: Env, chatId: number, urls: string[], telegramId: string, username: string): Promise<void> {
 	await sendChatAction(env.TELEGRAM_BOT_TOKEN, chatId, 'typing');
 	const { userId, linked } = await resolveUser(env, telegramId, username);
 	const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;

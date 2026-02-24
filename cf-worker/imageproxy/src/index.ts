@@ -5,9 +5,7 @@
  * Usage: /cdn-cgi/image/width=800,quality=85,format=auto/https://example.com/image.jpg
  */
 
-interface Env {
-	// Add environment variables here if needed
-}
+type Env = {};
 
 export default {
 	async fetch(request: Request, _env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -47,7 +45,7 @@ export default {
 			const imageResponse = await fetch(imageUrl, {
 				headers: {
 					'User-Agent': 'Mozilla/5.0 (compatible; ImageProxy/1.0)',
-					'Accept': 'image/*,*/*',
+					Accept: 'image/*,*/*',
 				},
 				cf: {
 					cacheEverything: true,

@@ -1,11 +1,11 @@
-import { Article, Env } from '../models/types';
-import { getSupabaseClient, getArticlesTable } from '../infra/db';
-import { normalizeUrl } from '../infra/web';
-import { prepareArticleTextForEmbedding, generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
-import { scrapeUrl, detectPlatformType } from '../domain/scrapers';
-import { runArticleProcessor, persistProcessorResult } from '../domain/processors';
+import { persistProcessorResult, runArticleProcessor } from '../domain/processors';
+import { detectPlatformType, scrapeUrl } from '../domain/scrapers';
 import { assignArticleTopic, synthesizeTopicSummary } from '../domain/topics';
-import { logInfo, logWarn, logError } from '../infra/log';
+import { getArticlesTable, getSupabaseClient } from '../infra/db';
+import { generateArticleEmbedding, prepareArticleTextForEmbedding, saveArticleEmbedding } from '../infra/embedding';
+import { logError, logInfo, logWarn } from '../infra/log';
+import { normalizeUrl } from '../infra/web';
+import type { Article, Env } from '../models/types';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
 const DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC = 60;
@@ -52,21 +52,25 @@ function getSubmitRateKey(request: Request, userId?: string): string {
 	return ip ? `ip:${ip}` : 'anon';
 }
 
-function hitSubmitRateLimit(key: string, max: number, windowSec: number): { limited: boolean; retryAfterSec: number } {
+function hitSubmitRateLimit(key: string, max: number, windowSec: number, cost = 1): { limited: boolean; retryAfterSec: number } {
 	const now = Date.now();
 	const windowMs = Math.max(windowSec, 1) * 1000;
 	const existing = submitRateBuckets.get(key);
 
 	if (!existing || existing.resetAt <= now) {
-		submitRateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+		if (cost > max) {
+			const retryAfterSec = existing ? Math.max(Math.ceil((existing.resetAt - now) / 1000), 1) : Math.max(windowSec, 1);
+			return { limited: true, retryAfterSec };
+		}
+		submitRateBuckets.set(key, { count: cost, resetAt: now + windowMs });
 		return { limited: false, retryAfterSec: 0 };
 	}
 
-	if (existing.count >= max) {
+	if (existing.count + cost > max) {
 		return { limited: true, retryAfterSec: Math.max(Math.ceil((existing.resetAt - now) / 1000), 1) };
 	}
 
-	existing.count += 1;
+	existing.count += cost;
 	submitRateBuckets.set(key, existing);
 	return { limited: false, retryAfterSec: 0 };
 }
@@ -88,10 +92,10 @@ export function handleHealth(_env: Env): Response {
 // ─────────────────────────────────────────────────────────────
 
 type SubmitBody = {
-	url?: string;         // Legacy single URL (backward compatible)
-	urls?: string[];      // Batch URLs
+	url?: string; // Legacy single URL (backward compatible)
+	urls?: string[]; // Batch URLs
 	userId?: string;
-	mode?: 'fast' | 'full';  // fast = Queue background, full = sync AI (default)
+	mode?: 'fast' | 'full'; // fast = Queue background, full = sync AI (default)
 };
 
 type SubmitResultFast = {
@@ -128,11 +132,7 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
 	const table = getArticlesTable(env);
 
 	// 1. Check if already exists
-	const { data: existing } = await supabase
-		.from(table)
-		.select('id, title_cn, source_type')
-		.eq('url', url)
-		.single();
+	const { data: existing } = await supabase.from(table).select('id, title_cn, source_type').eq('url', url).single();
 	if (existing) {
 		// Re-queue if article exists but hasn't been processed (missing title_cn indicates unprocessed)
 		if (!existing.title_cn) {
@@ -223,7 +223,7 @@ async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFas
  */
 async function processUrlFull(
 	rawUrl: string,
-	env: Env
+	env: Env,
 ): Promise<{ success: true; alreadyExists: boolean; data: SubmitResultFull } | { success: false; error: string }> {
 	const url = normalizeUrl(rawUrl);
 	const platformType = detectPlatformType(url);
@@ -357,12 +357,7 @@ async function processUrlFull(
 					try {
 						const topicResult = await assignArticleTopic(supabase, articleId, table);
 						if (topicResult.needsSynthesis && topicResult.topicId && env.OPENROUTER_API_KEY) {
-							await synthesizeTopicSummary(
-								supabase,
-								topicResult.topicId,
-								table,
-								env.OPENROUTER_API_KEY
-							);
+							await synthesizeTopicSummary(supabase, topicResult.topicId, table, env.OPENROUTER_API_KEY);
 						}
 					} catch (topicError) {
 						logWarn('SUBMIT', 'Topic pipeline failed in full mode', {
@@ -401,7 +396,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json(
 			{ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' } },
-			{ status: 401 }
+			{ status: 401 },
 		);
 	}
 
@@ -418,23 +413,33 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 		return Response.json({ error: 'Missing url or urls field' }, { status: 400 });
 	}
 
+	const MAX_BATCH_SIZE = 20;
+	if (urls.length > MAX_BATCH_SIZE) {
+		return Response.json(
+			{
+				success: false,
+				error: { code: 'BATCH_TOO_LARGE', message: `Maximum ${MAX_BATCH_SIZE} URLs per request, got ${urls.length}` },
+			},
+			{ status: 400 },
+		);
+	}
+
 	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
-	const windowSec =
-		Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
+	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
 	const rateKey = getSubmitRateKey(request, body.userId);
-	const rateResult = hitSubmitRateLimit(rateKey, Math.max(max, 1), Math.max(windowSec, 1));
+	const rateResult = hitSubmitRateLimit(rateKey, Math.max(max, 1), Math.max(windowSec, 1), urls.length);
 	if (rateResult.limited) {
 		return Response.json(
 			{
 				success: false,
 				error: { code: 'RATE_LIMITED', message: `Too many submit requests. Retry in ${rateResult.retryAfterSec}s` },
 			},
-			{ status: 429, headers: { 'Retry-After': String(rateResult.retryAfterSec) } }
+			{ status: 429, headers: { 'Retry-After': String(rateResult.retryAfterSec) } },
 		);
 	}
 
 	const mode = body.mode ?? 'full';
-	const urlsToProcess = urls.slice(0, 20);
+	const urlsToProcess = urls;
 
 	// Fast mode: Queue-based background processing, returns immediately
 	if (mode === 'fast') {
@@ -450,7 +455,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 				success: false,
 				error: { code: 'INVALID_REQUEST', message: 'Full mode supports exactly one URL. Use mode "fast" for batches.' },
 			},
-			{ status: 400 }
+			{ status: 400 },
 		);
 	}
 
@@ -458,10 +463,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	const result = await processUrlFull(url, env);
 
 	if (!result.success) {
-		return Response.json(
-			{ success: false, error: { code: 'PROCESS_FAILED', message: result.error } },
-			{ status: 422 }
-		);
+		return Response.json({ success: false, error: { code: 'PROCESS_FAILED', message: result.error } }, { status: 422 });
 	}
 
 	return Response.json({
@@ -493,12 +495,7 @@ export async function handleTelegramLookup(request: Request, env: Env): Promise<
 	}
 
 	const supabase = getSupabaseClient(env);
-	const { data } = await supabase
-		.from('account')
-		.select('userId')
-		.eq('providerId', 'telegram')
-		.eq('accountId', body.telegramId)
-		.single();
+	const { data } = await supabase.from('account').select('userId').eq('providerId', 'telegram').eq('accountId', body.telegramId).single();
 
 	if (!data) return Response.json({ found: false });
 	return Response.json({ found: true, userId: data.userId });
@@ -590,6 +587,13 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		return Response.json({ success: false, error: 'Invalid collection for user' }, { status: 403 });
 	}
 
+	// Verify article exists
+	const table = getArticlesTable(env);
+	const { data: articleExists } = await supabase.from(table).select('id').eq('id', articleId).maybeSingle();
+	if (!articleExists) {
+		return Response.json({ success: false, error: 'Article not found' }, { status: 404 });
+	}
+
 	// Check if already exists
 	const { data: existing } = await supabase
 		.from('citations')
@@ -627,12 +631,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 
 	if (updateError) {
 		// Fallback: manual increment
-		const { data: col } = await supabase
-			.from('collections')
-			.select('article_count')
-			.eq('id', collectionId)
-			.eq('user_id', userId)
-			.single();
+		const { data: col } = await supabase.from('collections').select('article_count').eq('id', collectionId).eq('user_id', userId).single();
 		if (col) {
 			await supabase
 				.from('collections')
@@ -647,7 +646,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 
 function normalizePlatformMetadata(
 	metadata: Record<string, unknown> | undefined,
-	fallbackType: string
+	fallbackType: string,
 ): Article['platform_metadata'] | null {
 	if (!metadata) return null;
 	const rawType = metadata.type;
@@ -663,10 +662,7 @@ function normalizePlatformMetadata(
  * Extract transcript data from YouTube metadata and save to youtube_transcripts table
  * Returns cleaned metadata without transcript fields only when transcript table write succeeds
  */
-async function saveYouTubeTranscript(
-	metadata: Record<string, unknown>,
-	env: Env
-): Promise<Record<string, unknown>> {
+async function saveYouTubeTranscript(metadata: Record<string, unknown>, env: Env): Promise<Record<string, unknown>> {
 	const videoId = metadata.videoId as string | undefined;
 	if (!videoId) return metadata;
 
@@ -690,7 +686,7 @@ async function saveYouTubeTranscript(
 					chapters_from_description: chaptersFromDescription || false,
 					fetched_at: new Date().toISOString(),
 				},
-				{ onConflict: 'video_id' }
+				{ onConflict: 'video_id' },
 			);
 
 			if (error) {
@@ -711,7 +707,6 @@ async function saveYouTubeTranscript(
 	}
 
 	// Return metadata without transcript fields (keep it lightweight) after successful persistence
-	const { transcript: _t, chapters: _c, transcriptLanguage: _l, chaptersFromDescription: _d, ...cleanMetadata } =
-		metadata;
+	const { transcript: _t, chapters: _c, transcriptLanguage: _l, chaptersFromDescription: _d, ...cleanMetadata } = metadata;
 	return cleanMetadata;
 }

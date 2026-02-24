@@ -1,9 +1,8 @@
-import { Article, Env } from '../models/types';
-import { callGeminiForAnalysis, callOpenRouter, AI_MODELS, translateTweet } from '../infra/ai';
-import { scrapeWebPage } from './scrapers';
+import { AI_MODELS, callGeminiForAnalysis, callOpenRouter, translateTweet } from '../infra/ai';
 import { prepareArticleTextForEmbedding } from '../infra/embedding';
-import { HN_ALGOLIA_API } from './scrapers';
-import { logInfo, logWarn, logError } from '../infra/log';
+import { logError, logInfo, logWarn } from '../infra/log';
+import type { Article, Env } from '../models/types';
+import { HN_ALGOLIA_API, scrapeWebPage } from './scrapers';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -52,7 +51,7 @@ export async function callOpenRouterChat(
 	apiKey: string,
 	systemPrompt: string,
 	userPrompt: string,
-	maxTokens = 500
+	maxTokens = 500,
 ): Promise<string | null> {
 	return callOpenRouter(userPrompt, {
 		apiKey,
@@ -193,7 +192,6 @@ class TwitterProcessor implements ArticleProcessor {
 		}
 		return null;
 	}
-
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -260,12 +258,21 @@ export function collectAllComments(children: HnComment[]): HnCollectedComment[] 
 function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | null): string[] {
 	const seen = new Set<string>();
 	const urls: string[] = [];
-	if (externalUrl) { seen.add(externalUrl); urls.push(externalUrl); }
+	if (externalUrl) {
+		seen.add(externalUrl);
+		urls.push(externalUrl);
+	}
 	if (hnTextHtml) {
 		const hrefMatches = hnTextHtml.match(/href="([^"]+)"/g);
 		for (const m of hrefMatches ?? []) {
-			const raw = m.slice(6, -1).replace(/&#x2F;/g, '/').replace(/&amp;/g, '&');
-			if (!seen.has(raw) && raw.startsWith('http')) { seen.add(raw); urls.push(raw); }
+			const raw = m
+				.slice(6, -1)
+				.replace(/&#x2F;/g, '/')
+				.replace(/&amp;/g, '&');
+			if (!seen.has(raw) && raw.startsWith('http')) {
+				seen.add(raw);
+				urls.push(raw);
+			}
 		}
 	}
 	return urls;
@@ -300,7 +307,8 @@ const EDITORIAL_CN: EditorialPrompts = {
 };
 
 const EDITORIAL_EN: EditorialPrompts = {
-	system: 'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.',
+	system:
+		'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.',
 	instruction: `Write a 400-600 word editorial note in English using flowing paragraphs, not bullet points. Format:
 
 ## Background
@@ -352,7 +360,7 @@ async function generateHnEditorial(
 	title: string,
 	hnText: string,
 	comments: HnCollectedComment[],
-	externalPageContent?: string | null
+	externalPageContent?: string | null,
 ): Promise<{ en: string | null; cn: string | null }> {
 	if (comments.length < 4 && !(externalPageContent && externalPageContent.length >= 600)) {
 		return { en: null, cn: null };
@@ -425,9 +433,7 @@ class HackerNewsProcessor implements ArticleProcessor {
 		}
 
 		// 4. callGeminiForAnalysis — 用外部文章（若有）做分析，品質更好
-		const articleForAnalysis = externalPageContent
-			? { ...article, content: externalPageContent, summary: null }
-			: article;
+		const articleForAnalysis = externalPageContent ? { ...article, content: externalPageContent, summary: null } : article;
 		const analysis = await callGeminiForAnalysis(articleForAnalysis, ctx.env.OPENROUTER_API_KEY);
 		const allTags = [...new Set([...analysis.tags, analysis.category, 'HackerNews'])];
 
@@ -479,7 +485,7 @@ export function getProcessor(sourceType: string | undefined): ArticleProcessor {
 
 export function mergePlatformMetadata(
 	baseMetadata: Article['platform_metadata'] | null | undefined,
-	enrichments?: Record<string, unknown>
+	enrichments?: Record<string, unknown>,
 ): Article['platform_metadata'] | null {
 	if (!baseMetadata && (!enrichments || Object.keys(enrichments).length === 0)) return baseMetadata ?? null;
 	if (!enrichments || Object.keys(enrichments).length === 0) return baseMetadata ?? null;
@@ -498,7 +504,7 @@ export function mergePlatformMetadata(
 export async function runArticleProcessor(
 	article: Article,
 	sourceType: string | undefined,
-	deps: ProcessingDeps
+	deps: ProcessingDeps,
 ): Promise<ProcessorResult> {
 	const processor = getProcessor(sourceType);
 	const ctx: ProcessorContext = {
@@ -513,7 +519,7 @@ export async function persistProcessorResult(
 	articleId: string,
 	article: Article,
 	result: ProcessorResult,
-	deps: ProcessingDeps
+	deps: ProcessingDeps,
 ): Promise<void> {
 	if (Object.keys(result.updateData).length > 0) {
 		const { error } = await deps.supabase.from(deps.table).update(result.updateData).eq('id', articleId);
@@ -529,7 +535,7 @@ export async function persistProcessorResult(
 
 export function buildEmbeddingTextForArticle(
 	article: Pick<Article, 'title' | 'title_cn' | 'summary' | 'summary_cn' | 'tags' | 'keywords'>,
-	result: ProcessorResult
+	result: ProcessorResult,
 ): string {
 	return prepareArticleTextForEmbedding({
 		title: article.title,
