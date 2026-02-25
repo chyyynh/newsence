@@ -52,12 +52,10 @@ export async function callOpenRouterChat(
 	apiKey: string,
 	systemPrompt: string,
 	userPrompt: string,
-	maxTokens = 500,
 ): Promise<string | null> {
 	return callOpenRouter(userPrompt, {
 		apiKey,
 		model: AI_MODELS.FLASH,
-		maxTokens,
 		systemPrompt,
 	});
 }
@@ -67,7 +65,7 @@ export async function translateContent(content: string, apiKey: string): Promise
 
 ${content}`;
 
-	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, maxTokens: 16_000, timeoutMs: 180_000 });
+	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, timeoutMs: 180_000 });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -365,8 +363,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user, 1200),
-		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user, 1000),
+		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user),
+		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user),
 	]);
 
 	return { en, cn };

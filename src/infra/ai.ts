@@ -237,7 +237,7 @@ ${tweetText}
 
 請只回傳JSON，不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, { apiKey });
+	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 500 });
 	if (!rawContent) return { ...TWEET_FALLBACK, summary_cn: tweetText };
 
 	try {
