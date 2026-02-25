@@ -31,7 +31,7 @@ interface ContentAssessment {
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
 const TIMEOUT_MS = 60_000;
-const MAX_CONTENT_LENGTH = 2000;
+const MAX_CONTENT_LENGTH = 10000;
 
 const OPENROUTER_HEADERS = {
 	'Content-Type': 'application/json',

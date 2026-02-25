@@ -1,6 +1,3 @@
-import * as cheerio from 'cheerio';
-import { logWarn } from './log';
-
 // ─────────────────────────────────────────────────────────────
 // URL Utilities
 // ─────────────────────────────────────────────────────────────
@@ -30,64 +27,6 @@ export function isSocialMediaUrl(url: string): boolean {
 		return socialDomains.some((d) => hostname.includes(d));
 	} catch {
 		return false;
-	}
-}
-
-/**
- * Extracts title from HTML content
- */
-export function extractTitleFromHtml(html: string): string | null {
-	try {
-		const $ = cheerio.load(html);
-		return $('title').text().trim() || $('h1').first().text().trim() || null;
-	} catch {
-		return null;
-	}
-}
-
-// ─────────────────────────────────────────────────────────────
-// OG Image Extraction
-// ─────────────────────────────────────────────────────────────
-
-const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-function resolveRelativeUrl(src: string, base: string): string | null {
-	const normalized = src.trim();
-	if (!normalized) return null;
-	if (/^https?:\/\//i.test(normalized)) return normalized;
-	try {
-		return new URL(normalized, base).toString();
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Extracts Open Graph image URL from a webpage
- */
-export async function extractOgImage(url: string): Promise<string | null> {
-	try {
-		const response = await fetch(url, {
-			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsenceBot/1.0)' },
-		});
-		if (!response.ok) return null;
-
-		const html = await response.text();
-		const $ = cheerio.load(html);
-
-		const imageUrl =
-			$('meta[property="og:image"]').attr('content') ||
-			$('meta[property="og:image:url"]').attr('content') ||
-			$('meta[name="twitter:image"]').attr('content') ||
-			$('meta[name="twitter:image:src"]').attr('content') ||
-			null;
-
-		if (!imageUrl) return null;
-		return resolveRelativeUrl(imageUrl, url);
-	} catch (error: unknown) {
-		const msg = error instanceof Error ? error.message : String(error);
-		logWarn('OG-IMAGE', 'Failed', { url, error: msg });
-		return null;
 	}
 }
 
@@ -147,53 +86,5 @@ export function normalizeUrl(url: string): string {
 		return urlObj.toString();
 	} catch {
 		return url;
-	}
-}
-
-// ─────────────────────────────────────────────────────────────
-// Article Content Scraping
-// ─────────────────────────────────────────────────────────────
-
-function processHtmlElement($: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0], baseUrl: string): string {
-	const element = $(el);
-	if (element.is('p')) return element.text().trim() + '\n\n';
-	if (element.is('h1')) return `## ${element.text().trim()}\n\n`;
-	if (element.is('h2')) return `### ${element.text().trim()}\n\n`;
-	if (element.is('h3')) return `#### ${element.text().trim()}\n\n`;
-
-	if (element.is('img')) {
-		const skipClasses = ['social-image', 'navbar-logo'];
-		if (skipClasses.some((cls) => element.hasClass(cls))) return '';
-		const imgSrc = resolveRelativeUrl(element.attr('src') || '', baseUrl);
-		if (imgSrc) return `![Image](${imgSrc})\n\n`;
-	}
-
-	return '';
-}
-
-export async function scrapeArticleContent(url: string): Promise<string> {
-	try {
-		const response = await fetch(url, {
-			headers: { 'User-Agent': BROWSER_UA },
-		});
-		if (!response.ok) {
-			logWarn('RSS-SCRAPER', 'HTTP error', { status: response.status, url });
-			return '';
-		}
-
-		const html = await response.text();
-		const $ = cheerio.load(html);
-		const title = $('title').text();
-		let content = `# ${title}\n\n`;
-
-		for (const el of $('p, img, h1, h2, h3')) {
-			content += processHtmlElement($, el, url);
-		}
-
-		return content.trim();
-	} catch (error: unknown) {
-		const msg = error instanceof Error ? error.message : String(error);
-		logWarn('RSS-SCRAPER', 'Failed to scrape', { url, error: msg });
-		return '';
 	}
 }

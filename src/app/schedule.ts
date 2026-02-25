@@ -1,10 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
-import { scrapeTwitterArticle } from '../domain/scrapers';
+import { scrapeTwitterArticle, scrapeWebPage } from '../domain/scrapers';
 import { assessContent } from '../infra/ai';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { fetchPlatformMetadata } from '../infra/platform';
-import { extractOgImage, extractTitleFromHtml, isSocialMediaUrl, normalizeUrl, resolveUrl, scrapeArticleContent } from '../infra/web';
+import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../infra/web';
 import type { TwitterMedia } from '../models/platform-metadata';
 import { buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../models/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
@@ -36,7 +36,7 @@ function toPlainText(value: unknown): string {
 	return '';
 }
 
-function stripHtml(raw: unknown): string {
+export function stripHtml(raw: unknown): string {
 	const text = toPlainText(raw);
 	if (!text) return '';
 	return text
@@ -50,12 +50,32 @@ function stripHtml(raw: unknown): string {
 		.trim();
 }
 
-function extractUrlFromItem(item: RSSItem): string | null {
+export function extractRssFullContent(item: RSSItem): string {
+	// content:encoded (RSS 2.0) → content (Atom) → description (Discourse forums put full HTML here)
+	const raw = toPlainText(item['content:encoded']) || toPlainText(item.content) || toPlainText(item.description);
+	if (!raw || raw.length < 800) return '';
+	// Convert HTML to readable text preserving paragraph structure
+	return raw
+		.replace(/<br\s*\/?>/gi, '\n')
+		.replace(/<\/p>/gi, '\n\n')
+		.replace(/<\/h[1-6]>/gi, '\n\n')
+		.replace(/<\/li>/gi, '\n')
+		.replace(/<[^>]*>/g, '')
+		.replace(/&quot;/g, '"')
+		.replace(/&#x27;|&#39;/g, "'")
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+}
+
+export function extractUrlFromItem(item: RSSItem): string | null {
 	if (typeof item.link === 'string') return item.link;
 	return item.link?.['@_href'] ?? item.link?.href ?? item.url ?? null;
 }
 
-function extractItemsFromFeed(data: any): RSSItem[] {
+export function extractItemsFromFeed(data: any): RSSItem[] {
 	const source = data?.rss?.channel?.item ?? data?.feed?.entry ?? data?.channel?.item ?? data?.['rdf:RDF']?.item;
 	return source ? (Array.isArray(source) ? source : [source]) : [];
 }
@@ -93,12 +113,17 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 
 	// Scrape content for regular RSS
 	if (sourceType === 'rss') {
-		try {
-			[crawledContent, ogImageUrl] = await Promise.all([
-				scrapeArticleContent(url),
-				ogImageUrl ? Promise.resolve(ogImageUrl) : extractOgImage(url),
-			]);
-		} catch {}
+		// Prefer RSS full content (content:encoded) over scraping
+		const rssContent = extractRssFullContent(item);
+		if (rssContent) {
+			crawledContent = rssContent;
+		} else {
+			try {
+				const scraped = await scrapeWebPage(url);
+				crawledContent = scraped.content;
+				if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
+			} catch {}
+		}
 	}
 
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
@@ -406,14 +431,13 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		}
 
 		// Scrape link content
-		const scrapedContent = await scrapeArticleContent(resolvedUrl);
-		const ogImage = await extractOgImage(resolvedUrl);
+		const scraped = await scrapeWebPage(resolvedUrl);
 
 		// Re-assess scraped content
 		const scrapedAssessment = await assessContent(
 			{
-				title: extractTitleFromHtml(scrapedContent) ?? `Shared by @${tweet.author?.userName}`,
-				text: scrapedContent,
+				title: scraped.title || `Shared by @${tweet.author?.userName}`,
+				text: scraped.content,
 				url: resolvedUrl,
 				source: 'Twitter',
 				sourceType: 'twitter',
@@ -428,11 +452,11 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 
 		return saveScrapedArticle(supabase, env, {
 			url: resolvedUrl,
-			title: extractTitleFromHtml(scrapedContent) ?? 'Shared Article',
-			content: scrapedContent,
+			title: scraped.title || 'Shared Article',
+			content: scraped.content,
 			source: 'Twitter',
 			sourceType: 'twitter',
-			ogImage,
+			ogImage: scraped.ogImageUrl,
 			originalTweetUrl: tweet.url,
 			tweetText: textWithoutUrls,
 			authorName: tweet.author?.name,
@@ -453,14 +477,18 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		return false;
 	}
 
-	// Fetch external link's og:image and title
+	// Fetch external link's og:image, title, and content
 	let externalOgImage: string | null = null;
 	let externalTitle: string | null = null;
+	let externalContent: string | null = null;
 	if (externalUrl) {
 		try {
-			const [ogImage, scrapedHtml] = await Promise.all([extractOgImage(externalUrl), scrapeArticleContent(externalUrl)]);
-			externalOgImage = ogImage;
-			externalTitle = extractTitleFromHtml(scrapedHtml);
+			const scraped = await scrapeWebPage(externalUrl);
+			externalOgImage = scraped.ogImageUrl;
+			externalTitle = scraped.title || null;
+			if (scraped.content && scraped.content.length > 100) {
+				externalContent = scraped.content;
+			}
 		} catch {
 			logWarn('TWITTER', 'Failed to fetch external link metadata', { url: externalUrl });
 		}
@@ -501,7 +529,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		tokens: [],
 		summary: tweet.text,
 		source_type: 'twitter',
-		content: null,
+		content: externalContent,
 		og_image_url: tweetMedia[0]?.url ?? externalOgImage ?? null,
 		platform_metadata: tweetPlatformMetadata,
 	};
@@ -574,16 +602,31 @@ export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise
 	const table = getArticlesTable(env);
 	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-	const { data, error } = await supabase
+	// AI processing failures
+	const { data: aiIncomplete, error } = await supabase
 		.from(table)
 		.select('id')
 		.gte('scraped_date', since)
 		.or('title_cn.is.null,summary_cn.is.null,embedding.is.null');
 
 	if (error) return logError('RETRY', 'Query failed', { error: String(error) });
-	if (!data?.length) return logInfo('RETRY', 'No incomplete articles');
 
-	const ids: string[] = data.map((r: { id: string }) => r.id);
+	// Translation failures (content exists but content_cn is null)
+	const { data: translationIncomplete } = await supabase
+		.from(table)
+		.select('id')
+		.gte('scraped_date', since)
+		.not('content', 'is', null)
+		.is('content_cn', null);
+
+	const ids = [
+		...new Set([
+			...(aiIncomplete ?? []).map((r: { id: string }) => r.id),
+			...(translationIncomplete ?? []).map((r: { id: string }) => r.id),
+		]),
+	];
+
+	if (!ids.length) return logInfo('RETRY', 'No incomplete articles');
 	for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
 		await env.ARTICLE_QUEUE.send({
 			type: 'batch_process',

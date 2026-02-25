@@ -3,7 +3,7 @@ import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
-import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor } from './processors';
+import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor, translateContent } from './processors';
 import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS =
@@ -127,7 +127,28 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		});
 
-		// Step 4: Generate embedding
+		// Step 4: Translate content to Chinese (separate step to isolate failures)
+		const contentToTranslate = processorResult.updateData.content ?? article.content;
+		if (contentToTranslate && contentToTranslate.length > 100) {
+			await step.do(
+				'translate-content',
+				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
+				async () => {
+					// Check if content_cn already exists (from processor or previous run)
+					const supabase = getSupabaseClient(this.env);
+					const { data: current } = await supabase.from(table).select('content_cn').eq('id', article_id).single();
+					if (current?.content_cn) return;
+
+					const contentCn = await translateContent(contentToTranslate, this.env.OPENROUTER_API_KEY);
+					if (contentCn) {
+						await supabase.from(table).update({ content_cn: contentCn }).eq('id', article_id);
+						logInfo('WORKFLOW', 'Content translated', { article_id, chars: contentCn.length });
+					}
+				},
+			);
+		}
+
+		// Step 5: Generate embedding
 		const embedding = (await step.do(
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -138,7 +159,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
-		// Step 5: Save embedding
+		// Step 6: Save embedding
 		if (embedding) {
 			await step.do(
 				'save-embedding',
@@ -151,7 +172,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			// Step 6: Assign topic (cluster similar articles)
+			// Step 7: Assign topic (cluster similar articles)
 			const topicResult = (await step.do(
 				'assign-topic',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -161,7 +182,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			)) as TopicAssignmentResult;
 
-			// Step 7: Synthesize topic summary if needed
+			// Step 8: Synthesize topic summary if needed
 			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
 				await step.do(
 					'synthesize-topic',
