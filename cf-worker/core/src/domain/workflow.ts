@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { generateYouTubeHighlights } from '../infra/ai';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
@@ -149,7 +150,35 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		});
 
-		// Step 5: Generate embedding
+		// Step 5: Generate YouTube highlights (if applicable)
+		if (source_type === 'youtube' && article.platform_metadata?.type === 'youtube') {
+			await step.do(
+				'generate-youtube-highlights',
+				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+				async () => {
+					const videoId = article.platform_metadata?.type === 'youtube' ? article.platform_metadata.data.videoId : null;
+					if (!videoId) return;
+
+					const supabase = getSupabaseClient(this.env);
+					const { data: row } = await supabase
+						.from('youtube_transcripts')
+						.select('transcript, ai_highlights')
+						.eq('video_id', videoId)
+						.single();
+
+					if (!row) return;
+					if (row.ai_highlights) {
+						logInfo('WORKFLOW', 'YouTube highlights already exist, skipping', { videoId });
+						return;
+					}
+					if (!Array.isArray(row.transcript) || row.transcript.length === 0) return;
+
+					await generateYouTubeHighlights(videoId, row.transcript as any, this.env);
+				},
+			);
+		}
+
+		// Step 6: Generate embedding
 		const embedding = (await step.do(
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -160,7 +189,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
-		// Step 6: Save embedding
+		// Step 7: Save embedding
 		if (embedding) {
 			await step.do(
 				'save-embedding',
@@ -173,7 +202,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			// Step 7: Assign topic (cluster similar articles)
+			// Step 8: Assign topic (cluster similar articles)
 			const topicResult = (await step.do(
 				'assign-topic',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -183,7 +212,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			)) as TopicAssignmentResult;
 
-			// Step 8: Synthesize topic summary if needed
+			// Step 9: Synthesize topic summary if needed
 			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
 				await step.do(
 					'synthesize-topic',
