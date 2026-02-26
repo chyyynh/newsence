@@ -2,8 +2,8 @@
 // Platform Scrapers (merged from crawler)
 // ─────────────────────────────────────────────────────────────
 
-import type { TwitterMedia } from '../models/platform-metadata';
 import { logInfo, logWarn } from '../infra/log';
+import type { TwitterMedia } from '../models/platform-metadata';
 
 export interface ScrapedContent {
 	title: string;

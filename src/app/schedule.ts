@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import { type FeedConfig, getFeedConfig } from '../domain/feed-config';
 import { scrapeTwitterArticle, scrapeWebPage } from '../domain/scrapers';
 import { assessContent } from '../infra/ai';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
@@ -59,47 +60,49 @@ export function extractRssFullContent(item: RSSItem): string {
 }
 
 export function htmlToMarkdown(html: string): string {
-	return html
-		// Block elements
-		.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
-		.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
-		.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
-		.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
-		.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n\n##### $1\n\n')
-		.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n\n###### $1\n\n')
-		// Lists
-		.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
-		.replace(/<\/?[ou]l[^>]*>/gi, '\n')
-		// Inline elements
-		.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
-		.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
-		.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
-		.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
-		.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-		.replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '^($1)')
-		// Block breaks
-		.replace(/<br\s*\/?>/gi, '\n')
-		.replace(/<\/p>/gi, '\n\n')
-		.replace(/<hr\s*\/?>/gi, '\n\n---\n\n')
-		.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) =>
-			content
-				.trim()
-				.split('\n')
-				.map((line: string) => `> ${line}`)
-				.join('\n'),
-		)
-		// Strip remaining tags
-		.replace(/<[^>]*>/g, '')
-		// HTML entities
-		.replace(/&quot;/g, '"')
-		.replace(/&#x27;|&#39;/g, "'")
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&nbsp;/g, ' ')
-		// Clean up whitespace
-		.replace(/\n{3,}/g, '\n\n')
-		.trim();
+	return (
+		html
+			// Block elements
+			.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
+			.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
+			.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
+			.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
+			.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n\n##### $1\n\n')
+			.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n\n###### $1\n\n')
+			// Lists
+			.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
+			.replace(/<\/?[ou]l[^>]*>/gi, '\n')
+			// Inline elements
+			.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+			.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+			.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
+			.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
+			.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+			.replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '^($1)')
+			// Block breaks
+			.replace(/<br\s*\/?>/gi, '\n')
+			.replace(/<\/p>/gi, '\n\n')
+			.replace(/<hr\s*\/?>/gi, '\n\n---\n\n')
+			.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) =>
+				content
+					.trim()
+					.split('\n')
+					.map((line: string) => `> ${line}`)
+					.join('\n'),
+			)
+			// Strip remaining tags
+			.replace(/<[^>]*>/g, '')
+			// HTML entities
+			.replace(/&quot;/g, '"')
+			.replace(/&#x27;|&#39;/g, "'")
+			.replace(/&amp;/g, '&')
+			.replace(/&lt;/g, '<')
+			.replace(/&gt;/g, '>')
+			.replace(/&nbsp;/g, ' ')
+			// Clean up whitespace
+			.replace(/\n{3,}/g, '\n\n')
+			.trim()
+	);
 }
 
 export function extractUrlFromItem(item: RSSItem): string | null {
@@ -112,7 +115,7 @@ export function extractItemsFromFeed(data: any): RSSItem[] {
 	return source ? (Array.isArray(source) ? source : [source]) : [];
 }
 
-async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, feed: RSSFeed): Promise<void> {
+async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const rawUrl = extractUrlFromItem(item);
 	const url = rawUrl ? normalizeUrl(rawUrl) : null;
 	if (!url) return;
@@ -143,18 +146,34 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		logWarn('RSS', 'Metadata fetch failed', { feed: feed.name, error: String(err) });
 	}
 
-	// Scrape content for regular RSS
+	// Fetch content based on feed config
 	if (sourceType === 'rss') {
-		// Prefer RSS full content (content:encoded) over scraping
-		const rssContent = extractRssFullContent(item);
-		if (rssContent) {
-			crawledContent = rssContent;
-		} else {
-			try {
-				const scraped = await scrapeWebPage(url);
-				crawledContent = scraped.content;
-				if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
-			} catch {}
+		switch (config.contentSource) {
+			case 'content_encoded': {
+				const rssContent = extractRssFullContent(item);
+				if (rssContent) crawledContent = rssContent;
+				break;
+			}
+			case 'description': {
+				const raw = toPlainText(item.description);
+				if (raw && raw.length > 100) crawledContent = htmlToMarkdown(raw);
+				break;
+			}
+			case 'scrape': {
+				const rssContent = extractRssFullContent(item);
+				if (rssContent) {
+					crawledContent = rssContent;
+				} else {
+					try {
+						const scraped = await scrapeWebPage(url);
+						crawledContent = scraped.content;
+						if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
+					} catch {}
+				}
+				break;
+			}
+			case 'skip':
+				break;
 		}
 	}
 
@@ -170,7 +189,9 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		keywords: [],
 		tags: [],
 		tokens: [],
-		summary: enrichedSummary ?? (sourceType === 'hackernews' ? '' : stripHtml(item.description ?? item.summary ?? '')),
+		summary:
+			enrichedSummary ??
+			(sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '')),
 		source_type: sourceType,
 		content,
 		og_image_url: ogImageUrl,
@@ -202,10 +223,9 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 	let items = extractItemsFromFeed(parser.parse(await res.text()));
 	if (!items.length) return;
 
-	// Limit items
-	const isAnthropic = feed.name?.toLowerCase().includes('anthropic');
-	if (isAnthropic && items.length > 30) items = items.slice(-30);
-	else if (items.length > 30) items = items.slice(0, 30);
+	const config = getFeedConfig(feed.name);
+
+	if (items.length > 30) items = items.slice(0, 30);
 
 	// Filter existing URLs
 	const urls = items
@@ -213,14 +233,14 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 		.filter(Boolean)
 		.map((u) => normalizeUrl(u!));
 	const table = getArticlesTable(env);
-	const batchSize = feed.name?.toLowerCase().includes('stratechery') ? 5 : 50;
+	const dedupBatchSize = 50;
 	const existingUrls: string[] = [];
 
-	for (let i = 0; i < urls.length; i += batchSize) {
+	for (let i = 0; i < urls.length; i += dedupBatchSize) {
 		const { data } = await supabase
 			.from(table)
 			.select('url')
-			.in('url', urls.slice(i, i + batchSize));
+			.in('url', urls.slice(i, i + dedupBatchSize));
 		if (data) existingUrls.push(...data.map((e: { url: string }) => normalizeUrl(e.url)));
 	}
 
@@ -231,7 +251,7 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 	});
 
 	logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
-	for (const item of newItems) await processAndInsertArticle(supabase, env, item, feed);
+	for (const item of newItems) await processAndInsertArticle(supabase, env, item, feed, config);
 	await supabase.from('RssList').update({ scraped_at: new Date() }).eq('id', feed.id);
 }
 
@@ -347,9 +367,11 @@ async function saveScrapedArticle(
 }
 
 function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
-	return tweet.extendedEntities?.media?.flatMap((m) =>
-		m.media_url_https ? [{ url: m.media_url_https, type: m.type as TwitterMedia['type'] }] : [],
-	) ?? [];
+	return (
+		tweet.extendedEntities?.media?.flatMap((m) =>
+			m.media_url_https ? [{ url: m.media_url_https, type: m.type as TwitterMedia['type'] }] : [],
+		) ?? []
+	);
 }
 
 /** Check if any of the given URLs already exist as article.url in the DB */

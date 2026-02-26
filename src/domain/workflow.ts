@@ -3,7 +3,13 @@ import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
-import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor, translateContent } from './processors';
+import {
+	buildEmbeddingTextForArticle,
+	type ProcessorResult,
+	persistProcessorResult,
+	runArticleProcessor,
+	translateContent,
+} from './processors';
 import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS =
@@ -111,7 +117,24 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as ProcessorResult;
 
-		// Step 3: Update DB with AI results
+		// Step 3: Translate content to Chinese (no DB write, just returns the translation)
+		const contentToTranslate = processorResult.updateData.content ?? article.content;
+		const needsTranslation = contentToTranslate && contentToTranslate.length > 100 && !processorResult.updateData.content_cn;
+		const contentCn = needsTranslation
+			? ((await step.do(
+					'translate-content',
+					{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
+					async () => {
+						const translated = await translateContent(contentToTranslate, this.env.OPENROUTER_API_KEY);
+						if (translated) logInfo('WORKFLOW', 'Content translated', { article_id, chars: translated.length });
+						return translated;
+					},
+				)) as string | null)
+			: null;
+
+		// Step 4: Write all AI results to DB in a single UPDATE
+		if (contentCn) processorResult.updateData.content_cn = contentCn;
+
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
 			const supabase = getSupabaseClient(this.env);
 			await persistProcessorResult(article_id, article, processorResult, {
@@ -119,34 +142,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				supabase,
 				table,
 			});
-			if (Object.keys(processorResult.updateData).length > 0) {
-				logInfo('WORKFLOW', 'Updated fields', { fields: Object.keys(processorResult.updateData).join(', ') });
-			}
+			const fields = Object.keys(processorResult.updateData);
+			if (fields.length > 0) logInfo('WORKFLOW', 'Updated fields', { fields: fields.join(', ') });
 			if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
 				logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
 			}
 		});
-
-		// Step 4: Translate content to Chinese (separate step to isolate failures)
-		const contentToTranslate = processorResult.updateData.content ?? article.content;
-		if (contentToTranslate && contentToTranslate.length > 100) {
-			await step.do(
-				'translate-content',
-				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-				async () => {
-					// Check if content_cn already exists (from processor or previous run)
-					const supabase = getSupabaseClient(this.env);
-					const { data: current } = await supabase.from(table).select('content_cn').eq('id', article_id).single();
-					if (current?.content_cn) return;
-
-					const contentCn = await translateContent(contentToTranslate, this.env.OPENROUTER_API_KEY);
-					if (contentCn) {
-						await supabase.from(table).update({ content_cn: contentCn }).eq('id', article_id);
-						logInfo('WORKFLOW', 'Content translated', { article_id, chars: contentCn.length });
-					}
-				},
-			);
-		}
 
 		// Step 5: Generate embedding
 		const embedding = (await step.do(

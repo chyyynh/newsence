@@ -48,11 +48,7 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export async function callOpenRouterChat(
-	apiKey: string,
-	systemPrompt: string,
-	userPrompt: string,
-): Promise<string | null> {
+export async function callOpenRouterChat(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string | null> {
 	return callOpenRouter(userPrompt, {
 		apiKey,
 		model: AI_MODELS.FLASH,

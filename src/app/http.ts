@@ -646,10 +646,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 	return Response.json({ success: true });
 }
 
-function normalizePlatformMetadata(
-	metadata: Record<string, unknown> | undefined,
-	fallbackType: string,
-): PlatformMetadata | null {
+function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined, fallbackType: string): PlatformMetadata | null {
 	if (!metadata) return null;
 	const rawType = metadata.type;
 	const type = typeof rawType === 'string' && rawType.trim().length > 0 ? rawType : fallbackType;
