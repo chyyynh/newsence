@@ -3,7 +3,13 @@ import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
-import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor } from './processors';
+import {
+	buildEmbeddingTextForArticle,
+	type ProcessorResult,
+	persistProcessorResult,
+	runArticleProcessor,
+	translateContent,
+} from './processors';
 import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS =
@@ -111,7 +117,24 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as ProcessorResult;
 
-		// Step 3: Update DB with AI results
+		// Step 3: Translate content to Chinese (no DB write, just returns the translation)
+		const contentToTranslate = processorResult.updateData.content ?? article.content;
+		const needsTranslation = contentToTranslate && contentToTranslate.length > 100 && !processorResult.updateData.content_cn;
+		const contentCn = needsTranslation
+			? ((await step.do(
+					'translate-content',
+					{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
+					async () => {
+						const translated = await translateContent(contentToTranslate, this.env.OPENROUTER_API_KEY);
+						if (translated) logInfo('WORKFLOW', 'Content translated', { article_id, chars: translated.length });
+						return translated;
+					},
+				)) as string | null)
+			: null;
+
+		// Step 4: Write all AI results to DB in a single UPDATE
+		if (contentCn) processorResult.updateData.content_cn = contentCn;
+
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
 			const supabase = getSupabaseClient(this.env);
 			await persistProcessorResult(article_id, article, processorResult, {
@@ -119,15 +142,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				supabase,
 				table,
 			});
-			if (Object.keys(processorResult.updateData).length > 0) {
-				logInfo('WORKFLOW', 'Updated fields', { fields: Object.keys(processorResult.updateData).join(', ') });
-			}
+			const fields = Object.keys(processorResult.updateData);
+			if (fields.length > 0) logInfo('WORKFLOW', 'Updated fields', { fields: fields.join(', ') });
 			if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
 				logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
 			}
 		});
 
-		// Step 4: Generate embedding
+		// Step 5: Generate embedding
 		const embedding = (await step.do(
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -138,7 +160,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
-		// Step 5: Save embedding
+		// Step 6: Save embedding
 		if (embedding) {
 			await step.do(
 				'save-embedding',
@@ -151,7 +173,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			// Step 6: Assign topic (cluster similar articles)
+			// Step 7: Assign topic (cluster similar articles)
 			const topicResult = (await step.do(
 				'assign-topic',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -161,7 +183,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			)) as TopicAssignmentResult;
 
-			// Step 7: Synthesize topic summary if needed
+			// Step 8: Synthesize topic summary if needed
 			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
 				await step.do(
 					'synthesize-topic',

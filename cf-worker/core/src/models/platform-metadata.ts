@@ -160,10 +160,7 @@ export function buildTwitterShared(
 	};
 }
 
-export function buildTwitterArticle(
-	author: TwitterAuthorFields,
-	tweetId?: string,
-): PlatformMetadata & { type: 'twitter' } {
+export function buildTwitterArticle(author: TwitterAuthorFields, tweetId?: string): PlatformMetadata & { type: 'twitter' } {
 	return {
 		type: 'twitter',
 		fetchedAt: now(),

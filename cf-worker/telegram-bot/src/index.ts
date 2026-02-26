@@ -27,23 +27,39 @@ interface TelegramUpdate {
 	};
 }
 
-interface ScrapeResponse {
+interface SubmitResponse {
 	success: boolean;
-	data?: {
-		articleId?: string;
+	results?: Array<{
 		url: string;
-		title: string;
-		titleCn?: string;
-		content?: string;
-		summary?: string;
-		summaryCn?: string;
+		articleId?: string;
+		instanceId?: string;
+		title?: string;
 		ogImageUrl?: string | null;
-		sourceType: string;
-		tags?: string[];
-		category?: string;
-	};
-	alreadyExists?: boolean;
+		sourceType?: string;
+		alreadyExists?: boolean;
+		error?: string;
+	}>;
 	error?: { code: string; message: string };
+}
+
+interface WorkflowStatusResponse {
+	status: string;
+	article?: {
+		id: string;
+		title: string;
+		title_cn?: string;
+		summary?: string;
+		summary_cn?: string;
+		content_cn?: string;
+		source: string;
+		source_type: string;
+		og_image_url?: string | null;
+		published_date?: string;
+		tags?: string[];
+		keywords?: string[];
+		url: string;
+	};
+	error?: string;
 }
 
 interface TelegramLookupResponse {
@@ -174,43 +190,6 @@ async function deleteMessage(botToken: string, chatId: number, messageId: number
 	});
 }
 
-// Send photo with caption to Telegram
-async function sendPhoto(botToken: string, chatId: number, photoUrl: string, caption: string): Promise<boolean> {
-	const response = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			chat_id: chatId,
-			photo: photoUrl,
-			caption,
-			parse_mode: 'HTML',
-		}),
-	});
-	return response.ok;
-}
-
-// Send photo with caption and inline keyboard
-async function sendPhotoWithKeyboard(
-	botToken: string,
-	chatId: number,
-	photoUrl: string,
-	caption: string,
-	keyboard: InlineKeyboard,
-): Promise<boolean> {
-	const response = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			chat_id: chatId,
-			photo: photoUrl,
-			caption,
-			parse_mode: 'HTML',
-			reply_markup: { inline_keyboard: keyboard },
-		}),
-	});
-	return response.ok;
-}
-
 // Answer callback query (acknowledge button press)
 async function answerCallbackQuery(botToken: string, queryId: string, text?: string): Promise<void> {
 	await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
@@ -290,9 +269,7 @@ function findDefaultCollection(collections: CollectionItem[]): CollectionItem | 
 }
 
 // Submit URL to core worker (via Service Binding)
-async function submitUrlToCore(env: Env, url: string, userId: string): Promise<ScrapeResponse> {
-	console.log('[CORE] Calling /submit for URL:', url);
-
+async function submitUrlToCore(env: Env, url: string, userId: string): Promise<SubmitResponse> {
 	try {
 		const response = await env.CORE.fetch('https://core/submit', {
 			method: 'POST',
@@ -301,17 +278,14 @@ async function submitUrlToCore(env: Env, url: string, userId: string): Promise<S
 		});
 
 		const text = await response.text();
-		console.log('[CORE] Response status:', response.status);
 
 		try {
-			return JSON.parse(text) as ScrapeResponse;
+			return JSON.parse(text) as SubmitResponse;
 		} catch {
-			console.error('[CORE] Invalid JSON response:', text.slice(0, 200));
 			const msg = `Core error (HTTP ${response.status}): ${text.slice(0, 100)}`;
 			return { success: false, error: { code: 'INVALID_RESPONSE', message: msg } };
 		}
 	} catch (error) {
-		console.error('[CORE] Network error:', error);
 		return { success: false, error: { code: 'NETWORK_ERROR', message: String(error) } };
 	}
 }
@@ -345,10 +319,10 @@ function buildCollectionKeyboard(otherCollections: CollectionItem[], articleId: 
 	return keyboard;
 }
 
-// Parse articleId from message text (hidden marker: 📎 {articleId})
+// Parse articleId from message text (extracted from /news/{articleId} link)
 function parseArticleId(text?: string | null): string | null {
 	if (!text) return null;
-	const match = text.match(/📎\s*([0-9a-f-]{36})/);
+	const match = text.match(/\/news\/([0-9a-f-]{36})/);
 	return match?.[1] ?? null;
 }
 
@@ -356,38 +330,74 @@ function parseArticleId(text?: string | null): string | null {
 // Message formatting
 // ─────────────────────────────────────────────────────────────
 
-function formatArticleMessage(data: ScrapeResponse['data'], articleId?: string, savedTo?: string): string {
-	if (!data) return '';
+function friendlyError(error: string): string {
+	if (error.includes('Tweet not found')) return '找不到這則推文，可能已被刪除或設為私人';
+	if (error.includes('rate limit') || error.includes('RATE_LIMIT')) return '請求過於頻繁，請稍後再試';
+	if (error.includes('NETWORK_ERROR')) return '網路連線錯誤，請稍後再試';
+	return error;
+}
 
-	const status = savedTo ? `✅ 已儲存到「${savedTo}」` : '✅ 已儲存';
-	const displayTitle = data.titleCn || data.title;
+interface MessageOpts {
+	savedTo?: string;
+	linked?: boolean;
+	alreadyExists?: boolean;
+}
 
-	let msg = `${status}\n\n`;
-	msg += `<b>${displayTitle}</b>\n`;
-
-	if (data.sourceType) {
-		msg += `📂 ${data.sourceType}`;
-		if (data.tags && data.tags.length > 0) {
-			msg += ` · ${data.tags.slice(0, 3).join(', ')}`;
-		}
-		msg += '\n';
+function formatStatusLine(opts: MessageOpts): string {
+	if (opts.alreadyExists) {
+		return opts.savedTo ? `文章已存在，已儲存到「${opts.savedTo}」` : '文章已存在';
 	}
+	return opts.savedTo ? `已儲存到「${opts.savedTo}」` : '已儲存';
+}
 
-	msg += '\n';
+function formatLinks(originalUrl: string, webappUrl: string, articleId?: string): string {
+	if (articleId) return `${webappUrl}/news/${articleId} - <a href="${originalUrl}">原文</a>`;
+	return `<a href="${originalUrl}">原文</a>`;
+}
 
-	const bodyText = data.summaryCn || data.summary || data.content;
-	if (bodyText) {
-		const truncated = bodyText.length > 200 ? bodyText.slice(0, 200) + '...' : bodyText;
-		msg += `${truncated}\n\n`;
+function formatFooter(opts: MessageOpts): string {
+	let footer = '';
+	if (opts.savedTo) footer += `\n\n${formatStatusLine(opts)}`;
+	if (!opts.linked) footer += '\n\n使用 /link 綁定帳號，可自動加入收藏夾';
+	return footer;
+}
+
+function formatBasicResult(result: NonNullable<SubmitResponse['results']>[0], webappUrl: string, opts: MessageOpts): string {
+	let msg = '';
+	if (result.title) msg += `<b>${result.title}</b>\n\n`;
+	if (result.sourceType) msg += `${result.sourceType}\n\n`;
+	msg += formatLinks(result.url, webappUrl, result.articleId);
+	msg += formatFooter(opts);
+	return msg;
+}
+
+function formatAIResult(
+	article: NonNullable<WorkflowStatusResponse['article']>,
+	articleId: string,
+	webappUrl: string,
+	opts: MessageOpts,
+): string {
+	const title = article.title_cn || article.title;
+	let msg = `<b>${title}</b>\n\n`;
+	const body = article.summary_cn || article.summary;
+	if (body) msg += `${body}\n\n`;
+	if (article.source_type) {
+		msg += article.source_type;
+		if (article.tags && article.tags.length > 0) msg += ` · ${article.tags.slice(0, 3).join(', ')}`;
+		msg += '\n\n';
 	}
+	msg += formatLinks(article.url, webappUrl, articleId);
+	msg += formatFooter(opts);
+	return msg;
+}
 
-	msg += `🔗 ${data.url}`;
-
-	// Hidden articleId marker for callback parsing
-	if (articleId) {
-		msg += `\n📎 ${articleId}`;
-	}
-
+function formatFallbackResult(ctx: PollContext, note: string): string {
+	let msg = '';
+	if (ctx.title) msg += `<b>${ctx.title}</b>\n\n`;
+	if (ctx.sourceType) msg += `${ctx.sourceType}\n\n`;
+	msg += formatLinks(ctx.url, ctx.webappUrl, ctx.articleId);
+	msg += `\n\n${note}`;
+	msg += formatFooter(ctx);
 	return msg;
 }
 
@@ -446,14 +456,14 @@ async function handleMe(env: Env, chatId: number, telegramId: string, firstName:
 		await sendMessage(
 			env.TELEGRAM_BOT_TOKEN,
 			chatId,
-			`👤 <b>${firstName}</b>\n\n` + '✅ 帳號已綁定\n' + '透過 Bot 儲存的文章會自動歸到你的 newsence 帳號。',
+			`👤 <b>${firstName}</b>\n\n✅ 帳號已綁定\n透過 Bot 儲存的文章會自動歸到你的 newsence 帳號。`,
 		);
 	} else {
 		const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 		await sendMessage(
 			env.TELEGRAM_BOT_TOKEN,
 			chatId,
-			`👤 <b>${firstName}</b>\n\n` + '⚠️ 帳號尚未綁定\n' + '你可以到 newsence 設定頁面綁定 Telegram 帳號。\n\n' + `🔗 ${webappUrl}`,
+			`👤 <b>${firstName}</b>\n\n⚠️ 帳號尚未綁定\n你可以到 newsence 設定頁面綁定 Telegram 帳號。\n\n🔗 ${webappUrl}`,
 		);
 	}
 }
@@ -503,7 +513,7 @@ async function handleLink(env: Env, chatId: number, telegramId: string, firstNam
 	await sendMessage(
 		env.TELEGRAM_BOT_TOKEN,
 		chatId,
-		'🔗 <b>綁定 Telegram 帳號</b>\n\n' + '點擊下方連結完成綁定（15 分鐘內有效）：\n\n' + `👉 ${linkUrl}`,
+		`🔗 <b>綁定 Telegram 帳號</b>\n\n點擊下方連結完成綁定（15 分鐘內有效）：\n\n👉 ${linkUrl}`,
 	);
 }
 
@@ -511,83 +521,159 @@ async function handleLink(env: Env, chatId: number, telegramId: string, firstNam
 // URL submission flow
 // ─────────────────────────────────────────────────────────────
 
-async function handleUrlSubmission(env: Env, chatId: number, urls: string[], telegramId: string, username: string): Promise<void> {
+async function autoSaveToCollection(
+	env: Env,
+	userId: string,
+	articleId: string,
+): Promise<{ savedTo?: string; collections: CollectionItem[]; defaultCol: CollectionItem | null }> {
+	const collections = await fetchUserCollections(env, userId);
+	const defaultCol = findDefaultCollection(collections);
+	let savedTo: string | undefined;
+
+	if (defaultCol) {
+		const addResult = await addToCollection(env, userId, articleId, defaultCol.id);
+		if (addResult.success) {
+			savedTo = `${defaultCol.icon || '📚'} ${defaultCol.name}`;
+		}
+	}
+
+	return { savedTo, collections, defaultCol };
+}
+
+interface PollContext extends MessageOpts {
+	instanceId: string;
+	articleId: string;
+	webappUrl: string;
+	otherCols: CollectionItem[];
+	title?: string;
+	sourceType?: string;
+	url: string;
+}
+
+async function processSingleUrl(
+	env: Env,
+	ctx: ExecutionContext,
+	chatId: number,
+	url: string,
+	userId: string,
+	linked: boolean,
+	webappUrl: string,
+): Promise<void> {
+	const pendingMsgId = await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `正在處理: ${url}`);
+	const submitResult = await submitUrlToCore(env, url, userId);
+
+	if (!submitResult.success || !submitResult.results?.length) {
+		await editOrSend(env, chatId, pendingMsgId, `${friendlyError(submitResult.error?.message || 'Unknown error')}`);
+		return;
+	}
+
+	const result = submitResult.results[0];
+	if (result.error) {
+		await editOrSend(env, chatId, pendingMsgId, `${friendlyError(result.error)}`);
+		return;
+	}
+
+	const articleId = result.articleId;
+
+	// Auto-save to default collection (silently)
+	let savedTo: string | undefined;
+	let otherCols: CollectionItem[] = [];
+	if (linked && articleId) {
+		const auto = await autoSaveToCollection(env, userId, articleId);
+		savedTo = auto.savedTo;
+		otherCols = auto.collections.filter((c) => !c.isSystem && c.id !== auto.defaultCol?.id);
+	}
+
+	const msgOpts: MessageOpts = { savedTo, linked, alreadyExists: result.alreadyExists };
+
+	if (result.instanceId && articleId) {
+		ctx.waitUntil(
+			pollAndShowResult(env, chatId, pendingMsgId, {
+				...msgOpts,
+				instanceId: result.instanceId,
+				articleId,
+				webappUrl,
+				otherCols,
+				title: result.title,
+				sourceType: result.sourceType,
+				url: result.url,
+			}),
+		);
+	} else {
+		const msg = formatBasicResult(result, webappUrl, msgOpts);
+		const keyboard = linked && articleId ? buildCollectionKeyboard(otherCols, articleId, webappUrl) : undefined;
+		await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
+	}
+}
+
+async function handleUrlSubmission(
+	env: Env,
+	ctx: ExecutionContext,
+	chatId: number,
+	urls: string[],
+	telegramId: string,
+	username: string,
+): Promise<void> {
 	await sendChatAction(env.TELEGRAM_BOT_TOKEN, chatId, 'typing');
 	const { userId, linked } = await resolveUser(env, telegramId, username);
 	const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 
 	for (const url of urls) {
-		const pendingMsgId = await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `⏳ 正在處理: ${url}`);
-		const result = await submitUrlToCore(env, url, userId);
-
-		if (!result.success || !result.data) {
-			const errorText = `❌ 失敗: ${result.error?.message || 'Unknown error'}`;
-			await editOrSend(env, chatId, pendingMsgId, errorText);
-			continue;
-		}
-
-		const articleId = result.data.articleId;
-		const showKeyboard = linked && articleId;
-
-		if (!showKeyboard) {
-			const msg = formatArticleMessage(result.data);
-			await sendArticleResult(env, chatId, pendingMsgId, msg, result.data.ogImageUrl);
-			continue;
-		}
-
-		// Linked user with articleId: auto-save to default collection
-		const collections = await fetchUserCollections(env, userId);
-		const defaultCol = findDefaultCollection(collections);
-		let savedTo: string | undefined;
-
-		if (defaultCol) {
-			const addResult = await addToCollection(env, userId, articleId!, defaultCol.id);
-			if (addResult.success) {
-				const icon = defaultCol.icon || '📚';
-				savedTo = `${icon} ${defaultCol.name}`;
-			}
-		}
-
-		const otherCols = collections.filter((c) => !c.isSystem && c.id !== defaultCol?.id);
-		const msg = formatArticleMessage(result.data, articleId, savedTo);
-		const keyboard = buildCollectionKeyboard(otherCols, articleId!, webappUrl);
-		await sendArticleWithKeyboard(env, chatId, pendingMsgId, msg, result.data.ogImageUrl, keyboard);
+		await processSingleUrl(env, ctx, chatId, url, userId, linked, webappUrl);
 	}
 }
 
-// Send article result with keyboard
-async function sendArticleWithKeyboard(
+// Poll workflow status and replace pending message with final result
+async function pollAndShowResult(env: Env, chatId: number, pendingMsgId: number | null, ctx: PollContext): Promise<void> {
+	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+	const keyboard = ctx.linked ? buildCollectionKeyboard(ctx.otherCols, ctx.articleId, ctx.webappUrl) : undefined;
+
+	for (let i = 0; i < 6; i++) {
+		await sendChatAction(env.TELEGRAM_BOT_TOKEN, chatId, 'typing');
+		await sleep(5000);
+		try {
+			const res = await env.CORE.fetch(`https://core/status/${ctx.instanceId}`);
+			if (!res.ok) continue;
+			const data = (await res.json()) as WorkflowStatusResponse;
+
+			if (data.status === 'complete' && data.article) {
+				const msg = formatAIResult(data.article, ctx.articleId, ctx.webappUrl, ctx);
+				await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
+				return;
+			}
+			if (data.status === 'errored') {
+				const msg = formatFallbackResult(ctx, 'AI 處理失敗，可稍後在網站查看');
+				await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
+				return;
+			}
+		} catch {
+			// Continue polling
+		}
+	}
+
+	// Timeout
+	const msg = formatFallbackResult(ctx, 'AI 仍在處理中，可稍後在網站查看完整分析');
+	await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
+}
+
+const MESSAGE_LIMIT = 4096;
+
+// Replace pending message with final result (text only, with or without keyboard)
+async function replaceWithResult(
 	env: Env,
 	chatId: number,
 	pendingMsgId: number | null,
 	msg: string,
-	ogImageUrl: string | null | undefined,
-	keyboard: InlineKeyboard,
+	keyboard?: InlineKeyboard,
 ): Promise<void> {
 	if (pendingMsgId) await deleteMessage(env.TELEGRAM_BOT_TOKEN, chatId, pendingMsgId);
 
-	if (ogImageUrl) {
-		const sent = await sendPhotoWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, ogImageUrl, msg, keyboard);
-		if (!sent) await sendMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, msg, keyboard);
-	} else {
-		await sendMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, msg, keyboard);
-	}
-}
+	const safeMsg = msg.length > MESSAGE_LIMIT ? `${msg.slice(0, MESSAGE_LIMIT - 3)}...` : msg;
 
-// Send article result without keyboard (original behavior)
-async function sendArticleResult(
-	env: Env,
-	chatId: number,
-	pendingMsgId: number | null,
-	msg: string,
-	ogImageUrl?: string | null,
-): Promise<void> {
-	if (ogImageUrl) {
-		if (pendingMsgId) await deleteMessage(env.TELEGRAM_BOT_TOKEN, chatId, pendingMsgId);
-		const photoSent = await sendPhoto(env.TELEGRAM_BOT_TOKEN, chatId, ogImageUrl, msg);
-		if (!photoSent) await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg);
+	if (keyboard) {
+		await sendMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, safeMsg, keyboard);
 	} else {
-		await editOrSend(env, chatId, pendingMsgId, msg);
+		await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, safeMsg);
 	}
 }
 
@@ -605,6 +691,31 @@ async function editOrSend(env: Env, chatId: number, pendingMsgId: number | null,
 // Callback query handler (collection selection)
 // ─────────────────────────────────────────────────────────────
 
+async function handleCollectionSelect(
+	env: Env,
+	queryId: string,
+	from: { id: number },
+	message: NonNullable<TelegramUpdate['callback_query']>['message'],
+	collectionId: string,
+): Promise<void> {
+	const articleId = parseArticleId(message?.text || message?.caption);
+	const lookup = await lookupTelegramAccount(env, String(from.id));
+
+	if (!(lookup.found && lookup.userId && articleId)) {
+		await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, queryId, '無法處理');
+		return;
+	}
+
+	const result = await addToCollection(env, lookup.userId, articleId, collectionId);
+	if (result.success) {
+		await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, queryId, '✓ 已加入收藏');
+	} else if (result.error === 'already_exists') {
+		await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, queryId, '已在此收藏中');
+	} else {
+		await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, queryId, '操作失敗');
+	}
+}
+
 async function handleCallbackQuery(env: Env, query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
 	const { id, data, message, from } = query;
 	if (!data || !message) {
@@ -615,31 +726,14 @@ async function handleCallbackQuery(env: Env, query: NonNullable<TelegramUpdate['
 	const chatId = message.chat.id;
 	const messageId = message.message_id;
 
-	// "Done" button — remove keyboard
 	if (data.startsWith('done:')) {
 		await editMessageReplyMarkup(env.TELEGRAM_BOT_TOKEN, chatId, messageId, null);
 		await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, id, '完成');
 		return;
 	}
 
-	// Collection selection
 	if (data.startsWith('col:')) {
-		const collectionId = data.slice(4);
-		const articleId = parseArticleId(message.text || message.caption);
-		const lookup = await lookupTelegramAccount(env, String(from.id));
-
-		if (lookup.found && lookup.userId && articleId) {
-			const result = await addToCollection(env, lookup.userId, articleId, collectionId);
-			if (result.success) {
-				await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, id, '✓ 已加入收藏');
-			} else if (result.error === 'already_exists') {
-				await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, id, '已在此收藏中');
-			} else {
-				await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, id, '操作失敗');
-			}
-		} else {
-			await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, id, '無法處理');
-		}
+		await handleCollectionSelect(env, id, from, message, data.slice(4));
 		return;
 	}
 
@@ -651,7 +745,7 @@ async function handleCallbackQuery(env: Env, query: NonNullable<TelegramUpdate['
 // ─────────────────────────────────────────────────────────────
 
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const payload = (await request.json()) as TelegramUpdate;
 
 		// Handle callback queries (inline keyboard button presses)
@@ -701,7 +795,7 @@ export default {
 		}
 
 		// Process URLs
-		await handleUrlSubmission(env, chatId, urls, telegramId, username);
+		await handleUrlSubmission(env, ctx, chatId, urls, telegramId, username);
 		return new Response('ok');
 	},
 };

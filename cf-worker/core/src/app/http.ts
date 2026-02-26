@@ -1,13 +1,10 @@
-import { persistProcessorResult, runArticleProcessor } from '../domain/processors';
-import { detectPlatformType, scrapeUrl } from '../domain/scrapers';
-import { assignArticleTopic, synthesizeTopicSummary } from '../domain/topics';
+import { detectPlatformType, type ScrapedContent, scrapeUrl } from '../domain/scrapers';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
-import { generateArticleEmbedding, prepareArticleTextForEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
 import { buildDefault, buildHackerNews, buildTwitterStandard, buildYouTube } from '../models/platform-metadata';
-import type { Article, Env } from '../models/types';
+import type { Env } from '../models/types';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
 const DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC = 60;
@@ -97,300 +94,130 @@ type SubmitBody = {
 	url?: string; // Legacy single URL (backward compatible)
 	urls?: string[]; // Batch URLs
 	userId?: string;
-	mode?: 'fast' | 'full'; // fast = Queue background, full = sync AI (default)
 };
 
-type SubmitResultFast = {
+type SubmitResult = {
 	url: string;
 	articleId?: string;
+	instanceId?: string;
+	title?: string;
+	ogImageUrl?: string | null;
+	sourceType?: string;
 	alreadyExists?: boolean;
 	error?: string;
 };
 
-type SubmitResultFull = {
-	articleId: string;
-	url: string;
-	title: string;
-	titleCn?: string | null;
-	content?: string | null;
-	summary?: string;
-	summaryCn?: string | null;
-	source: string;
-	sourceType: string;
-	ogImageUrl?: string | null;
-	publishedDate?: string;
-	tags?: string[];
-	keywords?: string[];
-	metadata?: Record<string, unknown>;
-};
+async function createWorkflow(env: Env, articleId: string, sourceType: string): Promise<string | undefined> {
+	try {
+		const instance = await env.MONITOR_WORKFLOW.create({
+			params: { article_id: articleId, source_type: sourceType },
+		});
+		return instance.id;
+	} catch (err) {
+		logError('SUBMIT', 'Workflow create failed', { articleId, error: String(err) });
+		return undefined;
+	}
+}
+
+async function scrapeAndInsert(
+	url: string,
+	env: Env,
+): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
+	const platformType = detectPlatformType(url);
+	const scraped = await scrapeUrl(url, {
+		youtubeApiKey: env.YOUTUBE_API_KEY,
+		transcriptApiKey: env.TRANSCRIPT_API_KEY,
+		kaitoApiKey: env.KAITO_API_KEY,
+	});
+
+	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
+	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
+		return { error: 'Content too short' };
+	}
+
+	let cleanedMetadata = scraped.metadata;
+	if (platformType === 'youtube' && scraped.metadata) {
+		cleanedMetadata = await saveYouTubeTranscript(scraped.metadata, env);
+	}
+
+	const supabase = getSupabaseClient(env);
+	const table = getArticlesTable(env);
+	const normalizedPlatformMetadata = normalizePlatformMetadata(cleanedMetadata, platformType);
+	const { data: inserted, error } = await supabase
+		.from(table)
+		.insert([
+			{
+				url,
+				title: scraped.title,
+				source: scraped.siteName || 'External',
+				published_date: scraped.publishedDate || new Date().toISOString(),
+				scraped_date: new Date().toISOString(),
+				summary: scraped.summary || '',
+				source_type: platformType,
+				content: scraped.content || null,
+				og_image_url: scraped.ogImageUrl || null,
+				keywords: [],
+				tags: [],
+				tokens: [],
+				platform_metadata: normalizedPlatformMetadata,
+			},
+		])
+		.select('id');
+
+	if (error || !inserted?.[0]?.id) {
+		logError('SUBMIT', 'DB insert failed', { url, error: String(error) });
+		return { error: 'DB insert failed' };
+	}
+
+	logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50) });
+	return { articleId: inserted[0].id, scraped, platformType };
+}
 
 /**
- * Fast URL processing: scrape + DB insert + Queue (no waiting for AI)
- * Returns immediately with articleId, AI processing happens in background via Queue
+ * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
+ * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
  */
-async function processUrlFast(rawUrl: string, env: Env): Promise<SubmitResultFast> {
+async function processUrl(rawUrl: string, env: Env): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
 
 	// 1. Check if already exists
-	const { data: existing } = await supabase.from(table).select('id, title_cn, source_type').eq('url', url).single();
+	const { data: existing } = await supabase.from(table).select('id, title, title_cn, source_type, og_image_url').eq('url', url).single();
 	if (existing) {
-		// Re-queue if article exists but hasn't been processed (missing title_cn indicates unprocessed)
-		if (!existing.title_cn) {
-			logInfo('SUBMIT', 'Re-queuing unprocessed article', { mode: 'fast', id: existing.id });
-			try {
-				await env.ARTICLE_QUEUE.send({
-					type: 'article_process',
-					article_id: existing.id,
-					source_type: existing.source_type || 'article',
-				});
-			} catch (queueErr) {
-				logError('SUBMIT', 'Re-queue failed', { mode: 'fast', id: existing.id, error: String(queueErr) });
-			}
-		}
-		return { url, articleId: existing.id, alreadyExists: true };
-	}
-
-	// 2. Quick scrape
-	const platformType = detectPlatformType(url);
-	let scraped;
-	try {
-		scraped = await scrapeUrl(url, {
-			youtubeApiKey: env.YOUTUBE_API_KEY,
-			transcriptApiKey: env.TRANSCRIPT_API_KEY,
-			kaitoApiKey: env.KAITO_API_KEY,
-		});
-	} catch (err) {
-		logError('SUBMIT', 'Scrape failed', { mode: 'fast', url, error: String(err) });
-		return { url, error: `Scrape failed: ${err}` };
-	}
-
-	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
-	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
-		return { url, error: 'Content too short' };
-	}
-
-	// 3. For YouTube, save transcript to separate table
-	let cleanedMetadata = scraped.metadata;
-	if (platformType === 'youtube' && scraped.metadata) {
-		cleanedMetadata = await saveYouTubeTranscript(scraped.metadata, env);
-	}
-
-	// 4. Insert raw article (without heavy transcript data)
-	const normalizedPlatformMetadata = normalizePlatformMetadata(cleanedMetadata, platformType);
-	const rawArticleData = {
-		url,
-		title: scraped.title,
-		source: scraped.siteName || 'External',
-		published_date: scraped.publishedDate || new Date().toISOString(),
-		scraped_date: new Date().toISOString(),
-		summary: scraped.summary || '',
-		source_type: platformType,
-		content: scraped.content || null,
-		og_image_url: scraped.ogImageUrl || null,
-		keywords: [],
-		tags: [],
-		tokens: [],
-		platform_metadata: normalizedPlatformMetadata,
-	};
-
-	const { data: inserted, error } = await supabase.from(table).insert([rawArticleData]).select('id');
-	if (error || !inserted?.[0]?.id) {
-		logError('SUBMIT', 'DB insert failed', { mode: 'fast', url, error: String(error) });
-		return { url, error: 'DB insert failed' };
-	}
-
-	const articleId = inserted[0].id;
-	logInfo('SUBMIT', 'Saved raw article', { mode: 'fast', title: scraped.title.slice(0, 50) });
-
-	// 4. Queue for background AI processing (best-effort, retry will re-queue if needed)
-	try {
-		await env.ARTICLE_QUEUE.send({
-			type: 'article_process',
-			article_id: articleId,
-			source_type: platformType,
-		});
-	} catch (queueErr) {
-		logError('SUBMIT', 'Queue send failed', { mode: 'fast', articleId, error: String(queueErr) });
-		// Article is saved; retry will detect it as existing and re-queue
-	}
-
-	return { url, articleId, alreadyExists: false };
-}
-
-/**
- * Full URL processing: scrape + AI analysis + embedding (synchronous)
- * Returns complete processed article data
- */
-async function processUrlFull(
-	rawUrl: string,
-	env: Env,
-): Promise<{ success: true; alreadyExists: boolean; data: SubmitResultFull } | { success: false; error: string }> {
-	const url = normalizeUrl(rawUrl);
-	const platformType = detectPlatformType(url);
-	const supabase = getSupabaseClient(env);
-	const table = getArticlesTable(env);
-
-	logInfo('SUBMIT', 'Processing URL', { mode: 'full', platformType, url });
-
-	// Check if already exists
-	const { data: existing } = await supabase
-		.from(table)
-		.select('id, title, title_cn, content, summary, summary_cn, source, source_type, og_image_url, published_date')
-		.eq('url', url)
-		.single();
-
-	if (existing) {
-		logInfo('SUBMIT', 'Already exists', { mode: 'full', id: existing.id });
+		const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
+		if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
 		return {
-			success: true,
+			url,
+			articleId: existing.id,
+			instanceId,
+			title: existing.title,
+			ogImageUrl: existing.og_image_url,
+			sourceType: existing.source_type,
 			alreadyExists: true,
-			data: {
-				articleId: existing.id,
-				url,
-				title: existing.title,
-				titleCn: existing.title_cn,
-				content: existing.content || '',
-				summary: existing.summary,
-				summaryCn: existing.summary_cn,
-				source: existing.source || '',
-				sourceType: existing.source_type || platformType,
-				ogImageUrl: existing.og_image_url,
-				publishedDate: existing.published_date,
-			},
 		};
 	}
 
-	// Scrape
-	let scraped;
+	// 2. Scrape + insert
+	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		scraped = await scrapeUrl(url, {
-			youtubeApiKey: env.YOUTUBE_API_KEY,
-			transcriptApiKey: env.TRANSCRIPT_API_KEY,
-			kaitoApiKey: env.KAITO_API_KEY,
-		});
-	} catch (error) {
-		logError('SUBMIT', 'Crawl error', { mode: 'full', error: String(error) });
-		return { success: false, error: `Crawl failed: ${error}` };
+		result = await scrapeAndInsert(url, env);
+	} catch (err) {
+		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
+		return { url, error: `Scrape failed: ${err}` };
 	}
+	if ('error' in result) return { url, error: result.error };
 
-	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
-	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
-		return { success: false, error: 'Content too short' };
-	}
-
-	// For YouTube, save transcript to separate table
-	let cleanedMetadata = scraped.metadata;
-	if (platformType === 'youtube' && scraped.metadata) {
-		cleanedMetadata = await saveYouTubeTranscript(scraped.metadata, env);
-	}
-
-	// Insert raw article (without heavy transcript data)
-	const normalizedPlatformMetadata = normalizePlatformMetadata(cleanedMetadata, platformType);
-	const rawArticleData = {
-		url,
-		title: scraped.title,
-		source: scraped.siteName || 'User Added',
-		published_date: scraped.publishedDate || new Date().toISOString(),
-		scraped_date: new Date().toISOString(),
-		summary: scraped.summary || '',
-		source_type: platformType,
-		content: scraped.content || null,
-		og_image_url: scraped.ogImageUrl || null,
-		keywords: [],
-		tags: [],
-		tokens: [],
-		platform_metadata: normalizedPlatformMetadata,
-	};
-
-	const { data: inserted, error } = await supabase.from(table).insert([rawArticleData]).select('id');
-	if (error) {
-		logError('SUBMIT', 'Insert error', { mode: 'full', error: String(error) });
-		return { success: false, error: 'Failed to save article' };
-	}
-
-	const articleId = inserted?.[0]?.id;
-	logInfo('SUBMIT', 'Saved raw article', { mode: 'full', title: scraped.title.slice(0, 50) });
-
-	// Run AI processor
-	const article = {
-		id: articleId || '',
-		title: scraped.title,
-		summary: scraped.summary ?? null,
-		content: scraped.content || null,
-		url,
-		source: scraped.siteName || 'User Added',
-		published_date: scraped.publishedDate || new Date().toISOString(),
-		tags: [] as string[],
-		keywords: [] as string[],
-		source_type: platformType,
-		platform_metadata: normalizedPlatformMetadata ?? undefined,
-	};
-
-	logInfo('SUBMIT', 'Running processor', { mode: 'full', platformType });
-	const result = await runArticleProcessor(article, platformType, { env, supabase, table });
-	await persistProcessorResult(articleId, article, result, { env, supabase, table });
-
-	const titleCn = result.updateData.title_cn ?? null;
-	const summary = result.updateData.summary ?? scraped.summary ?? '';
-	const summaryCn = result.updateData.summary_cn ?? null;
-	const content = result.updateData.content ?? scraped.content;
-	const tags = result.updateData.tags ?? [];
-	const keywords = result.updateData.keywords ?? [];
-
-	// Generate embedding
-	if (articleId && env.AI) {
-		const embeddingText = prepareArticleTextForEmbedding({
-			title: scraped.title,
-			title_cn: titleCn,
-			summary,
-			summary_cn: summaryCn,
-			tags,
-			keywords,
-		});
-
-		if (embeddingText) {
-			const embedding = await generateArticleEmbedding(embeddingText, env.AI);
-			if (embedding) {
-				const saved = await saveArticleEmbedding(supabase, articleId, embedding, table);
-				logInfo('SUBMIT', 'Embedding result', { mode: 'full', saved });
-				if (saved) {
-					try {
-						const topicResult = await assignArticleTopic(supabase, articleId, table);
-						if (topicResult.needsSynthesis && topicResult.topicId && env.OPENROUTER_API_KEY) {
-							await synthesizeTopicSummary(supabase, topicResult.topicId, table, env.OPENROUTER_API_KEY);
-						}
-					} catch (topicError) {
-						logWarn('SUBMIT', 'Topic pipeline failed in full mode', {
-							articleId,
-							error: String(topicError),
-						});
-					}
-				}
-			}
-		}
-	}
-
+	// 3. Create workflow for background AI processing
+	const instanceId = await createWorkflow(env, result.articleId, result.platformType);
 	return {
-		success: true,
+		url,
+		articleId: result.articleId,
+		instanceId,
+		title: result.scraped.title,
+		ogImageUrl: result.scraped.ogImageUrl || null,
+		sourceType: result.platformType,
 		alreadyExists: false,
-		data: {
-			articleId,
-			url,
-			title: scraped.title,
-			titleCn,
-			content,
-			summary,
-			summaryCn,
-			source: scraped.siteName || 'User Added',
-			sourceType: platformType,
-			ogImageUrl: scraped.ogImageUrl,
-			publishedDate: scraped.publishedDate ?? undefined,
-			tags,
-			keywords,
-			metadata: cleanedMetadata,
-		},
 	};
 }
 
@@ -440,39 +267,86 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 		);
 	}
 
-	const mode = body.mode ?? 'full';
-	const urlsToProcess = urls;
+	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
+	const results = await Promise.all(urls.map((url) => processUrl(url, env)));
+	return Response.json({ success: true, results });
+}
 
-	// Fast mode: Queue-based background processing, returns immediately
-	if (mode === 'fast') {
-		logInfo('SUBMIT', 'Processing URLs', { mode: 'fast', count: urlsToProcess.length });
-		const results = await Promise.all(urlsToProcess.map((url) => processUrlFast(url, env)));
-		return Response.json({ success: true, results });
+// ─────────────────────────────────────────────────────────────
+// Workflow status / stream
+// ─────────────────────────────────────────────────────────────
+
+const ARTICLE_FIELDS =
+	'id, title, title_cn, summary, summary_cn, content_cn, source, source_type, og_image_url, published_date, tags, keywords, url';
+
+export async function handleWorkflowStatus(instanceId: string, env: Env): Promise<Response> {
+	try {
+		const instance = await env.MONITOR_WORKFLOW.get(instanceId);
+		const { status, output, error } = await instance.status();
+
+		if (status === 'complete') {
+			const articleId = (output as Record<string, unknown> | undefined)?.article_id as string | undefined;
+			if (articleId) {
+				const supabase = getSupabaseClient(env);
+				const table = getArticlesTable(env);
+				const { data: article } = await supabase.from(table).select(ARTICLE_FIELDS).eq('id', articleId).single();
+				return Response.json({ status: 'complete', article });
+			}
+			return Response.json({ status: 'complete' });
+		}
+
+		return Response.json({ status, error });
+	} catch (err) {
+		logError('WORKFLOW-STATUS', 'Failed to get workflow status', { instanceId, error: String(err) });
+		return Response.json({ status: 'error', error: String(err) }, { status: 404 });
 	}
+}
 
-	// Full mode: Synchronous AI processing (legacy behavior, single URL only)
-	if (urlsToProcess.length > 1) {
-		return Response.json(
-			{
-				success: false,
-				error: { code: 'INVALID_REQUEST', message: 'Full mode supports exactly one URL. Use mode "fast" for batches.' },
-			},
-			{ status: 400 },
-		);
-	}
+export async function handleWorkflowStream(instanceId: string, env: Env): Promise<Response> {
+	const { readable, writable } = new TransformStream();
+	const writer = writable.getWriter();
+	const encoder = new TextEncoder();
 
-	const url = urlsToProcess[0];
-	const result = await processUrlFull(url, env);
+	const writeEvent = (data: object) => writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
-	if (!result.success) {
-		return Response.json({ success: false, error: { code: 'PROCESS_FAILED', message: result.error } }, { status: 422 });
-	}
+	(async () => {
+		try {
+			for (let i = 0; i < 40; i++) {
+				await new Promise((r) => setTimeout(r, 3000));
 
-	return Response.json({
-		success: true,
-		alreadyExists: result.alreadyExists,
-		existingArticleId: result.alreadyExists ? result.data.articleId : undefined,
-		data: result.data,
+				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
+				const { status, output, error } = await instance.status();
+				const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
+
+				if (status === 'complete') {
+					const articleId = (output as Record<string, unknown> | undefined)?.article_id as string | undefined;
+					if (articleId) {
+						const supabase = getSupabaseClient(env);
+						const table = getArticlesTable(env);
+						const { data: article } = await supabase.from(table).select(ARTICLE_FIELDS).eq('id', articleId).single();
+						await writeEvent({ status: 'complete', article });
+					} else {
+						await writeEvent({ status: 'complete' });
+					}
+					return;
+				}
+
+				await writeEvent({ status, error });
+				if (isTerminal) return;
+			}
+		} catch (err) {
+			await writeEvent({ status: 'error', error: String(err) });
+		} finally {
+			await writer.close();
+		}
+	})();
+
+	return new Response(readable, {
+		headers: {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			Connection: 'keep-alive',
+		},
 	});
 }
 
@@ -646,10 +520,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 	return Response.json({ success: true });
 }
 
-function normalizePlatformMetadata(
-	metadata: Record<string, unknown> | undefined,
-	fallbackType: string,
-): PlatformMetadata | null {
+function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined, fallbackType: string): PlatformMetadata | null {
 	if (!metadata) return null;
 	const rawType = metadata.type;
 	const type = typeof rawType === 'string' && rawType.trim().length > 0 ? rawType : fallbackType;

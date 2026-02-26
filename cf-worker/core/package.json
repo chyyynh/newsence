@@ -9,6 +9,7 @@
 		"start": "wrangler dev --test-scheduled",
 		"test": "pnpm run test:unit",
 		"test:unit": "vitest --config vitest.unit.config.mts --run",
+		"test:e2e": "vitest --config vitest.unit.config.mts --run test/rss-pipeline-e2e.spec.ts",
 		"test:integration": "vitest --config vitest.config.mts --run",
 		"cf-typegen": "wrangler types",
 		"lint": "biome check .",

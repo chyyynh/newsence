@@ -48,26 +48,20 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export async function callOpenRouterChat(
-	apiKey: string,
-	systemPrompt: string,
-	userPrompt: string,
-	maxTokens = 500,
-): Promise<string | null> {
+export async function callOpenRouterChat(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string | null> {
 	return callOpenRouter(userPrompt, {
 		apiKey,
 		model: AI_MODELS.FLASH,
-		maxTokens,
 		systemPrompt,
 	});
 }
 
-async function translateContent(content: string, apiKey: string): Promise<string | null> {
+export async function translateContent(content: string, apiKey: string): Promise<string | null> {
 	const prompt = `請將以下文章內容翻譯成繁體中文。保持 Markdown 格式，包括標題、段落、列表等。只翻譯，不要添加任何額外內容。
 
 ${content}`;
 
-	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, maxTokens: 16_000, timeoutMs: 180_000 });
+	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, timeoutMs: 180_000 });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -89,11 +83,6 @@ class DefaultProcessor implements ArticleProcessor {
 		if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.title_en && !article.title_cn) updateData.title = analysis.title_en;
-
-		if (isEmpty(article.content_cn) && !isEmpty(article.content)) {
-			const contentCn = await translateContent(article.content!, ctx.env.OPENROUTER_API_KEY);
-			if (contentCn) updateData.content_cn = contentCn;
-		}
 
 		return { updateData };
 	}
@@ -120,10 +109,6 @@ class TwitterProcessor implements ArticleProcessor {
 			if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 			if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
 			if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-
-			// Translate full article content to Chinese
-			const contentCn = await translateContent(article.content!, ctx.env.OPENROUTER_API_KEY);
-			if (contentCn) updateData.content_cn = contentCn;
 
 			return { updateData };
 		}
@@ -160,9 +145,6 @@ class TwitterProcessor implements ArticleProcessor {
 					if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 					if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
 					if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-
-					const contentCn = await translateContent(linked.content, ctx.env.OPENROUTER_API_KEY);
-					if (contentCn) updateData.content_cn = contentCn;
 
 					return { updateData };
 				}
@@ -377,8 +359,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user, 1200),
-		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user, 1000),
+		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user),
+		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user),
 	]);
 
 	return { en, cn };
@@ -523,16 +505,14 @@ export async function persistProcessorResult(
 	result: ProcessorResult,
 	deps: ProcessingDeps,
 ): Promise<void> {
-	if (Object.keys(result.updateData).length > 0) {
-		const { error } = await deps.supabase.from(deps.table).update(result.updateData).eq('id', articleId);
-		if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`);
-	}
-
 	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments);
-	if (mergedMetadata) {
-		const { error } = await deps.supabase.from(deps.table).update({ platform_metadata: mergedMetadata }).eq('id', articleId);
-		if (error) throw new Error(`Failed to update metadata for ${articleId}: ${error.message}`);
-	}
+	const updatePayload: Record<string, unknown> = { ...result.updateData };
+	if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
+
+	if (Object.keys(updatePayload).length === 0) return;
+
+	const { error } = await deps.supabase.from(deps.table).update(updatePayload).eq('id', articleId);
+	if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`);
 }
 
 export function buildEmbeddingTextForArticle(

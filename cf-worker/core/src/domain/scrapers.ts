@@ -2,8 +2,8 @@
 // Platform Scrapers (merged from crawler)
 // ─────────────────────────────────────────────────────────────
 
-import type { TwitterMedia } from '../models/platform-metadata';
 import { logInfo, logWarn } from '../infra/log';
+import type { TwitterMedia } from '../models/platform-metadata';
 
 export interface ScrapedContent {
 	title: string;
@@ -441,8 +441,8 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	if (!response.ok) throw new Error(`Kaito API error: HTTP ${response.status}`);
 
 	const data = (await response.json()) as { tweets?: KaitoTweet[]; status: string; msg?: string };
-	if (data.status !== 'success' || !data.tweets?.length) {
-		throw new Error(`Kaito API: ${data.msg || 'Tweet not found'}`);
+	if (!data.tweets?.length) {
+		throw new Error(`Kaito API: Tweet not found (status=${data.status})`);
 	}
 
 	const tweet = data.tweets[0];
