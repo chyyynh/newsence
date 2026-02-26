@@ -26,6 +26,13 @@ export async function fetchPlatformMetadata(
 	commentsUrl?: string,
 	kaitoApiKey?: string,
 ): Promise<PlatformMetadataResult> {
+	// If commentsUrl is a HN link, this article originated from HN — preserve HN identity
+	// even if the main URL points to YouTube/Twitter/etc.
+	if (commentsUrl && detectPlatformType(commentsUrl) === 'hackernews') {
+		logInfo('PLATFORM', 'Found HN comments URL, preserving HN source', { url, commentsUrl });
+		return fetchHnMetadata(commentsUrl, url);
+	}
+
 	const platformType = detectPlatformType(url);
 
 	switch (platformType) {
@@ -36,15 +43,11 @@ export async function fetchPlatformMetadata(
 		case 'twitter':
 			return fetchTwitterMetadata(url, kaitoApiKey);
 		default:
-			if (commentsUrl && detectPlatformType(commentsUrl) === 'hackernews') {
-				logInfo('PLATFORM', 'Found HN comments URL', { url: commentsUrl });
-				return fetchHnMetadata(commentsUrl);
-			}
 			return emptyResult('rss');
 	}
 }
 
-async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
+async function fetchHnMetadata(url: string, storyUrl?: string): Promise<PlatformMetadataResult> {
 	const itemId = extractHackerNewsId(url);
 	if (!itemId) return emptyResult('rss');
 
@@ -61,6 +64,7 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 			points?: number;
 			descendants?: number;
 			type?: string;
+			url?: string;
 		};
 
 		return {
@@ -71,6 +75,7 @@ async function fetchHnMetadata(url: string): Promise<PlatformMetadataResult> {
 				commentCount: data.descendants ?? 0,
 				itemId: data.id.toString(),
 				itemType: (data.type as 'story' | 'ask' | 'show' | 'job') ?? 'story',
+				storyUrl: storyUrl ?? data.url ?? null,
 			}),
 		};
 	} catch (error) {
