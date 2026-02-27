@@ -22,6 +22,9 @@ export interface Env {
 
 	// Workers AI binding
 	AI: Ai;
+
+	// Browser Rendering binding
+	BROWSER: Fetcher;
 }
 
 // Article related types

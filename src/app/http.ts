@@ -1,4 +1,5 @@
-import { detectPlatformType, type ScrapedContent, scrapeUrl } from '../domain/scrapers';
+import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPageCheerio, scrapeWebPageReadability } from '../domain/scrapers';
+import { scrapeWithPlaywright } from '../infra/browser';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
@@ -84,6 +85,51 @@ export function handleHealth(_env: Env): Response {
 		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
+}
+
+// ─────────────────────────────────────────────────────────────
+// Test Scrape (compare cheerio vs Playwright)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleTestScrape(request: Request, env: Env): Promise<Response> {
+	const reqUrl = new URL(request.url);
+	const url = reqUrl.searchParams.get('url');
+	if (!url) return Response.json({ error: 'Missing ?url= parameter' }, { status: 400 });
+
+	const mode = reqUrl.searchParams.get('mode') ?? 'both'; // 'cheerio' | 'readability' | 'playwright' | 'both'
+	const results: Record<string, { chars: number; title: string; content: string; ms: number } | { error: string }> = {};
+
+	if (mode === 'cheerio' || mode === 'both') {
+		const start = Date.now();
+		try {
+			const r = await scrapeWebPageCheerio(url);
+			results.cheerio = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
+		} catch (e) {
+			results.cheerio = { error: String(e) };
+		}
+	}
+
+	if (mode === 'readability' || mode === 'both') {
+		const start = Date.now();
+		try {
+			const r = await scrapeWebPageReadability(url);
+			results.readability = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
+		} catch (e) {
+			results.readability = { error: String(e) };
+		}
+	}
+
+	if (mode === 'playwright') {
+		const start = Date.now();
+		try {
+			const r = await scrapeWithPlaywright(url, env.BROWSER);
+			results.playwright = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
+		} catch (e) {
+			results.playwright = { error: String(e) };
+		}
+	}
+
+	return Response.json({ url, results });
 }
 
 // ─────────────────────────────────────────────────────────────
