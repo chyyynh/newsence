@@ -7,7 +7,8 @@ import { logError, logInfo, logWarn } from '../infra/log';
 import { fetchPlatformMetadata } from '../infra/platform';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../infra/web';
 import type { TwitterMedia } from '../models/platform-metadata';
-import { buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../models/platform-metadata';
+import { buildHackerNews, buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../models/platform-metadata';
+import { extractHackerNewsId, HN_ALGOLIA_API } from '../domain/scrapers';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
@@ -234,21 +235,70 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 		.map((u) => normalizeUrl(u!));
 	const table = getArticlesTable(env);
 	const dedupBatchSize = 50;
-	const existingUrls: string[] = [];
+	const existingRecords: Array<{ url: string; source: string }> = [];
 
 	for (let i = 0; i < urls.length; i += dedupBatchSize) {
 		const { data } = await supabase
 			.from(table)
-			.select('url')
+			.select('url, source')
 			.in('url', urls.slice(i, i + dedupBatchSize));
-		if (data) existingUrls.push(...data.map((e: { url: string }) => normalizeUrl(e.url)));
+		if (data) existingRecords.push(...(data as Array<{ url: string; source: string }>));
 	}
 
-	const existingSet = new Set(existingUrls);
+	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = items.filter((item) => {
 		const url = extractUrlFromItem(item);
 		return url && !existingSet.has(normalizeUrl(url));
 	});
+
+	// Upgrade source to this feed when a duplicate exists from a lower-priority source
+	// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
+	const SOURCE_PRIORITY: Record<string, number> = { Twitter: 0, Unknown: 0, Telegram: 1 };
+	const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
+
+	// Build URL→item map for fetching comments URL during upgrade
+	const urlToItem = new Map<string, RSSItem>();
+	for (const item of items) {
+		const url = extractUrlFromItem(item);
+		if (url) urlToItem.set(normalizeUrl(url), item);
+	}
+
+	for (const existing of existingRecords) {
+		const existingPriority = SOURCE_PRIORITY[existing.source] ?? 10;
+		if (feedPriority > existingPriority) {
+			const normalized = normalizeUrl(existing.url);
+			const update: Record<string, unknown> = { source: feed.name };
+
+			// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
+			const rssItem = urlToItem.get(normalized);
+			const commentsUrl = rssItem?.comments as string | undefined;
+			if (commentsUrl) {
+				const hnItemId = extractHackerNewsId(commentsUrl);
+				if (hnItemId) {
+					try {
+						const res = await fetch(`${HN_ALGOLIA_API}/${hnItemId}`);
+						if (res.ok) {
+							const hn = (await res.json()) as { id: number; author?: string; points?: number; descendants?: number; type?: string };
+							update.source_type = 'hackernews';
+							update.platform_metadata = buildHackerNews({
+								itemId: hn.id.toString(),
+								author: hn.author ?? '',
+								points: hn.points ?? 0,
+								commentCount: hn.descendants ?? 0,
+								itemType: (hn.type as 'story' | 'ask' | 'show' | 'job') ?? 'story',
+								storyUrl: commentsUrl,
+							});
+						}
+					} catch (err) {
+						logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
+					}
+				}
+			}
+
+			await supabase.from(table).update(update).eq('url', normalized);
+			logInfo('RSS', 'Upgraded article source', { url: normalized, from: existing.source, to: feed.name });
+		}
+	}
 
 	logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
 	for (const item of newItems) await processAndInsertArticle(supabase, env, item, feed, config);
@@ -384,9 +434,10 @@ async function checkDuplicateByContent(supabase: any, table: string, urls: strin
 
 async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean> {
 	const table = getArticlesTable(env);
+	const tweetUrl = normalizeUrl(tweet.url);
 
 	// Check for duplicates
-	const { data: existing } = await supabase.from(table).select('id').eq('url', tweet.url).single();
+	const { data: existing } = await supabase.from(table).select('id').eq('url', tweetUrl).single();
 	if (existing) return false;
 
 	// Check for Twitter Article via expanded URLs
@@ -401,7 +452,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			if (articleContent) {
 				const meta = articleContent.metadata as Record<string, any> | undefined;
 				const articleData = {
-					url: tweet.url,
+					url: tweetUrl,
 					title: articleContent.title,
 					source: 'Twitter',
 					published_date: articleContent.publishedDate ? new Date(articleContent.publishedDate) : new Date(),
@@ -573,7 +624,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			});
 
 	const articleData = {
-		url: tweet.url,
+		url: tweetUrl,
 		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
 		source: 'Twitter',
 		published_date: new Date(tweet.createdAt),

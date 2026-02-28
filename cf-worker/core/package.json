@@ -9,25 +9,31 @@
 		"start": "wrangler dev --test-scheduled",
 		"test": "pnpm run test:unit",
 		"test:unit": "vitest --config vitest.unit.config.mts --run",
-		"test:e2e": "vitest --config vitest.unit.config.mts --run test/rss-pipeline-e2e.spec.ts",
+		"test:e2e": "vitest --config vitest.e2e.config.mts --run test/rss-pipeline-e2e.spec.ts",
 		"test:integration": "vitest --config vitest.config.mts --run",
+		"test:compare": "vitest --config vitest.e2e.config.mts --run test/scrape-compare.spec.ts",
 		"cf-typegen": "wrangler types",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write ."
 	},
 	"dependencies": {
+		"@mozilla/readability": "^0.6.0",
 		"@supabase/supabase-js": "^2.93.3",
 		"cheerio": "^1.2.0",
-		"fast-xml-parser": "^5.3.4"
+		"fast-xml-parser": "^5.3.4",
+		"linkedom": "^0.18.12",
+		"turndown": "^7.2.2"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.4",
+		"@cloudflare/playwright": "^1.1.1",
 		"@cloudflare/vitest-pool-workers": "^0.8.71",
 		"@cloudflare/workers-types": "^4.20260131.0",
 		"@types/node": "^22.19.7",
+		"@types/turndown": "^5.0.6",
 		"typescript": "^5.9.3",
 		"vitest": "~3.2.4",
-		"wrangler": "^4.61.1"
+		"wrangler": "^4.69.0"
 	},
 	"packageManager": "pnpm@9.1.4",
 	"engines": {

@@ -1,9 +1,10 @@
-import { detectPlatformType, type ScrapedContent, scrapeUrl } from '../domain/scrapers';
+import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPageCheerio, scrapeWebPageReadability } from '../domain/scrapers';
+import { scrapeWithPlaywright } from '../infra/browser';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
-import { buildDefault, buildHackerNews, buildTwitterStandard, buildYouTube } from '../models/platform-metadata';
+import { buildDefault, buildHackerNews, buildTwitterArticle, buildTwitterShared, buildTwitterStandard, buildYouTube } from '../models/platform-metadata';
 import type { Env } from '../models/types';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
@@ -84,6 +85,55 @@ export function handleHealth(_env: Env): Response {
 		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
+}
+
+// ─────────────────────────────────────────────────────────────
+// Test Scrape (compare cheerio vs Playwright)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleTestScrape(request: Request, env: Env): Promise<Response> {
+	if (!(await isSubmitAuthorized(request, env))) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 });
+	}
+
+	const reqUrl = new URL(request.url);
+	const url = reqUrl.searchParams.get('url');
+	if (!url) return Response.json({ error: 'Missing ?url= parameter' }, { status: 400 });
+
+	const mode = reqUrl.searchParams.get('mode') ?? 'both'; // 'cheerio' | 'readability' | 'playwright' | 'both'
+	const results: Record<string, { chars: number; title: string; content: string; ms: number } | { error: string }> = {};
+
+	if (mode === 'cheerio' || mode === 'both') {
+		const start = Date.now();
+		try {
+			const r = await scrapeWebPageCheerio(url);
+			results.cheerio = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
+		} catch (e) {
+			results.cheerio = { error: String(e) };
+		}
+	}
+
+	if (mode === 'readability' || mode === 'both') {
+		const start = Date.now();
+		try {
+			const r = await scrapeWebPageReadability(url);
+			results.readability = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
+		} catch (e) {
+			results.readability = { error: String(e) };
+		}
+	}
+
+	if (mode === 'playwright' || mode === 'both') {
+		const start = Date.now();
+		try {
+			const r = await scrapeWithPlaywright(url, env.BROWSER);
+			results.playwright = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
+		} catch (e) {
+			results.playwright = { error: String(e) };
+		}
+	}
+
+	return Response.json({ url, results });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -550,20 +600,35 @@ function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined
 				itemType: metadata.itemType as 'story' | 'ask' | 'show' | 'job' | undefined,
 				storyUrl: metadata.storyUrl as string | null | undefined,
 			});
-		case 'twitter':
-			return buildTwitterStandard(
-				{
-					authorName: (metadata.authorName as string) || '',
-					authorUserName: (metadata.authorUserName as string) || '',
-					authorProfilePicture: metadata.authorProfilePicture as string | undefined,
-					authorVerified: metadata.authorVerified as boolean | undefined,
-				},
-				{
+		case 'twitter': {
+			const author = {
+				authorName: (metadata.authorName as string) || '',
+				authorUserName: (metadata.authorUserName as string) || '',
+				authorProfilePicture: metadata.authorProfilePicture as string | undefined,
+				authorVerified: metadata.authorVerified as boolean | undefined,
+			};
+			const variant = metadata.variant as string | undefined;
+			if (variant === 'shared') {
+				return buildTwitterShared(author, {
 					tweetId: metadata.tweetId as string | undefined,
 					media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
 					createdAt: metadata.createdAt as string | undefined,
-				},
-			);
+					tweetText: metadata.tweetText as string | undefined,
+					externalUrl: (metadata.externalUrl as string) || '',
+					externalOgImage: metadata.externalOgImage as string | null | undefined,
+					externalTitle: metadata.externalTitle as string | null | undefined,
+					originalTweetUrl: metadata.originalTweetUrl as string | undefined,
+				});
+			}
+			if (variant === 'article') {
+				return buildTwitterArticle(author, metadata.tweetId as string | undefined);
+			}
+			return buildTwitterStandard(author, {
+				tweetId: metadata.tweetId as string | undefined,
+				media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
+				createdAt: metadata.createdAt as string | undefined,
+			});
+		}
 		default:
 			return buildDefault();
 	}

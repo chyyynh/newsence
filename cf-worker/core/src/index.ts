@@ -4,6 +4,7 @@ import {
 	handleTelegramAddToCollection,
 	handleTelegramCollections,
 	handleTelegramLookup,
+	handleTestScrape,
 	handleWorkflowStatus,
 	handleWorkflowStream,
 } from './app/http';
@@ -39,6 +40,7 @@ function routeRequest(request: Request, env: Env): Response | Promise<Response> 
 	const { pathname } = new URL(request.url);
 
 	if (pathname === '/health') return handleHealth(env);
+	if (pathname === '/scrape') return handleTestScrape(request, env);
 
 	if (request.method === 'POST') {
 		const handler = POST_ROUTES[pathname];

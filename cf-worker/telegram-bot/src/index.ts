@@ -319,10 +319,10 @@ function buildCollectionKeyboard(otherCollections: CollectionItem[], articleId: 
 	return keyboard;
 }
 
-// Parse articleId from message text (extracted from /news/{articleId} link)
+// Parse articleId from message text (extracted from /p/{articleId} link)
 function parseArticleId(text?: string | null): string | null {
 	if (!text) return null;
-	const match = text.match(/\/news\/([0-9a-f-]{36})/);
+	const match = text.match(/\/p\/([0-9a-f-]{36})/);
 	return match?.[1] ?? null;
 }
 
@@ -351,7 +351,7 @@ function formatStatusLine(opts: MessageOpts): string {
 }
 
 function formatLinks(originalUrl: string, webappUrl: string, articleId?: string): string {
-	if (articleId) return `${webappUrl}/news/${articleId} - <a href="${originalUrl}">原文</a>`;
+	if (articleId) return `${webappUrl}/p/${articleId} - <a href="${originalUrl}">原文</a>`;
 	return `<a href="${originalUrl}">原文</a>`;
 }
 

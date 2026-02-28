@@ -100,40 +100,6 @@ interface TranscriptSegment {
 	text: string;
 }
 
-/**
- * Merge short transcript segments into longer, more readable chunks.
- * Breaks on: sentence-ending punctuation, speaker changes (>>), or long pauses (> 1.5s)
- */
-function mergeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
-	if (segments.length === 0) return [];
-
-	const merged: TranscriptSegment[] = [];
-	let current = { ...segments[0] };
-
-	for (let i = 1; i < segments.length; i++) {
-		const seg = segments[i];
-		const currentEndTime = current.startTime + current.duration;
-		const gap = seg.startTime - currentEndTime;
-
-		// Break conditions
-		const endsWithSentence = /[.!?。！？]\s*$/.test(current.text);
-		const nextStartsWithSpeaker = /^>>/.test(seg.text.trim());
-		const hasLongPause = gap > 1.5;
-
-		if (endsWithSentence || nextStartsWithSpeaker || hasLongPause) {
-			merged.push(current);
-			current = { ...seg };
-		} else {
-			// Merge: combine text and extend duration
-			current.text = current.text.trimEnd() + ' ' + seg.text.trimStart();
-			current.duration = seg.startTime + seg.duration - current.startTime;
-		}
-	}
-
-	merged.push(current);
-	return merged;
-}
-
 interface YouTubeChapter {
 	title: string;
 	startTime: number;
@@ -190,14 +156,13 @@ async function fetchTranscript(
 		return { segments: [], language: data.language || null };
 	}
 
-	const rawSegments = data.transcript.map((item) => ({
+	const segments = data.transcript.map((item) => ({
 		startTime: item.start,
 		duration: item.duration,
 		text: item.text,
 	}));
 
-	const segments = mergeTranscriptSegments(rawSegments);
-	logInfo('YOUTUBE', 'Transcript merged', { rawCount: rawSegments.length, mergedCount: segments.length });
+	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length });
 	return { segments, language: data.language || null };
 }
 
@@ -581,27 +546,35 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 }
 
 // ─────────────────────────────────────────────────────────────
-// Web Scraper (cheerio-based extraction)
+// Web Scraper (cheerio + Readability hybrid)
 // ─────────────────────────────────────────────────────────────
 
+import { Readability } from '@mozilla/readability';
 import * as cheerio from 'cheerio';
+import { parseHTML } from 'linkedom';
+import TurndownService from 'turndown';
 
-export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
-	logInfo('WEB', 'Scraping', { url });
+/** Filter out avatar/icon images by URL patterns and alt text */
+function isJunkImage(src: string, alt?: string): boolean {
+	const lower = src.toLowerCase();
+	if (/[_/,](w|h|width|height)[_=]?\d{1,2}[,_/&]/.test(lower)) return true;
+	if (/c_fill/.test(lower)) return true;
+	if (/avatar|profile.?pic|favicon|icon|logo|badge|emoji/i.test(lower)) return true;
+	if (alt && /avatar|profile|icon|logo/i.test(alt)) return true;
+	return false;
+}
 
-	const response = await fetch(url, {
-		headers: {
-			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-		},
-	});
+interface ArticleMetadata {
+	title: string;
+	ogImageUrl: string | null;
+	description: string | null;
+	siteName: string;
+	author: string | null;
+	publishedDate: string | null;
+}
 
-	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-	const html = await response.text();
-	const $ = cheerio.load(html);
-
+/** Extract metadata from HTML using cheerio (og:tags, author, date, etc.) */
+function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 	const title =
 		$('meta[property="og:title"]').attr('content') || $('meta[name="twitter:title"]').attr('content') || $('title').text() || '';
 
@@ -620,14 +593,15 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 	}
 
 	const description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || null;
-
 	const siteName = $('meta[property="og:site_name"]').attr('content') || new URL(url).hostname;
-
 	const author = $('meta[name="author"]').attr('content') || $('meta[property="article:author"]').attr('content') || null;
-
 	const publishedDate = $('meta[property="article:published_time"]').attr('content') || $('time').attr('datetime') || null;
 
-	// Extract content
+	return { title: title.trim(), ogImageUrl, description, siteName, author, publishedDate };
+}
+
+/** Extract article content using cheerio selectors (fallback method) */
+function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string): string {
 	$('script, style, nav, footer, header, aside, .ad, .advertisement, .social-share').remove();
 
 	const mainContent =
@@ -647,7 +621,7 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 			const element = $(el);
 			if (element.is('p')) {
 				const text = element.text().trim();
-				if (text.length > 0) content += text + '\n\n';
+				if (text.length > 0) content += `${text}\n\n`;
 			} else if (element.is('h1')) {
 				content += `## ${element.text().trim()}\n\n`;
 			} else if (element.is('h2')) {
@@ -664,23 +638,141 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 						continue;
 					}
 				}
-				if (imgSrc) content += `![${element.attr('alt') || 'Image'}](${imgSrc})\n\n`;
+				if (!imgSrc || isJunkImage(imgSrc, element.attr('alt') ?? undefined)) continue;
+				content += `![${element.attr('alt') || 'Image'}](${imgSrc})\n\n`;
 			}
 		} catch (error) {
 			logWarn('WEB', 'Error processing element', { error: String(error) });
 		}
 	}
 
-	logInfo('WEB', 'Scraped', { url, chars: content.length });
+	return content.trim();
+}
+
+/** Extract article content using Mozilla Readability + turndown (primary method) */
+function extractContentReadability(html: string, url: string): string | null {
+	try {
+		const { document } = parseHTML(html);
+		const reader = new Readability(document, { charThreshold: 100 });
+		const article = reader.parse();
+
+		if (!article?.content) return null;
+
+		const turndown = new TurndownService({
+			headingStyle: 'atx',
+			codeBlockStyle: 'fenced',
+			bulletListMarker: '-',
+		});
+		// Remove empty links and script/style tags
+		turndown.remove(['script', 'style']);
+
+		const markdown = turndown.turndown(article.content);
+		if (!markdown || markdown.length < 50) return null;
+
+		return markdown;
+	} catch (error) {
+		logWarn('WEB', 'Readability extraction failed', { url, error: String(error) });
+		return null;
+	}
+}
+
+export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
+	logInfo('WEB', 'Scraping', { url });
+
+	const response = await fetch(url, {
+		headers: {
+			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+		},
+	});
+
+	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+	const html = await response.text();
+	const $ = cheerio.load(html);
+	const metadata = extractMetadata($, url);
+
+	// Try Readability first, fallback to cheerio
+	const readabilityContent = extractContentReadability(html, url);
+	const content = readabilityContent ?? extractContentCheerio($, metadata.title, url);
+
+	logInfo('WEB', 'Scraped', { url, chars: content.length, method: readabilityContent ? 'readability' : 'cheerio' });
 
 	return {
-		title: title.trim(),
-		content: content.trim(),
-		summary: description || undefined,
-		ogImageUrl,
-		siteName,
-		author,
-		publishedDate,
+		title: metadata.title,
+		content,
+		summary: metadata.description || undefined,
+		ogImageUrl: metadata.ogImageUrl,
+		siteName: metadata.siteName,
+		author: metadata.author,
+		publishedDate: metadata.publishedDate,
+	};
+}
+
+/** Scrape using only cheerio (for comparison/testing) */
+export async function scrapeWebPageCheerio(url: string): Promise<ScrapedContent> {
+	logInfo('WEB', 'Scraping (cheerio only)', { url });
+
+	const response = await fetch(url, {
+		headers: {
+			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+		},
+	});
+
+	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+	const html = await response.text();
+	const $ = cheerio.load(html);
+	const metadata = extractMetadata($, url);
+	const content = extractContentCheerio($, metadata.title, url);
+
+	logInfo('WEB', 'Scraped (cheerio)', { url, chars: content.length });
+
+	return {
+		title: metadata.title,
+		content,
+		summary: metadata.description || undefined,
+		ogImageUrl: metadata.ogImageUrl,
+		siteName: metadata.siteName,
+		author: metadata.author,
+		publishedDate: metadata.publishedDate,
+	};
+}
+
+/** Scrape using only Readability (for comparison/testing) */
+export async function scrapeWebPageReadability(url: string): Promise<ScrapedContent> {
+	logInfo('WEB', 'Scraping (readability only)', { url });
+
+	const response = await fetch(url, {
+		headers: {
+			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+		},
+	});
+
+	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+	const html = await response.text();
+	const $ = cheerio.load(html);
+	const metadata = extractMetadata($, url);
+
+	const readabilityContent = extractContentReadability(html, url);
+	if (!readabilityContent) throw new Error('Readability failed to extract content');
+
+	logInfo('WEB', 'Scraped (readability)', { url, chars: readabilityContent.length });
+
+	return {
+		title: metadata.title,
+		content: readabilityContent,
+		summary: metadata.description || undefined,
+		ogImageUrl: metadata.ogImageUrl,
+		siteName: metadata.siteName,
+		author: metadata.author,
+		publishedDate: metadata.publishedDate,
 	};
 }
 
