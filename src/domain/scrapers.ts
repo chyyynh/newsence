@@ -604,14 +604,8 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string): string {
 	$('script, style, nav, footer, header, aside, .ad, .advertisement, .social-share').remove();
 
-	const mainContent =
-		$('article').first().length > 0
-			? $('article').first()
-			: $('main').first().length > 0
-				? $('main').first()
-				: $('[role="main"]').first().length > 0
-					? $('[role="main"]').first()
-					: $('body');
+	const candidates = [$('article').first(), $('main').first(), $('[role="main"]').first(), $('body')];
+	const mainContent = candidates.find((el) => el.length > 0 && el.find('p, h1, h2, h3, h4').length > 0) ?? $('body');
 
 	let content = `# ${title}\n\n`;
 	const elements = mainContent.find('p, h1, h2, h3, h4, img');
