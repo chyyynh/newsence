@@ -92,6 +92,10 @@ export function handleHealth(_env: Env): Response {
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTestScrape(request: Request, env: Env): Promise<Response> {
+	if (!(await isSubmitAuthorized(request, env))) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 });
+	}
+
 	const reqUrl = new URL(request.url);
 	const url = reqUrl.searchParams.get('url');
 	if (!url) return Response.json({ error: 'Missing ?url= parameter' }, { status: 400 });
