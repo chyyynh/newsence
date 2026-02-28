@@ -75,12 +75,33 @@ const TRACKING_PARAMS = [
 	'ttt',
 ];
 
+/** Domain aliases that should be normalized to a canonical form */
+const DOMAIN_ALIASES: Record<string, string> = {
+	'twitter.com': 'x.com',
+	'www.twitter.com': 'x.com',
+	'mobile.twitter.com': 'x.com',
+	'www.x.com': 'x.com',
+};
+
 /**
- * Normalizes URL by removing tracking, auth, and cache-busting parameters
+ * Normalizes URL by:
+ * 1. Canonicalizing domain aliases (twitter.com → x.com, etc.)
+ * 2. Stripping www. prefix
+ * 3. Removing tracking, auth, and cache-busting parameters
  */
 export function normalizeUrl(url: string): string {
 	try {
 		const urlObj = new URL(url);
+
+		// Normalize domain aliases
+		const hostname = urlObj.hostname.toLowerCase();
+		const canonical = DOMAIN_ALIASES[hostname];
+		if (canonical) {
+			urlObj.hostname = canonical;
+		} else if (hostname.startsWith('www.')) {
+			urlObj.hostname = hostname.slice(4);
+		}
+
 		for (const param of TRACKING_PARAMS) urlObj.searchParams.delete(param);
 		urlObj.searchParams.sort();
 		return urlObj.toString();
