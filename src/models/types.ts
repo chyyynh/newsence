@@ -11,7 +11,8 @@ export interface Env {
 	SUBMIT_RATE_LIMIT_WINDOW_SEC?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	TRANSCRIPT_API_KEY?: string;
+	CLIP_API_URL?: string;
+	CLIP_API_SECRET?: string;
 	ARTICLES_TABLE?: string;
 
 	// Queue binding

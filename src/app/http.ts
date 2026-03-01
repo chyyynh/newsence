@@ -176,7 +176,8 @@ async function scrapeAndInsert(
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
 		youtubeApiKey: env.YOUTUBE_API_KEY,
-		transcriptApiKey: env.TRANSCRIPT_API_KEY,
+		clipApiUrl: env.CLIP_API_URL,
+		clipApiSecret: env.CLIP_API_SECRET,
 		kaitoApiKey: env.KAITO_API_KEY,
 	});
 

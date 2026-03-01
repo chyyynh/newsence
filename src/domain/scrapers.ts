@@ -96,7 +96,7 @@ interface YouTubeVideoItem {
 
 interface TranscriptSegment {
 	startTime: number;
-	duration: number;
+	endTime: number;
 	text: string;
 }
 
@@ -130,43 +130,77 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 	return chapters.length >= 2 ? chapters : [];
 }
 
+const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
+
 async function fetchTranscript(
 	videoId: string,
-	transcriptApiKey: string,
+	clipApiUrl: string,
+	clipApiSecret: string,
 ): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
+	logInfo('YOUTUBE', 'Fetching transcript via clip-api', { videoId });
 
-	const response = await fetch(`https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`, {
-		headers: { Authorization: `Bearer ${transcriptApiKey}` },
+	const authHeaders = { Authorization: `Bearer ${clipApiSecret}` };
+
+	// 1. Start transcript job
+	const startResponse = await fetch(`${clipApiUrl}/transcript`, {
+		method: 'POST',
+		headers: { ...authHeaders, 'Content-Type': 'application/json' },
+		body: JSON.stringify({ videoId }),
 	});
 
-	if (!response.ok) {
-		logWarn('YOUTUBE', 'Transcript API returned error', { status: response.status });
-		return { segments: [], language: null };
+	if (!startResponse.ok) {
+		logWarn('YOUTUBE', 'clip-api transcript start failed', { status: startResponse.status });
+		return EMPTY_TRANSCRIPT;
 	}
 
-	const data = (await response.json()) as {
-		transcript?: Array<{ start: number; duration: number; text: string }>;
-		language?: string;
-		error?: string;
-	};
+	const { jobId } = (await startResponse.json()) as { jobId: string };
+	logInfo('YOUTUBE', 'Transcript job started', { jobId });
 
-	if (data.error || !data.transcript?.length) {
-		logWarn('YOUTUBE', 'Transcript unavailable', { error: data.error || 'empty' });
-		return { segments: [], language: data.language || null };
+	// 2. Poll for completion (every 5s, max ~60s to stay within CF Worker limits)
+	const MAX_ATTEMPTS = 12;
+	const POLL_INTERVAL = 5000;
+
+	for (let i = 0; i < MAX_ATTEMPTS; i++) {
+		await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+
+		const pollResponse = await fetch(`${clipApiUrl}/transcript/${jobId}`, {
+			headers: authHeaders,
+		});
+
+		if (!pollResponse.ok) {
+			logWarn('YOUTUBE', 'clip-api transcript poll failed', { status: pollResponse.status, attempt: i + 1 });
+			continue;
+		}
+
+		const job = (await pollResponse.json()) as {
+			status: string;
+			result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
+			error?: string;
+		};
+
+		if (job.status === 'done' && job.result) {
+			const segments = job.result.segments.map((seg) => ({
+				startTime: seg.startTime,
+				endTime: seg.endTime,
+				text: seg.text,
+			}));
+			logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length });
+			return { segments, language: job.result.language };
+		}
+
+		if (job.status === 'error') {
+			logWarn('YOUTUBE', 'Transcript job failed', { error: job.error });
+			return EMPTY_TRANSCRIPT;
+		}
+
+		logInfo('YOUTUBE', 'Transcript job polling', { status: job.status, attempt: i + 1 });
 	}
 
-	const segments = data.transcript.map((item) => ({
-		startTime: item.start,
-		duration: item.duration,
-		text: item.text,
-	}));
-
-	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length });
-	return { segments, language: data.language || null };
+	logWarn('YOUTUBE', 'Transcript job timed out', { jobId });
+	return EMPTY_TRANSCRIPT;
 }
 
-export async function scrapeYouTube(videoId: string, youtubeApiKey: string, transcriptApiKey?: string): Promise<ScrapedContent> {
+export async function scrapeYouTube(videoId: string, youtubeApiKey: string, clipApiUrl?: string, clipApiSecret?: string): Promise<ScrapedContent> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
@@ -211,18 +245,16 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string, tran
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
-	// Fetch transcript
-	let transcript: TranscriptSegment[] = [];
-	let transcriptLanguage: string | null = null;
-	if (transcriptApiKey) {
+	// Fetch transcript via clip-api (if configured)
+	let transcriptResult = EMPTY_TRANSCRIPT;
+	if (clipApiUrl && clipApiSecret) {
 		try {
-			const result = await fetchTranscript(videoId, transcriptApiKey);
-			transcript = result.segments;
-			transcriptLanguage = result.language;
+			transcriptResult = await fetchTranscript(videoId, clipApiUrl, clipApiSecret);
 		} catch (e) {
 			logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
 		}
 	}
+	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 
 	logInfo('YOUTUBE', 'Video fetched', { title: snippet.title });
 
@@ -776,7 +808,8 @@ export async function scrapeWebPageReadability(url: string): Promise<ScrapedCont
 
 export interface ScrapeOptions {
 	youtubeApiKey?: string;
-	transcriptApiKey?: string;
+	clipApiUrl?: string;
+	clipApiSecret?: string;
 	kaitoApiKey?: string;
 }
 
@@ -788,7 +821,7 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 			const videoId = extractYouTubeId(url);
 			if (!videoId) throw new Error('Invalid YouTube URL');
 			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-			return scrapeYouTube(videoId, options.youtubeApiKey, options.transcriptApiKey);
+			return scrapeYouTube(videoId, options.youtubeApiKey, options.clipApiUrl, options.clipApiSecret);
 		}
 
 		case 'twitter': {

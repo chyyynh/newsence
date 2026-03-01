@@ -362,7 +362,7 @@ interface YouTubeHighlightsResult {
 
 interface TranscriptSegment {
 	startTime: number;
-	duration: number;
+	endTime: number;
 	text: string;
 }
 
@@ -393,7 +393,7 @@ export async function generateYouTubeHighlights(
 
 	const transcriptText = transcript.map((s) => `[${Math.floor(s.startTime)}s] ${s.text}`).join('\n');
 	const last = transcript[transcript.length - 1];
-	const duration = Math.ceil(last.startTime + last.duration);
+	const duration = Math.ceil(last.endTime);
 
 	const prompt = `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`;
 
