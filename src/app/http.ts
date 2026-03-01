@@ -551,21 +551,14 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		return Response.json({ success: false, error: 'Insert failed' }, { status: 500 });
 	}
 
-	// Increment article_count
-	const { error: updateError } = await supabase.rpc('increment_collection_article_count', {
-		collection_id: collectionId,
-	});
-
-	if (updateError) {
-		// Fallback: manual increment
-		const { data: col } = await supabase.from('collections').select('article_count').eq('id', collectionId).eq('user_id', userId).single();
-		if (col) {
-			await supabase
-				.from('collections')
-				.update({ article_count: (col.article_count ?? 0) + 1 })
-				.eq('id', collectionId)
-				.eq('user_id', userId);
-		}
+	// Increment article_count (non-atomic read-then-update; acceptable for low-throughput Telegram endpoint)
+	const { data: col } = await supabase.from('collections').select('article_count').eq('id', collectionId).eq('user_id', userId).single();
+	if (col) {
+		await supabase
+			.from('collections')
+			.update({ article_count: (col.article_count ?? 0) + 1 })
+			.eq('id', collectionId)
+			.eq('user_id', userId);
 	}
 
 	return Response.json({ success: true });
