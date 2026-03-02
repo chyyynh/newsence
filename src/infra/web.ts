@@ -73,6 +73,7 @@ const TRACKING_PARAMS = [
 	'ttl',
 	'vfff',
 	'ttt',
+	'triedRedirect',
 ];
 
 /** Domain aliases that should be normalized to a canonical form */
