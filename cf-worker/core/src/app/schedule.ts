@@ -4,11 +4,10 @@ import { scrapeTwitterArticle, scrapeWebPage } from '../domain/scrapers';
 import { assessContent } from '../infra/ai';
 import { getArticlesTable, getSupabaseClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
-import { fetchPlatformMetadata } from '../infra/platform';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../infra/web';
-import type { TwitterMedia } from '../models/platform-metadata';
+import type { PlatformMetadata, TwitterMedia } from '../models/platform-metadata';
 import { buildHackerNews, buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../models/platform-metadata';
-import { extractHackerNewsId, HN_ALGOLIA_API } from '../domain/scrapers';
+import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API } from '../domain/scrapers';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
@@ -16,6 +15,23 @@ import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
 // ─────────────────────────────────────────────────────────────
 
 type RSSItem = Record<string, any>;
+
+async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMetadata & { type: 'hackernews' }) | null> {
+	if (detectPlatformType(commentsUrl) !== 'hackernews') return null;
+	const hnItemId = extractHackerNewsId(commentsUrl);
+	if (!hnItemId) return null;
+	const res = await fetch(`${HN_ALGOLIA_API}/${hnItemId}`);
+	if (!res.ok) return null;
+	const hn = (await res.json()) as { id: number; author?: string; points?: number; descendants?: number; type?: string };
+	return buildHackerNews({
+		itemId: hn.id.toString(),
+		author: hn.author ?? '',
+		points: hn.points ?? 0,
+		commentCount: hn.descendants ?? 0,
+		itemType: (hn.type as 'story' | 'ask' | 'show' | 'job') ?? 'story',
+		storyUrl: commentsUrl,
+	});
+}
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
@@ -121,30 +137,22 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 	const url = rawUrl ? normalizeUrl(rawUrl) : null;
 	if (!url) return;
 
-	let platformMetadata = null;
+	let platformMetadata: PlatformMetadata | null = null;
 	let sourceType = 'rss';
 	let crawledContent = '';
 	let ogImageUrl: string | null = null;
-	let enrichedSummary: string | null = null;
-
-	// Fetch platform metadata
-	try {
-		const result = await fetchPlatformMetadata(url, env.YOUTUBE_API_KEY, item.comments ?? null, env.KAITO_API_KEY);
-		platformMetadata = result.platformMetadata;
-		sourceType = result.sourceType;
-
-		if (platformMetadata?.data) {
-			if (platformMetadata.type === 'youtube') {
-				ogImageUrl = platformMetadata.data.thumbnailUrl || null;
-				const desc = platformMetadata.data.description;
-				if (desc && desc.length > 50) enrichedSummary = desc.slice(0, 500);
-			} else if (platformMetadata.type === 'twitter') {
-				const media = 'media' in platformMetadata.data ? platformMetadata.data.media : undefined;
-				if (media?.length) ogImageUrl = media[0].url;
+	// Determine source type from the RSS item's comments URL
+	const commentsUrl = item.comments as string | undefined;
+	if (commentsUrl) {
+		try {
+			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
+			if (hnMeta) {
+				sourceType = 'hackernews';
+				platformMetadata = hnMeta;
 			}
+		} catch (err) {
+			logWarn('RSS', 'Failed to fetch HN metadata', { feed: feed.name, error: String(err) });
 		}
-	} catch (err) {
-		logWarn('RSS', 'Metadata fetch failed', { feed: feed.name, error: String(err) });
 	}
 
 	// Fetch content based on feed config
@@ -179,7 +187,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 	}
 
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
-	const content = sourceType === 'youtube' ? null : crawledContent || null;
+	const content = crawledContent || null;
 
 	const insert = {
 		url,
@@ -190,9 +198,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 		keywords: [],
 		tags: [],
 		tokens: [],
-		summary:
-			enrichedSummary ??
-			(sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '')),
+		summary: sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? ''),
 		source_type: sourceType,
 		content,
 		og_image_url: ogImageUrl,
@@ -273,25 +279,14 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 			const rssItem = urlToItem.get(normalized);
 			const commentsUrl = rssItem?.comments as string | undefined;
 			if (commentsUrl) {
-				const hnItemId = extractHackerNewsId(commentsUrl);
-				if (hnItemId) {
-					try {
-						const res = await fetch(`${HN_ALGOLIA_API}/${hnItemId}`);
-						if (res.ok) {
-							const hn = (await res.json()) as { id: number; author?: string; points?: number; descendants?: number; type?: string };
-							update.source_type = 'hackernews';
-							update.platform_metadata = buildHackerNews({
-								itemId: hn.id.toString(),
-								author: hn.author ?? '',
-								points: hn.points ?? 0,
-								commentCount: hn.descendants ?? 0,
-								itemType: (hn.type as 'story' | 'ask' | 'show' | 'job') ?? 'story',
-								storyUrl: commentsUrl,
-							});
-						}
-					} catch (err) {
-						logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
+				try {
+					const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
+					if (hnMeta) {
+						update.source_type = 'hackernews';
+						update.platform_metadata = hnMeta;
 					}
+				} catch (err) {
+					logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
 				}
 			}
 

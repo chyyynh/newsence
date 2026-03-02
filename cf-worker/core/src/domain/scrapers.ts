@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { logInfo, logWarn } from '../infra/log';
+import { YOUTUBE_SHORT_HOSTS, YOUTUBE_WATCH_HOSTS } from '../infra/web';
 import type { TwitterMedia } from '../models/platform-metadata';
 
 export interface ScrapedContent {
@@ -14,6 +15,14 @@ export interface ScrapedContent {
 	author: string | null;
 	publishedDate: string | null;
 	metadata?: Record<string, unknown>;
+	/** YouTube-only: transcript data to save to youtube_transcripts table */
+	youtubeTranscript?: {
+		videoId: string;
+		segments: TranscriptSegment[];
+		language: string | null;
+		chapters: YouTubeChapter[];
+		chaptersFromDescription: boolean;
+	};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -23,14 +32,13 @@ export interface ScrapedContent {
 export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
 const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com', 'www.ycombinator.com']);
-const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be']);
 const TWITTER_HOSTS = new Set(['twitter.com', 'x.com', 'www.twitter.com', 'www.x.com', 'mobile.twitter.com']);
 
 export function detectPlatformType(url: string): PlatformType {
 	try {
 		const hostname = new URL(url).hostname.toLowerCase();
 		if (HACKERNEWS_HOSTS.has(hostname)) return 'hackernews';
-		if (YOUTUBE_HOSTS.has(hostname)) return 'youtube';
+		if (YOUTUBE_WATCH_HOSTS.has(hostname) || YOUTUBE_SHORT_HOSTS.has(hostname)) return 'youtube';
 		if (TWITTER_HOSTS.has(hostname)) return 'twitter';
 		return 'web';
 	} catch {
@@ -96,7 +104,7 @@ interface YouTubeVideoItem {
 
 interface TranscriptSegment {
 	startTime: number;
-	duration: number;
+	endTime: number;
 	text: string;
 }
 
@@ -130,43 +138,42 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 	return chapters.length >= 2 ? chapters : [];
 }
 
+const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
+
 async function fetchTranscript(
 	videoId: string,
-	transcriptApiKey: string,
+	clipApiUrl: string,
+	clipApiSecret: string,
 ): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
+	logInfo('YOUTUBE', 'Fetching transcript via clip-api', { videoId });
 
-	const response = await fetch(`https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`, {
-		headers: { Authorization: `Bearer ${transcriptApiKey}` },
+	const response = await fetch(`${clipApiUrl}/transcript`, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${clipApiSecret}`, 'Content-Type': 'application/json' },
+		body: JSON.stringify({ videoId }),
 	});
 
 	if (!response.ok) {
-		logWarn('YOUTUBE', 'Transcript API returned error', { status: response.status });
-		return { segments: [], language: null };
+		logWarn('YOUTUBE', 'clip-api transcript failed', { status: response.status });
+		return EMPTY_TRANSCRIPT;
 	}
 
 	const data = (await response.json()) as {
-		transcript?: Array<{ start: number; duration: number; text: string }>;
-		language?: string;
+		status: string;
+		result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
 		error?: string;
 	};
 
-	if (data.error || !data.transcript?.length) {
-		logWarn('YOUTUBE', 'Transcript unavailable', { error: data.error || 'empty' });
-		return { segments: [], language: data.language || null };
+	if (data.status === 'done' && data.result) {
+		logInfo('YOUTUBE', 'Transcript fetched', { count: data.result.segments.length });
+		return { segments: data.result.segments, language: data.result.language };
 	}
 
-	const segments = data.transcript.map((item) => ({
-		startTime: item.start,
-		duration: item.duration,
-		text: item.text,
-	}));
-
-	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length });
-	return { segments, language: data.language || null };
+	logWarn('YOUTUBE', 'Transcript failed', { error: data.error });
+	return EMPTY_TRANSCRIPT;
 }
 
-export async function scrapeYouTube(videoId: string, youtubeApiKey: string, transcriptApiKey?: string): Promise<ScrapedContent> {
+export async function scrapeYouTube(videoId: string, youtubeApiKey: string, clipApiUrl?: string, clipApiSecret?: string): Promise<ScrapedContent> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
@@ -211,18 +218,16 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string, tran
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
-	// Fetch transcript
-	let transcript: TranscriptSegment[] = [];
-	let transcriptLanguage: string | null = null;
-	if (transcriptApiKey) {
+	// Fetch transcript via clip-api (if configured)
+	let transcriptResult = EMPTY_TRANSCRIPT;
+	if (clipApiUrl && clipApiSecret) {
 		try {
-			const result = await fetchTranscript(videoId, transcriptApiKey);
-			transcript = result.segments;
-			transcriptLanguage = result.language;
+			transcriptResult = await fetchTranscript(videoId, clipApiUrl, clipApiSecret);
 		} catch (e) {
 			logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
 		}
 	}
+	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 
 	logInfo('YOUTUBE', 'Video fetched', { title: snippet.title });
 
@@ -247,11 +252,10 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string, tran
 			tags: snippet.tags || [],
 			publishedAt: snippet.publishedAt,
 			description: snippet.description || '',
-			transcript,
-			transcriptLanguage,
-			chapters,
-			chaptersFromDescription: chapters.length > 0,
 		},
+		youtubeTranscript: transcript.length > 0
+			? { videoId: video.id, segments: transcript, language: transcriptLanguage, chapters, chaptersFromDescription: chapters.length > 0 }
+			: undefined,
 	};
 }
 
@@ -604,14 +608,8 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string): string {
 	$('script, style, nav, footer, header, aside, .ad, .advertisement, .social-share').remove();
 
-	const mainContent =
-		$('article').first().length > 0
-			? $('article').first()
-			: $('main').first().length > 0
-				? $('main').first()
-				: $('[role="main"]').first().length > 0
-					? $('[role="main"]').first()
-					: $('body');
+	const candidates = [$('article').first(), $('main').first(), $('[role="main"]').first(), $('body')];
+	const mainContent = candidates.find((el) => el.length > 0 && el.find('p, h1, h2, h3, h4').length > 0) ?? $('body');
 
 	let content = `# ${title}\n\n`;
 	const elements = mainContent.find('p, h1, h2, h3, h4, img');
@@ -782,7 +780,8 @@ export async function scrapeWebPageReadability(url: string): Promise<ScrapedCont
 
 export interface ScrapeOptions {
 	youtubeApiKey?: string;
-	transcriptApiKey?: string;
+	clipApiUrl?: string;
+	clipApiSecret?: string;
 	kaitoApiKey?: string;
 }
 
@@ -794,7 +793,7 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 			const videoId = extractYouTubeId(url);
 			if (!videoId) throw new Error('Invalid YouTube URL');
 			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-			return scrapeYouTube(videoId, options.youtubeApiKey, options.transcriptApiKey);
+			return scrapeYouTube(videoId, options.youtubeApiKey, options.clipApiUrl, options.clipApiSecret);
 		}
 
 		case 'twitter': {

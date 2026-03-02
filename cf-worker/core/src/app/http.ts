@@ -176,7 +176,8 @@ async function scrapeAndInsert(
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
 		youtubeApiKey: env.YOUTUBE_API_KEY,
-		transcriptApiKey: env.TRANSCRIPT_API_KEY,
+		clipApiUrl: env.CLIP_API_URL,
+		clipApiSecret: env.CLIP_API_SECRET,
 		kaitoApiKey: env.KAITO_API_KEY,
 	});
 
@@ -185,14 +186,9 @@ async function scrapeAndInsert(
 		return { error: 'Content too short' };
 	}
 
-	let cleanedMetadata = scraped.metadata;
-	if (platformType === 'youtube' && scraped.metadata) {
-		cleanedMetadata = await saveYouTubeTranscript(scraped.metadata, env);
-	}
-
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
-	const normalizedPlatformMetadata = normalizePlatformMetadata(cleanedMetadata, platformType);
+	const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
 	const { data: inserted, error } = await supabase
 		.from(table)
 		.insert([
@@ -217,6 +213,25 @@ async function scrapeAndInsert(
 	if (error || !inserted?.[0]?.id) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(error) });
 		return { error: 'DB insert failed' };
+	}
+
+	// Save YouTube transcript to dedicated table (after article insert so no orphans)
+	if (scraped.youtubeTranscript) {
+		const yt = scraped.youtubeTranscript;
+		const { error: transcriptError } = await supabase.from('youtube_transcripts').upsert(
+			{
+				video_id: yt.videoId,
+				transcript: yt.segments,
+				language: yt.language,
+				chapters: yt.chapters,
+				chapters_from_description: yt.chaptersFromDescription,
+				fetched_at: new Date().toISOString(),
+			},
+			{ onConflict: 'video_id' },
+		);
+		if (transcriptError) {
+			logError('YOUTUBE', 'Failed to save transcript', { videoId: yt.videoId, error: String(transcriptError) });
+		}
 	}
 
 	logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50) });
@@ -550,21 +565,14 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		return Response.json({ success: false, error: 'Insert failed' }, { status: 500 });
 	}
 
-	// Increment article_count
-	const { error: updateError } = await supabase.rpc('increment_collection_article_count', {
-		collection_id: collectionId,
-	});
-
-	if (updateError) {
-		// Fallback: manual increment
-		const { data: col } = await supabase.from('collections').select('article_count').eq('id', collectionId).eq('user_id', userId).single();
-		if (col) {
-			await supabase
-				.from('collections')
-				.update({ article_count: (col.article_count ?? 0) + 1 })
-				.eq('id', collectionId)
-				.eq('user_id', userId);
-		}
+	// Increment article_count (non-atomic read-then-update; acceptable for low-throughput Telegram endpoint)
+	const { data: col } = await supabase.from('collections').select('article_count').eq('id', collectionId).eq('user_id', userId).single();
+	if (col) {
+		await supabase
+			.from('collections')
+			.update({ article_count: (col.article_count ?? 0) + 1 })
+			.eq('id', collectionId)
+			.eq('user_id', userId);
 	}
 
 	return Response.json({ success: true });
@@ -634,55 +642,3 @@ function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined
 	}
 }
 
-/**
- * Extract transcript data from YouTube metadata and save to youtube_transcripts table
- * Returns cleaned metadata without transcript fields only when transcript table write succeeds
- */
-async function saveYouTubeTranscript(metadata: Record<string, unknown>, env: Env): Promise<Record<string, unknown>> {
-	const videoId = metadata.videoId as string | undefined;
-	if (!videoId) return metadata;
-
-	const transcript = metadata.transcript;
-	const chapters = metadata.chapters;
-	const transcriptLanguage = metadata.transcriptLanguage as string | undefined;
-	const chaptersFromDescription = metadata.chaptersFromDescription as boolean | undefined;
-
-	// Only save if we have transcript data
-	let persistedToTranscriptTable = false;
-	if (transcript && Array.isArray(transcript) && transcript.length > 0) {
-		const supabase = getSupabaseClient(env);
-
-		try {
-			const { error } = await supabase.from('youtube_transcripts').upsert(
-				{
-					video_id: videoId,
-					transcript,
-					language: transcriptLanguage || null,
-					chapters: chapters || [],
-					chapters_from_description: chaptersFromDescription || false,
-					fetched_at: new Date().toISOString(),
-				},
-				{ onConflict: 'video_id' },
-			);
-
-			if (error) {
-				logError('YOUTUBE', 'Failed to save transcript', { videoId, error: String(error) });
-			} else {
-				persistedToTranscriptTable = true;
-				logInfo('YOUTUBE', 'Saved transcript', { videoId, segments: (transcript as unknown[]).length });
-			}
-		} catch (err) {
-			logError('YOUTUBE', 'Failed to save transcript', { videoId, error: String(err) });
-		}
-	}
-
-	// Keep transcript/chapter fields in platform_metadata when write failed or wasn't attempted.
-	// This prevents permanent data loss for legacy/fallback reads.
-	if (!persistedToTranscriptTable) {
-		return metadata;
-	}
-
-	// Return metadata without transcript fields (keep it lightweight) after successful persistence
-	const { transcript: _t, chapters: _c, transcriptLanguage: _l, chaptersFromDescription: _d, ...cleanMetadata } = metadata;
-	return cleanMetadata;
-}
