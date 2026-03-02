@@ -83,11 +83,17 @@ const DOMAIN_ALIASES: Record<string, string> = {
 	'www.x.com': 'x.com',
 };
 
+/** YouTube hostnames that use ?v= parameter */
+export const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com']);
+/** YouTube shortlink hosts that use path-based video ID */
+export const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
+
 /**
  * Normalizes URL by:
  * 1. Canonicalizing domain aliases (twitter.com → x.com, etc.)
  * 2. Stripping www. prefix
  * 3. Removing tracking, auth, and cache-busting parameters
+ * 4. YouTube: canonicalize to youtube.com/watch?v=VIDEO_ID
  */
 export function normalizeUrl(url: string): string {
 	try {
@@ -100,6 +106,19 @@ export function normalizeUrl(url: string): string {
 			urlObj.hostname = canonical;
 		} else if (hostname.startsWith('www.')) {
 			urlObj.hostname = hostname.slice(4);
+		}
+
+		// YouTube → canonical youtube.com/watch?v=VIDEO_ID
+		if (YOUTUBE_WATCH_HOSTS.has(hostname)) {
+			if (urlObj.pathname === '/watch') {
+				const videoId = urlObj.searchParams.get('v');
+				if (videoId) return `https://youtube.com/watch?v=${videoId}`;
+			}
+			const pathMatch = urlObj.pathname.match(/^\/(embed|shorts|live)\/([a-zA-Z0-9_-]{11})/);
+			if (pathMatch) return `https://youtube.com/watch?v=${pathMatch[2]}`;
+		} else if (YOUTUBE_SHORT_HOSTS.has(hostname)) {
+			const match = urlObj.pathname.match(/^\/([a-zA-Z0-9_-]{11})/);
+			if (match) return `https://youtube.com/watch?v=${match[1]}`;
 		}
 
 		for (const param of TRACKING_PARAMS) urlObj.searchParams.delete(param);

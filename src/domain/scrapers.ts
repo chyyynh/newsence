@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { logInfo, logWarn } from '../infra/log';
+import { YOUTUBE_SHORT_HOSTS, YOUTUBE_WATCH_HOSTS } from '../infra/web';
 import type { TwitterMedia } from '../models/platform-metadata';
 
 export interface ScrapedContent {
@@ -14,6 +15,14 @@ export interface ScrapedContent {
 	author: string | null;
 	publishedDate: string | null;
 	metadata?: Record<string, unknown>;
+	/** YouTube-only: transcript data to save to youtube_transcripts table */
+	youtubeTranscript?: {
+		videoId: string;
+		segments: TranscriptSegment[];
+		language: string | null;
+		chapters: YouTubeChapter[];
+		chaptersFromDescription: boolean;
+	};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -23,14 +32,13 @@ export interface ScrapedContent {
 export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
 const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com', 'www.ycombinator.com']);
-const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be']);
 const TWITTER_HOSTS = new Set(['twitter.com', 'x.com', 'www.twitter.com', 'www.x.com', 'mobile.twitter.com']);
 
 export function detectPlatformType(url: string): PlatformType {
 	try {
 		const hostname = new URL(url).hostname.toLowerCase();
 		if (HACKERNEWS_HOSTS.has(hostname)) return 'hackernews';
-		if (YOUTUBE_HOSTS.has(hostname)) return 'youtube';
+		if (YOUTUBE_WATCH_HOSTS.has(hostname) || YOUTUBE_SHORT_HOSTS.has(hostname)) return 'youtube';
 		if (TWITTER_HOSTS.has(hostname)) return 'twitter';
 		return 'web';
 	} catch {
@@ -139,64 +147,29 @@ async function fetchTranscript(
 ): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
 	logInfo('YOUTUBE', 'Fetching transcript via clip-api', { videoId });
 
-	const authHeaders = { Authorization: `Bearer ${clipApiSecret}` };
-
-	// 1. Start transcript job
-	const startResponse = await fetch(`${clipApiUrl}/transcript`, {
+	const response = await fetch(`${clipApiUrl}/transcript`, {
 		method: 'POST',
-		headers: { ...authHeaders, 'Content-Type': 'application/json' },
+		headers: { Authorization: `Bearer ${clipApiSecret}`, 'Content-Type': 'application/json' },
 		body: JSON.stringify({ videoId }),
 	});
 
-	if (!startResponse.ok) {
-		logWarn('YOUTUBE', 'clip-api transcript start failed', { status: startResponse.status });
+	if (!response.ok) {
+		logWarn('YOUTUBE', 'clip-api transcript failed', { status: response.status });
 		return EMPTY_TRANSCRIPT;
 	}
 
-	const { jobId } = (await startResponse.json()) as { jobId: string };
-	logInfo('YOUTUBE', 'Transcript job started', { jobId });
+	const data = (await response.json()) as {
+		status: string;
+		result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
+		error?: string;
+	};
 
-	// 2. Poll for completion (every 5s, max ~60s to stay within CF Worker limits)
-	const MAX_ATTEMPTS = 12;
-	const POLL_INTERVAL = 5000;
-
-	for (let i = 0; i < MAX_ATTEMPTS; i++) {
-		await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-
-		const pollResponse = await fetch(`${clipApiUrl}/transcript/${jobId}`, {
-			headers: authHeaders,
-		});
-
-		if (!pollResponse.ok) {
-			logWarn('YOUTUBE', 'clip-api transcript poll failed', { status: pollResponse.status, attempt: i + 1 });
-			continue;
-		}
-
-		const job = (await pollResponse.json()) as {
-			status: string;
-			result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
-			error?: string;
-		};
-
-		if (job.status === 'done' && job.result) {
-			const segments = job.result.segments.map((seg) => ({
-				startTime: seg.startTime,
-				endTime: seg.endTime,
-				text: seg.text,
-			}));
-			logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length });
-			return { segments, language: job.result.language };
-		}
-
-		if (job.status === 'error') {
-			logWarn('YOUTUBE', 'Transcript job failed', { error: job.error });
-			return EMPTY_TRANSCRIPT;
-		}
-
-		logInfo('YOUTUBE', 'Transcript job polling', { status: job.status, attempt: i + 1 });
+	if (data.status === 'done' && data.result) {
+		logInfo('YOUTUBE', 'Transcript fetched', { count: data.result.segments.length });
+		return { segments: data.result.segments, language: data.result.language };
 	}
 
-	logWarn('YOUTUBE', 'Transcript job timed out', { jobId });
+	logWarn('YOUTUBE', 'Transcript failed', { error: data.error });
 	return EMPTY_TRANSCRIPT;
 }
 
@@ -279,11 +252,10 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string, clip
 			tags: snippet.tags || [],
 			publishedAt: snippet.publishedAt,
 			description: snippet.description || '',
-			transcript,
-			transcriptLanguage,
-			chapters,
-			chaptersFromDescription: chapters.length > 0,
 		},
+		youtubeTranscript: transcript.length > 0
+			? { videoId: video.id, segments: transcript, language: transcriptLanguage, chapters, chaptersFromDescription: chapters.length > 0 }
+			: undefined,
 	};
 }
 
