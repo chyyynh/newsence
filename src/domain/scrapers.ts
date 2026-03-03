@@ -158,18 +158,23 @@ async function fetchTranscript(
 		return EMPTY_TRANSCRIPT;
 	}
 
-	const data = (await response.json()) as {
-		status: string;
+	const json = (await response.json()) as {
+		ok?: boolean;
+		data?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
+		// Legacy format
+		status?: string;
 		result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
 		error?: string;
 	};
 
-	if (data.status === 'done' && data.result) {
-		logInfo('YOUTUBE', 'Transcript fetched', { count: data.result.segments.length });
-		return { segments: data.result.segments, language: data.result.language };
+	// Current envelope format: { ok, data: { segments, language } }
+	const result = json.data ?? (json.status === 'done' ? json.result : undefined);
+	if (result?.segments) {
+		logInfo('YOUTUBE', 'Transcript fetched', { count: result.segments.length });
+		return { segments: result.segments, language: result.language };
 	}
 
-	logWarn('YOUTUBE', 'Transcript failed', { error: data.error });
+	logWarn('YOUTUBE', 'Transcript failed', { error: json.error });
 	return EMPTY_TRANSCRIPT;
 }
 

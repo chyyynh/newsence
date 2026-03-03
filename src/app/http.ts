@@ -52,9 +52,17 @@ function getSubmitRateKey(request: Request, userId?: string): string {
 	return ip ? `ip:${ip}` : 'anon';
 }
 
+function pruneExpiredBuckets(): void {
+	const now = Date.now();
+	for (const [key, bucket] of submitRateBuckets) {
+		if (bucket.resetAt <= now) submitRateBuckets.delete(key);
+	}
+}
+
 function hitSubmitRateLimit(key: string, max: number, windowSec: number, cost = 1): { limited: boolean; retryAfterSec: number } {
 	const now = Date.now();
 	const windowMs = Math.max(windowSec, 1) * 1000;
+	if (submitRateBuckets.size > 1000) pruneExpiredBuckets();
 	const existing = submitRateBuckets.get(key);
 
 	if (!existing || existing.resetAt <= now) {
