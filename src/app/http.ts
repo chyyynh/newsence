@@ -180,6 +180,7 @@ async function createWorkflow(env: Env, articleId: string, sourceType: string): 
 async function scrapeAndInsert(
 	url: string,
 	env: Env,
+	submitterId?: string,
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
@@ -214,6 +215,8 @@ async function scrapeAndInsert(
 				tags: [],
 				tokens: [],
 				platform_metadata: normalizedPlatformMetadata,
+				submitter_id: submitterId || null,
+				visibility: submitterId ? 'private' : 'public',
 			},
 		])
 		.select('id');
@@ -250,7 +253,7 @@ async function scrapeAndInsert(
  * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
  * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
  */
-async function processUrl(rawUrl: string, env: Env): Promise<SubmitResult> {
+async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
@@ -274,7 +277,7 @@ async function processUrl(rawUrl: string, env: Env): Promise<SubmitResult> {
 	// 2. Scrape + insert
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env);
+		result = await scrapeAndInsert(url, env, submitterId);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -341,7 +344,8 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	}
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
-	const results = await Promise.all(urls.map((url) => processUrl(url, env)));
+	const submitterId = body.userId;
+	const results = await Promise.all(urls.map((url) => processUrl(url, env, submitterId)));
 	return Response.json({ success: true, results });
 }
 
