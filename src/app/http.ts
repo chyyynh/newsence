@@ -258,15 +258,18 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
 
-	// 1. Check if already exists (only reuse public articles or same submitter's private articles)
-	const { data: existing } = await supabase
+	// 1. Check if already exists (prefer own article, then any public article)
+	const { data: existingRows } = await supabase
 		.from(table)
 		.select('id, title, title_cn, source_type, og_image_url, visibility, submitter_id')
-		.eq('url', url)
-		.single();
-	if (existing) {
-		const isOwnOrPublic = existing.visibility !== 'private' || existing.submitter_id === submitterId;
-		if (isOwnOrPublic) {
+		.eq('url', url);
+	if (existingRows && existingRows.length > 0) {
+		// Prefer submitter's own article first, then any public one
+		const existing =
+			(submitterId && existingRows.find((r) => r.submitter_id === submitterId)) ||
+			existingRows.find((r) => r.visibility !== 'private') ||
+			null;
+		if (existing) {
 			const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
 			if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
 			return {
@@ -279,7 +282,7 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 				alreadyExists: true,
 			};
 		}
-		// Private article from another user — proceed to create a new one
+		// All existing rows are private from other users — proceed to create a new one
 	}
 
 	// 2. Scrape + insert
