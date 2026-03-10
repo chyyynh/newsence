@@ -1,8 +1,12 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { Client } from 'pg';
 import type { Env } from '../models/types';
 
-export function getSupabaseClient(env: Env): SupabaseClient {
-	return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+export type DbClient = Client;
+
+export async function createDbClient(env: Env): Promise<Client> {
+	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await client.connect();
+	return client;
 }
 
 export function getArticlesTable(env: Env): string {

@@ -1,3 +1,4 @@
+import type { Client } from 'pg';
 import { AI_MODELS, callGeminiForAnalysis, callOpenRouter, translateTweet } from '../infra/ai';
 import { prepareArticleTextForEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
@@ -25,13 +26,13 @@ export interface ProcessorResult {
 
 export interface ProcessorContext {
 	env: Env;
-	supabase: any;
+	db: Client;
 	table: string;
 }
 
 export interface ProcessingDeps {
 	env: Env;
-	supabase: any;
+	db: Client;
 	table: string;
 }
 
@@ -499,7 +500,7 @@ export async function runArticleProcessor(
 	const processor = getProcessor(sourceType);
 	const ctx: ProcessorContext = {
 		env: deps.env,
-		supabase: deps.supabase,
+		db: deps.db,
 		table: deps.table,
 	};
 	return processor.process(article, ctx);
@@ -517,8 +518,23 @@ export async function persistProcessorResult(
 
 	if (Object.keys(updatePayload).length === 0) return;
 
-	const { error } = await deps.supabase.from(deps.table).update(updatePayload).eq('id', articleId);
-	if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`);
+	const columns = Object.keys(updatePayload);
+	const setClauses = columns.map((col, i) => `${col} = $${i + 1}`).join(', ');
+	const values = columns.map((col) => {
+		const val = updatePayload[col];
+		// JSON columns (objects/arrays that aren't native pg arrays for tags/keywords)
+		if (val !== null && typeof val === 'object' && col !== 'tags' && col !== 'keywords') {
+			return JSON.stringify(val);
+		}
+		return val;
+	});
+	values.push(articleId);
+
+	const sql = `UPDATE ${deps.table} SET ${setClauses} WHERE id = $${values.length}`;
+	const queryResult = await deps.db.query(sql, values);
+	if (queryResult.rowCount === 0) {
+		throw new Error(`Failed to update article ${articleId}: no rows matched`);
+	}
 }
 
 export function buildEmbeddingTextForArticle(

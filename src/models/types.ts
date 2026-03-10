@@ -3,8 +3,7 @@ import type { PlatformMetadata } from './platform-metadata';
 
 // Environment variables
 export interface Env {
-	SUPABASE_URL: string;
-	SUPABASE_SERVICE_ROLE_KEY: string;
+	HYPERDRIVE: Hyperdrive;
 	OPENROUTER_API_KEY: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	SUBMIT_RATE_LIMIT_MAX?: string;

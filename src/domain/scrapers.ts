@@ -179,7 +179,12 @@ async function fetchTranscript(
 	return EMPTY_TRANSCRIPT;
 }
 
-export async function scrapeYouTube(videoId: string, youtubeApiKey: string, clipApiUrl?: string, clipApiSecret?: string): Promise<ScrapedContent> {
+export async function scrapeYouTube(
+	videoId: string,
+	youtubeApiKey: string,
+	clipApiUrl?: string,
+	clipApiSecret?: string,
+): Promise<ScrapedContent> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
@@ -259,9 +264,10 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string, clip
 			publishedAt: snippet.publishedAt,
 			description: snippet.description || '',
 		},
-		youtubeTranscript: transcript.length > 0
-			? { videoId: video.id, segments: transcript, language: transcriptLanguage, chapters, chaptersFromDescription: chapters.length > 0 }
-			: undefined,
+		youtubeTranscript:
+			transcript.length > 0
+				? { videoId: video.id, segments: transcript, language: transcriptLanguage, chapters, chaptersFromDescription: chapters.length > 0 }
+				: undefined,
 	};
 }
 
@@ -701,7 +707,8 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 	try {
 		response = await fetch(url, {
 			headers: {
-				'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+				'User-Agent':
+					'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 				Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 			},
@@ -755,7 +762,9 @@ function getRetryUrls(inputUrl: string, finalUrl: string, content: string): stri
 		try {
 			const embeddedObj = new URL(urlMatch[1]);
 			candidates.add(`${embeddedObj.origin}${embeddedObj.pathname}`);
-		} catch { /* ignore invalid URLs */ }
+		} catch {
+			/* ignore invalid URLs */
+		}
 	}
 
 	// Remove the original input URL from candidates
