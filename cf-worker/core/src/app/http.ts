@@ -180,6 +180,7 @@ async function createWorkflow(env: Env, articleId: string, sourceType: string): 
 async function scrapeAndInsert(
 	url: string,
 	env: Env,
+	submitterId?: string,
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
@@ -214,6 +215,8 @@ async function scrapeAndInsert(
 				tags: [],
 				tokens: [],
 				platform_metadata: normalizedPlatformMetadata,
+				submitter_id: submitterId || null,
+				visibility: submitterId ? 'private' : 'public',
 			},
 		])
 		.select('id');
@@ -250,31 +253,42 @@ async function scrapeAndInsert(
  * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
  * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
  */
-async function processUrl(rawUrl: string, env: Env): Promise<SubmitResult> {
+async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 	const supabase = getSupabaseClient(env);
 	const table = getArticlesTable(env);
 
-	// 1. Check if already exists
-	const { data: existing } = await supabase.from(table).select('id, title, title_cn, source_type, og_image_url').eq('url', url).single();
-	if (existing) {
-		const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
-		if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
-		return {
-			url,
-			articleId: existing.id,
-			instanceId,
-			title: existing.title,
-			ogImageUrl: existing.og_image_url,
-			sourceType: existing.source_type,
-			alreadyExists: true,
-		};
+	// 1. Check if already exists (prefer own article, then any public article)
+	const { data: existingRows } = await supabase
+		.from(table)
+		.select('id, title, title_cn, source_type, og_image_url, visibility, submitter_id')
+		.eq('url', url);
+	if (existingRows && existingRows.length > 0) {
+		// Prefer submitter's own article first, then any public one
+		const existing =
+			(submitterId && existingRows.find((r) => r.submitter_id === submitterId)) ||
+			existingRows.find((r) => r.visibility !== 'private') ||
+			null;
+		if (existing) {
+			const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
+			if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
+			return {
+				url,
+				articleId: existing.id,
+				instanceId,
+				title: existing.title,
+				ogImageUrl: existing.og_image_url,
+				sourceType: existing.source_type,
+				alreadyExists: true,
+			};
+		}
+		// All existing rows are private from other users — proceed to create a new one
 	}
 
 	// 2. Scrape + insert
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env);
+		result = await scrapeAndInsert(url, env, submitterId);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -341,7 +355,8 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	}
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
-	const results = await Promise.all(urls.map((url) => processUrl(url, env)));
+	const submitterId = body.userId;
+	const results = await Promise.all(urls.map((url) => processUrl(url, env, submitterId)));
 	return Response.json({ success: true, results });
 }
 

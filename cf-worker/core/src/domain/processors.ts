@@ -409,6 +409,12 @@ class HackerNewsProcessor implements ArticleProcessor {
 				logInfo('HN-PROCESSOR', 'Generated editorial content', { chars: editorial.en.length });
 			}
 
+			// Fallback: if editorial generation failed, use scraped page content directly
+			if (!updateData.content && externalPageContent && externalPageContent.length > 100) {
+				updateData.content = externalPageContent;
+				logWarn('HN-PROCESSOR', 'Editorial failed, falling back to scraped content', { chars: externalPageContent.length });
+			}
+
 			enrichments.hnUrl = `https://news.ycombinator.com/item?id=${hnData.id}`;
 			enrichments.externalUrl = hnData.url || null;
 			enrichments.hnText = hnData.text || null;

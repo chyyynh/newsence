@@ -154,7 +154,8 @@ async function fetchTranscript(
 	});
 
 	if (!response.ok) {
-		logWarn('YOUTUBE', 'clip-api transcript failed', { status: response.status });
+		const errorBody = await response.text().catch(() => '');
+		logWarn('YOUTUBE', 'clip-api transcript failed', { status: response.status, body: errorBody.slice(0, 200) });
 		return EMPTY_TRANSCRIPT;
 	}
 

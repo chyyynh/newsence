@@ -531,7 +531,13 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		}
 
 		// Scrape link content
-		const scraped = await scrapeWebPage(resolvedUrl);
+		let scraped;
+		try {
+			scraped = await scrapeWebPage(resolvedUrl);
+		} catch (err) {
+			logWarn('TWITTER', 'Failed to scrape followed link', { url: resolvedUrl, error: String(err) });
+			return false;
+		}
 
 		// Re-assess scraped content
 		const scrapedAssessment = await assessContent(
@@ -666,13 +672,23 @@ async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any
 		const res = await fetch(`${TWITTER_API}?${params}`, {
 			headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
 		});
-		if (!res.ok) break;
+		if (!res.ok) {
+			logError('TWITTER', 'Kaito API HTTP error', { listId, status: res.status, statusText: res.statusText });
+			break;
+		}
 
 		const data: TwitterApiResponse = await res.json();
-		if (data.status !== 'success') break;
+		if (data.status !== 'success') {
+			logError('TWITTER', 'Kaito API non-success', { listId, status: data.status, message: data.message });
+			break;
+		}
 
 		for (const tweet of data.tweets || []) {
-			if (tweet.viewCount > VIEW_THRESHOLD && (await saveTweet(tweet, supabase, env))) count++;
+			try {
+				if (tweet.viewCount > VIEW_THRESHOLD && (await saveTweet(tweet, supabase, env))) count++;
+			} catch (err) {
+				logError('TWITTER', 'saveTweet failed', { url: tweet.url, author: tweet.author?.userName, error: String(err) });
+			}
 		}
 
 		if (!data.has_next_page) break;
