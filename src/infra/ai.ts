@@ -36,8 +36,8 @@ const MAX_CONTENT_LENGTH = 10000;
 
 const OPENROUTER_HEADERS = {
 	'Content-Type': 'application/json',
-	'HTTP-Referer': 'https://app.newsence.xyz',
-	'X-Title': 'app.newsence.xyz',
+	'HTTP-Referer': 'https://www.newsence.app',
+	'X-Title': 'newsence',
 };
 
 // Available models
