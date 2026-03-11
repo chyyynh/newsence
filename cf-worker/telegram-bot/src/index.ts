@@ -2,10 +2,10 @@ interface Env {
 	TELEGRAM_BOT_TOKEN: string;
 	CORE: Fetcher; // Service Binding to newsence-core
 	CORE_WORKER_INTERNAL_TOKEN?: string;
-	WEBAPP_URL?: string; // e.g. https://www.newsence.xyz
+	WEBAPP_URL?: string; // e.g. https://www.newsence.app
 }
 
-const DEFAULT_WEBAPP_URL = 'https://www.newsence.xyz';
+const DEFAULT_WEBAPP_URL = 'https://www.newsence.app';
 
 interface TelegramUpdate {
 	message?: {

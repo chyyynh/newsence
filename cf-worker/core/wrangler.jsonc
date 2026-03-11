@@ -4,9 +4,9 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "newsence-core-test",
+	"name": "newsence-core",
 	"main": "src/index.ts",
-	"compatibility_date": "2025-11-28",
+	"compatibility_date": "2026-02-16",
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
 		"enabled": true
@@ -29,20 +29,6 @@
 	"queues": {
 		"consumers": [
 			{
-				"queue": "rss-scraping-queue-core",
-				"max_batch_size": 10,
-				"max_batch_timeout": 30,
-				"max_retries": 3,
-				"dead_letter_queue": "workflow-dlq-core"
-			},
-			{
-				"queue": "twitter-processing-queue-core",
-				"max_batch_size": 10,
-				"max_batch_timeout": 30,
-				"max_retries": 3,
-				"dead_letter_queue": "workflow-dlq-core"
-			},
-			{
 				"queue": "article-processing-queue-core",
 				"max_batch_size": 10,
 				"max_batch_timeout": 30,
@@ -51,14 +37,6 @@
 			}
 		],
 		"producers": [
-			{
-				"binding": "RSS_QUEUE",
-				"queue": "rss-scraping-queue-core"
-			},
-			{
-				"binding": "TWITTER_QUEUE",
-				"queue": "twitter-processing-queue-core"
-			},
 			{
 				"binding": "ARTICLE_QUEUE",
 				"queue": "article-processing-queue-core"
@@ -72,20 +50,37 @@
 	"workflows": [
 		{
 			"binding": "MONITOR_WORKFLOW",
-			"name": "newsence-monitor-workflow-test",
+			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
 		}
 	],
+	/**
+	 * Workers AI Binding
+	 * https://developers.cloudflare.com/workers-ai/get-started/workers-wrangler/
+	 */
+	"ai": {
+		"binding": "AI"
+	},
+	"browser": {
+		"binding": "BROWSER"
+	},
+	/**
+	 * Hyperdrive — PlanetScale PostgreSQL connection pooling
+	 * https://developers.cloudflare.com/hyperdrive/
+	 */
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "5d7b16cf287e4dcc8b36d43461ccbf5c"
+		}
+	],
+	/**
+	 * Smart Placement — run close to database
+	 */
+	"placement": {
+		"mode": "smart"
+	},
 	"vars": {
-		"ARTICLES_TABLE": "",
-		"CORE_WORKER_INTERNAL_TOKEN": "",
-		"SUBMIT_RATE_LIMIT_MAX": "20",
-		"SUBMIT_RATE_LIMIT_WINDOW_SEC": "60",
-		"KAITO_API_KEY": "",
-		"OPENROUTER_API_KEY": "",
-		"SUPABASE_SERVICE_ROLE_KEY": "",
-		"SUPABASE_URL": "",
-		"TELEGRAM_BOT_TOKEN": "",
-		"TELEGRAM_CHAT_ID": ""
+		"CLIP_API_URL": "https://clip-api-production-8bf7.up.railway.app"
 	}
 }

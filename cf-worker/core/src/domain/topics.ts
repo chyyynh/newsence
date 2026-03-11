@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Client } from 'pg';
 import { callOpenRouter, extractJson } from '../infra/ai';
 import { logInfo, logWarn } from '../infra/log';
 
@@ -38,60 +38,57 @@ function uniqueSortedIds(ids: string[]): string[] {
 	return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
 }
 
-async function getArticleTopicId(supabase: SupabaseClient, table: string, articleId: string): Promise<string | null> {
-	const { data, error } = await supabase.from(table).select('topic_id').eq('id', articleId).maybeSingle();
-
-	if (error) {
-		logWarn('TOPIC', 'Failed to get article topic', { articleId, error: error.message });
+async function getArticleTopicId(db: Client, table: string, articleId: string): Promise<string | null> {
+	try {
+		const result = await db.query(`SELECT topic_id FROM ${table} WHERE id = $1 LIMIT 1`, [articleId]);
+		return (result.rows[0] as ArticleTopicRow | undefined)?.topic_id ?? null;
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to get article topic', { articleId, error: (error as Error).message });
 		return null;
 	}
-
-	return (data as ArticleTopicRow | null)?.topic_id ?? null;
 }
 
-async function attachArticleToTopic(supabase: SupabaseClient, table: string, articleId: string, topicId: string): Promise<string | null> {
-	const { error } = await supabase.from(table).update({ topic_id: topicId }).eq('id', articleId).is('topic_id', null);
-
-	if (error) {
-		logWarn('TOPIC', 'Failed to attach article to topic', { articleId, topicId, error: error.message });
+async function attachArticleToTopic(db: Client, table: string, articleId: string, topicId: string): Promise<string | null> {
+	try {
+		await db.query(`UPDATE ${table} SET topic_id = $1 WHERE id = $2 AND topic_id IS NULL`, [topicId, articleId]);
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to attach article to topic', { articleId, topicId, error: (error as Error).message });
 	}
 
-	return getArticleTopicId(supabase, table, articleId);
+	return getArticleTopicId(db, table, articleId);
 }
 
-async function getAnyAssignedTopicId(supabase: SupabaseClient, table: string, articleIds: string[]): Promise<string | null> {
+async function getAnyAssignedTopicId(db: Client, table: string, articleIds: string[]): Promise<string | null> {
 	if (articleIds.length === 0) return null;
 
-	const { data, error } = await supabase.from(table).select('topic_id').in('id', articleIds).not('topic_id', 'is', null).limit(1);
-
-	if (error) {
-		logWarn('TOPIC', 'Failed to re-check assigned topic in cluster', { error: error.message });
+	try {
+		const result = await db.query(`SELECT topic_id FROM ${table} WHERE id = ANY($1) AND topic_id IS NOT NULL LIMIT 1`, [articleIds]);
+		return (result.rows[0] as ArticleTopicRow | undefined)?.topic_id ?? null;
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to re-check assigned topic in cluster', { error: (error as Error).message });
 		return null;
 	}
-
-	return (data?.[0] as ArticleTopicRow | undefined)?.topic_id ?? null;
 }
 
-async function getTopicArticleCount(supabase: SupabaseClient, topicId: string): Promise<number> {
-	const { data } = await supabase.from('topics').select('article_count').eq('id', topicId).maybeSingle();
-
-	return (data as { article_count: number } | null)?.article_count ?? 0;
-}
-
-async function cleanupTopicIfUnused(supabase: SupabaseClient, table: string, topicId: string): Promise<void> {
-	const { count, error: countError } = await supabase.from(table).select('id', { count: 'exact', head: true }).eq('topic_id', topicId);
-
-	if (countError) {
-		logWarn('TOPIC', 'Failed to count topic usage for cleanup', { topicId, error: countError.message });
-		return;
+async function getTopicArticleCount(db: Client, topicId: string): Promise<number> {
+	try {
+		const result = await db.query('SELECT article_count FROM topics WHERE id = $1 LIMIT 1', [topicId]);
+		return (result.rows[0] as { article_count: number } | undefined)?.article_count ?? 0;
+	} catch (_error) {
+		return 0;
 	}
+}
 
-	if ((count ?? 0) > 0) return;
+async function cleanupTopicIfUnused(db: Client, table: string, topicId: string): Promise<void> {
+	try {
+		const countResult = await db.query(`SELECT COUNT(*) FROM ${table} WHERE topic_id = $1`, [topicId]);
+		const count = parseInt((countResult.rows[0] as { count: string }).count, 10);
 
-	const { error: cleanupError } = await supabase.from('topics').delete().eq('id', topicId);
+		if (count > 0) return;
 
-	if (cleanupError) {
-		logWarn('TOPIC', 'Failed to cleanup unused topic', { topicId, error: cleanupError.message });
+		await db.query('DELETE FROM topics WHERE id = $1', [topicId]);
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to cleanup unused topic', { topicId, error: (error as Error).message });
 	}
 }
 
@@ -103,7 +100,7 @@ async function cleanupTopicIfUnused(supabase: SupabaseClient, table: string, top
  *
  * Returns info about the assignment for synthesis decisions.
  */
-export async function assignArticleTopic(supabase: SupabaseClient, articleId: string, table: string): Promise<TopicAssignmentResult> {
+export async function assignArticleTopic(db: Client, articleId: string, table: string): Promise<TopicAssignmentResult> {
 	const noResult: TopicAssignmentResult = {
 		topicId: null,
 		isNewTopic: false,
@@ -111,18 +108,18 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 		needsSynthesis: false,
 	};
 	// 1. Get article with embedding
-	const { data: article, error: fetchError } = await supabase
-		.from(table)
-		.select('id, title, title_cn, embedding, topic_id')
-		.eq('id', articleId)
-		.single();
-
-	if (fetchError || !article) {
-		logInfo('TOPIC', 'Article not found or error', { articleId, error: fetchError?.message });
+	let typedArticle: ArticleWithEmbedding;
+	try {
+		const result = await db.query(`SELECT id, title, title_cn, embedding, topic_id FROM ${table} WHERE id = $1`, [articleId]);
+		if (result.rows.length === 0) {
+			logInfo('TOPIC', 'Article not found or error', { articleId });
+			return noResult;
+		}
+		typedArticle = result.rows[0] as ArticleWithEmbedding;
+	} catch (error) {
+		logInfo('TOPIC', 'Article not found or error', { articleId, error: (error as Error).message });
 		return noResult;
 	}
-
-	const typedArticle = article as ArticleWithEmbedding;
 
 	// Skip if no embedding or already has topic
 	if (!typedArticle.embedding) {
@@ -136,20 +133,22 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 	}
 
 	// 2. Find similar articles using the RPC function
-	const { data: similar, error: rpcError } = await supabase.rpc('find_similar_articles_with_topics', {
-		target_embedding: typedArticle.embedding,
-		similarity_threshold: TOPIC_CONFIG.SIMILARITY_THRESHOLD,
-		time_window_days: TOPIC_CONFIG.TIME_WINDOW_DAYS,
-		result_limit: TOPIC_CONFIG.MAX_SIMILAR_RESULTS,
-		exclude_article_id: articleId,
-	});
-
-	if (rpcError) {
-		logWarn('TOPIC', 'RPC error', { articleId, error: rpcError.message });
+	let candidates: SimilarArticle[];
+	try {
+		const embeddingStr = typeof typedArticle.embedding === 'string' ? typedArticle.embedding : `[${typedArticle.embedding.join(',')}]`;
+		const result = await db.query('SELECT * FROM find_similar_articles_with_topics($1, $2, $3, $4, $5)', [
+			embeddingStr,
+			TOPIC_CONFIG.SIMILARITY_THRESHOLD,
+			TOPIC_CONFIG.TIME_WINDOW_DAYS,
+			TOPIC_CONFIG.MAX_SIMILAR_RESULTS,
+			articleId,
+		]);
+		candidates = (result.rows as SimilarArticle[]) || [];
+	} catch (error) {
+		logWarn('TOPIC', 'RPC error', { articleId, error: (error as Error).message });
 		return noResult;
 	}
 
-	const candidates = (similar as SimilarArticle[]) || [];
 	if (candidates.length === 0) {
 		logInfo('TOPIC', 'No similar articles found', { articleId });
 		return noResult;
@@ -161,11 +160,11 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 	const withTopic = candidates.find((c) => c.topic_id);
 
 	if (withTopic) {
-		const finalTopicId = await attachArticleToTopic(supabase, table, articleId, withTopic.topic_id!);
+		const finalTopicId = await attachArticleToTopic(db, table, articleId, withTopic.topic_id!);
 		if (!finalTopicId) return noResult;
 
-		await updateTopicStats(supabase, finalTopicId);
-		const articleCount = await getTopicArticleCount(supabase, finalTopicId);
+		await updateTopicStats(db, finalTopicId);
+		const articleCount = await getTopicArticleCount(db, finalTopicId);
 		const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
 
 		logInfo('TOPIC', 'Assigned article to existing topic', { articleId, topicId: finalTopicId, articleCount });
@@ -182,13 +181,13 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 		if (!lockArticleId) return noResult;
 
 		// Re-check before creating, because another workflow may have assigned a topic already.
-		const racedTopicId = await getAnyAssignedTopicId(supabase, table, allIds);
+		const racedTopicId = await getAnyAssignedTopicId(db, table, allIds);
 		if (racedTopicId) {
-			const finalTopicId = await attachArticleToTopic(supabase, table, articleId, racedTopicId);
+			const finalTopicId = await attachArticleToTopic(db, table, articleId, racedTopicId);
 			if (!finalTopicId) return noResult;
 
-			await updateTopicStats(supabase, finalTopicId);
-			const articleCount = await getTopicArticleCount(supabase, finalTopicId);
+			await updateTopicStats(db, finalTopicId);
+			const articleCount = await getTopicArticleCount(db, finalTopicId);
 			const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
 
 			logInfo('TOPIC', 'Joined topic created by concurrent workflow', {
@@ -207,55 +206,53 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 
 		// Create new topic with deterministic canonical article to reduce split races.
 		const expectedArticleCount = allIds.length;
-		const { data: topic, error: createError } = await supabase
-			.from('topics')
-			.insert({
-				title: typedArticle.title,
-				title_cn: typedArticle.title_cn,
-				canonical_article_id: lockArticleId,
-				article_count: expectedArticleCount,
-			})
-			.select('id')
-			.single();
-
-		if (createError || !topic) {
-			logWarn('TOPIC', 'Failed to create topic', { error: createError?.message });
+		let topicId: string;
+		try {
+			const result = await db.query(
+				'INSERT INTO topics (title, title_cn, canonical_article_id, article_count) VALUES ($1, $2, $3, $4) RETURNING id',
+				[typedArticle.title, typedArticle.title_cn, lockArticleId, expectedArticleCount],
+			);
+			if (result.rows.length === 0) {
+				logWarn('TOPIC', 'Failed to create topic', {});
+				return noResult;
+			}
+			topicId = (result.rows[0] as { id: string }).id;
+		} catch (error) {
+			logWarn('TOPIC', 'Failed to create topic', { error: (error as Error).message });
 			return noResult;
 		}
-		const topicId = (topic as { id: string }).id;
 
 		// Cluster lock: only one worker should claim the same lock article.
-		const { data: lockClaim, error: lockClaimError } = await supabase
-			.from(table)
-			.update({ topic_id: topicId })
-			.eq('id', lockArticleId)
-			.is('topic_id', null)
-			.select('id')
-			.maybeSingle();
-
-		if (lockClaimError) {
+		let lockClaim: { id: string } | null;
+		try {
+			const result = await db.query(`UPDATE ${table} SET topic_id = $1 WHERE id = $2 AND topic_id IS NULL RETURNING id`, [
+				topicId,
+				lockArticleId,
+			]);
+			lockClaim = (result.rows[0] as { id: string } | undefined) ?? null;
+		} catch (error) {
 			logWarn('TOPIC', 'Failed to claim lock article for topic creation', {
 				articleId,
 				topicId,
 				lockArticleId,
-				error: lockClaimError.message,
+				error: (error as Error).message,
 			});
-			await cleanupTopicIfUnused(supabase, table, topicId);
+			await cleanupTopicIfUnused(db, table, topicId);
 			return noResult;
 		}
 
 		if (!lockClaim) {
 			// Lost race: another worker assigned cluster first.
-			await cleanupTopicIfUnused(supabase, table, topicId);
+			await cleanupTopicIfUnused(db, table, topicId);
 
-			const winnerTopicId = await getArticleTopicId(supabase, table, lockArticleId);
+			const winnerTopicId = await getArticleTopicId(db, table, lockArticleId);
 			if (!winnerTopicId) return noResult;
 
-			const finalTopicId = await attachArticleToTopic(supabase, table, articleId, winnerTopicId);
+			const finalTopicId = await attachArticleToTopic(db, table, articleId, winnerTopicId);
 			if (!finalTopicId) return noResult;
 
-			await updateTopicStats(supabase, winnerTopicId);
-			const articleCount = await getTopicArticleCount(supabase, winnerTopicId);
+			await updateTopicStats(db, winnerTopicId);
+			const articleCount = await getTopicArticleCount(db, winnerTopicId);
 			const needsSynthesis = shouldSynthesizeTopic(articleCount, false);
 
 			logInfo('TOPIC', 'Lost topic creation race and joined winner topic', {
@@ -274,29 +271,28 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 
 		// Assign remaining similar articles + current article to the new topic without overwriting existing assignments.
 		const peerIds = allIds.filter((id) => id !== lockArticleId);
-		const { error: batchUpdateError } =
-			peerIds.length === 0
-				? { error: null as null | { message: string } }
-				: await supabase.from(table).update({ topic_id: topicId }).in('id', peerIds).is('topic_id', null);
-
-		if (batchUpdateError) {
-			logWarn('TOPIC', 'Failed to batch update peer articles', { topicId, error: batchUpdateError.message });
+		if (peerIds.length > 0) {
+			try {
+				await db.query(`UPDATE ${table} SET topic_id = $1 WHERE id = ANY($2) AND topic_id IS NULL`, [topicId, peerIds]);
+			} catch (error) {
+				logWarn('TOPIC', 'Failed to batch update peer articles', { topicId, error: (error as Error).message });
+			}
 		}
 
-		const finalTopicId = await attachArticleToTopic(supabase, table, articleId, topicId);
+		const finalTopicId = await attachArticleToTopic(db, table, articleId, topicId);
 		if (!finalTopicId) {
-			await cleanupTopicIfUnused(supabase, table, topicId);
+			await cleanupTopicIfUnused(db, table, topicId);
 			return noResult;
 		}
 
 		// Recompute topic stats from actual assigned articles (count + first/last seen timestamps).
-		await updateTopicStats(supabase, finalTopicId);
+		await updateTopicStats(db, finalTopicId);
 
-		const actualArticleCount = await getTopicArticleCount(supabase, finalTopicId);
+		const actualArticleCount = await getTopicArticleCount(db, finalTopicId);
 		const isNewTopic = finalTopicId === topicId;
 		const needsSynthesis = shouldSynthesizeTopic(actualArticleCount, isNewTopic);
 		if (!isNewTopic) {
-			await cleanupTopicIfUnused(supabase, table, topicId);
+			await cleanupTopicIfUnused(db, table, topicId);
 		}
 		logInfo('TOPIC', 'Created new topic', { topicId: finalTopicId, articleCount: actualArticleCount, isNewTopic });
 
@@ -309,10 +305,11 @@ export async function assignArticleTopic(supabase: SupabaseClient, articleId: st
 	}
 }
 
-async function updateTopicStats(supabase: SupabaseClient, topicId: string): Promise<void> {
-	const { error } = await supabase.rpc('update_topic_stats', { p_topic_id: topicId });
-	if (error) {
-		logWarn('TOPIC', 'Failed to update topic stats', { error: error.message });
+async function updateTopicStats(db: Client, topicId: string): Promise<void> {
+	try {
+		await db.query('SELECT update_topic_stats($1)', [topicId]);
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to update topic stats', { error: (error as Error).message });
 	}
 }
 
@@ -382,23 +379,26 @@ function buildArticleListForPrompt(articles: TopicArticle[]): string {
  * Synthesizes a topic title and description from all its articles using AI.
  * Called when a topic is created or reaches certain article count thresholds.
  */
-export async function synthesizeTopicSummary(supabase: SupabaseClient, topicId: string, table: string, apiKey: string): Promise<boolean> {
+export async function synthesizeTopicSummary(db: Client, topicId: string, table: string, apiKey: string): Promise<boolean> {
 	logInfo('TOPIC', 'Synthesizing summary for topic', { topicId });
 
 	// Fetch all articles for this topic
-	const { data: articles, error: fetchError } = await supabase
-		.from(table)
-		.select('title, title_cn, summary, summary_cn, tags, source')
-		.eq('topic_id', topicId)
-		.order('published_date', { ascending: false })
-		.limit(20); // Limit to avoid prompt overflow
-
-	if (fetchError || !articles?.length) {
-		logWarn('TOPIC', 'Failed to fetch articles for topic', { topicId, error: fetchError?.message });
+	let typedArticles: TopicArticle[];
+	try {
+		const result = await db.query(
+			`SELECT title, title_cn, summary, summary_cn, tags, source FROM ${table} WHERE topic_id = $1 ORDER BY published_date DESC LIMIT 20`,
+			[topicId],
+		);
+		if (result.rows.length === 0) {
+			logWarn('TOPIC', 'Failed to fetch articles for topic', { topicId });
+			return false;
+		}
+		typedArticles = result.rows as TopicArticle[];
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to fetch articles for topic', { topicId, error: (error as Error).message });
 		return false;
 	}
 
-	const typedArticles = articles as TopicArticle[];
 	logInfo('TOPIC', 'Found articles for synthesis', { topicId, count: typedArticles.length });
 
 	// Build prompt
@@ -427,19 +427,17 @@ export async function synthesizeTopicSummary(supabase: SupabaseClient, topicId: 
 	logInfo('TOPIC', 'Synthesized topic title', { topicId, title: result.title, title_cn: result.title_cn });
 
 	// Update topic
-	const { error: updateError } = await supabase
-		.from('topics')
-		.update({
-			title: result.title,
-			title_cn: result.title_cn,
-			description: result.description,
-			description_cn: result.description_cn,
-			updated_at: new Date().toISOString(),
-		})
-		.eq('id', topicId);
-
-	if (updateError) {
-		logWarn('TOPIC', 'Failed to update topic', { topicId, error: updateError.message });
+	try {
+		await db.query('UPDATE topics SET title = $1, title_cn = $2, description = $3, description_cn = $4, updated_at = $5 WHERE id = $6', [
+			result.title,
+			result.title_cn,
+			result.description,
+			result.description_cn,
+			new Date().toISOString(),
+			topicId,
+		]);
+	} catch (error) {
+		logWarn('TOPIC', 'Failed to update topic', { topicId, error: (error as Error).message });
 		return false;
 	}
 

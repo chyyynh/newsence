@@ -1,0 +1,13 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"main": "src/index.ts",
+	"name": "opennews-embedding-proxy",
+	"compatibility_date": "2025-01-01",
+	"observability": {
+		"enabled": true
+	},
+	// Workers AI binding
+	"ai": {
+		"binding": "AI"
+	}
+}

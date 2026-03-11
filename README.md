@@ -1,7 +1,7 @@
 # newsence
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chyyynh/newsence)
-[![Website](https://img.shields.io/badge/Website-newsence.xyz-blue?style=flat-square)](https://www.newsence.xyz)
+[![Website](https://img.shields.io/badge/Website-newsence.app-blue?style=flat-square)](https://www.newsence.app)
 
 A knowledge management platform that turns scattered news and articles into a connected knowledge network through citations and collections.
 

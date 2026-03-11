@@ -1,0 +1,12 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "newsence-telegram-bot",
+	"main": "src/index.ts",
+	"compatibility_date": "2024-12-01",
+	"services": [
+		{
+			"binding": "CORE",
+			"service": "newsence-core",
+		},
+	],
+}

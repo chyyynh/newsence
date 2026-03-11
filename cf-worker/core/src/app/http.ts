@@ -1,10 +1,16 @@
-import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPageCheerio, scrapeWebPageReadability } from '../domain/scrapers';
-import { scrapeWithPlaywright } from '../infra/browser';
-import { getArticlesTable, getSupabaseClient } from '../infra/db';
+import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPage } from '../domain/scrapers';
+import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
-import { buildDefault, buildHackerNews, buildTwitterArticle, buildTwitterShared, buildTwitterStandard, buildYouTube } from '../models/platform-metadata';
+import {
+	buildDefault,
+	buildHackerNews,
+	buildTwitterArticle,
+	buildTwitterShared,
+	buildTwitterStandard,
+	buildYouTube,
+} from '../models/platform-metadata';
 import type { Env } from '../models/types';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
@@ -108,40 +114,16 @@ export async function handleTestScrape(request: Request, env: Env): Promise<Resp
 	const url = reqUrl.searchParams.get('url');
 	if (!url) return Response.json({ error: 'Missing ?url= parameter' }, { status: 400 });
 
-	const mode = reqUrl.searchParams.get('mode') ?? 'both'; // 'cheerio' | 'readability' | 'playwright' | 'both'
-	const results: Record<string, { chars: number; title: string; content: string; ms: number } | { error: string }> = {};
-
-	if (mode === 'cheerio' || mode === 'both') {
-		const start = Date.now();
-		try {
-			const r = await scrapeWebPageCheerio(url);
-			results.cheerio = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
-		} catch (e) {
-			results.cheerio = { error: String(e) };
-		}
+	const start = Date.now();
+	try {
+		const r = await scrapeWebPage(url, env);
+		return Response.json({
+			url,
+			results: { crawl: { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start } },
+		});
+	} catch (e) {
+		return Response.json({ url, results: { crawl: { error: String(e) } } });
 	}
-
-	if (mode === 'readability' || mode === 'both') {
-		const start = Date.now();
-		try {
-			const r = await scrapeWebPageReadability(url);
-			results.readability = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
-		} catch (e) {
-			results.readability = { error: String(e) };
-		}
-	}
-
-	if (mode === 'playwright' || mode === 'both') {
-		const start = Date.now();
-		try {
-			const r = await scrapeWithPlaywright(url, env.BROWSER);
-			results.playwright = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
-		} catch (e) {
-			results.playwright = { error: String(e) };
-		}
-	}
-
-	return Response.json({ url, results });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -184,6 +166,7 @@ async function scrapeAndInsert(
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
+		env,
 		youtubeApiKey: env.YOUTUBE_API_KEY,
 		clipApiUrl: env.CLIP_API_URL,
 		clipApiSecret: env.CLIP_API_SECRET,
@@ -195,58 +178,75 @@ async function scrapeAndInsert(
 		return { error: 'Content too short' };
 	}
 
-	const supabase = getSupabaseClient(env);
-	const table = getArticlesTable(env);
-	const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
-	const { data: inserted, error } = await supabase
-		.from(table)
-		.insert([
-			{
+	const db = await createDbClient(env);
+	try {
+		const table = ARTICLES_TABLE;
+		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
+		const insertResult = await db.query(
+			`INSERT INTO ${table}
+				(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata, submitter_id, visibility)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			RETURNING id`,
+			[
 				url,
-				title: scraped.title,
-				source: scraped.siteName || 'External',
-				published_date: scraped.publishedDate || new Date().toISOString(),
-				scraped_date: new Date().toISOString(),
-				summary: scraped.summary || '',
-				source_type: platformType,
-				content: scraped.content || null,
-				og_image_url: scraped.ogImageUrl || null,
-				keywords: [],
-				tags: [],
-				tokens: [],
-				platform_metadata: normalizedPlatformMetadata,
-				submitter_id: submitterId || null,
-				visibility: submitterId ? 'private' : 'public',
-			},
-		])
-		.select('id');
-
-	if (error || !inserted?.[0]?.id) {
-		logError('SUBMIT', 'DB insert failed', { url, error: String(error) });
-		return { error: 'DB insert failed' };
-	}
-
-	// Save YouTube transcript to dedicated table (after article insert so no orphans)
-	if (scraped.youtubeTranscript) {
-		const yt = scraped.youtubeTranscript;
-		const { error: transcriptError } = await supabase.from('youtube_transcripts').upsert(
-			{
-				video_id: yt.videoId,
-				transcript: yt.segments,
-				language: yt.language,
-				chapters: yt.chapters,
-				chapters_from_description: yt.chaptersFromDescription,
-				fetched_at: new Date().toISOString(),
-			},
-			{ onConflict: 'video_id' },
+				scraped.title,
+				scraped.siteName || 'External',
+				scraped.publishedDate || new Date().toISOString(),
+				new Date().toISOString(),
+				scraped.summary || '',
+				platformType,
+				scraped.content || null,
+				scraped.ogImageUrl || null,
+				[],
+				[],
+				[],
+				normalizedPlatformMetadata ? JSON.stringify(normalizedPlatformMetadata) : null,
+				submitterId || null,
+				submitterId ? 'private' : 'public',
+			],
 		);
-		if (transcriptError) {
-			logError('YOUTUBE', 'Failed to save transcript', { videoId: yt.videoId, error: String(transcriptError) });
-		}
-	}
 
-	logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50) });
-	return { articleId: inserted[0].id, scraped, platformType };
+		const inserted = insertResult.rows;
+		if (!inserted?.[0]?.id) {
+			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned' });
+			return { error: 'DB insert failed' };
+		}
+
+		// Save YouTube transcript to dedicated table (after article insert so no orphans)
+		if (scraped.youtubeTranscript) {
+			const yt = scraped.youtubeTranscript;
+			try {
+				await db.query(
+					`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
+					VALUES ($1, $2, $3, $4, $5, $6)
+					ON CONFLICT (video_id) DO UPDATE SET
+						transcript = EXCLUDED.transcript,
+						language = EXCLUDED.language,
+						chapters = EXCLUDED.chapters,
+						chapters_from_description = EXCLUDED.chapters_from_description,
+						fetched_at = EXCLUDED.fetched_at`,
+					[
+						yt.videoId,
+						JSON.stringify(yt.segments),
+						yt.language,
+						yt.chapters ? JSON.stringify(yt.chapters) : null,
+						yt.chaptersFromDescription,
+						new Date().toISOString(),
+					],
+				);
+			} catch (transcriptErr) {
+				logError('YOUTUBE', 'Failed to save transcript', { videoId: yt.videoId, error: String(transcriptErr) });
+			}
+		}
+
+		logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50) });
+		return { articleId: inserted[0].id, scraped, platformType };
+	} catch (err) {
+		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
+		return { error: 'DB insert failed' };
+	} finally {
+		await db.end();
+	}
 }
 
 /**
@@ -255,21 +255,22 @@ async function scrapeAndInsert(
  */
 async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
-	const supabase = getSupabaseClient(env);
-	const table = getArticlesTable(env);
+	const db = await createDbClient(env);
+	try {
+		const table = ARTICLES_TABLE;
 
-	// 1. Check if already exists (prefer own article, then any public article)
-	const { data: existingRows } = await supabase
-		.from(table)
-		.select('id, title, title_cn, source_type, og_image_url, visibility, submitter_id')
-		.eq('url', url);
-	if (existingRows && existingRows.length > 0) {
-		// Prefer submitter's own article first, then any public one
-		const existing =
-			(submitterId && existingRows.find((r) => r.submitter_id === submitterId)) ||
-			existingRows.find((r) => r.visibility !== 'private') ||
-			null;
-		if (existing) {
+		// 1. Check if already exists (prefer own article, then any public article)
+		const existingResult = await db.query(
+			`SELECT id, title, title_cn, source_type, og_image_url, visibility, submitter_id FROM ${table} WHERE url = $1`,
+			[url],
+		);
+		const existingRows = existingResult.rows;
+		if (existingRows && existingRows.length > 0) {
+			// Prefer submitter's own article first, then any public one, then any row (avoids unique constraint violation)
+			const existing =
+				(submitterId && existingRows.find((r: Record<string, unknown>) => r.submitter_id === submitterId)) ||
+				existingRows.find((r: Record<string, unknown>) => r.visibility !== 'private') ||
+				existingRows[0];
 			const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
 			if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
 			return {
@@ -282,7 +283,8 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 				alreadyExists: true,
 			};
 		}
-		// All existing rows are private from other users — proceed to create a new one
+	} finally {
+		await db.end();
 	}
 
 	// 2. Scrape + insert
@@ -375,10 +377,15 @@ export async function handleWorkflowStatus(instanceId: string, env: Env): Promis
 		if (status === 'complete') {
 			const articleId = (output as Record<string, unknown> | undefined)?.article_id as string | undefined;
 			if (articleId) {
-				const supabase = getSupabaseClient(env);
-				const table = getArticlesTable(env);
-				const { data: article } = await supabase.from(table).select(ARTICLE_FIELDS).eq('id', articleId).single();
-				return Response.json({ status: 'complete', article });
+				const db = await createDbClient(env);
+				try {
+					const table = ARTICLES_TABLE;
+					const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [articleId]);
+					const article = result.rows[0];
+					return Response.json({ status: 'complete', article });
+				} finally {
+					await db.end();
+				}
 			}
 			return Response.json({ status: 'complete' });
 		}
@@ -409,10 +416,15 @@ export async function handleWorkflowStream(instanceId: string, env: Env): Promis
 				if (status === 'complete') {
 					const articleId = (output as Record<string, unknown> | undefined)?.article_id as string | undefined;
 					if (articleId) {
-						const supabase = getSupabaseClient(env);
-						const table = getArticlesTable(env);
-						const { data: article } = await supabase.from(table).select(ARTICLE_FIELDS).eq('id', articleId).single();
-						await writeEvent({ status: 'complete', article });
+						const db = await createDbClient(env);
+						try {
+							const table = ARTICLES_TABLE;
+							const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [articleId]);
+							const article = result.rows[0];
+							await writeEvent({ status: 'complete', article });
+						} finally {
+							await db.end();
+						}
 					} else {
 						await writeEvent({ status: 'complete' });
 					}
@@ -458,11 +470,19 @@ export async function handleTelegramLookup(request: Request, env: Env): Promise<
 		return Response.json({ found: false, error: 'Missing telegramId' }, { status: 400 });
 	}
 
-	const supabase = getSupabaseClient(env);
-	const { data } = await supabase.from('account').select('userId').eq('providerId', 'telegram').eq('accountId', body.telegramId).single();
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(`SELECT "userId" FROM account WHERE "providerId" = $1 AND "accountId" = $2`, [
+			'telegram',
+			body.telegramId,
+		]);
+		const data = result.rows[0];
 
-	if (!data) return Response.json({ found: false });
-	return Response.json({ found: true, userId: data.userId });
+		if (!data) return Response.json({ found: false });
+		return Response.json({ found: true, userId: data.userId });
+	} finally {
+		await db.end();
+	}
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -485,30 +505,32 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 		return Response.json({ collections: [], error: 'Missing userId' }, { status: 400 });
 	}
 
-	const supabase = getSupabaseClient(env);
-	const { data, error } = await supabase
-		.from('collections')
-		.select('id, name, icon, is_default, is_system')
-		.eq('user_id', body.userId)
-		.order('is_system', { ascending: false })
-		.order('is_default', { ascending: false })
-		.order('updated_at', { ascending: false })
-		.limit(10);
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(
+			`SELECT id, name, icon, is_default, is_system
+			FROM collections
+			WHERE user_id = $1
+			ORDER BY is_system DESC, is_default DESC, updated_at DESC
+			LIMIT 10`,
+			[body.userId],
+		);
 
-	if (error) {
-		logError('TELEGRAM', 'Collections query error', { error: String(error) });
+		const collections = (result.rows ?? []).map((c: Record<string, unknown>) => ({
+			id: c.id,
+			name: c.name,
+			icon: c.icon,
+			isDefault: c.is_default,
+			isSystem: c.is_system,
+		}));
+
+		return Response.json({ collections });
+	} catch (err) {
+		logError('TELEGRAM', 'Collections query error', { error: String(err) });
 		return Response.json({ collections: [] });
+	} finally {
+		await db.end();
 	}
-
-	const collections = (data ?? []).map((c) => ({
-		id: c.id,
-		name: c.name,
-		icon: c.icon,
-		isDefault: c.is_default,
-		isSystem: c.is_system,
-	}));
-
-	return Response.json({ collections });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -532,73 +554,60 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		return Response.json({ success: false, error: 'Missing required fields' }, { status: 400 });
 	}
 
-	const supabase = getSupabaseClient(env);
+	const db = await createDbClient(env);
+	try {
+		// Ensure the target collection belongs to the requesting user.
+		const collectionResult = await db.query(`SELECT id FROM collections WHERE id = $1 AND user_id = $2`, [collectionId, userId]);
+		const ownedCollection = collectionResult.rows[0] ?? null;
 
-	// Ensure the target collection belongs to the requesting user.
-	const { data: ownedCollection, error: collectionError } = await supabase
-		.from('collections')
-		.select('id')
-		.eq('id', collectionId)
-		.eq('user_id', userId)
-		.maybeSingle();
+		if (!ownedCollection) {
+			return Response.json({ success: false, error: 'Invalid collection for user' }, { status: 403 });
+		}
 
-	if (collectionError) {
-		logError('TELEGRAM', 'Collection ownership check failed', { collectionId, userId, error: String(collectionError) });
-		return Response.json({ success: false, error: 'Collection lookup failed' }, { status: 500 });
-	}
+		// Verify article exists
+		const table = ARTICLES_TABLE;
+		const articleResult = await db.query(`SELECT id FROM ${table} WHERE id = $1`, [articleId]);
+		const articleExists = articleResult.rows[0] ?? null;
+		if (!articleExists) {
+			return Response.json({ success: false, error: 'Article not found' }, { status: 404 });
+		}
 
-	if (!ownedCollection) {
-		return Response.json({ success: false, error: 'Invalid collection for user' }, { status: 403 });
-	}
+		// Check if already exists
+		const existingResult = await db.query(
+			`SELECT id FROM citations WHERE from_type = $1 AND from_id = $2 AND to_type = $3 AND to_id = $4 AND user_id = $5`,
+			['collection', collectionId, 'article', articleId, userId],
+		);
+		const existing = existingResult.rows[0];
 
-	// Verify article exists
-	const table = getArticlesTable(env);
-	const { data: articleExists } = await supabase.from(table).select('id').eq('id', articleId).maybeSingle();
-	if (!articleExists) {
-		return Response.json({ success: false, error: 'Article not found' }, { status: 404 });
-	}
+		if (existing) {
+			return Response.json({ success: false, error: 'already_exists' });
+		}
 
-	// Check if already exists
-	const { data: existing } = await supabase
-		.from('citations')
-		.select('id')
-		.eq('from_type', 'collection')
-		.eq('from_id', collectionId)
-		.eq('to_type', 'article')
-		.eq('to_id', articleId)
-		.eq('user_id', userId)
-		.single();
+		// Insert citation
+		await db.query(
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			['collection', collectionId, 'article', articleId, 'resource', userId],
+		);
 
-	if (existing) {
-		return Response.json({ success: false, error: 'already_exists' });
-	}
+		// Increment article_count (non-atomic read-then-update; acceptable for low-throughput Telegram endpoint)
+		const colResult = await db.query(`SELECT article_count FROM collections WHERE id = $1 AND user_id = $2`, [collectionId, userId]);
+		const col = colResult.rows[0];
+		if (col) {
+			await db.query(`UPDATE collections SET article_count = $1 WHERE id = $2 AND user_id = $3`, [
+				(col.article_count ?? 0) + 1,
+				collectionId,
+				userId,
+			]);
+		}
 
-	// Insert citation
-	const { error: insertError } = await supabase.from('citations').insert({
-		from_type: 'collection',
-		from_id: collectionId,
-		to_type: 'article',
-		to_id: articleId,
-		relation_type: 'resource',
-		user_id: userId,
-	});
-
-	if (insertError) {
-		logError('TELEGRAM', 'Citation insert error', { error: String(insertError) });
+		return Response.json({ success: true });
+	} catch (err) {
+		logError('TELEGRAM', 'Add to collection failed', { error: String(err) });
 		return Response.json({ success: false, error: 'Insert failed' }, { status: 500 });
+	} finally {
+		await db.end();
 	}
-
-	// Increment article_count (non-atomic read-then-update; acceptable for low-throughput Telegram endpoint)
-	const { data: col } = await supabase.from('collections').select('article_count').eq('id', collectionId).eq('user_id', userId).single();
-	if (col) {
-		await supabase
-			.from('collections')
-			.update({ article_count: (col.article_count ?? 0) + 1 })
-			.eq('id', collectionId)
-			.eq('user_id', userId);
-	}
-
-	return Response.json({ success: true });
 }
 
 function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined, fallbackType: string): PlatformMetadata | null {
@@ -664,4 +673,3 @@ function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined
 			return buildDefault();
 	}
 }
-

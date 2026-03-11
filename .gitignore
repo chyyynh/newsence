@@ -11,10 +11,6 @@
 **/secrets.json
 **/*secret*
 
-# Wrangler config files (contains API keys)
-wrangler.jsonc
-*/wrangler.jsonc
-**/wrangler.jsonc
 **/worker-configuration.d.ts
 
 # Logs
