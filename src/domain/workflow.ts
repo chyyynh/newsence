@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateYouTubeHighlights } from '../infra/ai';
-import { createDbClient, getArticlesTable } from '../infra/db';
+import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
@@ -27,7 +27,7 @@ const SOURCE_TYPE_FALLBACK = 'default';
 async function fetchSourceTypeMap(articleIds: string[], env: Env): Promise<Map<string, string>> {
 	if (articleIds.length === 0) return new Map();
 
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 	const sourceTypes = new Map<string, string>();
 	const db = await createDbClient(env);
 
@@ -87,7 +87,7 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, source_type } = event.payload;
-		const table = getArticlesTable(this.env);
+		const table = ARTICLES_TABLE;
 
 		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
 

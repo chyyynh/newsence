@@ -1,6 +1,5 @@
 import { Client } from 'pg';
 import type { Env } from '../models/types';
-
 export type DbClient = Client;
 
 export async function createDbClient(env: Env): Promise<Client> {
@@ -9,6 +8,4 @@ export async function createDbClient(env: Env): Promise<Client> {
 	return client;
 }
 
-export function getArticlesTable(env: Env): string {
-	return env.ARTICLES_TABLE || 'articles';
-}
+export const ARTICLES_TABLE = 'articles';

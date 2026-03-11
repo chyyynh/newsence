@@ -132,7 +132,7 @@ class TwitterProcessor implements ArticleProcessor {
 		const linkedUrl = this.extractLinkedUrl(tweetText);
 		if (linkedUrl) {
 			try {
-				const linked = await scrapeWebPage(linkedUrl);
+				const linked = await scrapeWebPage(linkedUrl, ctx.env);
 				if (linked.content && linked.content.length > 100) {
 					logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
 					updateData.content = linked.content;
@@ -390,7 +390,7 @@ class HackerNewsProcessor implements ArticleProcessor {
 			logInfo('HN-PROCESSOR', 'Collected comments', { count: comments.length, title: article.title.slice(0, 50) });
 		}
 
-		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url);
+		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url, ctx.env);
 
 		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
 		if (hnData) {
@@ -448,10 +448,10 @@ class HackerNewsProcessor implements ArticleProcessor {
 		}
 	}
 
-	private async fetchExternalPage(url?: string): Promise<{ title: string | null; content: string | null }> {
+	private async fetchExternalPage(url: string | undefined, env: Env): Promise<{ title: string | null; content: string | null }> {
 		if (!url) return { title: null, content: null };
 		try {
-			const page = await scrapeWebPage(url);
+			const page = await scrapeWebPage(url, env);
 			return { title: page.title || null, content: page.content || null };
 		} catch (error) {
 			logWarn('HN-PROCESSOR', 'Failed to scrape linked webpage', { error: String(error) });

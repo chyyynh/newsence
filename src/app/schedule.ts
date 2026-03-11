@@ -3,7 +3,7 @@ import type { Client } from 'pg';
 import { type FeedConfig, getFeedConfig } from '../domain/feed-config';
 import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API, scrapeTwitterArticle, scrapeWebPage } from '../domain/scrapers';
 import { assessContent } from '../infra/ai';
-import { createDbClient, getArticlesTable } from '../infra/db';
+import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../infra/web';
 import type { PlatformMetadata, TwitterMedia } from '../models/platform-metadata';
@@ -174,7 +174,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 					crawledContent = rssContent;
 				} else {
 					try {
-						const scraped = await scrapeWebPage(url);
+						const scraped = await scrapeWebPage(url, env);
 						crawledContent = scraped.content;
 						if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
 					} catch {}
@@ -189,7 +189,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
 	const content = crawledContent || null;
 
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 	const publishedDate = pubDate ? new Date(pubDate) : new Date();
 	const scrapedDate = new Date();
 	const title = item.title ?? item.text ?? 'No Title';
@@ -252,7 +252,7 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 			.map((item) => extractUrlFromItem(item))
 			.filter(Boolean)
 			.map((u) => normalizeUrl(u!));
-		const table = getArticlesTable(env);
+		const table = ARTICLES_TABLE;
 		const dedupBatchSize = 50;
 		const existingRecords: Array<{ url: string; source: string }> = [];
 
@@ -383,7 +383,7 @@ const VIEW_THRESHOLD = 10000;
 const TWITTER_LISTS = ['1894659296388157547', '1920007527703662678'];
 
 async function getLastTwitterTime(db: Client, env: Env): Promise<Date> {
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 	const result = await db.query(`SELECT scraped_date FROM ${table} WHERE source_type = $1 ORDER BY scraped_date DESC LIMIT 1`, ['twitter']);
 	return result.rows[0] ? new Date(result.rows[0].scraped_date) : new Date(Date.now() - 24 * 60 * 60 * 1000);
 }
@@ -408,7 +408,7 @@ async function saveScrapedArticle(
 		createdAt?: string;
 	},
 ): Promise<boolean> {
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 
 	const platformMetadata = buildTwitterShared(
 		{
@@ -484,7 +484,7 @@ async function checkDuplicateByContent(db: Client, table: string, urls: string[]
 }
 
 async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 	const tweetUrl = normalizeUrl(tweet.url);
 
 	// Check for duplicates
@@ -596,7 +596,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		// Scrape link content
 		let scraped;
 		try {
-			scraped = await scrapeWebPage(resolvedUrl);
+			scraped = await scrapeWebPage(resolvedUrl, env);
 		} catch (err) {
 			logWarn('TWITTER', 'Failed to scrape followed link', { url: resolvedUrl, error: String(err) });
 			return false;
@@ -652,7 +652,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	let externalContent: string | null = null;
 	if (externalUrl) {
 		try {
-			const scraped = await scrapeWebPage(externalUrl);
+			const scraped = await scrapeWebPage(externalUrl, env);
 			externalOgImage = scraped.ogImageUrl;
 			externalTitle = scraped.title || null;
 			if (scraped.content && scraped.content.length > 100) {
@@ -791,7 +791,7 @@ export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise
 	logInfo('RETRY', 'start');
 	const db = await createDbClient(env);
 	try {
-		const table = getArticlesTable(env);
+		const table = ARTICLES_TABLE;
 		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
 		// AI processing failures

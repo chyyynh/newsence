@@ -12,8 +12,6 @@ export interface Env {
 	YOUTUBE_API_KEY?: string;
 	CLIP_API_URL?: string;
 	CLIP_API_SECRET?: string;
-	ARTICLES_TABLE?: string;
-
 	// Queue binding
 	ARTICLE_QUEUE: Queue;
 
@@ -23,7 +21,9 @@ export interface Env {
 	// Workers AI binding
 	AI: Ai;
 
-	// Browser Rendering binding
+	// Browser Rendering — /crawl REST API credentials
+	CF_ACCOUNT_ID: string;
+	CF_API_TOKEN: string;
 	BROWSER: Fetcher;
 }
 

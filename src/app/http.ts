@@ -1,6 +1,5 @@
-import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPageCheerio, scrapeWebPageReadability } from '../domain/scrapers';
-import { scrapeWithPlaywright } from '../infra/browser';
-import { createDbClient, getArticlesTable } from '../infra/db';
+import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPage } from '../domain/scrapers';
+import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
@@ -115,40 +114,16 @@ export async function handleTestScrape(request: Request, env: Env): Promise<Resp
 	const url = reqUrl.searchParams.get('url');
 	if (!url) return Response.json({ error: 'Missing ?url= parameter' }, { status: 400 });
 
-	const mode = reqUrl.searchParams.get('mode') ?? 'both'; // 'cheerio' | 'readability' | 'playwright' | 'both'
-	const results: Record<string, { chars: number; title: string; content: string; ms: number } | { error: string }> = {};
-
-	if (mode === 'cheerio' || mode === 'both') {
-		const start = Date.now();
-		try {
-			const r = await scrapeWebPageCheerio(url);
-			results.cheerio = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
-		} catch (e) {
-			results.cheerio = { error: String(e) };
-		}
+	const start = Date.now();
+	try {
+		const r = await scrapeWebPage(url, env);
+		return Response.json({
+			url,
+			results: { crawl: { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start } },
+		});
+	} catch (e) {
+		return Response.json({ url, results: { crawl: { error: String(e) } } });
 	}
-
-	if (mode === 'readability' || mode === 'both') {
-		const start = Date.now();
-		try {
-			const r = await scrapeWebPageReadability(url);
-			results.readability = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
-		} catch (e) {
-			results.readability = { error: String(e) };
-		}
-	}
-
-	if (mode === 'playwright' || mode === 'both') {
-		const start = Date.now();
-		try {
-			const r = await scrapeWithPlaywright(url, env.BROWSER);
-			results.playwright = { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start };
-		} catch (e) {
-			results.playwright = { error: String(e) };
-		}
-	}
-
-	return Response.json({ url, results });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -191,6 +166,7 @@ async function scrapeAndInsert(
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
+		env,
 		youtubeApiKey: env.YOUTUBE_API_KEY,
 		clipApiUrl: env.CLIP_API_URL,
 		clipApiSecret: env.CLIP_API_SECRET,
@@ -204,7 +180,7 @@ async function scrapeAndInsert(
 
 	const db = await createDbClient(env);
 	try {
-		const table = getArticlesTable(env);
+		const table = ARTICLES_TABLE;
 		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
 		const insertResult = await db.query(
 			`INSERT INTO ${table}
@@ -281,7 +257,7 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 	const url = normalizeUrl(rawUrl);
 	const db = await createDbClient(env);
 	try {
-		const table = getArticlesTable(env);
+		const table = ARTICLES_TABLE;
 
 		// 1. Check if already exists (prefer own article, then any public article)
 		const existingResult = await db.query(
@@ -406,7 +382,7 @@ export async function handleWorkflowStatus(instanceId: string, env: Env): Promis
 			if (articleId) {
 				const db = await createDbClient(env);
 				try {
-					const table = getArticlesTable(env);
+					const table = ARTICLES_TABLE;
 					const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [articleId]);
 					const article = result.rows[0];
 					return Response.json({ status: 'complete', article });
@@ -445,7 +421,7 @@ export async function handleWorkflowStream(instanceId: string, env: Env): Promis
 					if (articleId) {
 						const db = await createDbClient(env);
 						try {
-							const table = getArticlesTable(env);
+							const table = ARTICLES_TABLE;
 							const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [articleId]);
 							const article = result.rows[0];
 							await writeEvent({ status: 'complete', article });
@@ -592,7 +568,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		}
 
 		// Verify article exists
-		const table = getArticlesTable(env);
+		const table = ARTICLES_TABLE;
 		const articleResult = await db.query(`SELECT id FROM ${table} WHERE id = $1`, [articleId]);
 		const articleExists = articleResult.rows[0] ?? null;
 		if (!articleExists) {
