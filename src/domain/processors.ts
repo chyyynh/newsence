@@ -1,3 +1,4 @@
+import type { Client } from 'pg';
 import { AI_MODELS, callGeminiForAnalysis, callOpenRouter, translateTweet } from '../infra/ai';
 import { prepareArticleTextForEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
@@ -25,13 +26,13 @@ export interface ProcessorResult {
 
 export interface ProcessorContext {
 	env: Env;
-	supabase: any;
+	db: Client;
 	table: string;
 }
 
 export interface ProcessingDeps {
 	env: Env;
-	supabase: any;
+	db: Client;
 	table: string;
 }
 
@@ -131,7 +132,7 @@ class TwitterProcessor implements ArticleProcessor {
 		const linkedUrl = this.extractLinkedUrl(tweetText);
 		if (linkedUrl) {
 			try {
-				const linked = await scrapeWebPage(linkedUrl);
+				const linked = await scrapeWebPage(linkedUrl, ctx.env);
 				if (linked.content && linked.content.length > 100) {
 					logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
 					updateData.content = linked.content;
@@ -389,7 +390,7 @@ class HackerNewsProcessor implements ArticleProcessor {
 			logInfo('HN-PROCESSOR', 'Collected comments', { count: comments.length, title: article.title.slice(0, 50) });
 		}
 
-		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url);
+		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url, ctx.env);
 
 		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
 		if (hnData) {
@@ -447,10 +448,10 @@ class HackerNewsProcessor implements ArticleProcessor {
 		}
 	}
 
-	private async fetchExternalPage(url?: string): Promise<{ title: string | null; content: string | null }> {
+	private async fetchExternalPage(url: string | undefined, env: Env): Promise<{ title: string | null; content: string | null }> {
 		if (!url) return { title: null, content: null };
 		try {
-			const page = await scrapeWebPage(url);
+			const page = await scrapeWebPage(url, env);
 			return { title: page.title || null, content: page.content || null };
 		} catch (error) {
 			logWarn('HN-PROCESSOR', 'Failed to scrape linked webpage', { error: String(error) });
@@ -499,7 +500,7 @@ export async function runArticleProcessor(
 	const processor = getProcessor(sourceType);
 	const ctx: ProcessorContext = {
 		env: deps.env,
-		supabase: deps.supabase,
+		db: deps.db,
 		table: deps.table,
 	};
 	return processor.process(article, ctx);
@@ -517,8 +518,23 @@ export async function persistProcessorResult(
 
 	if (Object.keys(updatePayload).length === 0) return;
 
-	const { error } = await deps.supabase.from(deps.table).update(updatePayload).eq('id', articleId);
-	if (error) throw new Error(`Failed to update article ${articleId}: ${error.message}`);
+	const columns = Object.keys(updatePayload);
+	const setClauses = columns.map((col, i) => `${col} = $${i + 1}`).join(', ');
+	const values = columns.map((col) => {
+		const val = updatePayload[col];
+		// JSON columns (objects/arrays that aren't native pg arrays for tags/keywords)
+		if (val !== null && typeof val === 'object' && col !== 'tags' && col !== 'keywords') {
+			return JSON.stringify(val);
+		}
+		return val;
+	});
+	values.push(articleId);
+
+	const sql = `UPDATE ${deps.table} SET ${setClauses} WHERE id = $${values.length}`;
+	const queryResult = await deps.db.query(sql, values);
+	if (queryResult.rowCount === 0) {
+		throw new Error(`Failed to update article ${articleId}: no rows matched`);
+	}
 }
 
 export function buildEmbeddingTextForArticle(

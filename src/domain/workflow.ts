@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateYouTubeHighlights } from '../infra/ai';
-import { getArticlesTable, getSupabaseClient } from '../infra/db';
+import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
@@ -27,20 +27,24 @@ const SOURCE_TYPE_FALLBACK = 'default';
 async function fetchSourceTypeMap(articleIds: string[], env: Env): Promise<Map<string, string>> {
 	if (articleIds.length === 0) return new Map();
 
-	const supabase = getSupabaseClient(env);
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 	const sourceTypes = new Map<string, string>();
+	const db = await createDbClient(env);
 
-	for (let i = 0; i < articleIds.length; i += SOURCE_TYPE_BATCH_SIZE) {
-		const batchIds = articleIds.slice(i, i + SOURCE_TYPE_BATCH_SIZE);
-		const { data, error } = await supabase.from(table).select('id, source_type').in('id', batchIds);
-		if (error) {
-			logWarn('ARTICLE-QUEUE', 'Failed to fetch source types', { error: String(error) });
-			continue;
+	try {
+		for (let i = 0; i < articleIds.length; i += SOURCE_TYPE_BATCH_SIZE) {
+			const batchIds = articleIds.slice(i, i + SOURCE_TYPE_BATCH_SIZE);
+			try {
+				const result = await db.query(`SELECT id, source_type FROM ${table} WHERE id = ANY($1)`, [batchIds]);
+				for (const row of result.rows) {
+					if (row.id && row.source_type) sourceTypes.set(row.id, row.source_type);
+				}
+			} catch (error) {
+				logWarn('ARTICLE-QUEUE', 'Failed to fetch source types', { error: String(error) });
+			}
 		}
-		for (const row of data ?? []) {
-			if (row.id && row.source_type) sourceTypes.set(row.id, row.source_type);
-		}
+	} finally {
+		await db.end();
 	}
 
 	return sourceTypes;
@@ -83,7 +87,7 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, source_type } = event.payload;
-		const table = getArticlesTable(this.env);
+		const table = ARTICLES_TABLE;
 
 		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
 
@@ -92,10 +96,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'fetch-article',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				const supabase = getSupabaseClient(this.env);
-				const { data, error } = await supabase.from(table).select(ARTICLE_FIELDS).eq('id', article_id).single();
-				if (error) throw new Error(`Failed to fetch article ${article_id}: ${error.message}`);
-				return data as Article;
+				const db = await createDbClient(this.env);
+				try {
+					const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [article_id]);
+					if (result.rows.length === 0) throw new Error(`Failed to fetch article ${article_id}: not found`);
+					return result.rows[0] as Article;
+				} finally {
+					await db.end();
+				}
 			},
 		)) as Article;
 
@@ -109,12 +117,16 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const supabase = getSupabaseClient(this.env);
-				return await runArticleProcessor(article, source_type, {
-					env: this.env,
-					supabase,
-					table,
-				});
+				const db = await createDbClient(this.env);
+				try {
+					return await runArticleProcessor(article, source_type, {
+						env: this.env,
+						db,
+						table,
+					});
+				} finally {
+					await db.end();
+				}
 			},
 		)) as ProcessorResult;
 
@@ -137,16 +149,20 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		if (contentCn) processorResult.updateData.content_cn = contentCn;
 
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
-			const supabase = getSupabaseClient(this.env);
-			await persistProcessorResult(article_id, article, processorResult, {
-				env: this.env,
-				supabase,
-				table,
-			});
-			const fields = Object.keys(processorResult.updateData);
-			if (fields.length > 0) logInfo('WORKFLOW', 'Updated fields', { fields: fields.join(', ') });
-			if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
-				logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
+			const db = await createDbClient(this.env);
+			try {
+				await persistProcessorResult(article_id, article, processorResult, {
+					env: this.env,
+					db,
+					table,
+				});
+				const fields = Object.keys(processorResult.updateData);
+				if (fields.length > 0) logInfo('WORKFLOW', 'Updated fields', { fields: fields.join(', ') });
+				if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
+					logInfo('WORKFLOW', 'Enrichments saved', { enrichments: Object.keys(processorResult.enrichments).join(', ') });
+				}
+			} finally {
+				await db.end();
 			}
 		});
 
@@ -159,21 +175,22 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					const videoId = article.platform_metadata?.type === 'youtube' ? article.platform_metadata.data.videoId : null;
 					if (!videoId) return;
 
-					const supabase = getSupabaseClient(this.env);
-					const { data: row } = await supabase
-						.from('youtube_transcripts')
-						.select('transcript, ai_highlights')
-						.eq('video_id', videoId)
-						.single();
+					const db = await createDbClient(this.env);
+					try {
+						const result = await db.query('SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1', [videoId]);
+						const row = result.rows[0];
 
-					if (!row) return;
-					if (row.ai_highlights) {
-						logInfo('WORKFLOW', 'YouTube highlights already exist, skipping', { videoId });
-						return;
+						if (!row) return;
+						if (row.ai_highlights) {
+							logInfo('WORKFLOW', 'YouTube highlights already exist, skipping', { videoId });
+							return;
+						}
+						if (!Array.isArray(row.transcript) || row.transcript.length === 0) return;
+
+						await generateYouTubeHighlights(videoId, row.transcript as any, this.env);
+					} finally {
+						await db.end();
 					}
-					if (!Array.isArray(row.transcript) || row.transcript.length === 0) return;
-
-					await generateYouTubeHighlights(videoId, row.transcript as any, this.env);
 				},
 			);
 		}
@@ -195,10 +212,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				'save-embedding',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () => {
-					const supabase = getSupabaseClient(this.env);
-					const saved = await saveArticleEmbedding(supabase, article_id, embedding, table);
-					if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
-					logInfo('WORKFLOW', 'Embedding saved', { article_id });
+					const db = await createDbClient(this.env);
+					try {
+						const saved = await saveArticleEmbedding(db, article_id, embedding, table);
+						if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
+						logInfo('WORKFLOW', 'Embedding saved', { article_id });
+					} finally {
+						await db.end();
+					}
 				},
 			);
 
@@ -207,8 +228,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				'assign-topic',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () => {
-					const supabase = getSupabaseClient(this.env);
-					return await assignArticleTopic(supabase, article_id, table);
+					const db = await createDbClient(this.env);
+					try {
+						return await assignArticleTopic(db, article_id, table);
+					} finally {
+						await db.end();
+					}
 				},
 			)) as TopicAssignmentResult;
 
@@ -218,8 +243,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					'synthesize-topic',
 					{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 					async () => {
-						const supabase = getSupabaseClient(this.env);
-						await synthesizeTopicSummary(supabase, topicResult.topicId!, table, this.env.OPENROUTER_API_KEY);
+						const db = await createDbClient(this.env);
+						try {
+							await synthesizeTopicSummary(db, topicResult.topicId!, table, this.env.OPENROUTER_API_KEY);
+						} finally {
+							await db.end();
+						}
 					},
 				);
 			}

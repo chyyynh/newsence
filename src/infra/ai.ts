@@ -1,5 +1,5 @@
 import type { AIAnalysisResult, Article, Env, OpenRouterResponse } from '../models/types';
-import { getSupabaseClient } from './db';
+import { createDbClient } from './db';
 import { logError, logInfo } from './log';
 
 // ─────────────────────────────────────────────────────────────
@@ -36,8 +36,8 @@ const MAX_CONTENT_LENGTH = 10000;
 
 const OPENROUTER_HEADERS = {
 	'Content-Type': 'application/json',
-	'HTTP-Referer': 'https://app.newsence.xyz',
-	'X-Title': 'app.newsence.xyz',
+	'HTTP-Referer': 'https://www.newsence.app',
+	'X-Title': 'newsence',
 };
 
 // Available models
@@ -417,8 +417,8 @@ export async function generateYouTubeHighlights(
 	}
 
 	// Write to youtube_transcripts table
+	const db = await createDbClient(env);
 	try {
-		const supabase = getSupabaseClient(env);
 		const aiHighlights = {
 			version: '1.0',
 			model: AI_MODELS.FLASH,
@@ -426,23 +426,18 @@ export async function generateYouTubeHighlights(
 			generatedAt: new Date().toISOString(),
 		};
 
-		const { error } = await supabase
-			.from('youtube_transcripts')
-			.update({
-				ai_highlights: aiHighlights,
-				highlights_generated_at: new Date().toISOString(),
-			})
-			.eq('video_id', videoId);
-
-		if (error) {
-			logError('AI', 'YouTube highlights: DB write failed', { videoId, error: String(error) });
-			return null;
-		}
+		await db.query(`UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3`, [
+			JSON.stringify(aiHighlights),
+			new Date().toISOString(),
+			videoId,
+		]);
 
 		logInfo('AI', 'YouTube highlights saved', { videoId, count: result.highlights.length });
 		return result;
 	} catch (error) {
 		logError('AI', 'YouTube highlights: unexpected error', { videoId, error: String(error) });
 		return null;
+	} finally {
+		await db.end();
 	}
 }

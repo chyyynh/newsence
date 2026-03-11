@@ -17,20 +17,15 @@
 		"lint:fix": "biome check --write ."
 	},
 	"dependencies": {
-		"@mozilla/readability": "^0.6.0",
-		"@supabase/supabase-js": "^2.93.3",
-		"cheerio": "^1.2.0",
 		"fast-xml-parser": "^5.3.4",
-		"linkedom": "^0.18.12",
-		"turndown": "^7.2.2"
+		"pg": "^8.20.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.4",
-		"@cloudflare/playwright": "^1.1.1",
 		"@cloudflare/vitest-pool-workers": "^0.8.71",
 		"@cloudflare/workers-types": "^4.20260131.0",
 		"@types/node": "^22.19.7",
-		"@types/turndown": "^5.0.6",
+		"@types/pg": "^8.18.0",
 		"typescript": "^5.9.3",
 		"vitest": "~3.2.4",
 		"wrangler": "^4.69.0"

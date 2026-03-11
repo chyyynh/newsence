@@ -1,13 +1,13 @@
 import { XMLParser } from 'fast-xml-parser';
+import type { Client } from 'pg';
 import { type FeedConfig, getFeedConfig } from '../domain/feed-config';
-import { scrapeTwitterArticle, scrapeWebPage } from '../domain/scrapers';
+import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API, scrapeTwitterArticle, scrapeWebPage } from '../domain/scrapers';
 import { assessContent } from '../infra/ai';
-import { getArticlesTable, getSupabaseClient } from '../infra/db';
+import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../infra/web';
 import type { PlatformMetadata, TwitterMedia } from '../models/platform-metadata';
 import { buildHackerNews, buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../models/platform-metadata';
-import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API } from '../domain/scrapers';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../models/types';
 
 // ─────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ export function extractItemsFromFeed(data: any): RSSItem[] {
 	return source ? (Array.isArray(source) ? source : [source]) : [];
 }
 
-async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, feed: RSSFeed, config: FeedConfig): Promise<void> {
+async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const rawUrl = extractUrlFromItem(item);
 	const url = rawUrl ? normalizeUrl(rawUrl) : null;
 	if (!url) return;
@@ -174,7 +174,7 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 					crawledContent = rssContent;
 				} else {
 					try {
-						const scraped = await scrapeWebPage(url);
+						const scraped = await scrapeWebPage(url, env);
 						crawledContent = scraped.content;
 						if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
 					} catch {}
@@ -189,37 +189,47 @@ async function processAndInsertArticle(supabase: any, env: Env, item: RSSItem, f
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
 	const content = crawledContent || null;
 
-	const insert = {
-		url,
-		title: item.title ?? item.text ?? 'No Title',
-		source: feed.name ?? 'Unknown',
-		published_date: pubDate ? new Date(pubDate) : new Date(),
-		scraped_date: new Date(),
-		keywords: [],
-		tags: [],
-		tokens: [],
-		summary: sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? ''),
-		source_type: sourceType,
-		content,
-		og_image_url: ogImageUrl,
-		...(platformMetadata && { platform_metadata: platformMetadata }),
-	};
+	const table = ARTICLES_TABLE;
+	const publishedDate = pubDate ? new Date(pubDate) : new Date();
+	const scrapedDate = new Date();
+	const title = item.title ?? item.text ?? 'No Title';
+	const source = feed.name ?? 'Unknown';
+	const summary = sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
 
-	const table = getArticlesTable(env);
-	const { data: inserted, error } = await supabase.from(table).insert([insert]).select('id');
-	if (error) return logError('RSS', 'Insert error', { feed: feed.name, error: String(error) });
+	const result = await db.query(
+		`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		 RETURNING id`,
+		[
+			url,
+			title,
+			source,
+			publishedDate,
+			scrapedDate,
+			[],
+			[],
+			[],
+			summary,
+			sourceType,
+			content,
+			ogImageUrl,
+			platformMetadata ? JSON.stringify(platformMetadata) : null,
+		],
+	);
 
-	const articleId = inserted?.[0]?.id;
+	if (result.rows.length === 0) return logError('RSS', 'Insert error', { feed: feed.name, error: 'No rows returned' });
+
+	const articleId = result.rows[0]?.id;
 	if (articleId) {
 		await env.ARTICLE_QUEUE.send({
 			type: 'article_process',
 			article_id: articleId,
-			source_type: insert.source_type,
+			source_type: sourceType,
 		});
 	}
 }
 
-async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
+async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
 	const res = await fetch(feed.RSSLink, {
@@ -234,80 +244,126 @@ async function processFeed(supabase: any, env: Env, feed: RSSFeed, parser: XMLPa
 
 	if (items.length > 30) items = items.slice(0, 30);
 
-	// Filter existing URLs
-	const urls = items
-		.map((item) => extractUrlFromItem(item))
-		.filter(Boolean)
-		.map((u) => normalizeUrl(u!));
-	const table = getArticlesTable(env);
-	const dedupBatchSize = 50;
-	const existingRecords: Array<{ url: string; source: string }> = [];
+	// Each feed gets its own Client — Hyperdrive pools the underlying connections
+	const db = await createDbClient(env);
+	try {
+		// Filter existing URLs
+		const urls = items
+			.map((item) => extractUrlFromItem(item))
+			.filter(Boolean)
+			.map((u) => normalizeUrl(u!));
+		const table = ARTICLES_TABLE;
+		const dedupBatchSize = 50;
+		const existingRecords: Array<{ url: string; source: string }> = [];
 
-	for (let i = 0; i < urls.length; i += dedupBatchSize) {
-		const { data } = await supabase
-			.from(table)
-			.select('url, source')
-			.in('url', urls.slice(i, i + dedupBatchSize));
-		if (data) existingRecords.push(...(data as Array<{ url: string; source: string }>));
-	}
-
-	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
-	const newItems = items.filter((item) => {
-		const url = extractUrlFromItem(item);
-		return url && !existingSet.has(normalizeUrl(url));
-	});
-
-	// Upgrade source to this feed when a duplicate exists from a lower-priority source
-	// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
-	const SOURCE_PRIORITY: Record<string, number> = { Twitter: 0, Unknown: 0, Telegram: 1 };
-	const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
-
-	// Build URL→item map for fetching comments URL during upgrade
-	const urlToItem = new Map<string, RSSItem>();
-	for (const item of items) {
-		const url = extractUrlFromItem(item);
-		if (url) urlToItem.set(normalizeUrl(url), item);
-	}
-
-	for (const existing of existingRecords) {
-		const existingPriority = SOURCE_PRIORITY[existing.source] ?? 10;
-		if (feedPriority > existingPriority) {
-			const normalized = normalizeUrl(existing.url);
-			const update: Record<string, unknown> = { source: feed.name };
-
-			// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
-			const rssItem = urlToItem.get(normalized);
-			const commentsUrl = rssItem?.comments as string | undefined;
-			if (commentsUrl) {
-				try {
-					const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
-					if (hnMeta) {
-						update.source_type = 'hackernews';
-						update.platform_metadata = hnMeta;
-					}
-				} catch (err) {
-					logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
-				}
-			}
-
-			await supabase.from(table).update(update).eq('url', normalized);
-			logInfo('RSS', 'Upgraded article source', { url: normalized, from: existing.source, to: feed.name });
+		for (let i = 0; i < urls.length; i += dedupBatchSize) {
+			const batch = urls.slice(i, i + dedupBatchSize);
+			const result = await db.query(`SELECT url, source FROM ${table} WHERE url = ANY($1)`, [batch]);
+			existingRecords.push(...(result.rows as Array<{ url: string; source: string }>));
 		}
-	}
 
-	logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
-	for (const item of newItems) await processAndInsertArticle(supabase, env, item, feed, config);
-	await supabase.from('RssList').update({ scraped_at: new Date() }).eq('id', feed.id);
+		const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
+		const newItems = items.filter((item) => {
+			const url = extractUrlFromItem(item);
+			return url && !existingSet.has(normalizeUrl(url));
+		});
+
+		// Upgrade source to this feed when a duplicate exists from a lower-priority source
+		// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
+		const SOURCE_PRIORITY: Record<string, number> = { Twitter: 0, Unknown: 0, Telegram: 1 };
+		const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
+
+		// Build URL→item map for fetching comments URL during upgrade
+		const urlToItem = new Map<string, RSSItem>();
+		for (const item of items) {
+			const url = extractUrlFromItem(item);
+			if (url) urlToItem.set(normalizeUrl(url), item);
+		}
+
+		for (const existing of existingRecords) {
+			const existingPriority = SOURCE_PRIORITY[existing.source] ?? 10;
+			if (feedPriority > existingPriority) {
+				const normalized = normalizeUrl(existing.url);
+				const updateFields: string[] = ['source = $1'];
+				const updateValues: unknown[] = [feed.name];
+				let paramIndex = 2;
+
+				// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
+				const rssItem = urlToItem.get(normalized);
+				const commentsUrl = rssItem?.comments as string | undefined;
+				if (commentsUrl) {
+					try {
+						const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
+						if (hnMeta) {
+							updateFields.push(`source_type = $${paramIndex}`);
+							updateValues.push('hackernews');
+							paramIndex++;
+							updateFields.push(`platform_metadata = $${paramIndex}`);
+							updateValues.push(JSON.stringify(hnMeta));
+							paramIndex++;
+						}
+					} catch (err) {
+						logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
+					}
+				}
+
+				updateValues.push(normalized);
+				await db.query(`UPDATE ${table} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
+				logInfo('RSS', 'Upgraded article source', { url: normalized, from: existing.source, to: feed.name });
+			}
+		}
+
+		logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
+		for (const item of newItems) {
+			try {
+				await processAndInsertArticle(db, env, item, feed, config);
+			} catch (err) {
+				logError('RSS', 'processAndInsertArticle failed', {
+					feed: feed.name,
+					url: extractUrlFromItem(item),
+					error: String(err),
+				});
+			}
+		}
+		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+	} finally {
+		await db.end();
+	}
+}
+
+const RSS_CONCURRENCY = 5;
+
+async function runWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+	let i = 0;
+	const next = async (): Promise<void> => {
+		while (i < items.length) {
+			const item = items[i++]!;
+			await fn(item);
+		}
+	};
+	await Promise.allSettled(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('RSS', 'start');
-	const supabase = getSupabaseClient(env);
-	const parser = new XMLParser({ ignoreAttributes: false });
-	const { data: feeds, error } = await supabase.from('RssList').select('id, name, RSSLink, url, type');
-	if (error) return logError('RSS', 'Fetch feeds failed', { error: String(error) });
-	await Promise.allSettled((feeds ?? []).map((feed: RSSFeed) => processFeed(supabase, env, feed, parser)));
-	logInfo('RSS', 'end');
+	const db = await createDbClient(env);
+	try {
+		const parser = new XMLParser({ ignoreAttributes: false });
+		const result = await db.query(`SELECT id, name, "RSSLink", url, type FROM "RssList"`);
+		const feeds = result.rows as RSSFeed[];
+		// Each processFeed creates its own Client (Hyperdrive pools underneath).
+		// Limit to RSS_CONCURRENCY parallel feeds to cap backend connections.
+		await runWithConcurrency(feeds, RSS_CONCURRENCY, async (feed: RSSFeed) => {
+			try {
+				await processFeed(env, feed, parser);
+			} catch (err) {
+				logError('RSS', 'Feed failed', { feed: feed.name, error: String(err) });
+			}
+		});
+		logInfo('RSS', 'end');
+	} finally {
+		await db.end();
+	}
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -326,19 +382,14 @@ const TWITTER_API = 'https://api.twitterapi.io/twitter/list/tweets';
 const VIEW_THRESHOLD = 10000;
 const TWITTER_LISTS = ['1894659296388157547', '1920007527703662678'];
 
-async function getLastTwitterTime(supabase: any, env: Env): Promise<Date> {
-	const { data } = await supabase
-		.from(getArticlesTable(env))
-		.select('scraped_date')
-		.eq('source_type', 'twitter')
-		.order('scraped_date', { ascending: false })
-		.limit(1)
-		.single();
-	return data ? new Date(data.scraped_date) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+async function getLastTwitterTime(db: Client, env: Env): Promise<Date> {
+	const table = ARTICLES_TABLE;
+	const result = await db.query(`SELECT scraped_date FROM ${table} WHERE source_type = $1 ORDER BY scraped_date DESC LIMIT 1`, ['twitter']);
+	return result.rows[0] ? new Date(result.rows[0].scraped_date) : new Date(Date.now() - 24 * 60 * 60 * 1000);
 }
 
 async function saveScrapedArticle(
-	supabase: any,
+	db: Client,
 	env: Env,
 	data: {
 		url: string;
@@ -357,48 +408,53 @@ async function saveScrapedArticle(
 		createdAt?: string;
 	},
 ): Promise<boolean> {
-	const table = getArticlesTable(env);
+	const table = ARTICLES_TABLE;
 
-	const articleData = {
-		url: data.url,
-		title: data.title,
-		source: data.source,
-		published_date: data.createdAt ? new Date(data.createdAt) : new Date(),
-		scraped_date: new Date(),
-		keywords: [],
-		tags: [],
-		tokens: [],
-		summary: '',
-		source_type: data.sourceType,
-		content: data.content,
-		og_image_url: data.ogImage,
-		platform_metadata: buildTwitterShared(
-			{
-				authorName: data.authorName || '',
-				authorUserName: data.authorUserName || '',
-				authorProfilePicture: data.authorProfilePicture,
-				authorVerified: data.authorVerified,
-			},
-			{
-				media: data.media || [],
-				createdAt: data.createdAt,
-				tweetText: data.tweetText,
-				externalUrl: data.url,
-				externalOgImage: data.ogImage,
-				externalTitle: data.title,
-				originalTweetUrl: data.originalTweetUrl,
-			},
-		),
-	};
+	const platformMetadata = buildTwitterShared(
+		{
+			authorName: data.authorName || '',
+			authorUserName: data.authorUserName || '',
+			authorProfilePicture: data.authorProfilePicture,
+			authorVerified: data.authorVerified,
+		},
+		{
+			media: data.media || [],
+			createdAt: data.createdAt,
+			tweetText: data.tweetText,
+			externalUrl: data.url,
+			externalOgImage: data.ogImage,
+			externalTitle: data.title,
+			originalTweetUrl: data.originalTweetUrl,
+		},
+	);
 
-	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
+	const result = await db.query(
+		`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		 RETURNING id`,
+		[
+			data.url,
+			data.title,
+			data.source,
+			data.createdAt ? new Date(data.createdAt) : new Date(),
+			new Date(),
+			[],
+			[],
+			[],
+			'',
+			data.sourceType,
+			data.content,
+			data.ogImage,
+			JSON.stringify(platformMetadata),
+		],
+	);
 
-	if (error) {
-		logError('TWITTER', 'Insert scraped article error', { error: String(error) });
+	if (result.rows.length === 0) {
+		logError('TWITTER', 'Insert scraped article error', { error: 'No rows returned' });
 		return false;
 	}
 
-	const articleId = inserted?.[0]?.id;
+	const articleId = result.rows[0]?.id;
 	if (articleId) {
 		await env.ARTICLE_QUEUE.send({
 			type: 'article_process',
@@ -420,20 +476,20 @@ function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
 }
 
 /** Check if any of the given URLs already exist as article.url in the DB */
-async function checkDuplicateByContent(supabase: any, table: string, urls: string[]): Promise<boolean> {
+async function checkDuplicateByContent(db: Client, table: string, urls: string[]): Promise<boolean> {
 	const normalized = urls.map(normalizeUrl).filter(Boolean);
 	if (normalized.length === 0) return false;
-	const { data } = await supabase.from(table).select('id').in('url', normalized).limit(1);
-	return (data?.length ?? 0) > 0;
+	const result = await db.query(`SELECT id FROM ${table} WHERE url = ANY($1) LIMIT 1`, [normalized]);
+	return result.rows.length > 0;
 }
 
-async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean> {
-	const table = getArticlesTable(env);
+async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
+	const table = ARTICLES_TABLE;
 	const tweetUrl = normalizeUrl(tweet.url);
 
 	// Check for duplicates
-	const { data: existing } = await supabase.from(table).select('id').eq('url', tweetUrl).single();
-	if (existing) return false;
+	const existingResult = await db.query(`SELECT id FROM ${table} WHERE url = $1 LIMIT 1`, [tweetUrl]);
+	if (existingResult.rows.length > 0) return false;
 
 	// Check for Twitter Article via expanded URLs
 	const expandedUrls = (tweet.urls || []).map((u: any) => u.expanded_url || u.url || u).filter(Boolean) as string[];
@@ -446,37 +502,44 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			const articleContent = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
 			if (articleContent) {
 				const meta = articleContent.metadata as Record<string, any> | undefined;
-				const articleData = {
-					url: tweetUrl,
-					title: articleContent.title,
-					source: 'Twitter',
-					published_date: articleContent.publishedDate ? new Date(articleContent.publishedDate) : new Date(),
-					scraped_date: new Date(),
-					keywords: [],
-					tags: [],
-					tokens: [],
-					summary: articleContent.summary || '',
-					source_type: 'twitter',
-					content: articleContent.content,
-					og_image_url: articleContent.ogImageUrl || null,
-					platform_metadata: buildTwitterArticle(
-						{
-							authorName: meta?.authorName || tweet.author?.name || '',
-							authorUserName: meta?.authorUserName || tweet.author?.userName || '',
-							authorProfilePicture: meta?.authorProfilePicture || (tweet.author as any)?.profilePicture,
-							authorVerified: meta?.authorVerified ?? tweet.author?.verified,
-						},
-						tweetId,
-					),
-				};
 
-				const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
-				if (error) {
-					logError('TWITTER', 'Insert article error', { error: String(error) });
+				const twitterArticleMeta = buildTwitterArticle(
+					{
+						authorName: meta?.authorName || tweet.author?.name || '',
+						authorUserName: meta?.authorUserName || tweet.author?.userName || '',
+						authorProfilePicture: meta?.authorProfilePicture || (tweet.author as any)?.profilePicture,
+						authorVerified: meta?.authorVerified ?? tweet.author?.verified,
+					},
+					tweetId,
+				);
+
+				const result = await db.query(
+					`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+					 RETURNING id`,
+					[
+						tweetUrl,
+						articleContent.title,
+						'Twitter',
+						articleContent.publishedDate ? new Date(articleContent.publishedDate) : new Date(),
+						new Date(),
+						[],
+						[],
+						[],
+						articleContent.summary || '',
+						'twitter',
+						articleContent.content,
+						articleContent.ogImageUrl || null,
+						JSON.stringify(twitterArticleMeta),
+					],
+				);
+
+				if (result.rows.length === 0) {
+					logError('TWITTER', 'Insert article error', { error: 'No rows returned' });
 					return false;
 				}
 
-				const articleId = inserted?.[0]?.id;
+				const articleId = result.rows[0]?.id;
 				if (articleId) {
 					await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'twitter' });
 				}
@@ -525,7 +588,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		}
 
 		// Cross-source dedup: check if resolved URL or normalized form already exists
-		if (await checkDuplicateByContent(supabase, table, [resolvedUrl])) {
+		if (await checkDuplicateByContent(db, table, [resolvedUrl])) {
 			logInfo('TWITTER', 'Link already exists (dedup)', { url: resolvedUrl });
 			return false;
 		}
@@ -533,7 +596,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 		// Scrape link content
 		let scraped;
 		try {
-			scraped = await scrapeWebPage(resolvedUrl);
+			scraped = await scrapeWebPage(resolvedUrl, env);
 		} catch (err) {
 			logWarn('TWITTER', 'Failed to scrape followed link', { url: resolvedUrl, error: String(err) });
 			return false;
@@ -556,7 +619,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 			return false;
 		}
 
-		return saveScrapedArticle(supabase, env, {
+		return saveScrapedArticle(db, env, {
 			url: resolvedUrl,
 			title: scraped.title || 'Shared Article',
 			content: scraped.content,
@@ -578,7 +641,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 
 	// Cross-source dedup: if tweet shares an external URL, check if it already exists
-	if (externalUrl && (await checkDuplicateByContent(supabase, table, [externalUrl]))) {
+	if (externalUrl && (await checkDuplicateByContent(db, table, [externalUrl]))) {
 		logInfo('TWITTER', 'External URL already exists (dedup)', { url: externalUrl });
 		return false;
 	}
@@ -589,7 +652,7 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 	let externalContent: string | null = null;
 	if (externalUrl) {
 		try {
-			const scraped = await scrapeWebPage(externalUrl);
+			const scraped = await scrapeWebPage(externalUrl, env);
 			externalOgImage = scraped.ogImageUrl;
 			externalTitle = scraped.title || null;
 			if (scraped.content && scraped.content.length > 100) {
@@ -624,29 +687,33 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 				createdAt: tweet.createdAt,
 			});
 
-	const articleData = {
-		url: tweetUrl,
-		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
-		source: 'Twitter',
-		published_date: new Date(tweet.createdAt),
-		scraped_date: new Date(),
-		keywords: tweet.hashTags || [],
-		tags: [],
-		tokens: [],
-		summary: tweet.text,
-		source_type: 'twitter',
-		content: externalContent,
-		og_image_url: tweetMedia[0]?.url ?? externalOgImage ?? null,
-		platform_metadata: tweetPlatformMetadata,
-	};
+	const result = await db.query(
+		`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		 RETURNING id`,
+		[
+			tweetUrl,
+			`@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
+			'Twitter',
+			new Date(tweet.createdAt),
+			new Date(),
+			tweet.hashTags || [],
+			[],
+			[],
+			tweet.text,
+			'twitter',
+			externalContent,
+			tweetMedia[0]?.url ?? externalOgImage ?? null,
+			JSON.stringify(tweetPlatformMetadata),
+		],
+	);
 
-	const { data: inserted, error } = await supabase.from(table).insert([articleData]).select('id');
-	if (error) {
-		logError('TWITTER', 'Insert error', { error: String(error) });
+	if (result.rows.length === 0) {
+		logError('TWITTER', 'Insert error', { error: 'No rows returned' });
 		return false;
 	}
 
-	const articleId = inserted?.[0]?.id;
+	const articleId = result.rows[0]?.id;
 	if (articleId) {
 		await env.ARTICLE_QUEUE.send({
 			type: 'article_process',
@@ -659,8 +726,8 @@ async function saveTweet(tweet: Tweet, supabase: any, env: Env): Promise<boolean
 	return true;
 }
 
-async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any, env: Env): Promise<number> {
-	const lastTime = await getLastTwitterTime(supabase, env);
+async function fetchHighViewTweets(apiKey: string, listId: string, db: Client, env: Env): Promise<number> {
+	const lastTime = await getLastTwitterTime(db, env);
 	const sinceTime = Math.floor((lastTime.getTime() - 60 * 60 * 1000) / 1000);
 	let cursor: string | null = null;
 	let count = 0;
@@ -685,7 +752,7 @@ async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any
 
 		for (const tweet of data.tweets || []) {
 			try {
-				if (tweet.viewCount > VIEW_THRESHOLD && (await saveTweet(tweet, supabase, env))) count++;
+				if (tweet.viewCount > VIEW_THRESHOLD && (await saveTweet(tweet, db, env))) count++;
 			} catch (err) {
 				logError('TWITTER', 'saveTweet failed', { url: tweet.url, author: tweet.author?.userName, error: String(err) });
 			}
@@ -701,9 +768,17 @@ async function fetchHighViewTweets(apiKey: string, listId: string, supabase: any
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('TWITTER', 'start');
-	const supabase = getSupabaseClient(env);
-	const results = await Promise.all(TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, supabase, env)));
-	logInfo('TWITTER', 'end', { inserted: results.reduce((a, b) => a + b, 0) });
+	// Process lists sequentially — each uses a shared db client, so avoid concurrent queries
+	let total = 0;
+	for (const listId of TWITTER_LISTS) {
+		const db = await createDbClient(env);
+		try {
+			total += await fetchHighViewTweets(env.KAITO_API_KEY || '', listId, db, env);
+		} finally {
+			await db.end();
+		}
+	}
+	logInfo('TWITTER', 'end', { inserted: total });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -714,41 +789,40 @@ const RETRY_BATCH_SIZE = 20;
 
 export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('RETRY', 'start');
-	const supabase = getSupabaseClient(env);
-	const table = getArticlesTable(env);
-	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+	const db = await createDbClient(env);
+	try {
+		const table = ARTICLES_TABLE;
+		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-	// AI processing failures
-	const { data: aiIncomplete, error } = await supabase
-		.from(table)
-		.select('id')
-		.gte('scraped_date', since)
-		.or('title_cn.is.null,summary_cn.is.null,embedding.is.null');
+		// AI processing failures
+		const aiResult = await db.query(
+			`SELECT id FROM ${table} WHERE scraped_date >= $1 AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL)`,
+			[since],
+		);
 
-	if (error) return logError('RETRY', 'Query failed', { error: String(error) });
+		// Translation failures (content exists but content_cn is null)
+		const translationResult = await db.query(
+			`SELECT id FROM ${table} WHERE scraped_date >= $1 AND content IS NOT NULL AND content_cn IS NULL`,
+			[since],
+		);
 
-	// Translation failures (content exists but content_cn is null)
-	const { data: translationIncomplete } = await supabase
-		.from(table)
-		.select('id')
-		.gte('scraped_date', since)
-		.not('content', 'is', null)
-		.is('content_cn', null);
+		const ids = [
+			...new Set([
+				...(aiResult.rows as Array<{ id: string }>).map((r) => r.id),
+				...(translationResult.rows as Array<{ id: string }>).map((r) => r.id),
+			]),
+		];
 
-	const ids = [
-		...new Set([
-			...(aiIncomplete ?? []).map((r: { id: string }) => r.id),
-			...(translationIncomplete ?? []).map((r: { id: string }) => r.id),
-		]),
-	];
-
-	if (!ids.length) return logInfo('RETRY', 'No incomplete articles');
-	for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
-		await env.ARTICLE_QUEUE.send({
-			type: 'batch_process',
-			article_ids: ids.slice(i, i + RETRY_BATCH_SIZE),
-			triggered_by: 'retry_cron',
-		});
+		if (!ids.length) return logInfo('RETRY', 'No incomplete articles');
+		for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
+			await env.ARTICLE_QUEUE.send({
+				type: 'batch_process',
+				article_ids: ids.slice(i, i + RETRY_BATCH_SIZE),
+				triggered_by: 'retry_cron',
+			});
+		}
+		logInfo('RETRY', 'Queued articles for retry', { count: ids.length, batches: Math.ceil(ids.length / RETRY_BATCH_SIZE) });
+	} finally {
+		await db.end();
 	}
-	logInfo('RETRY', 'Queued articles for retry', { count: ids.length, batches: Math.ceil(ids.length / RETRY_BATCH_SIZE) });
 }

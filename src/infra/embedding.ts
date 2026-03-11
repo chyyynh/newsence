@@ -54,7 +54,7 @@ export async function generateArticleEmbedding(text: string, ai: Ai): Promise<nu
 }
 
 export async function saveArticleEmbedding(
-	supabase: any,
+	db: import('pg').Client,
 	articleId: string,
 	embedding: number[],
 	table: string = 'articles',
@@ -62,14 +62,7 @@ export async function saveArticleEmbedding(
 	const vectorStr = `[${embedding.join(',')}]`;
 
 	try {
-		// 直接更新指定的表
-		const { error } = await supabase.from(table).update({ embedding: vectorStr }).eq('id', articleId);
-
-		if (error) {
-			logError('EMBEDDING', 'Failed to save', { articleId, table, error: error.message });
-			return false;
-		}
-
+		await db.query(`UPDATE ${table} SET embedding = $1 WHERE id = $2`, [vectorStr, articleId]);
 		logInfo('EMBEDDING', 'Saved', { articleId, table });
 		return true;
 	} catch (error: unknown) {
