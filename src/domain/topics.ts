@@ -135,8 +135,10 @@ export async function assignArticleTopic(db: Client, articleId: string, table: s
 	// 2. Find similar articles using the RPC function
 	let candidates: SimilarArticle[];
 	try {
+		const embeddingStr =
+			typeof typedArticle.embedding === 'string' ? typedArticle.embedding : `[${typedArticle.embedding.join(',')}]`;
 		const result = await db.query('SELECT * FROM find_similar_articles_with_topics($1, $2, $3, $4, $5)', [
-			JSON.stringify(typedArticle.embedding),
+			embeddingStr,
 			TOPIC_CONFIG.SIMILARITY_THRESHOLD,
 			TOPIC_CONFIG.TIME_WINDOW_DAYS,
 			TOPIC_CONFIG.MAX_SIMILAR_RESULTS,
