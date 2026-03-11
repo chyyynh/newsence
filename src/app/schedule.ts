@@ -174,7 +174,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 					crawledContent = rssContent;
 				} else {
 					try {
-						const scraped = await scrapeWebPage(url, env);
+						const scraped = await scrapeWebPage(url);
 						crawledContent = scraped.content;
 						if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
 					} catch {}
@@ -229,7 +229,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	}
 }
 
-async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
+async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
 	const res = await fetch(feed.RSSLink, {
@@ -244,104 +244,75 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 
 	if (items.length > 30) items = items.slice(0, 30);
 
-	// Each feed gets its own Client — Hyperdrive pools the underlying connections
-	const db = await createDbClient(env);
-	try {
-		// Filter existing URLs
-		const urls = items
-			.map((item) => extractUrlFromItem(item))
-			.filter(Boolean)
-			.map((u) => normalizeUrl(u!));
-		const table = ARTICLES_TABLE;
-		const dedupBatchSize = 50;
-		const existingRecords: Array<{ url: string; source: string }> = [];
+	// Filter existing URLs
+	const urls = items
+		.map((item) => extractUrlFromItem(item))
+		.filter(Boolean)
+		.map((u) => normalizeUrl(u!));
+	const table = ARTICLES_TABLE;
+	const dedupBatchSize = 50;
+	const existingRecords: Array<{ url: string; source: string }> = [];
 
-		for (let i = 0; i < urls.length; i += dedupBatchSize) {
-			const batch = urls.slice(i, i + dedupBatchSize);
-			const result = await db.query(`SELECT url, source FROM ${table} WHERE url = ANY($1)`, [batch]);
-			existingRecords.push(...(result.rows as Array<{ url: string; source: string }>));
-		}
-
-		const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
-		const newItems = items.filter((item) => {
-			const url = extractUrlFromItem(item);
-			return url && !existingSet.has(normalizeUrl(url));
-		});
-
-		// Upgrade source to this feed when a duplicate exists from a lower-priority source
-		// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
-		const SOURCE_PRIORITY: Record<string, number> = { Twitter: 0, Unknown: 0, Telegram: 1 };
-		const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
-
-		// Build URL→item map for fetching comments URL during upgrade
-		const urlToItem = new Map<string, RSSItem>();
-		for (const item of items) {
-			const url = extractUrlFromItem(item);
-			if (url) urlToItem.set(normalizeUrl(url), item);
-		}
-
-		for (const existing of existingRecords) {
-			const existingPriority = SOURCE_PRIORITY[existing.source] ?? 10;
-			if (feedPriority > existingPriority) {
-				const normalized = normalizeUrl(existing.url);
-				const updateFields: string[] = ['source = $1'];
-				const updateValues: unknown[] = [feed.name];
-				let paramIndex = 2;
-
-				// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
-				const rssItem = urlToItem.get(normalized);
-				const commentsUrl = rssItem?.comments as string | undefined;
-				if (commentsUrl) {
-					try {
-						const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
-						if (hnMeta) {
-							updateFields.push(`source_type = $${paramIndex}`);
-							updateValues.push('hackernews');
-							paramIndex++;
-							updateFields.push(`platform_metadata = $${paramIndex}`);
-							updateValues.push(JSON.stringify(hnMeta));
-							paramIndex++;
-						}
-					} catch (err) {
-						logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
-					}
-				}
-
-				updateValues.push(normalized);
-				await db.query(`UPDATE ${table} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
-				logInfo('RSS', 'Upgraded article source', { url: normalized, from: existing.source, to: feed.name });
-			}
-		}
-
-		logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
-		for (const item of newItems) {
-			try {
-				await processAndInsertArticle(db, env, item, feed, config);
-			} catch (err) {
-				logError('RSS', 'processAndInsertArticle failed', {
-					feed: feed.name,
-					url: extractUrlFromItem(item),
-					error: String(err),
-				});
-			}
-		}
-		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
-	} finally {
-		await db.end();
+	for (let i = 0; i < urls.length; i += dedupBatchSize) {
+		const batch = urls.slice(i, i + dedupBatchSize);
+		const result = await db.query(`SELECT url, source FROM ${table} WHERE url = ANY($1)`, [batch]);
+		existingRecords.push(...(result.rows as Array<{ url: string; source: string }>));
 	}
-}
 
-const RSS_CONCURRENCY = 5;
+	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
+	const newItems = items.filter((item) => {
+		const url = extractUrlFromItem(item);
+		return url && !existingSet.has(normalizeUrl(url));
+	});
 
-async function runWithConcurrency<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
-	let i = 0;
-	const next = async (): Promise<void> => {
-		while (i < items.length) {
-			const item = items[i++]!;
-			await fn(item);
+	// Upgrade source to this feed when a duplicate exists from a lower-priority source
+	// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
+	const SOURCE_PRIORITY: Record<string, number> = { Twitter: 0, Unknown: 0, Telegram: 1 };
+	const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
+
+	// Build URL→item map for fetching comments URL during upgrade
+	const urlToItem = new Map<string, RSSItem>();
+	for (const item of items) {
+		const url = extractUrlFromItem(item);
+		if (url) urlToItem.set(normalizeUrl(url), item);
+	}
+
+	for (const existing of existingRecords) {
+		const existingPriority = SOURCE_PRIORITY[existing.source] ?? 10;
+		if (feedPriority > existingPriority) {
+			const normalized = normalizeUrl(existing.url);
+			const updateFields: string[] = ['source = $1'];
+			const updateValues: unknown[] = [feed.name];
+			let paramIndex = 2;
+
+			// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
+			const rssItem = urlToItem.get(normalized);
+			const commentsUrl = rssItem?.comments as string | undefined;
+			if (commentsUrl) {
+				try {
+					const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
+					if (hnMeta) {
+						updateFields.push(`source_type = $${paramIndex}`);
+						updateValues.push('hackernews');
+						paramIndex++;
+						updateFields.push(`platform_metadata = $${paramIndex}`);
+						updateValues.push(JSON.stringify(hnMeta));
+						paramIndex++;
+					}
+				} catch (err) {
+					logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
+				}
+			}
+
+			updateValues.push(normalized);
+			await db.query(`UPDATE ${table} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
+			logInfo('RSS', 'Upgraded article source', { url: normalized, from: existing.source, to: feed.name });
 		}
-	};
-	await Promise.allSettled(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
+	}
+
+	logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
+	for (const item of newItems) await processAndInsertArticle(db, env, item, feed, config);
+	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -351,15 +322,7 @@ export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<v
 		const parser = new XMLParser({ ignoreAttributes: false });
 		const result = await db.query(`SELECT id, name, "RSSLink", url, type FROM "RssList"`);
 		const feeds = result.rows as RSSFeed[];
-		// Each processFeed creates its own Client (Hyperdrive pools underneath).
-		// Limit to RSS_CONCURRENCY parallel feeds to cap backend connections.
-		await runWithConcurrency(feeds, RSS_CONCURRENCY, async (feed: RSSFeed) => {
-			try {
-				await processFeed(env, feed, parser);
-			} catch (err) {
-				logError('RSS', 'Feed failed', { feed: feed.name, error: String(err) });
-			}
-		});
+		await Promise.allSettled(feeds.map((feed: RSSFeed) => processFeed(db, env, feed, parser)));
 		logInfo('RSS', 'end');
 	} finally {
 		await db.end();
@@ -596,7 +559,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		// Scrape link content
 		let scraped;
 		try {
-			scraped = await scrapeWebPage(resolvedUrl, env);
+			scraped = await scrapeWebPage(resolvedUrl);
 		} catch (err) {
 			logWarn('TWITTER', 'Failed to scrape followed link', { url: resolvedUrl, error: String(err) });
 			return false;
@@ -652,7 +615,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	let externalContent: string | null = null;
 	if (externalUrl) {
 		try {
-			const scraped = await scrapeWebPage(externalUrl, env);
+			const scraped = await scrapeWebPage(externalUrl);
 			externalOgImage = scraped.ogImageUrl;
 			externalTitle = scraped.title || null;
 			if (scraped.content && scraped.content.length > 100) {
@@ -768,17 +731,13 @@ async function fetchHighViewTweets(apiKey: string, listId: string, db: Client, e
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('TWITTER', 'start');
-	// Process lists sequentially — each uses a shared db client, so avoid concurrent queries
-	let total = 0;
-	for (const listId of TWITTER_LISTS) {
-		const db = await createDbClient(env);
-		try {
-			total += await fetchHighViewTweets(env.KAITO_API_KEY || '', listId, db, env);
-		} finally {
-			await db.end();
-		}
+	const db = await createDbClient(env);
+	try {
+		const results = await Promise.all(TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, db, env)));
+		logInfo('TWITTER', 'end', { inserted: results.reduce((a, b) => a + b, 0) });
+	} finally {
+		await db.end();
 	}
-	logInfo('TWITTER', 'end', { inserted: total });
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -132,7 +132,7 @@ class TwitterProcessor implements ArticleProcessor {
 		const linkedUrl = this.extractLinkedUrl(tweetText);
 		if (linkedUrl) {
 			try {
-				const linked = await scrapeWebPage(linkedUrl, ctx.env);
+				const linked = await scrapeWebPage(linkedUrl);
 				if (linked.content && linked.content.length > 100) {
 					logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
 					updateData.content = linked.content;
@@ -451,7 +451,7 @@ class HackerNewsProcessor implements ArticleProcessor {
 	private async fetchExternalPage(url: string | undefined, env: Env): Promise<{ title: string | null; content: string | null }> {
 		if (!url) return { title: null, content: null };
 		try {
-			const page = await scrapeWebPage(url, env);
+			const page = await scrapeWebPage(url);
 			return { title: page.title || null, content: page.content || null };
 		} catch (error) {
 			logWarn('HN-PROCESSOR', 'Failed to scrape linked webpage', { error: String(error) });
