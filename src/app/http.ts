@@ -266,25 +266,22 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 		);
 		const existingRows = existingResult.rows;
 		if (existingRows && existingRows.length > 0) {
-			// Prefer submitter's own article first, then any public one
+			// Prefer submitter's own article first, then any public one, then any row (avoids unique constraint violation)
 			const existing =
 				(submitterId && existingRows.find((r: Record<string, unknown>) => r.submitter_id === submitterId)) ||
 				existingRows.find((r: Record<string, unknown>) => r.visibility !== 'private') ||
-				null;
-			if (existing) {
-				const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
-				if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
-				return {
-					url,
-					articleId: existing.id,
-					instanceId,
-					title: existing.title,
-					ogImageUrl: existing.og_image_url,
-					sourceType: existing.source_type,
-					alreadyExists: true,
-				};
-			}
-			// All existing rows are private from other users — proceed to create a new one
+				existingRows[0];
+			const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
+			if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
+			return {
+				url,
+				articleId: existing.id,
+				instanceId,
+				title: existing.title,
+				ogImageUrl: existing.og_image_url,
+				sourceType: existing.source_type,
+				alreadyExists: true,
+			};
 		}
 	} finally {
 		await db.end();
