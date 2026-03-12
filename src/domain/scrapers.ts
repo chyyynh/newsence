@@ -720,6 +720,17 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 
 	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
+	const contentType = response.headers.get('content-type') || '';
+	if (!contentType.includes('text/html') && !contentType.includes('text/xml') && !contentType.includes('application/xhtml')) {
+		throw new Error(`Non-HTML response: ${contentType}`);
+	}
+
+	const MAX_BODY_BYTES = 5 * 1024 * 1024; // 5 MB
+	const contentLength = Number(response.headers.get('content-length') || '0');
+	if (contentLength > MAX_BODY_BYTES) {
+		throw new Error(`Response too large: ${contentLength} bytes`);
+	}
+
 	const finalUrl = response.url || url;
 	const html = await response.text();
 	const $ = cheerio.load(html);

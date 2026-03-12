@@ -311,7 +311,16 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	}
 
 	logInfo('RSS', 'Feed processed', { feed: feed.name, newCount: newItems.length, totalCount: items.length });
-	for (const item of newItems) await processAndInsertArticle(db, env, item, feed, config);
+	let inserted = 0;
+	for (const item of newItems) {
+		try {
+			await processAndInsertArticle(db, env, item, feed, config);
+			inserted++;
+		} catch (err) {
+			logWarn('RSS', 'Item insert failed, skipping', { feed: feed.name, url: extractUrlFromItem(item), error: String(err) });
+		}
+	}
+	logInfo('RSS', 'Feed insert done', { feed: feed.name, inserted, total: newItems.length });
 	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 }
 
@@ -733,8 +742,11 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 	logInfo('TWITTER', 'start');
 	const db = await createDbClient(env);
 	try {
-		const results = await Promise.all(TWITTER_LISTS.map((listId) => fetchHighViewTweets(env.KAITO_API_KEY || '', listId, db, env)));
-		logInfo('TWITTER', 'end', { inserted: results.reduce((a, b) => a + b, 0) });
+		let total = 0;
+		for (const listId of TWITTER_LISTS) {
+			total += await fetchHighViewTweets(env.KAITO_API_KEY || '', listId, db, env);
+		}
+		logInfo('TWITTER', 'end', { inserted: total });
 	} finally {
 		await db.end();
 	}
