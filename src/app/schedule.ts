@@ -141,6 +141,8 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	let sourceType = 'rss';
 	let crawledContent = '';
 	let ogImageUrl: string | null = null;
+	let ogImageWidth: number | null = null;
+	let ogImageHeight: number | null = null;
 	// Determine source type from the RSS item's comments URL
 	const commentsUrl = item.comments as string | undefined;
 	if (commentsUrl) {
@@ -176,7 +178,11 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 					try {
 						const scraped = await scrapeWebPage(url);
 						crawledContent = scraped.content;
-						if (!ogImageUrl) ogImageUrl = scraped.ogImageUrl;
+						if (!ogImageUrl) {
+							ogImageUrl = scraped.ogImageUrl;
+							ogImageWidth = scraped.ogImageWidth ?? null;
+							ogImageHeight = scraped.ogImageHeight ?? null;
+						}
 					} catch {}
 				}
 				break;
@@ -213,7 +219,11 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 			sourceType,
 			content,
 			ogImageUrl,
-			platformMetadata ? JSON.stringify(platformMetadata) : null,
+			platformMetadata
+				? JSON.stringify({ ...platformMetadata, ogImageWidth, ogImageHeight })
+				: ogImageWidth && ogImageHeight
+					? JSON.stringify({ type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight })
+					: null,
 		],
 	);
 

@@ -11,6 +11,8 @@ export interface ScrapedContent {
 	content: string;
 	summary?: string;
 	ogImageUrl: string | null;
+	ogImageWidth?: number | null;
+	ogImageHeight?: number | null;
 	siteName: string | null;
 	author: string | null;
 	publishedDate: string | null;
@@ -583,6 +585,8 @@ function isJunkImage(src: string, alt?: string): boolean {
 interface ArticleMetadata {
 	title: string;
 	ogImageUrl: string | null;
+	ogImageWidth: number | null;
+	ogImageHeight: number | null;
 	description: string | null;
 	siteName: string;
 	author: string | null;
@@ -608,12 +612,17 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 		}
 	}
 
+	const rawW = $('meta[property="og:image:width"]').attr('content');
+	const rawH = $('meta[property="og:image:height"]').attr('content');
+	const ogImageWidth = rawW ? parseInt(rawW, 10) || null : null;
+	const ogImageHeight = rawH ? parseInt(rawH, 10) || null : null;
+
 	const description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || null;
 	const siteName = $('meta[property="og:site_name"]').attr('content') || new URL(url).hostname;
 	const author = $('meta[name="author"]').attr('content') || $('meta[property="article:author"]').attr('content') || null;
 	const publishedDate = $('meta[property="article:published_time"]').attr('content') || $('time').attr('datetime') || null;
 
-	return { title: title.trim(), ogImageUrl, description, siteName, author, publishedDate };
+	return { title: title.trim(), ogImageUrl, ogImageWidth, ogImageHeight, description, siteName, author, publishedDate };
 }
 
 /** Extract article content using cheerio selectors (fallback method) */
@@ -792,6 +801,8 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 		content,
 		summary: metadata.description || undefined,
 		ogImageUrl: metadata.ogImageUrl,
+		ogImageWidth: metadata.ogImageWidth,
+		ogImageHeight: metadata.ogImageHeight,
 		siteName: metadata.siteName,
 		author: metadata.author,
 		publishedDate: metadata.publishedDate,
@@ -885,6 +896,8 @@ export async function scrapeWebPageCheerio(url: string): Promise<ScrapedContent>
 		content,
 		summary: metadata.description || undefined,
 		ogImageUrl: metadata.ogImageUrl,
+		ogImageWidth: metadata.ogImageWidth,
+		ogImageHeight: metadata.ogImageHeight,
 		siteName: metadata.siteName,
 		author: metadata.author,
 		publishedDate: metadata.publishedDate,
@@ -919,6 +932,8 @@ export async function scrapeWebPageReadability(url: string): Promise<ScrapedCont
 		content: readabilityContent,
 		summary: metadata.description || undefined,
 		ogImageUrl: metadata.ogImageUrl,
+		ogImageWidth: metadata.ogImageWidth,
+		ogImageHeight: metadata.ogImageHeight,
 		siteName: metadata.siteName,
 		author: metadata.author,
 		publishedDate: metadata.publishedDate,

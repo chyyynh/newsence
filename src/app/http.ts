@@ -181,6 +181,9 @@ async function scrapeAndInsert(
 	try {
 		const table = ARTICLES_TABLE;
 		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
+		const platformMetadataJson = normalizedPlatformMetadata
+			? JSON.stringify({ ...normalizedPlatformMetadata, ogImageWidth: scraped.ogImageWidth ?? null, ogImageHeight: scraped.ogImageHeight ?? null })
+			: null;
 		const insertResult = await db.query(
 			`INSERT INTO ${table}
 				(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata, submitter_id, visibility)
@@ -199,7 +202,7 @@ async function scrapeAndInsert(
 				[],
 				[],
 				[],
-				normalizedPlatformMetadata ? JSON.stringify(normalizedPlatformMetadata) : null,
+				platformMetadataJson,
 				submitterId || null,
 				submitterId ? 'private' : 'public',
 			],
