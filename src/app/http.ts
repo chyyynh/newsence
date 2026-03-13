@@ -116,7 +116,7 @@ export async function handleTestScrape(request: Request, env: Env): Promise<Resp
 
 	const start = Date.now();
 	try {
-		const r = await scrapeWebPage(url, env);
+		const r = await scrapeWebPage(url);
 		return Response.json({
 			url,
 			results: { crawl: { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start } },
@@ -166,7 +166,6 @@ async function scrapeAndInsert(
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
-		env,
 		youtubeApiKey: env.YOUTUBE_API_KEY,
 		clipApiUrl: env.CLIP_API_URL,
 		clipApiSecret: env.CLIP_API_SECRET,
@@ -182,6 +181,9 @@ async function scrapeAndInsert(
 	try {
 		const table = ARTICLES_TABLE;
 		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
+		const platformMetadataJson = normalizedPlatformMetadata
+			? JSON.stringify({ ...normalizedPlatformMetadata, ogImageWidth: scraped.ogImageWidth ?? null, ogImageHeight: scraped.ogImageHeight ?? null })
+			: null;
 		const insertResult = await db.query(
 			`INSERT INTO ${table}
 				(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata, submitter_id, visibility)
@@ -200,7 +202,7 @@ async function scrapeAndInsert(
 				[],
 				[],
 				[],
-				normalizedPlatformMetadata ? JSON.stringify(normalizedPlatformMetadata) : null,
+				platformMetadataJson,
 				submitterId || null,
 				submitterId ? 'private' : 'public',
 			],

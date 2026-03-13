@@ -15,7 +15,7 @@ import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, stripH
 import { translateContent } from '../src/domain/processors';
 import { scrapeWebPage } from '../src/domain/scrapers';
 import { callGeminiForAnalysis } from '../src/infra/ai';
-import type { Article, Env } from '../src/models/types';
+import type { Article } from '../src/models/types';
 
 // ─────────────────────────────────────────────────────────────
 // Env
@@ -195,8 +195,7 @@ describe('RSS Pipeline E2E', () => {
 
 				if (!content) {
 					try {
-						const testEnv = { CF_ACCOUNT_ID: process.env.CF_ACCOUNT_ID, CF_API_TOKEN: process.env.CF_API_TOKEN } as unknown as Env;
-						const scraped = await scrapeWebPage(url, testEnv);
+						const scraped = await scrapeWebPage(url);
 						content = scraped.content;
 						contentSource = 'web_scrape';
 					} catch {
