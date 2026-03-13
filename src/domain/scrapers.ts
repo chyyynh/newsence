@@ -732,7 +732,29 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 	}
 
 	const finalUrl = response.url || url;
-	const html = await response.text();
+
+	// Stream the body with a hard byte cap to guard against chunked responses
+	// or origins that omit/lie about Content-Length
+	const reader = response.body!.getReader();
+	const chunks: Uint8Array[] = [];
+	let totalBytes = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		totalBytes += value.byteLength;
+		if (totalBytes > MAX_BODY_BYTES) {
+			reader.cancel();
+			throw new Error(`Response body exceeded ${MAX_BODY_BYTES} bytes`);
+		}
+		chunks.push(value);
+	}
+	const merged = new Uint8Array(totalBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	const html = new TextDecoder().decode(merged);
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 
