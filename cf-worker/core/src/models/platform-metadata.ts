@@ -99,11 +99,17 @@ export interface PlatformEnrichments {
 // Top-level envelope (discriminated union)
 // ─────────────────────────────────────────────────────────────
 
+/** Optional OG image dimensions stored at the envelope level (cross-platform). */
+interface OgImageDimensions {
+	ogImageWidth?: number | null;
+	ogImageHeight?: number | null;
+}
+
 export type PlatformMetadata =
-	| { type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null }
-	| { type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null }
-	| { type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null }
-	| { type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null };
+	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
+	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
+	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
+	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions);
 
 // ─────────────────────────────────────────────────────────────
 // Builder Functions
