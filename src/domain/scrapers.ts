@@ -673,12 +673,12 @@ function extractContentReadability(html: string, url: string): string | null {
 		// relative hrefs/srcs as-is. Load into cheerio to absolutify them.
 		const $r = cheerio.load(article.content);
 		try {
-			const origin = new URL(url).origin;
+			const base = url;
 			$r('a[href]').each((_, el) => {
 				const href = $r(el).attr('href');
 				if (href && !href.startsWith('http') && !href.startsWith('#') && !href.startsWith('mailto:')) {
 					try {
-						$r(el).attr('href', new URL(href, origin).href);
+						$r(el).attr('href', new URL(href, base).href);
 					} catch {}
 				}
 			});
@@ -686,7 +686,7 @@ function extractContentReadability(html: string, url: string): string | null {
 				const src = $r(el).attr('src');
 				if (src && !src.startsWith('http') && !src.startsWith('data:')) {
 					try {
-						$r(el).attr('src', new URL(src, origin).href);
+						$r(el).attr('src', new URL(src, base).href);
 					} catch {}
 				}
 			});

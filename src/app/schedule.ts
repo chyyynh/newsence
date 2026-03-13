@@ -331,7 +331,12 @@ export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<v
 		const parser = new XMLParser({ ignoreAttributes: false });
 		const result = await db.query(`SELECT id, name, "RSSLink", url, type FROM "RssList"`);
 		const feeds = result.rows as RSSFeed[];
-		await Promise.allSettled(feeds.map((feed: RSSFeed) => processFeed(db, env, feed, parser)));
+		const results = await Promise.allSettled(feeds.map((feed: RSSFeed) => processFeed(db, env, feed, parser)));
+		for (let i = 0; i < results.length; i++) {
+			if (results[i].status === 'rejected') {
+				logWarn('RSS', 'Feed failed', { feed: feeds[i].name, error: String((results[i] as PromiseRejectedResult).reason) });
+			}
+		}
 		logInfo('RSS', 'end');
 	} finally {
 		await db.end();
