@@ -668,6 +668,30 @@ function extractContentReadability(html: string, url: string): string | null {
 
 		if (!article?.content) return null;
 
+		// Resolve relative URLs in Readability output before converting to markdown.
+		// parseHTML creates a document with no base URL, so Readability preserves
+		// relative hrefs/srcs as-is. Load into cheerio to absolutify them.
+		const $r = cheerio.load(article.content);
+		try {
+			const origin = new URL(url).origin;
+			$r('a[href]').each((_, el) => {
+				const href = $r(el).attr('href');
+				if (href && !href.startsWith('http') && !href.startsWith('#') && !href.startsWith('mailto:')) {
+					try {
+						$r(el).attr('href', new URL(href, origin).href);
+					} catch {}
+				}
+			});
+			$r('img[src]').each((_, el) => {
+				const src = $r(el).attr('src');
+				if (src && !src.startsWith('http') && !src.startsWith('data:')) {
+					try {
+						$r(el).attr('src', new URL(src, origin).href);
+					} catch {}
+				}
+			});
+		} catch {}
+
 		const turndown = new TurndownService({
 			headingStyle: 'atx',
 			codeBlockStyle: 'fenced',
@@ -676,7 +700,7 @@ function extractContentReadability(html: string, url: string): string | null {
 		// Remove empty links and script/style tags
 		turndown.remove(['script', 'style']);
 
-		const markdown = turndown.turndown(article.content);
+		const markdown = turndown.turndown($r('body').html() ?? article.content);
 		if (!markdown || markdown.length < 50) return null;
 
 		return markdown;
@@ -703,20 +727,14 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-	let response: Response;
-	try {
-		response = await fetch(url, {
-			headers: {
-				'User-Agent':
-					'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-				Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-				'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-			},
-			signal: controller.signal,
-		});
-	} finally {
-		clearTimeout(timer);
-	}
+	const response = await fetch(url, {
+		headers: {
+			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+		},
+		signal: controller.signal,
+	});
 
 	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
@@ -734,19 +752,27 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 	const finalUrl = response.url || url;
 
 	// Stream the body with a hard byte cap to guard against chunked responses
-	// or origins that omit/lie about Content-Length
-	const reader = response.body!.getReader();
+	// or origins that omit/lie about Content-Length.
+	// Keep the abort timer active until the body is fully read — a stalled
+	// origin that sends headers quickly but trickles the body would otherwise
+	// hang until the Worker's own timeout.
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 	const chunks: Uint8Array[] = [];
 	let totalBytes = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		totalBytes += value.byteLength;
-		if (totalBytes > MAX_BODY_BYTES) {
-			reader.cancel();
-			throw new Error(`Response body exceeded ${MAX_BODY_BYTES} bytes`);
+	try {
+		reader = response.body!.getReader();
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			totalBytes += value.byteLength;
+			if (totalBytes > MAX_BODY_BYTES) {
+				reader.cancel();
+				throw new Error(`Response body exceeded ${MAX_BODY_BYTES} bytes`);
+			}
+			chunks.push(value);
 		}
-		chunks.push(value);
+	} finally {
+		clearTimeout(timer);
 	}
 	const merged = new Uint8Array(totalBytes);
 	let offset = 0;
