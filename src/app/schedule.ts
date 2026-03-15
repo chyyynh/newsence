@@ -482,225 +482,200 @@ export async function handleRSSCron(
 interface TwitterApiResponse {
 	status: string;
 	message?: string;
-	tweets?: Tweet[];
+	data?: { tweets?: Tweet[] };
 	has_next_page?: boolean;
 	next_cursor?: string;
 }
 
 const TWITTER_USER_API = "https://api.twitterapi.io/twitter/user/last_tweets";
 
-/** Pre-filter obvious non-original tweets before sending to AI assessment */
-function isOriginalTweet(tweet: Tweet): boolean {
-	if (tweet.text.startsWith("RT @")) return false;
-	return true;
+/** Filter to only keep original content: root tweets + self-replies (threads). Skip RTs and replies to others. */
+function isOriginalContent(tweet: Tweet): boolean {
+	if (tweet.retweeted_tweet || tweet.text.startsWith("RT @")) return false;
+	if (!tweet.isReply) return true;
+	// Self-reply = thread continuation
+	return tweet.inReplyToUsername === tweet.author?.userName;
 }
 
-async function saveScrapedArticle(
+/** Extract quoted tweet data for platform_metadata */
+function extractQuotedTweet(tweet: Tweet): import("../models/platform-metadata").QuotedTweetData | undefined {
+	const q = tweet.quoted_tweet;
+	if (!q?.text || !q?.author) return undefined;
+	return {
+		authorName: q.author.name || "",
+		authorUserName: q.author.userName || "",
+		authorProfilePicture: q.author.profilePicture,
+		text: q.text.replace(/https?:\/\/\S+/g, "").trim(),
+	};
+}
+
+// -- Twitter Helpers ----------------------------------------------------------
+
+function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
+	return (
+		tweet.extendedEntities?.media?.flatMap((m) =>
+			m.media_url_https ? [{ url: m.media_url_https, type: m.type as TwitterMedia["type"] }] : [],
+		) ?? []
+	);
+}
+
+function extractAuthor(tweet: Tweet) {
+	return {
+		authorName: tweet.author?.name || "",
+		authorUserName: tweet.author?.userName || "",
+		authorProfilePicture: tweet.author?.profilePicture,
+	};
+}
+
+async function urlExists(db: Client, url: string): Promise<boolean> {
+	const result = await db.query(`SELECT 1 FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
+	return result.rows.length > 0;
+}
+
+async function urlsExist(db: Client, urls: string[]): Promise<boolean> {
+	const normalized = urls.map(normalizeUrl).filter(Boolean);
+	if (normalized.length === 0) return false;
+	const result = await db.query(`SELECT 1 FROM ${ARTICLES_TABLE} WHERE url = ANY($1) LIMIT 1`, [normalized]);
+	return result.rows.length > 0;
+}
+
+/** Insert a twitter article and queue it for AI processing */
+async function insertTwitterArticle(
 	db: Client,
 	env: Env,
 	data: {
 		url: string;
 		title: string;
-		content: string;
 		source: string;
-		sourceType: string;
+		publishedDate: Date;
+		summary: string;
+		content: string | null;
 		ogImage: string | null;
-		originalTweetUrl?: string;
-		tweetText?: string;
-		authorName?: string;
-		authorUserName?: string;
-		authorProfilePicture?: string;
-		authorVerified?: boolean;
-		media?: TwitterMedia[];
-		createdAt?: string;
+		metadata: PlatformMetadata;
+		hashTags?: string[];
 	},
-): Promise<boolean> {
-	const table = ARTICLES_TABLE;
-
-	const platformMetadata = buildTwitterShared(
-		{
-			authorName: data.authorName || "",
-			authorUserName: data.authorUserName || "",
-			authorProfilePicture: data.authorProfilePicture,
-			authorVerified: data.authorVerified,
-		},
-		{
-			media: data.media || [],
-			createdAt: data.createdAt,
-			tweetText: data.tweetText,
-			externalUrl: data.url,
-			externalOgImage: data.ogImage,
-			externalTitle: data.title,
-			originalTweetUrl: data.originalTweetUrl,
-		},
-	);
-
+): Promise<string | null> {
 	const result = await db.query(
-		`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
+		`INSERT INTO ${ARTICLES_TABLE} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING id`,
 		[
-			data.url,
-			data.title,
-			data.source,
-			data.createdAt ? new Date(data.createdAt) : new Date(),
-			new Date(),
-			[],
-			[],
-			[],
-			"",
-			data.sourceType,
-			data.content,
-			data.ogImage,
-			JSON.stringify(platformMetadata),
+			data.url, data.title, data.source, data.publishedDate, new Date(),
+			data.hashTags || [], [], [], data.summary, "twitter",
+			data.content, data.ogImage, JSON.stringify(data.metadata),
 		],
 	);
+	const articleId = result.rows[0]?.id;
+	if (articleId) {
+		await env.ARTICLE_QUEUE.send({ type: "article_process", article_id: articleId, source_type: "twitter" });
+	}
+	return articleId || null;
+}
 
-	if (result.rows.length === 0) {
-		logError("TWITTER", "Insert scraped article error", {
-			error: "No rows returned",
-		});
+// -- Twitter Article (long-form) ----------------------------------------------
+
+async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
+	const expandedUrls = (tweet.urls || []).map((u) => u.expanded_url || u.url || "").filter(Boolean);
+	const articleUrl = expandedUrls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
+	if (!articleUrl) return false;
+
+	const tweetId = tweet.id || tweet.url.split("/").pop();
+	if (!tweetId) return false;
+
+	logInfo("TWITTER", "Detected Twitter Article", { tweetId, articleUrl });
+	const scraped = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || "");
+	if (!scraped) {
+		logWarn("TWITTER", "Article API failed, falling through");
 		return false;
 	}
 
-	const articleId = result.rows[0]?.id;
-	if (articleId) {
-		await env.ARTICLE_QUEUE.send({
-			type: "article_process",
-			article_id: articleId,
-			source_type: data.sourceType,
-		});
+	const meta = scraped.metadata as Record<string, any> | undefined;
+	const id = await insertTwitterArticle(db, env, {
+		url: normalizeUrl(tweet.url),
+		title: scraped.title,
+		source: tweet.author?.name || "Twitter",
+		publishedDate: scraped.publishedDate ? new Date(scraped.publishedDate) : new Date(),
+		summary: scraped.summary || "",
+		content: scraped.content,
+		ogImage: scraped.ogImageUrl || null,
+		metadata: buildTwitterArticle({
+			authorName: meta?.authorName || tweet.author?.name || "",
+			authorUserName: meta?.authorUserName || tweet.author?.userName || "",
+			authorProfilePicture: meta?.authorProfilePicture || tweet.author?.profilePicture,
+		}),
+	});
+
+	if (id) logInfo("TWITTER", "Saved Twitter Article", { title: scraped.title.slice(0, 50) });
+	return !!id;
+}
+
+// -- Follow Link (tweet shares an external URL) -------------------------------
+
+async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: string[], db: Client, env: Env): Promise<boolean> {
+	const resolvedUrl = await resolveUrl(links[0]!);
+
+	if (isSocialMediaUrl(resolvedUrl)) {
+		logInfo("TWITTER", "Skipped social media link", { url: resolvedUrl });
+		return false;
+	}
+	if (await urlsExist(db, [resolvedUrl])) {
+		logInfo("TWITTER", "Link already exists (dedup)", { url: resolvedUrl });
+		return false;
 	}
 
-	logInfo("TWITTER", "Saved scraped article", {
-		title: data.title.slice(0, 50),
+	let scraped;
+	try {
+		scraped = await scrapeWebPage(resolvedUrl);
+	} catch (err) {
+		logWarn("TWITTER", "Failed to scrape followed link", { url: resolvedUrl, error: String(err) });
+		return false;
+	}
+
+	// Re-assess scraped content quality
+	const assessment = await assessContent(
+		{ title: scraped.title || `Shared by @${tweet.author?.userName}`, text: scraped.content, url: resolvedUrl, source: "Twitter", sourceType: "twitter" },
+		env.OPENROUTER_API_KEY,
+	);
+	if (assessment.action === "discard") {
+		logInfo("TWITTER", "Scraped content filtered", { reason: assessment.reason });
+		return false;
+	}
+
+	const id = await insertTwitterArticle(db, env, {
+		url: resolvedUrl,
+		title: scraped.title || "Shared Article",
+		source: tweet.author?.name || "Twitter",
+		publishedDate: tweet.createdAt ? new Date(tweet.createdAt) : new Date(),
+		summary: "",
+		content: scraped.content,
+		ogImage: scraped.ogImageUrl,
+		metadata: buildTwitterShared(extractAuthor(tweet), {
+			media: extractTweetMedia(tweet),
+			createdAt: tweet.createdAt,
+			tweetText: textWithoutUrls,
+			externalUrl: resolvedUrl,
+			externalOgImage: scraped.ogImageUrl,
+			externalTitle: scraped.title || null,
+		}),
 	});
-	return true;
+
+	if (id) logInfo("TWITTER", "Saved shared article", { title: scraped.title?.slice(0, 50) });
+	return !!id;
 }
 
-function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
-	return (
-		tweet.extendedEntities?.media?.flatMap((m) =>
-			m.media_url_https
-				? [{ url: m.media_url_https, type: m.type as TwitterMedia["type"] }]
-				: [],
-		) ?? []
-	);
-}
-
-/** Check if any of the given URLs already exist as article.url in the DB */
-async function checkDuplicateByContent(
-	db: Client,
-	table: string,
-	urls: string[],
-): Promise<boolean> {
-	const normalized = urls.map(normalizeUrl).filter(Boolean);
-	if (normalized.length === 0) return false;
-	const result = await db.query(
-		`SELECT id FROM ${table} WHERE url = ANY($1) LIMIT 1`,
-		[normalized],
-	);
-	return result.rows.length > 0;
-}
+// -- Save Single Tweet --------------------------------------------------------
 
 async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
-	const table = ARTICLES_TABLE;
 	const tweetUrl = normalizeUrl(tweet.url);
+	if (await urlExists(db, tweetUrl)) return false;
 
-	// Check for duplicates
-	const existingResult = await db.query(
-		`SELECT id FROM ${table} WHERE url = $1 LIMIT 1`,
-		[tweetUrl],
-	);
-	if (existingResult.rows.length > 0) return false;
+	// 1. Twitter Article?
+	if (await handleTwitterArticle(tweet, db, env)) return true;
 
-	// Check for Twitter Article via expanded URLs
-	const expandedUrls = (tweet.urls || [])
-		.map((u: any) => u.expanded_url || u.url || u)
-		.filter(Boolean) as string[];
-	const articleUrl = expandedUrls.find((u) =>
-		/(?:twitter\.com|x\.com)\/i\/article\//.test(u),
-	);
-
-	if (articleUrl) {
-		const tweetId = tweet.id || tweet.url.split("/").pop();
-		if (tweetId) {
-			logInfo("TWITTER", "Detected Twitter Article", { tweetId, articleUrl });
-			const articleContent = await scrapeTwitterArticle(
-				tweetId,
-				env.KAITO_API_KEY || "",
-			);
-			if (articleContent) {
-				const meta = articleContent.metadata as Record<string, any> | undefined;
-
-				const twitterArticleMeta = buildTwitterArticle(
-					{
-						authorName: meta?.authorName || tweet.author?.name || "",
-						authorUserName:
-							meta?.authorUserName || tweet.author?.userName || "",
-						authorProfilePicture:
-							meta?.authorProfilePicture ||
-							(tweet.author as any)?.profilePicture,
-						authorVerified: meta?.authorVerified ?? tweet.author?.verified,
-					},
-					tweetId,
-				);
-
-				const result = await db.query(
-					`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-					 RETURNING id`,
-					[
-						tweetUrl,
-						articleContent.title,
-						tweet.author?.name || "Twitter",
-						articleContent.publishedDate
-							? new Date(articleContent.publishedDate)
-							: new Date(),
-						new Date(),
-						[],
-						[],
-						[],
-						articleContent.summary || "",
-						"twitter",
-						articleContent.content,
-						articleContent.ogImageUrl || null,
-						JSON.stringify(twitterArticleMeta),
-					],
-				);
-
-				if (result.rows.length === 0) {
-					logError("TWITTER", "Insert article error", {
-						error: "No rows returned",
-					});
-					return false;
-				}
-
-				const articleId = result.rows[0]?.id;
-				if (articleId) {
-					await env.ARTICLE_QUEUE.send({
-						type: "article_process",
-						article_id: articleId,
-						source_type: "twitter",
-					});
-				}
-				logInfo("TWITTER", "Saved Twitter Article", {
-					title: articleContent.title.slice(0, 50),
-				});
-				return true;
-			}
-			logWarn(
-				"TWITTER",
-				"Article API failed, falling through to regular tweet handling",
-			);
-		}
-	}
-
-	// Extract links and text without URLs
 	const links = tweet.text.match(/https?:\/\/\S+/g) || [];
 	const textWithoutUrls = tweet.text.replace(/https?:\/\/\S+/g, "").trim();
 
-	// AI Assessment
+	// 2. AI Assessment
 	const assessment = await assessContent(
 		{
 			title: `@${tweet.author?.userName}`,
@@ -709,106 +684,31 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 			source: "Twitter",
 			sourceType: "twitter",
 			links,
-			metrics: {
-				viewCount: tweet.viewCount,
-				likeCount: tweet.likeCount,
-			},
+			metrics: { viewCount: tweet.viewCount, likeCount: tweet.likeCount },
 		},
 		env.OPENROUTER_API_KEY,
 	);
 
-	// Handle based on assessment
 	if (assessment.action === "discard") {
-		logInfo("TWITTER", "Filtered tweet", {
-			author: tweet.author?.userName,
-			reason: assessment.reason,
-		});
+		logInfo("TWITTER", "Filtered tweet", { author: tweet.author?.userName, reason: assessment.reason });
 		return false;
 	}
 
+	// 3. Follow link?
 	if (assessment.action === "follow_link" && links.length > 0) {
-		// Resolve and scrape link content
-		const resolvedUrl = await resolveUrl(links[0]!);
-
-		// Skip social media links
-		if (isSocialMediaUrl(resolvedUrl)) {
-			logInfo("TWITTER", "Skipped social media link", { url: resolvedUrl });
-			return false;
-		}
-
-		// Cross-source dedup: check if resolved URL or normalized form already exists
-		if (await checkDuplicateByContent(db, table, [resolvedUrl])) {
-			logInfo("TWITTER", "Link already exists (dedup)", { url: resolvedUrl });
-			return false;
-		}
-
-		// Scrape link content
-		let scraped;
-		try {
-			scraped = await scrapeWebPage(resolvedUrl);
-		} catch (err) {
-			logWarn("TWITTER", "Failed to scrape followed link", {
-				url: resolvedUrl,
-				error: String(err),
-			});
-			return false;
-		}
-
-		// Re-assess scraped content
-		const scrapedAssessment = await assessContent(
-			{
-				title: scraped.title || `Shared by @${tweet.author?.userName}`,
-				text: scraped.content,
-				url: resolvedUrl,
-				source: "Twitter",
-				sourceType: "twitter",
-			},
-			env.OPENROUTER_API_KEY,
-		);
-
-		if (scrapedAssessment.action === "discard") {
-			logInfo("TWITTER", "Scraped content filtered", {
-				reason: scrapedAssessment.reason,
-			});
-			return false;
-		}
-
-		return saveScrapedArticle(db, env, {
-			url: resolvedUrl,
-			title: scraped.title || "Shared Article",
-			content: scraped.content,
-			source: tweet.author?.name || "Twitter",
-			sourceType: "twitter",
-			ogImage: scraped.ogImageUrl,
-			originalTweetUrl: tweet.url,
-			tweetText: textWithoutUrls,
-			authorName: tweet.author?.name,
-			authorUserName: tweet.author?.userName,
-			authorProfilePicture: (tweet.author as any)?.profilePicture,
-			authorVerified:
-				tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-			media: extractTweetMedia(tweet),
-			createdAt: tweet.createdAt,
-		});
+		return handleFollowLink(tweet, textWithoutUrls, links, db, env);
 	}
 
-	// assessment.action === 'save' - Save as tweet
-	const externalUrl = expandedUrls.find(
-		(u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u),
-	);
+	// 4. Save as tweet
+	const expandedUrls = (tweet.urls || []).map((u) => u.expanded_url || u.url || "").filter(Boolean);
+	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 
-	// Cross-source dedup: if tweet shares an external URL, check if it already exists
-	if (
-		externalUrl &&
-		(await checkDuplicateByContent(db, table, [externalUrl]))
-	) {
-		logInfo("TWITTER", "External URL already exists (dedup)", {
-			url: externalUrl,
-		});
+	if (externalUrl && (await urlsExist(db, [externalUrl]))) {
+		logInfo("TWITTER", "External URL already exists (dedup)", { url: externalUrl });
 		return false;
 	}
 
-	// Fetch external link's og:image, title, and content
+	// Fetch external link metadata if present
 	let externalOgImage: string | null = null;
 	let externalTitle: string | null = null;
 	let externalContent: string | null = null;
@@ -817,81 +717,79 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 			const scraped = await scrapeWebPage(externalUrl);
 			externalOgImage = scraped.ogImageUrl;
 			externalTitle = scraped.title || null;
-			if (scraped.content && scraped.content.length > 100) {
-				externalContent = scraped.content;
-			}
+			if (scraped.content && scraped.content.length > 100) externalContent = scraped.content;
 		} catch {
-			logWarn("TWITTER", "Failed to fetch external link metadata", {
-				url: externalUrl,
-			});
+			logWarn("TWITTER", "Failed to fetch external link metadata", { url: externalUrl });
 		}
 	}
 
-	const tweetMedia = extractTweetMedia(tweet);
+	const author = extractAuthor(tweet);
+	const media = extractTweetMedia(tweet);
+	const metadata = externalUrl
+		? buildTwitterShared(author, { media, createdAt: tweet.createdAt, tweetText: textWithoutUrls, externalUrl, externalOgImage, externalTitle })
+		: buildTwitterStandard(author, { media, createdAt: tweet.createdAt, quotedTweet: extractQuotedTweet(tweet) });
 
-	const tweetAuthor = {
-		authorName: tweet.author?.name || "",
-		authorUserName: tweet.author?.userName || "",
-		authorProfilePicture: (tweet.author as any)?.profilePicture,
-		authorVerified:
-			tweet.author?.verified ?? (tweet.author as any)?.isBlueVerified,
-	};
-
-	const tweetPlatformMetadata = externalUrl
-		? buildTwitterShared(tweetAuthor, {
-				media: tweetMedia,
-				createdAt: tweet.createdAt,
-				tweetText: textWithoutUrls,
-				externalUrl,
-				externalOgImage,
-				externalTitle,
-				originalTweetUrl: tweet.url,
-			})
-		: buildTwitterStandard(tweetAuthor, {
-				media: tweetMedia,
-				createdAt: tweet.createdAt,
-			});
-
-	const result = await db.query(
-		`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		 RETURNING id`,
-		[
-			tweetUrl,
-			`@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? "..." : ""}`,
-			tweet.author?.name || "Twitter",
-			new Date(tweet.createdAt),
-			new Date(),
-			tweet.hashTags || [],
-			[],
-			[],
-			textWithoutUrls,
-			"twitter",
-			externalContent || textWithoutUrls || null,
-			tweetMedia[0]?.url ?? externalOgImage ?? null,
-			JSON.stringify(tweetPlatformMetadata),
-		],
-	);
-
-	if (result.rows.length === 0) {
-		logError("TWITTER", "Insert error", { error: "No rows returned" });
-		return false;
-	}
-
-	const articleId = result.rows[0]?.id;
-	if (articleId) {
-		await env.ARTICLE_QUEUE.send({
-			type: "article_process",
-			article_id: articleId,
-			source_type: "twitter",
-		});
-	}
-
-	logInfo("TWITTER", "Saved tweet", {
-		author: tweet.author?.userName,
-		score: assessment.score,
+	const id = await insertTwitterArticle(db, env, {
+		url: tweetUrl,
+		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? "..." : ""}`,
+		source: tweet.author?.name || "Twitter",
+		publishedDate: new Date(tweet.createdAt),
+		summary: textWithoutUrls,
+		content: externalContent || textWithoutUrls || null,
+		ogImage: media[0]?.url ?? externalOgImage ?? null,
+		metadata,
+		hashTags: tweet.hashTags,
 	});
-	return true;
+
+	if (id) logInfo("TWITTER", "Saved tweet", { author: tweet.author?.userName, score: assessment.score });
+	return !!id;
+}
+
+// -- Save Thread (multiple tweets merged) -------------------------------------
+
+async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolean> {
+	const sorted = tweets.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+	const first = sorted[0];
+	const firstUrl = normalizeUrl(first.url);
+
+	// If root tweet already exists, update it with merged content
+	const existing = await db.query(`SELECT id, content FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [firstUrl]);
+
+	const combinedText = sorted
+		.map((t) => t.text.replace(/https?:\/\/\S+/g, "").trim())
+		.filter(Boolean)
+		.join("\n\n");
+	const allMedia = sorted.flatMap(extractTweetMedia);
+	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
+	const author = extractAuthor(first);
+	const metadata = buildTwitterStandard(author, { media: allMedia, createdAt: first.createdAt, quotedTweet });
+
+	if (existing.rows.length > 0) {
+		// Update existing root tweet with merged thread content and re-queue for AI processing
+		const existingId = existing.rows[0].id;
+		await db.query(
+			`UPDATE ${ARTICLES_TABLE} SET summary = $1, content = $2, platform_metadata = $3, summary_cn = NULL, content_cn = NULL, title_cn = NULL, embedding = NULL WHERE id = $4`,
+			[combinedText, combinedText, JSON.stringify(metadata), existingId],
+		);
+		await env.ARTICLE_QUEUE.send({ type: "article_process", article_id: existingId, source_type: "twitter" });
+		logInfo("TWITTER", "Updated thread", { author: first.author?.userName, tweets: sorted.length });
+		return true;
+	}
+
+	const id = await insertTwitterArticle(db, env, {
+		url: firstUrl,
+		title: `@${first.author?.userName}: ${first.text.substring(0, 100)}${first.text.length > 100 ? "..." : ""}`,
+		source: first.author?.name || "Twitter",
+		publishedDate: new Date(first.createdAt),
+		summary: combinedText,
+		content: combinedText,
+		ogImage: allMedia[0]?.url ?? null,
+		metadata,
+		hashTags: first.hashTags,
+	});
+
+	if (id) logInfo("TWITTER", "Saved thread", { author: first.author?.userName, tweets: sorted.length });
+	return !!id;
 }
 
 async function fetchUserTweets(
@@ -901,17 +799,16 @@ async function fetchUserTweets(
 	db: Client,
 	env: Env,
 ): Promise<number> {
-	let cursor: string | null = null;
-	let count = 0;
 	const isNumericId = /^\d+$/.test(userIdentifier);
+	const allTweets: Tweet[] = [];
+	let cursor: string | null = null;
 
+	// Phase 1: Collect all tweets (with replies for thread detection)
 	while (true) {
 		const params = new URLSearchParams({
-			...(isNumericId
-				? { userId: userIdentifier }
-				: { userName: userIdentifier }),
+			...(isNumericId ? { userId: userIdentifier } : { userName: userIdentifier }),
 			sinceTime: sinceTime.toString(),
-			includeReplies: "false",
+			includeReplies: "true",
 			limit: "20",
 		});
 		if (cursor) params.append("cursor", cursor);
@@ -920,40 +817,46 @@ async function fetchUserTweets(
 			headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
 		});
 		if (!res.ok) {
-			logError("TWITTER", "Kaito API HTTP error", {
-				user: userIdentifier,
-				status: res.status,
-				statusText: res.statusText,
-			});
+			logError("TWITTER", "Kaito API HTTP error", { user: userIdentifier, status: res.status, statusText: res.statusText });
 			break;
 		}
 
-		const data: TwitterApiResponse = await res.json();
-		if (data.status !== "success") {
-			logError("TWITTER", "Kaito API non-success", {
-				user: userIdentifier,
-				status: data.status,
-				message: data.message,
-			});
+		const apiRes: TwitterApiResponse = await res.json();
+		if (apiRes.status !== "success") {
+			logError("TWITTER", "Kaito API non-success", { user: userIdentifier, status: apiRes.status, message: apiRes.message });
 			break;
 		}
 
-		for (const tweet of data.tweets || []) {
-			try {
-				if (isOriginalTweet(tweet) && (await saveTweet(tweet, db, env)))
-					count++;
-			} catch (err) {
-				logError("TWITTER", "saveTweet failed", {
-					url: tweet.url,
-					author: tweet.author?.userName,
-					error: String(err),
-				});
-			}
+		const tweets = apiRes.data?.tweets || [];
+		for (const tweet of tweets) {
+			if (isOriginalContent(tweet)) allTweets.push(tweet);
 		}
 
-		if (!data.has_next_page) break;
-		cursor = data.next_cursor || null;
+		if (!apiRes.has_next_page) break;
+		cursor = apiRes.next_cursor || null;
 		await new Promise((r) => setTimeout(r, 1000));
+	}
+
+	// Phase 2: Group by conversationId → threads vs single tweets
+	const groups = new Map<string, Tweet[]>();
+	for (const tweet of allTweets) {
+		const key = tweet.conversationId || tweet.id || tweet.url;
+		if (!groups.has(key)) groups.set(key, []);
+		groups.get(key)!.push(tweet);
+	}
+
+	// Phase 3: Process each group
+	let count = 0;
+	for (const tweets of groups.values()) {
+		try {
+			if (tweets.length >= 2) {
+				if (await saveThread(tweets, db, env)) count++;
+			} else {
+				if (await saveTweet(tweets[0], db, env)) count++;
+			}
+		} catch (err) {
+			logError("TWITTER", "Save failed", { url: tweets[0]?.url, error: String(err) });
+		}
 	}
 
 	return count;

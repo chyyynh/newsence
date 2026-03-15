@@ -16,6 +16,12 @@ import type { Env } from '../models/types';
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
 const DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC = 60;
 
+/**
+ * Best-effort in-memory rate limiter. NOT reliable across isolates —
+ * Cloudflare may route requests to different instances. Acceptable for
+ * /submit which is low-traffic and auth-gated. For stricter limiting,
+ * migrate to Durable Objects or KV-based counting.
+ */
 type RateBucket = { count: number; resetAt: number };
 const submitRateBuckets = new Map<string, RateBucket>();
 
@@ -647,26 +653,22 @@ function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined
 				authorName: (metadata.authorName as string) || '',
 				authorUserName: (metadata.authorUserName as string) || '',
 				authorProfilePicture: metadata.authorProfilePicture as string | undefined,
-				authorVerified: metadata.authorVerified as boolean | undefined,
 			};
 			const variant = metadata.variant as string | undefined;
 			if (variant === 'shared') {
 				return buildTwitterShared(author, {
-					tweetId: metadata.tweetId as string | undefined,
 					media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
 					createdAt: metadata.createdAt as string | undefined,
 					tweetText: metadata.tweetText as string | undefined,
 					externalUrl: (metadata.externalUrl as string) || '',
 					externalOgImage: metadata.externalOgImage as string | null | undefined,
 					externalTitle: metadata.externalTitle as string | null | undefined,
-					originalTweetUrl: metadata.originalTweetUrl as string | undefined,
 				});
 			}
 			if (variant === 'article') {
-				return buildTwitterArticle(author, metadata.tweetId as string | undefined);
+				return buildTwitterArticle(author);
 			}
 			return buildTwitterStandard(author, {
-				tweetId: metadata.tweetId as string | undefined,
 				media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
 				createdAt: metadata.createdAt as string | undefined,
 			});
