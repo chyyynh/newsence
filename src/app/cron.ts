@@ -1,7 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 import type { Client } from "pg";
 import { type FeedConfig, getFeedConfig } from "../domain/feed-config";
-import { assessContent } from "../domain/processors";
 import {
 	type RSSItem,
 	extractItemsFromFeed,
@@ -504,6 +503,15 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise
 	return !!id;
 }
 
+// -- Triage (rule-based, no AI) -----------------------------------------------
+
+/** Rule-based content triage. Tracked users are curated, so no AI needed for quality gating. */
+function triageTweet(textWithoutUrls: string, links: string[]): "save" | "follow_link" | "discard" {
+	if (textWithoutUrls.length < 10) return links.length > 0 ? "follow_link" : "discard";
+	if (textWithoutUrls.length < 50 && links.length > 0) return "follow_link";
+	return "save";
+}
+
 // -- Follow Link (tweet shares an external URL) -------------------------------
 
 async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: string[], db: Client, env: Env): Promise<boolean> {
@@ -526,13 +534,9 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: st
 		return false;
 	}
 
-	// Re-assess scraped content quality
-	const assessment = await assessContent(
-		{ title: scraped.title || `Shared by @${tweet.author?.userName}`, text: scraped.content, url: resolvedUrl, source: "Twitter", sourceType: "twitter" },
-		env.OPENROUTER_API_KEY,
-	);
-	if (assessment.action === "discard") {
-		logInfo("TWITTER", "Scraped content filtered", { reason: assessment.reason });
+	// Skip if scraped content is too short to be meaningful
+	if (!scraped.content || scraped.content.length < 100) {
+		logInfo("TWITTER", "Scraped content too short", { url: resolvedUrl, chars: scraped.content?.length ?? 0 });
 		return false;
 	}
 
@@ -570,31 +574,19 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const links = tweet.text.match(/https?:\/\/\S+/g) || [];
 	const textWithoutUrls = tweet.text.replace(/https?:\/\/\S+/g, "").trim();
 
-	// 2. AI Assessment
-	const assessment = await assessContent(
-		{
-			title: `@${tweet.author?.userName}`,
-			text: textWithoutUrls,
-			url: tweet.url,
-			source: "Twitter",
-			sourceType: "twitter",
-			links,
-			metrics: { viewCount: tweet.viewCount, likeCount: tweet.likeCount },
-		},
-		env.OPENROUTER_API_KEY,
-	);
+	// 2. Rule-based triage (no AI — tracked users are curated)
+	const triage = triageTweet(textWithoutUrls, links);
 
-	if (assessment.action === "discard") {
-		logInfo("TWITTER", "Filtered tweet", { author: tweet.author?.userName, reason: assessment.reason });
+	if (triage === "discard") {
+		logInfo("TWITTER", "Filtered tweet", { author: tweet.author?.userName, reason: "too short, no links" });
 		return false;
 	}
 
-	// 3. Follow link?
-	if (assessment.action === "follow_link" && links.length > 0) {
+	if (triage === "follow_link") {
 		return handleFollowLink(tweet, textWithoutUrls, links, db, env);
 	}
 
-	// 4. Save as tweet
+	// 3. Save as tweet
 	const expandedUrls = (tweet.urls || []).map((u) => u.expanded_url || u.url || "").filter(Boolean);
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 
@@ -636,7 +628,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		hashTags: tweet.hashTags,
 	});
 
-	if (id) logInfo("TWITTER", "Saved tweet", { author: tweet.author?.userName, score: assessment.score });
+	if (id) logInfo("TWITTER", "Saved tweet", { author: tweet.author?.userName });
 	return !!id;
 }
 
