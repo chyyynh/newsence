@@ -1,5 +1,5 @@
 import type { Client } from 'pg';
-import { callOpenRouter, extractJson } from '../infra/ai';
+import { callOpenRouter, extractJson } from '../infra/openrouter';
 import { logInfo, logWarn } from '../infra/log';
 
 const TOPIC_CONFIG = {

@@ -8,7 +8,7 @@ import {
 	handleWorkflowStatus,
 	handleWorkflowStream,
 } from './app/http';
-import { handleRetryCron, handleRSSCron, handleTwitterCron } from './app/schedule';
+import { handleRetryCron, handleRSSCron, handleTwitterCron } from './app/cron';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 import { logInfo } from './infra/log';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';

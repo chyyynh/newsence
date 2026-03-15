@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { generateYouTubeHighlights } from '../infra/ai';
+import { generateYouTubeHighlights } from './processors';
 import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
