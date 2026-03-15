@@ -1,5 +1,4 @@
 import type { AIAnalysisResult, Article, Env, OpenRouterResponse } from '../models/types';
-import { createDbClient } from './db';
 import { logError, logInfo } from './log';
 
 // ─────────────────────────────────────────────────────────────
@@ -42,7 +41,6 @@ const OPENROUTER_HEADERS = {
 
 // Available models
 export const AI_MODELS = {
-	FLASH_LITE: 'google/gemini-2.5-flash-lite',
 	FLASH: 'google/gemini-3-flash-preview',
 } as const;
 
@@ -384,10 +382,11 @@ const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 
 
 只回傳 JSON，不要其他文字。`;
 
+/** Generate YouTube highlights from transcript. Returns highlights only — caller handles persistence. */
 export async function generateYouTubeHighlights(
 	videoId: string,
 	transcript: TranscriptSegment[],
-	env: Env,
+	apiKey: string,
 ): Promise<YouTubeHighlightsResult | null> {
 	logInfo('AI', 'Generating YouTube highlights', { videoId });
 
@@ -395,10 +394,8 @@ export async function generateYouTubeHighlights(
 	const last = transcript[transcript.length - 1];
 	const duration = Math.ceil(last.endTime);
 
-	const prompt = `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`;
-
-	const rawContent = await callOpenRouter(prompt, {
-		apiKey: env.OPENROUTER_API_KEY,
+	const rawContent = await callOpenRouter(`影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+		apiKey,
 		model: AI_MODELS.FLASH,
 		maxTokens: 2000,
 		temperature: 0.3,
@@ -416,28 +413,6 @@ export async function generateYouTubeHighlights(
 		return null;
 	}
 
-	// Write to youtube_transcripts table
-	const db = await createDbClient(env);
-	try {
-		const aiHighlights = {
-			version: '1.0',
-			model: AI_MODELS.FLASH,
-			highlights: result.highlights,
-			generatedAt: new Date().toISOString(),
-		};
-
-		await db.query(`UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3`, [
-			JSON.stringify(aiHighlights),
-			new Date().toISOString(),
-			videoId,
-		]);
-
-		logInfo('AI', 'YouTube highlights saved', { videoId, count: result.highlights.length });
-		return result;
-	} catch (error) {
-		logError('AI', 'YouTube highlights: unexpected error', { videoId, error: String(error) });
-		return null;
-	} finally {
-		await db.end();
-	}
+	logInfo('AI', 'YouTube highlights generated', { videoId, count: result.highlights.length });
+	return result;
 }

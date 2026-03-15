@@ -14,6 +14,7 @@ import { logError, logInfo, logWarn } from "../infra/log";
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from "../infra/web";
 import type {
 	PlatformMetadata,
+	QuotedTweetData,
 	TwitterMedia,
 } from "../models/platform-metadata";
 import {
@@ -498,7 +499,7 @@ function isOriginalContent(tweet: Tweet): boolean {
 }
 
 /** Extract quoted tweet data for platform_metadata */
-function extractQuotedTweet(tweet: Tweet): import("../models/platform-metadata").QuotedTweetData | undefined {
+function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 	const q = tweet.quoted_tweet;
 	if (!q?.text || !q?.author) return undefined;
 	return {
