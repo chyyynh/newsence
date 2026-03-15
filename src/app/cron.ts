@@ -383,12 +383,9 @@ interface TwitterApiResponse {
 
 const TWITTER_USER_API = "https://api.twitterapi.io/twitter/user/last_tweets";
 
-/** Filter to only keep original content: root tweets + self-replies (threads). Skip RTs and replies to others. */
-function isOriginalContent(tweet: Tweet): boolean {
-	if (tweet.retweeted_tweet || tweet.text.startsWith("RT @")) return false;
-	if (!tweet.isReply) return true;
-	// Self-reply = thread continuation
-	return tweet.inReplyToUsername === tweet.author?.userName;
+/** Skip RTs. All other filtering (replies vs threads) handled in Phase 2. */
+function isNotRetweet(tweet: Tweet): boolean {
+	return !tweet.retweeted_tweet && !tweet.text.startsWith("RT @");
 }
 
 /** Extract quoted tweet data for platform_metadata */
@@ -506,9 +503,10 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise
 // -- Triage (rule-based, no AI) -----------------------------------------------
 
 /** Rule-based content triage. Tracked users are curated, so no AI needed for quality gating. */
+const MIN_TWEET_LENGTH = 150;
+
 function triageTweet(textWithoutUrls: string, links: string[]): "save" | "follow_link" | "discard" {
-	if (textWithoutUrls.length < 10) return links.length > 0 ? "follow_link" : "discard";
-	if (textWithoutUrls.length < 50 && links.length > 0) return "follow_link";
+	if (textWithoutUrls.length < MIN_TWEET_LENGTH) return links.length > 0 ? "follow_link" : "discard";
 	return "save";
 }
 
@@ -642,10 +640,17 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	// If root tweet already exists, update it with merged content
 	const existing = await db.query(`SELECT id, content FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [firstUrl]);
 
-	const combinedText = sorted
-		.map((t) => t.text.replace(/https?:\/\/\S+/g, "").trim())
-		.filter(Boolean)
-		.join("\n\n");
+	// Dedup repeated text (e.g. same reply to multiple people) and cap at 10 tweets
+	const seen = new Set<string>();
+	const uniqueTexts: string[] = [];
+	for (const t of sorted.slice(0, 10)) {
+		const text = t.text.replace(/https?:\/\/\S+/g, "").trim();
+		if (text && !seen.has(text)) {
+			seen.add(text);
+			uniqueTexts.push(text);
+		}
+	}
+	const combinedText = uniqueTexts.join("\n\n");
 	const allMedia = sorted.flatMap(extractTweetMedia);
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
 	const author = extractAuthor(first);
@@ -716,7 +721,7 @@ async function fetchUserTweets(
 
 		const tweets = apiRes.data?.tweets || [];
 		for (const tweet of tweets) {
-			if (isOriginalContent(tweet)) allTweets.push(tweet);
+			if (isNotRetweet(tweet)) allTweets.push(tweet);
 		}
 
 		if (!apiRes.has_next_page) break;
@@ -724,9 +729,17 @@ async function fetchUserTweets(
 		await new Promise((r) => setTimeout(r, 1000));
 	}
 
-	// Phase 2: Group by conversationId → threads vs single tweets
+	// Phase 2: Separate root tweets from replies, detect threads
+	const rootTweets = allTweets.filter((t) => !t.isReply);
+	const selfReplies = allTweets.filter((t) => t.isReply && t.inReplyToUsername === t.author?.userName);
+
+	// Only keep self-replies whose conversationId matches a root tweet (= actual threads)
+	const rootConversationIds = new Set(rootTweets.map((t) => t.conversationId || t.id));
+	const threadReplies = selfReplies.filter((t) => t.conversationId && rootConversationIds.has(t.conversationId));
+
+	// Group root tweets + their thread replies by conversationId
 	const groups = new Map<string, Tweet[]>();
-	for (const tweet of allTweets) {
+	for (const tweet of [...rootTweets, ...threadReplies]) {
 		const key = tweet.conversationId || tweet.id || tweet.url;
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)!.push(tweet);
