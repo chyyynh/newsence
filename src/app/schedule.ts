@@ -335,16 +335,16 @@ async function processFeed(
 		.map((u) => normalizeUrl(u!));
 	const table = ARTICLES_TABLE;
 	const dedupBatchSize = 50;
-	const existingRecords: Array<{ url: string; source: string }> = [];
+	const existingRecords: Array<{ url: string; source: string; source_type: string }> = [];
 
 	for (let i = 0; i < urls.length; i += dedupBatchSize) {
 		const batch = urls.slice(i, i + dedupBatchSize);
 		const result = await db.query(
-			`SELECT url, source FROM ${table} WHERE url = ANY($1)`,
+			`SELECT url, source, source_type FROM ${table} WHERE url = ANY($1)`,
 			[batch],
 		);
 		existingRecords.push(
-			...(result.rows as Array<{ url: string; source: string }>),
+			...(result.rows as Array<{ url: string; source: string; source_type: string }>),
 		);
 	}
 
@@ -357,10 +357,10 @@ async function processFeed(
 	// Upgrade source to this feed when a duplicate exists from a lower-priority source
 	// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
 	const SOURCE_PRIORITY: Record<string, number> = {
-		Twitter: 0,
 		Unknown: 0,
 		Telegram: 1,
 	};
+	const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
 	const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
 
 	// Build URL→item map for fetching comments URL during upgrade
@@ -371,7 +371,7 @@ async function processFeed(
 	}
 
 	for (const existing of existingRecords) {
-		const existingPriority = SOURCE_PRIORITY[existing.source] ?? 10;
+		const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? 10;
 		if (feedPriority > existingPriority) {
 			const normalized = normalizeUrl(existing.url);
 			const updateFields: string[] = ["source = $1"];
@@ -653,7 +653,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 					[
 						tweetUrl,
 						articleContent.title,
-						"Twitter",
+						tweet.author?.name || "Twitter",
 						articleContent.publishedDate
 							? new Date(articleContent.publishedDate)
 							: new Date(),
@@ -777,7 +777,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 			url: resolvedUrl,
 			title: scraped.title || "Shared Article",
 			content: scraped.content,
-			source: "Twitter",
+			source: tweet.author?.name || "Twitter",
 			sourceType: "twitter",
 			ogImage: scraped.ogImageUrl,
 			originalTweetUrl: tweet.url,
@@ -859,13 +859,13 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		[
 			tweetUrl,
 			`@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? "..." : ""}`,
-			"Twitter",
+			tweet.author?.name || "Twitter",
 			new Date(tweet.createdAt),
 			new Date(),
 			tweet.hashTags || [],
 			[],
 			[],
-			"",
+			textWithoutUrls,
 			"twitter",
 			externalContent || textWithoutUrls || null,
 			tweetMedia[0]?.url ?? externalOgImage ?? null,
