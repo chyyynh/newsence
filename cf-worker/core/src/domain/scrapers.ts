@@ -606,7 +606,7 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 
 	if (ogImageUrl && !ogImageUrl.startsWith('http')) {
 		try {
-			ogImageUrl = new URL(ogImageUrl, new URL(url).origin).toString();
+			ogImageUrl = new URL(ogImageUrl, url).toString();
 		} catch {
 			ogImageUrl = null;
 		}

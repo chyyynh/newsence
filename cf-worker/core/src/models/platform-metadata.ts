@@ -18,34 +18,37 @@ interface TwitterAuthorFields {
 	authorName: string;
 	authorUserName: string;
 	authorProfilePicture?: string;
-	authorVerified?: boolean;
+}
+
+export interface QuotedTweetData {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	text: string;
 }
 
 /** Standard tweet (no external link) */
 export interface TwitterStandardData extends TwitterAuthorFields {
 	variant?: undefined;
-	tweetId?: string;
 	media: TwitterMedia[];
 	createdAt?: string;
+	quotedTweet?: QuotedTweetData;
 }
 
 /** Tweet sharing external link */
 export interface TwitterSharedData extends TwitterAuthorFields {
 	variant: 'shared';
-	tweetId?: string;
 	media: TwitterMedia[];
 	createdAt?: string;
 	tweetText?: string;
 	externalUrl: string;
 	externalOgImage?: string | null;
 	externalTitle?: string | null;
-	originalTweetUrl?: string;
 }
 
 /** Twitter Article (long-form) */
 export interface TwitterArticleData extends TwitterAuthorFields {
 	variant: 'article';
-	tweetId?: string;
 }
 
 export type TwitterMetadata = TwitterStandardData | TwitterSharedData | TwitterArticleData;
@@ -121,31 +124,24 @@ function now(): string {
 
 export function buildTwitterStandard(
 	author: TwitterAuthorFields,
-	opts?: { tweetId?: string; media?: TwitterMedia[]; createdAt?: string },
+	opts?: { media?: TwitterMedia[]; createdAt?: string; quotedTweet?: QuotedTweetData },
 ): PlatformMetadata & { type: 'twitter' } {
 	return {
 		type: 'twitter',
 		fetchedAt: now(),
-		data: {
-			...author,
-			media: opts?.media ?? [],
-			tweetId: opts?.tweetId,
-			createdAt: opts?.createdAt,
-		},
+		data: { ...author, media: opts?.media ?? [], createdAt: opts?.createdAt, quotedTweet: opts?.quotedTweet },
 	};
 }
 
 export function buildTwitterShared(
 	author: TwitterAuthorFields,
 	opts: {
-		tweetId?: string;
 		media?: TwitterMedia[];
 		createdAt?: string;
 		tweetText?: string;
 		externalUrl: string;
 		externalOgImage?: string | null;
 		externalTitle?: string | null;
-		originalTweetUrl?: string;
 	},
 ): PlatformMetadata & { type: 'twitter' } {
 	return {
@@ -155,26 +151,20 @@ export function buildTwitterShared(
 			variant: 'shared',
 			...author,
 			media: opts.media ?? [],
-			tweetId: opts.tweetId,
 			createdAt: opts.createdAt,
 			tweetText: opts.tweetText,
 			externalUrl: opts.externalUrl,
 			externalOgImage: opts.externalOgImage,
 			externalTitle: opts.externalTitle,
-			originalTweetUrl: opts.originalTweetUrl,
 		},
 	};
 }
 
-export function buildTwitterArticle(author: TwitterAuthorFields, tweetId?: string): PlatformMetadata & { type: 'twitter' } {
+export function buildTwitterArticle(author: TwitterAuthorFields): PlatformMetadata & { type: 'twitter' } {
 	return {
 		type: 'twitter',
 		fetchedAt: now(),
-		data: {
-			variant: 'article',
-			...author,
-			tweetId,
-		},
+		data: { variant: 'article', ...author },
 	};
 }
 

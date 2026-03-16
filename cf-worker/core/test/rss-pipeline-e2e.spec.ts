@@ -11,10 +11,9 @@ import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
 import { describe, expect, it } from 'vitest';
-import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, stripHtml } from '../src/app/schedule';
-import { translateContent } from '../src/domain/processors';
+import { callGeminiForAnalysis, translateContent } from '../src/domain/processors';
+import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, stripHtml } from '../src/domain/rss';
 import { scrapeWebPage } from '../src/domain/scrapers';
-import { callGeminiForAnalysis } from '../src/infra/ai';
 import type { Article } from '../src/models/types';
 
 // ─────────────────────────────────────────────────────────────

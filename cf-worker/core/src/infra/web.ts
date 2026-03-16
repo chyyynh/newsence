@@ -74,6 +74,8 @@ const TRACKING_PARAMS = [
 	'vfff',
 	'ttt',
 	'triedRedirect',
+	's', // Twitter share tracking
+	'ssr',
 ];
 
 /** Domain aliases that should be normalized to a canonical form */
