@@ -802,10 +802,14 @@ export async function handleTwitterCron(
 			);
 			total += count;
 
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [
-				new Date(),
-				user.id,
-			]);
+			// Only advance cursor if we actually saved tweets — otherwise a
+			// transient API failure would cause tweets to be skipped permanently
+			if (count > 0) {
+				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [
+					new Date(),
+					user.id,
+				]);
+			}
 		}
 
 		logInfo("TWITTER", "end", { inserted: total, users: users.length });
