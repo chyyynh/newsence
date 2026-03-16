@@ -1,30 +1,21 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 import type { PlatformMetadata } from './platform-metadata';
 
-// Environment variables
-export interface Env {
-	HYPERDRIVE: Hyperdrive;
+/**
+ * Environment bindings.
+ * Extends wrangler-generated Cloudflare.Env (from worker-configuration.d.ts)
+ * with secrets that are not in wrangler.jsonc.
+ */
+export interface Env extends Cloudflare.Env {
 	OPENROUTER_API_KEY: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	SUBMIT_RATE_LIMIT_MAX?: string;
 	SUBMIT_RATE_LIMIT_WINDOW_SEC?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	CLIP_API_URL?: string;
 	CLIP_API_SECRET?: string;
-	// Queue binding
-	ARTICLE_QUEUE: Queue;
-
-	// Workflow binding
-	MONITOR_WORKFLOW: any; // Workflow type from cloudflare:workers
-
-	// Workers AI binding
-	AI: Ai;
-
-	// Browser Rendering — /crawl REST API credentials
 	CF_ACCOUNT_ID: string;
 	CF_API_TOKEN: string;
-	BROWSER: Fetcher;
 }
 
 // Article related types
@@ -76,7 +67,7 @@ export interface RSSFeed {
 	scraped_at?: string;
 }
 
-// Twitter related
+// Twitter related (Kaito API response shape)
 export interface Tweet {
 	id?: string;
 	url: string;
@@ -86,7 +77,7 @@ export interface Tweet {
 		id?: string;
 		userName: string;
 		name: string;
-		verified?: boolean;
+		profilePicture?: string;
 	};
 	text: string;
 	likeCount?: number;
@@ -97,12 +88,16 @@ export interface Tweet {
 		media?: Array<{ media_url_https: string; type: string }>;
 	};
 	hashTags?: string[];
-	mentions?: any[];
-	urls?: any[];
+	urls?: Array<{ expanded_url?: string; url?: string }>;
 	lang?: string;
-	possiblySensitive?: boolean;
-	source?: string;
-	listType?: string;
+	// Thread & reply fields
+	conversationId?: string;
+	isReply?: boolean;
+	inReplyToId?: string | null;
+	inReplyToUsername?: string | null;
+	// Quote & retweet
+	quoted_tweet?: Tweet | null;
+	retweeted_tweet?: Tweet | null;
 }
 
 // Queue message types

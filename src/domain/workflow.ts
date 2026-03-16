@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { generateYouTubeHighlights } from '../infra/ai';
+import { generateYouTubeHighlights } from './processors';
 import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
@@ -177,17 +177,27 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 					const db = await createDbClient(this.env);
 					try {
-						const result = await db.query('SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1', [videoId]);
+						const result = await db.query<{ transcript: Array<{ startTime: number; endTime: number; text: string }> | null; ai_highlights: unknown }>(
+							'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
+							[videoId],
+						);
 						const row = result.rows[0];
+						if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return;
 
-						if (!row) return;
-						if (row.ai_highlights) {
-							logInfo('WORKFLOW', 'YouTube highlights already exist, skipping', { videoId });
-							return;
-						}
-						if (!Array.isArray(row.transcript) || row.transcript.length === 0) return;
+						const highlights = await generateYouTubeHighlights(videoId, row.transcript, this.env.OPENROUTER_API_KEY);
+						if (!highlights) return;
 
-						await generateYouTubeHighlights(videoId, row.transcript as any, this.env);
+						const aiHighlights = {
+							version: '1.0',
+							model: 'google/gemini-3-flash-preview',
+							highlights: highlights.highlights,
+							generatedAt: new Date().toISOString(),
+						};
+						await db.query(
+							'UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3',
+							[JSON.stringify(aiHighlights), new Date().toISOString(), videoId],
+						);
+						logInfo('WORKFLOW', 'YouTube highlights saved', { videoId, count: highlights.highlights.length });
 					} finally {
 						await db.end();
 					}

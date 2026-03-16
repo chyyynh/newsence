@@ -18,7 +18,7 @@
 	"triggers": {
 		"crons": [
 			"*/5 * * * *", // RSS monitor (every 5 minutes)
-			"0 */6 * * *", // Twitter monitor (every 6 hours)
+			"0 * * * *", // Twitter monitor (every hour)
 			"0 3 * * *" // Retry failed articles (daily 3 AM UTC)
 		]
 	},
