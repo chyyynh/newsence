@@ -690,10 +690,11 @@ async function fetchUserTweets(
 	sinceTime: number,
 	db: Client,
 	env: Env,
-): Promise<number> {
+): Promise<{ count: number; completed: boolean }> {
 	const isNumericId = /^\d+$/.test(userIdentifier);
 	const allTweets: Tweet[] = [];
 	let cursor: string | null = null;
+	let completed = true;
 
 	// Phase 1: Collect all tweets (with replies for thread detection)
 	while (true) {
@@ -710,12 +711,14 @@ async function fetchUserTweets(
 		});
 		if (!res.ok) {
 			logError("TWITTER", "Kaito API HTTP error", { user: userIdentifier, status: res.status, statusText: res.statusText });
+			completed = false;
 			break;
 		}
 
 		const apiRes: TwitterApiResponse = await res.json();
 		if (apiRes.status !== "success") {
 			logError("TWITTER", "Kaito API non-success", { user: userIdentifier, status: apiRes.status, message: apiRes.message });
+			completed = false;
 			break;
 		}
 
@@ -733,13 +736,15 @@ async function fetchUserTweets(
 	const rootTweets = allTweets.filter((t) => !t.isReply);
 	const selfReplies = allTweets.filter((t) => t.isReply && t.inReplyToUsername === t.author?.userName);
 
-	// Only keep self-replies whose conversationId matches a root tweet (= actual threads)
+	// Keep self-replies whose conversationId matches a root tweet (= actual threads)
 	const rootConversationIds = new Set(rootTweets.map((t) => t.conversationId || t.id));
 	const threadReplies = selfReplies.filter((t) => t.conversationId && rootConversationIds.has(t.conversationId));
+	// Self-replies whose root predates the cursor — save individually rather than dropping
+	const orphanReplies = selfReplies.filter((t) => !t.conversationId || !rootConversationIds.has(t.conversationId));
 
 	// Group root tweets + their thread replies by conversationId
 	const groups = new Map<string, Tweet[]>();
-	for (const tweet of [...rootTweets, ...threadReplies]) {
+	for (const tweet of [...rootTweets, ...threadReplies, ...orphanReplies]) {
 		const key = tweet.conversationId || tweet.id || tweet.url;
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)!.push(tweet);
@@ -759,7 +764,7 @@ async function fetchUserTweets(
 		}
 	}
 
-	return count;
+	return { count, completed };
 }
 
 export async function handleTwitterCron(
@@ -793,19 +798,23 @@ export async function handleTwitterCron(
 				name: user.name,
 				id: userIdentifier,
 			});
-			const count = await fetchUserTweets(
+			const result = await fetchUserTweets(
 				env.KAITO_API_KEY || "",
 				userIdentifier,
 				sinceTime,
 				db,
 				env,
 			);
-			total += count;
+			total += result.count;
 
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [
-				new Date(),
-				user.id,
-			]);
+			// Only advance cursor if all pages were fetched successfully —
+			// a transient API failure would cause tweets to be skipped permanently
+			if (result.completed) {
+				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [
+					new Date(),
+					user.id,
+				]);
+			}
 		}
 
 		logInfo("TWITTER", "end", { inserted: total, users: users.length });
