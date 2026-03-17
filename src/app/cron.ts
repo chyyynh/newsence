@@ -373,15 +373,7 @@ export async function handleRSSCron(
 // Twitter Monitor
 // ─────────────────────────────────────────────────────────────
 
-interface TwitterApiResponse {
-	status: string;
-	message?: string;
-	data?: { tweets?: Tweet[] };
-	has_next_page?: boolean;
-	next_cursor?: string;
-}
-
-const TWITTER_USER_API = "https://api.twitterapi.io/twitter/user/last_tweets";
+const TWITTER_ADVANCED_SEARCH_API = "https://api.twitterapi.io/twitter/tweet/advanced_search";
 
 /** Skip RTs. All other filtering (replies vs threads) handled in Phase 2. */
 function isNotRetweet(tweet: Tweet): boolean {
@@ -684,65 +676,75 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	return !!id;
 }
 
-async function fetchUserTweets(
+/** Max usernames per query batch to stay within query length limits */
+const TWITTER_BATCH_SIZE = 20;
+
+/** Format a unix timestamp (seconds) to Twitter advanced search date format */
+function toTwitterDate(epochSec: number): string {
+	return new Date(epochSec * 1000).toISOString().replace("T", "_").replace(/\.\d+Z$/, "_UTC");
+}
+
+/**
+ * Fetch tweets for a batch of users via Advanced Search API.
+ * Builds a query like: (from:user1 OR from:user2 ...) since:2025-01-01_00:00:00_UTC
+ */
+async function fetchBatchTweets(
 	apiKey: string,
-	userIdentifier: string,
+	userNames: string[],
 	sinceTime: number,
 	db: Client,
 	env: Env,
 ): Promise<{ count: number; completed: boolean }> {
-	const isNumericId = /^\d+$/.test(userIdentifier);
+	const fromClause = userNames.map((u) => `from:${u}`).join(" OR ");
+	const sinceDate = toTwitterDate(sinceTime);
+	const query = `(${fromClause}) since:${sinceDate}`;
+
 	const allTweets: Tweet[] = [];
-	let cursor: string | null = null;
+	let cursor = "";
 	let completed = true;
 
-	// Phase 1: Collect all tweets (with replies for thread detection)
+	// Phase 1: Paginate through all results
 	while (true) {
 		const params = new URLSearchParams({
-			...(isNumericId ? { userId: userIdentifier } : { userName: userIdentifier }),
-			sinceTime: sinceTime.toString(),
-			includeReplies: "true",
-			limit: "20",
+			query,
+			queryType: "Latest",
 		});
-		if (cursor) params.append("cursor", cursor);
+		if (cursor) params.set("cursor", cursor);
 
-		const res = await fetch(`${TWITTER_USER_API}?${params}`, {
+		const res = await fetch(`${TWITTER_ADVANCED_SEARCH_API}?${params}`, {
 			headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
 		});
 		if (!res.ok) {
-			logError("TWITTER", "Kaito API HTTP error", { user: userIdentifier, status: res.status, statusText: res.statusText });
+			logError("TWITTER", "Advanced Search HTTP error", { status: res.status, statusText: res.statusText });
 			completed = false;
 			break;
 		}
 
-		const apiRes: TwitterApiResponse = await res.json();
-		if (apiRes.status !== "success") {
-			logError("TWITTER", "Kaito API non-success", { user: userIdentifier, status: apiRes.status, message: apiRes.message });
-			completed = false;
-			break;
-		}
+		const apiRes = (await res.json()) as {
+			tweets?: Tweet[];
+			has_next_page?: boolean;
+			next_cursor?: string;
+		};
 
-		const tweets = apiRes.data?.tweets || [];
+		const tweets = apiRes.tweets || [];
 		for (const tweet of tweets) {
 			if (isNotRetweet(tweet)) allTweets.push(tweet);
 		}
 
 		if (!apiRes.has_next_page) break;
-		cursor = apiRes.next_cursor || null;
+		cursor = apiRes.next_cursor || "";
+		if (!cursor) break;
 		await new Promise((r) => setTimeout(r, 1000));
 	}
 
-	// Phase 2: Separate root tweets from replies, detect threads
+	// Phase 2: Thread detection — group by author then by conversationId
 	const rootTweets = allTweets.filter((t) => !t.isReply);
 	const selfReplies = allTweets.filter((t) => t.isReply && t.inReplyToUsername === t.author?.userName);
 
-	// Keep self-replies whose conversationId matches a root tweet (= actual threads)
 	const rootConversationIds = new Set(rootTweets.map((t) => t.conversationId || t.id));
 	const threadReplies = selfReplies.filter((t) => t.conversationId && rootConversationIds.has(t.conversationId));
-	// Self-replies whose root predates the cursor — save individually rather than dropping
 	const orphanReplies = selfReplies.filter((t) => !t.conversationId || !rootConversationIds.has(t.conversationId));
 
-	// Group root tweets + their thread replies by conversationId
 	const groups = new Map<string, Tweet[]>();
 	for (const tweet of [...rootTweets, ...threadReplies, ...orphanReplies]) {
 		const key = tweet.conversationId || tweet.id || tweet.url;
@@ -750,7 +752,7 @@ async function fetchUserTweets(
 		groups.get(key)!.push(tweet);
 	}
 
-	// Phase 3: Process each group
+	// Phase 3: Save each group
 	let count = 0;
 	for (const tweets of groups.values()) {
 		try {
@@ -785,39 +787,59 @@ export async function handleTwitterCron(
 			return;
 		}
 
-		let total = 0;
-		for (const user of users) {
-			const userIdentifier = user.RSSLink;
-			const sinceTime = user.scraped_at
-				? Math.floor(
-						(new Date(user.scraped_at).getTime() - 60 * 60 * 1000) / 1000,
-					)
-				: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+		// Compute the global sinceTime from the oldest scraped_at across all users
+		// (with 1-hour overlap for safety)
+		const oldestScrapedAt = users.reduce((min, u) => {
+			if (!u.scraped_at) return min;
+			const t = new Date(u.scraped_at).getTime();
+			return t < min ? t : min;
+		}, Date.now());
+		const sinceTime = Math.floor(
+			(oldestScrapedAt - 60 * 60 * 1000) / 1000,
+		);
+		// Fallback: if no user has been scraped before, look back 24h
+		const effectiveSince = users.some((u) => u.scraped_at)
+			? sinceTime
+			: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
 
-			logInfo("TWITTER", "Fetching user", {
-				name: user.name,
-				id: userIdentifier,
-			});
-			const result = await fetchUserTweets(
+		// Batch users into groups of TWITTER_BATCH_SIZE
+		const userNames = users.map((u) => u.RSSLink).filter(Boolean);
+		const batches: string[][] = [];
+		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
+			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
+		}
+
+		logInfo("TWITTER", "Fetching via Advanced Search", {
+			users: userNames.length,
+			batches: batches.length,
+			sinceTime: effectiveSince,
+		});
+
+		let total = 0;
+		let allCompleted = true;
+		for (const batch of batches) {
+			const batchResult = await fetchBatchTweets(
 				env.KAITO_API_KEY || "",
-				userIdentifier,
-				sinceTime,
+				batch,
+				effectiveSince,
 				db,
 				env,
 			);
-			total += result.count;
-
-			// Only advance cursor if all pages were fetched successfully —
-			// a transient API failure would cause tweets to be skipped permanently
-			if (result.completed) {
-				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [
-					new Date(),
-					user.id,
-				]);
-			}
+			total += batchResult.count;
+			if (!batchResult.completed) allCompleted = false;
 		}
 
-		logInfo("TWITTER", "end", { inserted: total, users: users.length });
+		// Advance scraped_at only for users that were actually fetched
+		if (allCompleted) {
+			const now = new Date();
+			const ids = users.map((u) => u.id);
+			await db.query(
+				`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`,
+				[now, ids],
+			);
+		}
+
+		logInfo("TWITTER", "end", { inserted: total, users: users.length, batches: batches.length });
 	} finally {
 		await db.end();
 	}
