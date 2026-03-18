@@ -979,3 +979,102 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 			return scrapeWebPage(url);
 	}
 }
+
+// ─────────────────────────────────────────────────────────────
+// Lightweight OG Image Fetcher
+// ─────────────────────────────────────────────────────────────
+
+const OG_FETCH_TIMEOUT_MS = 6_000;
+const OG_MAX_BYTES = 32_768; // 32 KB — enough for <head>
+
+export interface OgImageResult {
+	ogImageUrl: string | null;
+	ogImageWidth: number | null;
+	ogImageHeight: number | null;
+}
+
+/**
+ * Lightweight fetch of OG image metadata from a URL.
+ * Only downloads the first ~32KB of HTML (enough for <head> meta tags)
+ * instead of the full page. Returns null on any failure.
+ */
+export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), OG_FETCH_TIMEOUT_MS);
+
+	try {
+		const response = await fetch(url, {
+			headers: {
+				'User-Agent':
+					'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+				Accept: 'text/html,application/xhtml+xml',
+			},
+			signal: controller.signal,
+		});
+
+		if (!response.ok || !response.body) return null;
+
+		// Read only the first chunk (enough for <head>)
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let totalBytes = 0;
+
+		while (totalBytes < OG_MAX_BYTES) {
+			const { done, value } = await reader.read();
+			if (done || !value) break;
+			chunks.push(value);
+			totalBytes += value.length;
+		}
+		reader.cancel();
+
+		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
+
+		// Parse meta tags from partial HTML
+		let ogImageUrl =
+			extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
+		if (!ogImageUrl) return null;
+
+		if (!ogImageUrl.startsWith('http')) {
+			try {
+				ogImageUrl = new URL(ogImageUrl, url).toString();
+			} catch {
+				return null;
+			}
+		}
+
+		const rawW = extractMeta(html, 'og:image:width');
+		const rawH = extractMeta(html, 'og:image:height');
+
+		return {
+			ogImageUrl,
+			ogImageWidth: rawW ? parseInt(rawW, 10) || null : null,
+			ogImageHeight: rawH ? parseInt(rawH, 10) || null : null,
+		};
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
+	const merged = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return merged;
+}
+
+function extractMeta(html: string, property: string): string | null {
+	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
+	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
+	return re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+}
+
+function extractMetaName(html: string, name: string): string | null {
+	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
+	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
+	return re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+}

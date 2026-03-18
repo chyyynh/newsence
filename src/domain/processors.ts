@@ -20,6 +20,7 @@ export interface ProcessorResult {
 		content?: string;
 		content_cn?: string;
 		title?: string;
+		og_image_url?: string;
 	};
 	enrichments?: PlatformEnrichments;
 }

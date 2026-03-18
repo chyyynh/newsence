@@ -11,6 +11,7 @@ import {
 	runArticleProcessor,
 	translateContent,
 } from './processors';
+import { fetchOgImage } from './scrapers';
 import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS =
@@ -130,7 +131,19 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as ProcessorResult;
 
-		// Step 3: Translate content to Chinese (no DB write, just returns the translation)
+		// Step 3: Fetch OG image if missing (lightweight — only downloads first 32KB of HTML)
+		if (!article.og_image_url && !processorResult.updateData.og_image_url) {
+			const ogResult = await step.do(
+				'fetch-og-image',
+				{ retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' },
+				async () => fetchOgImage(article.url),
+			);
+			if (ogResult?.ogImageUrl) {
+				processorResult.updateData.og_image_url = ogResult.ogImageUrl;
+			}
+		}
+
+		// Step 4: Translate content to Chinese (no DB write, just returns the translation)
 		const contentToTranslate = processorResult.updateData.content ?? article.content;
 		const needsTranslation = contentToTranslate && contentToTranslate.length > 100 && !processorResult.updateData.content_cn;
 		const contentCn = needsTranslation
@@ -145,7 +158,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				)) as string | null)
 			: null;
 
-		// Step 4: Write all AI results to DB in a single UPDATE
+		// Step 5: Write all AI results to DB in a single UPDATE
 		if (contentCn) processorResult.updateData.content_cn = contentCn;
 
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
@@ -166,7 +179,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		});
 
-		// Step 5: Generate YouTube highlights (if applicable)
+		// Step 6: Generate YouTube highlights (if applicable)
 		if (source_type === 'youtube' && article.platform_metadata?.type === 'youtube') {
 			await step.do(
 				'generate-youtube-highlights',
@@ -205,7 +218,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 		}
 
-		// Step 6: Generate embedding
+		// Step 7: Generate embedding
 		const embedding = (await step.do(
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -216,7 +229,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
-		// Step 7: Save embedding
+		// Step 8: Save embedding
 		if (embedding) {
 			await step.do(
 				'save-embedding',
@@ -233,7 +246,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			// Step 8: Assign topic (cluster similar articles)
+			// Step 9: Assign topic (cluster similar articles)
 			const topicResult = (await step.do(
 				'assign-topic',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -247,7 +260,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			)) as TopicAssignmentResult;
 
-			// Step 9: Synthesize topic summary if needed
+			// Step 10: Synthesize topic summary if needed
 			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
 				await step.do(
 					'synthesize-topic',

@@ -34,6 +34,7 @@ export interface Article {
 	tags: string[];
 	keywords: string[];
 	source_type?: string;
+	og_image_url?: string | null;
 	platform_metadata?: PlatformMetadata;
 }
 
