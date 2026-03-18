@@ -94,6 +94,52 @@ export function extractUrlFromItem(item: RSSItem): string | null {
 	return item.link?.['@_href'] ?? item.link?.href ?? item.url ?? null;
 }
 
+/**
+ * Extract an image URL from RSS item metadata.
+ * Checks enclosure, media:content, media:thumbnail, itunes:image, and
+ * first <img> in description/content.
+ */
+export function extractImageFromItem(item: RSSItem): string | null {
+	// enclosure (podcasts, some blogs)
+	const enclosure = item.enclosure;
+	if (enclosure) {
+		const url = enclosure['@_url'] ?? enclosure.url;
+		const type = enclosure['@_type'] ?? enclosure.type ?? '';
+		if (typeof url === 'string' && (!type || type.startsWith('image/'))) return url;
+	}
+
+	// media:content / media:thumbnail (Media RSS)
+	for (const key of ['media:content', 'media:thumbnail', 'media:group']) {
+		const media = item[key];
+		if (!media) continue;
+		const entries = Array.isArray(media) ? media : [media];
+		for (const entry of entries) {
+			const url = entry?.['@_url'] ?? entry?.url;
+			if (typeof url === 'string') return url;
+			// media:group wraps media:content
+			const nested = entry?.['media:content'] ?? entry?.['media:thumbnail'];
+			const nestedUrl = nested?.['@_url'] ?? nested?.url;
+			if (typeof nestedUrl === 'string') return nestedUrl;
+		}
+	}
+
+	// itunes:image
+	const itunes = item['itunes:image'];
+	if (itunes) {
+		const url = itunes['@_href'] ?? itunes.href ?? (typeof itunes === 'string' ? itunes : null);
+		if (typeof url === 'string') return url;
+	}
+
+	// First <img src> in description or content
+	const html = toPlainText(item.description) || toPlainText(item['content:encoded']);
+	if (html) {
+		const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+		if (match?.[1]) return match[1];
+	}
+
+	return null;
+}
+
 export function extractItemsFromFeed(data: any): RSSItem[] {
 	const source = data?.rss?.channel?.item ?? data?.feed?.entry ?? data?.channel?.item ?? data?.['rdf:RDF']?.item;
 	return source ? (Array.isArray(source) ? source : [source]) : [];

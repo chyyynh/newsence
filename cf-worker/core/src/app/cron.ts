@@ -3,6 +3,7 @@ import type { Client } from "pg";
 import { type FeedConfig, getFeedConfig } from "../domain/feed-config";
 import {
 	type RSSItem,
+	extractImageFromItem,
 	extractItemsFromFeed,
 	extractRssFullContent,
 	extractUrlFromItem,
@@ -132,6 +133,11 @@ async function processAndInsertArticle(
 			case "skip":
 				break;
 		}
+	}
+
+	// Extract image from RSS item metadata (zero-cost, no HTTP request)
+	if (!ogImageUrl) {
+		ogImageUrl = extractImageFromItem(item);
 	}
 
 	const pubDate =
