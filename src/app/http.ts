@@ -1,5 +1,5 @@
 import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPage } from '../domain/scrapers';
-import { ARTICLES_TABLE, createDbClient } from '../infra/db';
+import { ARTICLES_TABLE, createDbClient, USER_ARTICLES_TABLE } from '../infra/db';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
@@ -11,7 +11,7 @@ import {
 	buildTwitterStandard,
 	buildYouTube,
 } from '../models/platform-metadata';
-import type { Env } from '../models/types';
+import type { Env, TelegramNotifyContext } from '../models/types';
 
 const DEFAULT_SUBMIT_RATE_LIMIT_MAX = 20;
 const DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC = 60;
@@ -140,6 +140,14 @@ type SubmitBody = {
 	url?: string; // Legacy single URL (backward compatible)
 	urls?: string[]; // Batch URLs
 	userId?: string;
+	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
+	notifyContext?: {
+		chatId: number;
+		messageId: number;
+		linked: boolean;
+		userId: string;
+		webappUrl: string;
+	};
 };
 
 type SubmitResult = {
@@ -150,13 +158,25 @@ type SubmitResult = {
 	ogImageUrl?: string | null;
 	sourceType?: string;
 	alreadyExists?: boolean;
+	isUserArticle?: boolean;
 	error?: string;
 };
 
-async function createWorkflow(env: Env, articleId: string, sourceType: string): Promise<string | undefined> {
+async function createWorkflow(
+	env: Env,
+	articleId: string,
+	sourceType: string,
+	notifyContext?: TelegramNotifyContext,
+	targetTable?: string,
+): Promise<string | undefined> {
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
-			params: { article_id: articleId, source_type: sourceType },
+			params: {
+				article_id: articleId,
+				source_type: sourceType,
+				...(notifyContext ? { notify_context: notifyContext } : {}),
+				...(targetTable ? { target_table: targetTable } : {}),
+			},
 		});
 		return instance.id;
 	} catch (err) {
@@ -169,6 +189,8 @@ async function scrapeAndInsert(
 	url: string,
 	env: Env,
 	submitterId?: string,
+	targetTable?: string,
+	visibility = 'public',
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
@@ -185,34 +207,60 @@ async function scrapeAndInsert(
 
 	const db = await createDbClient(env);
 	try {
-		const table = ARTICLES_TABLE;
+		const table = targetTable ?? ARTICLES_TABLE;
+		const isUserArticle = table === USER_ARTICLES_TABLE;
 		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
 		const platformMetadataJson = normalizedPlatformMetadata
 			? JSON.stringify({ ...normalizedPlatformMetadata, ogImageWidth: scraped.ogImageWidth ?? null, ogImageHeight: scraped.ogImageHeight ?? null })
 			: null;
-		const insertResult = await db.query(
-			`INSERT INTO ${table}
-				(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata, submitter_id, visibility)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-			RETURNING id`,
-			[
-				url,
-				scraped.title,
-				scraped.siteName || 'External',
-				scraped.publishedDate || new Date().toISOString(),
-				new Date().toISOString(),
-				scraped.summary || '',
-				platformType,
-				scraped.content || null,
-				scraped.ogImageUrl || null,
-				[],
-				[],
-				[],
-				platformMetadataJson,
-				submitterId || null,
-				submitterId ? 'private' : 'public',
-			],
-		);
+
+		let insertResult: { rows: { id: string }[] };
+		if (isUserArticle) {
+			insertResult = await db.query(
+				`INSERT INTO ${table}
+					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				RETURNING id`,
+				[
+					url,
+					scraped.title,
+					scraped.siteName || 'External',
+					scraped.publishedDate || new Date().toISOString(),
+					new Date().toISOString(),
+					scraped.summary || '',
+					platformType,
+					scraped.content || null,
+					scraped.ogImageUrl || null,
+					[],
+					[],
+					platformMetadataJson,
+					submitterId,
+					visibility,
+				],
+			);
+		} else {
+			insertResult = await db.query(
+				`INSERT INTO ${table}
+					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				RETURNING id`,
+				[
+					url,
+					scraped.title,
+					scraped.siteName || 'External',
+					scraped.publishedDate || new Date().toISOString(),
+					new Date().toISOString(),
+					scraped.summary || '',
+					platformType,
+					scraped.content || null,
+					scraped.ogImageUrl || null,
+					[],
+					[],
+					[],
+					platformMetadataJson,
+				],
+			);
+		}
 
 		const inserted = insertResult.rows;
 		if (!inserted?.[0]?.id) {
@@ -247,7 +295,7 @@ async function scrapeAndInsert(
 			}
 		}
 
-		logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50) });
+		logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50), table });
 		return { articleId: inserted[0].id, scraped, platformType };
 	} catch (err) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
@@ -258,47 +306,73 @@ async function scrapeAndInsert(
 }
 
 /**
+ * If the row is already processed (has title_cn), skip workflow. Otherwise create one.
+ * Returns the existing-article SubmitResult.
+ */
+async function returnExisting(
+	url: string,
+	row: Record<string, string>,
+	env: Env,
+	notifyContext: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'> | undefined,
+	isUserArticle: boolean,
+	targetTable?: string,
+): Promise<SubmitResult> {
+	const enrichedNotify = notifyContext
+		? { ...notifyContext, articleId: row.id, alreadyExists: true, ...(isUserArticle ? { isUserArticle: true } : {}) }
+		: undefined;
+	const instanceId = row.title_cn
+		? undefined
+		: await createWorkflow(env, row.id, row.source_type || 'article', enrichedNotify, targetTable);
+	return {
+		url,
+		articleId: row.id,
+		instanceId,
+		title: row.title,
+		ogImageUrl: row.og_image_url,
+		sourceType: row.source_type,
+		alreadyExists: true,
+		isUserArticle,
+	};
+}
+
+/**
  * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
  * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
  */
-async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promise<SubmitResult> {
+async function processUrl(
+	rawUrl: string,
+	env: Env,
+	submitterId?: string,
+	notifyContext?: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'>,
+	visibility = 'public',
+): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
+	const EXIST_COLS = 'id, title, title_cn, source_type, og_image_url';
+
+	// 1. Check for existing article
 	const db = await createDbClient(env);
 	try {
-		const table = ARTICLES_TABLE;
+		if (submitterId) {
+			// User submission: check public articles first, then user_articles
+			const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
+			if (pub.rows.length > 0) return returnExisting(url, pub.rows[0], env, notifyContext, false);
 
-		// 1. Check if already exists (prefer own article, then any public article)
-		const existingResult = await db.query(
-			`SELECT id, title, title_cn, source_type, og_image_url, visibility, submitter_id FROM ${table} WHERE url = $1`,
-			[url],
-		);
-		const existingRows = existingResult.rows;
-		if (existingRows && existingRows.length > 0) {
-			// Prefer submitter's own article first, then any public one, then any row (avoids unique constraint violation)
-			const existing =
-				(submitterId && existingRows.find((r: Record<string, unknown>) => r.submitter_id === submitterId)) ||
-				existingRows.find((r: Record<string, unknown>) => r.visibility !== 'private') ||
-				existingRows[0];
-			const instanceId = existing.title_cn ? undefined : await createWorkflow(env, existing.id, existing.source_type || 'article');
-			if (!existing.title_cn) logInfo('SUBMIT', 'Re-creating workflow for unprocessed article', { id: existing.id });
-			return {
-				url,
-				articleId: existing.id,
-				instanceId,
-				title: existing.title,
-				ogImageUrl: existing.og_image_url,
-				sourceType: existing.source_type,
-				alreadyExists: true,
-			};
+			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [submitterId, url]);
+			if (ua.rows.length > 0) return returnExisting(url, ua.rows[0], env, notifyContext, true, USER_ARTICLES_TABLE);
+		} else {
+			// System/cron: check articles table
+			const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1`, [url]);
+			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, notifyContext, false);
 		}
 	} finally {
 		await db.end();
 	}
 
-	// 2. Scrape + insert
+	// 2. Scrape + insert (user → user_articles, system → articles)
+	const targetTable = submitterId ? USER_ARTICLES_TABLE : undefined;
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, submitterId);
+		result = await scrapeAndInsert(url, env, submitterId, targetTable, visibility);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -306,7 +380,10 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 	if ('error' in result) return { url, error: result.error };
 
 	// 3. Create workflow for background AI processing
-	const instanceId = await createWorkflow(env, result.articleId, result.platformType);
+	const enrichedNotify = notifyContext
+		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(submitterId ? { isUserArticle: true } : {}) }
+		: undefined;
+	const instanceId = await createWorkflow(env, result.articleId, result.platformType, enrichedNotify, targetTable);
 	return {
 		url,
 		articleId: result.articleId,
@@ -315,6 +392,7 @@ async function processUrl(rawUrl: string, env: Env, submitterId?: string): Promi
 		ogImageUrl: result.scraped.ogImageUrl || null,
 		sourceType: result.platformType,
 		alreadyExists: false,
+		isUserArticle: !!submitterId,
 	};
 }
 
@@ -366,7 +444,10 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
 	const submitterId = body.userId;
-	const results = await Promise.all(urls.map((url) => processUrl(url, env, submitterId)));
+	const articleVisibility = body.visibility ?? 'public';
+	// Only pass notifyContext for single-URL submissions (Telegram sends one at a time)
+	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
+	const results = await Promise.all(urls.map((url) => processUrl(url, env, submitterId, notifyCtx, articleVisibility)));
 	return Response.json({ success: true, results });
 }
 
@@ -516,10 +597,10 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 	const db = await createDbClient(env);
 	try {
 		const result = await db.query(
-			`SELECT id, name, icon, is_default, is_system
+			`SELECT id, name, icon, is_default
 			FROM collections
 			WHERE user_id = $1
-			ORDER BY is_system DESC, is_default DESC, updated_at DESC
+			ORDER BY is_default DESC, updated_at DESC
 			LIMIT 10`,
 			[body.userId],
 		);
@@ -529,7 +610,6 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 			name: c.name,
 			icon: c.icon,
 			isDefault: c.is_default,
-			isSystem: c.is_system,
 		}));
 
 		return Response.json({ collections });
@@ -550,14 +630,15 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
-	let body: { userId?: string; articleId?: string; collectionId?: string };
+	let body: { userId?: string; articleId?: string; collectionId?: string; toType?: string };
 	try {
-		body = (await request.json()) as { userId?: string; articleId?: string; collectionId?: string };
+		body = (await request.json()) as { userId?: string; articleId?: string; collectionId?: string; toType?: string };
 	} catch {
 		return Response.json({ success: false, error: 'Invalid JSON' }, { status: 400 });
 	}
 
 	const { userId, articleId, collectionId } = body;
+	const toType = body.toType === 'user_article' ? 'user_article' : 'article';
 	if (!userId || !articleId || !collectionId) {
 		return Response.json({ success: false, error: 'Missing required fields' }, { status: 400 });
 	}
@@ -572,9 +653,9 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 			return Response.json({ success: false, error: 'Invalid collection for user' }, { status: 403 });
 		}
 
-		// Verify article exists
-		const table = ARTICLES_TABLE;
-		const articleResult = await db.query(`SELECT id FROM ${table} WHERE id = $1`, [articleId]);
+		// Verify article exists in the correct table
+		const lookupTable = toType === 'user_article' ? USER_ARTICLES_TABLE : ARTICLES_TABLE;
+		const articleResult = await db.query(`SELECT id FROM ${lookupTable} WHERE id = $1`, [articleId]);
 		const articleExists = articleResult.rows[0] ?? null;
 		if (!articleExists) {
 			return Response.json({ success: false, error: 'Article not found' }, { status: 404 });
@@ -583,7 +664,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		// Check if already exists
 		const existingResult = await db.query(
 			`SELECT id FROM citations WHERE from_type = $1 AND from_id = $2 AND to_type = $3 AND to_id = $4 AND user_id = $5`,
-			['collection', collectionId, 'article', articleId, userId],
+			['collection', collectionId, toType, articleId, userId],
 		);
 		const existing = existingResult.rows[0];
 
@@ -595,7 +676,7 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 		await db.query(
 			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id)
 			VALUES ($1, $2, $3, $4, $5, $6)`,
-			['collection', collectionId, 'article', articleId, 'resource', userId],
+			['collection', collectionId, toType, articleId, 'resource', userId],
 		);
 
 		// Increment article_count (non-atomic read-then-update; acceptable for low-throughput Telegram endpoint)

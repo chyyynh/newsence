@@ -101,10 +101,22 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 }
 
+// Telegram push notification context (passed through workflow)
+export interface TelegramNotifyContext {
+	chatId: number;
+	messageId: number;
+	linked: boolean;
+	userId: string;
+	articleId: string;
+	alreadyExists: boolean;
+	webappUrl: string;
+	isUserArticle?: boolean;
+}
+
 // Queue message types
 export type QueueMessage =
-	| { type: 'article_process'; article_id: string; source_type: string }
-	| { type: 'batch_process'; article_ids: string[]; triggered_by: string };
+	| { type: 'article_process'; article_id: string; source_type: string; target_table?: string }
+	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: string };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
