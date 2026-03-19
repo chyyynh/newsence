@@ -188,7 +188,7 @@ async function createWorkflow(
 async function scrapeAndInsert(
 	url: string,
 	env: Env,
-	submitterId?: string,
+	userId?: string,
 	targetTable?: string,
 	visibility = 'public',
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
@@ -234,7 +234,7 @@ async function scrapeAndInsert(
 					[],
 					[],
 					platformMetadataJson,
-					submitterId,
+					userId,
 					visibility,
 				],
 			);
@@ -342,7 +342,7 @@ async function returnExisting(
 async function processUrl(
 	rawUrl: string,
 	env: Env,
-	submitterId?: string,
+	userId?: string,
 	notifyContext?: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'>,
 	visibility = 'public',
 ): Promise<SubmitResult> {
@@ -352,12 +352,12 @@ async function processUrl(
 	// 1. Check for existing article
 	const db = await createDbClient(env);
 	try {
-		if (submitterId) {
+		if (userId) {
 			// User submission: check public articles first, then user_articles
 			const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
 			if (pub.rows.length > 0) return returnExisting(url, pub.rows[0], env, notifyContext, false);
 
-			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [submitterId, url]);
+			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [userId, url]);
 			if (ua.rows.length > 0) return returnExisting(url, ua.rows[0], env, notifyContext, true, USER_ARTICLES_TABLE);
 		} else {
 			// System/cron: check articles table
@@ -369,10 +369,10 @@ async function processUrl(
 	}
 
 	// 2. Scrape + insert (user → user_articles, system → articles)
-	const targetTable = submitterId ? USER_ARTICLES_TABLE : undefined;
+	const targetTable = userId ? USER_ARTICLES_TABLE : undefined;
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, submitterId, targetTable, visibility);
+		result = await scrapeAndInsert(url, env, userId, targetTable, visibility);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -381,7 +381,7 @@ async function processUrl(
 
 	// 3. Create workflow for background AI processing
 	const enrichedNotify = notifyContext
-		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(submitterId ? { isUserArticle: true } : {}) }
+		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(userId ? { isUserArticle: true } : {}) }
 		: undefined;
 	const instanceId = await createWorkflow(env, result.articleId, result.platformType, enrichedNotify, targetTable);
 	return {
@@ -392,7 +392,7 @@ async function processUrl(
 		ogImageUrl: result.scraped.ogImageUrl || null,
 		sourceType: result.platformType,
 		alreadyExists: false,
-		isUserArticle: !!submitterId,
+		isUserArticle: !!userId,
 	};
 }
 
@@ -443,11 +443,11 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	}
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
-	const submitterId = body.userId;
+	const userId = body.userId;
 	const articleVisibility = body.visibility ?? 'public';
 	// Only pass notifyContext for single-URL submissions (Telegram sends one at a time)
 	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
-	const results = await Promise.all(urls.map((url) => processUrl(url, env, submitterId, notifyCtx, articleVisibility)));
+	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility)));
 	return Response.json({ success: true, results });
 }
 
