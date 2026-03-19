@@ -3,7 +3,7 @@ import { generateYouTubeHighlights } from './processors';
 import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
-import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
+import type { Article, Env, MessageBatch, QueueMessage, TelegramNotifyContext } from '../models/types';
 import {
 	buildEmbeddingTextForArticle,
 	type ProcessorResult,
@@ -20,6 +20,8 @@ const ARTICLE_FIELDS =
 type WorkflowParams = {
 	article_id: string;
 	source_type: string;
+	notify_context?: TelegramNotifyContext;
+	target_table?: string;
 };
 
 const SOURCE_TYPE_BATCH_SIZE = 200;
@@ -60,7 +62,11 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 		try {
 			if (body.type === 'article_process') {
 				await env.MONITOR_WORKFLOW.create({
-					params: { article_id: body.article_id, source_type: body.source_type },
+					params: {
+						article_id: body.article_id,
+						source_type: body.source_type,
+						...(body.target_table ? { target_table: body.target_table } : {}),
+					},
 				});
 				logInfo('ARTICLE-QUEUE', 'Created workflow for article', { article_id: body.article_id });
 				message.ack();
@@ -69,7 +75,11 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 				for (const id of body.article_ids) {
 					const sourceType = sourceTypeMap.get(id) ?? SOURCE_TYPE_FALLBACK;
 					await env.MONITOR_WORKFLOW.create({
-						params: { article_id: id, source_type: sourceType },
+						params: {
+							article_id: id,
+							source_type: sourceType,
+							...(body.target_table ? { target_table: body.target_table } : {}),
+						},
 					});
 				}
 				logInfo('ARTICLE-QUEUE', 'Created workflows (batch)', { count: body.article_ids.length, triggered_by: body.triggered_by });
@@ -87,8 +97,9 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
-		const { article_id, source_type } = event.payload;
-		const table = ARTICLES_TABLE;
+		const { article_id, source_type, notify_context, target_table } = event.payload;
+		const table = target_table ?? ARTICLES_TABLE;
+		const isUserArticle = table !== ARTICLES_TABLE;
 
 		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
 
@@ -179,7 +190,42 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		});
 
-		// Step 6: Generate YouTube highlights (if applicable)
+		// Step 6: Notify Telegram bot with AI results (push-based)
+		if (notify_context && this.env.TELEGRAM_BOT) {
+			await step.do(
+				'notify-telegram',
+				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
+				async () => {
+					const db = await createDbClient(this.env);
+					try {
+						const result = await db.query(
+							`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`,
+							[article_id],
+						);
+						const updatedArticle = result.rows[0];
+						if (!updatedArticle) return;
+
+						const res = await this.env.TELEGRAM_BOT.fetch('https://telegram-bot/notify', {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+								'X-Internal-Token': this.env.CORE_WORKER_INTERNAL_TOKEN || '',
+							},
+							body: JSON.stringify({ article: updatedArticle, notifyContext: notify_context }),
+						});
+						if (!res.ok) {
+							logWarn('WORKFLOW', 'Telegram notify failed', { status: res.status });
+						} else {
+							logInfo('WORKFLOW', 'Telegram notified', { article_id });
+						}
+					} finally {
+						await db.end();
+					}
+				},
+			);
+		}
+
+		// Step 7: Generate YouTube highlights (if applicable)
 		if (source_type === 'youtube' && article.platform_metadata?.type === 'youtube') {
 			await step.do(
 				'generate-youtube-highlights',
@@ -218,7 +264,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 		}
 
-		// Step 7: Generate embedding
+		// Step 8: Generate embedding
 		const embedding = (await step.do(
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -229,7 +275,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
-		// Step 8: Save embedding
+		// Step 9: Save embedding
 		if (embedding) {
 			await step.do(
 				'save-embedding',
@@ -246,34 +292,36 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			// Step 9: Assign topic (cluster similar articles)
-			const topicResult = (await step.do(
-				'assign-topic',
-				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				async () => {
-					const db = await createDbClient(this.env);
-					try {
-						return await assignArticleTopic(db, article_id, table);
-					} finally {
-						await db.end();
-					}
-				},
-			)) as TopicAssignmentResult;
-
-			// Step 10: Synthesize topic summary if needed
-			if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
-				await step.do(
-					'synthesize-topic',
-					{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			// Step 10: Assign topic (cluster similar articles) — skip for user_articles
+			if (!isUserArticle) {
+				const topicResult = (await step.do(
+					'assign-topic',
+					{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 					async () => {
 						const db = await createDbClient(this.env);
 						try {
-							await synthesizeTopicSummary(db, topicResult.topicId!, table, this.env.OPENROUTER_API_KEY);
+							return await assignArticleTopic(db, article_id, table);
 						} finally {
 							await db.end();
 						}
 					},
-				);
+				)) as TopicAssignmentResult;
+
+				// Step 11: Synthesize topic summary if needed
+				if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
+					await step.do(
+						'synthesize-topic',
+						{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+						async () => {
+							const db = await createDbClient(this.env);
+							try {
+								await synthesizeTopicSummary(db, topicResult.topicId!, table, this.env.OPENROUTER_API_KEY);
+							} finally {
+								await db.end();
+							}
+						},
+					);
+				}
 			}
 		}
 
