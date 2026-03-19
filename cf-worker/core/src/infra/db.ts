@@ -9,3 +9,4 @@ export async function createDbClient(env: Env): Promise<Client> {
 }
 
 export const ARTICLES_TABLE = 'articles';
+export const USER_ARTICLES_TABLE = 'user_articles';

@@ -37,29 +37,37 @@ interface SubmitResponse {
 		ogImageUrl?: string | null;
 		sourceType?: string;
 		alreadyExists?: boolean;
+		isUserArticle?: boolean;
 		error?: string;
 	}>;
 	error?: { code: string; message: string };
 }
 
-interface WorkflowStatusResponse {
-	status: string;
-	article?: {
-		id: string;
-		title: string;
-		title_cn?: string;
-		summary?: string;
-		summary_cn?: string;
-		content_cn?: string;
-		source: string;
-		source_type: string;
-		og_image_url?: string | null;
-		published_date?: string;
-		tags?: string[];
-		keywords?: string[];
-		url: string;
-	};
-	error?: string;
+interface NotifyArticle {
+	id: string;
+	title: string;
+	title_cn?: string;
+	summary?: string;
+	summary_cn?: string;
+	content_cn?: string;
+	source: string;
+	source_type: string;
+	og_image_url?: string | null;
+	published_date?: string;
+	tags?: string[];
+	keywords?: string[];
+	url: string;
+}
+
+interface NotifyContext {
+	chatId: number;
+	messageId: number;
+	linked: boolean;
+	userId: string;
+	articleId: string;
+	alreadyExists: boolean;
+	webappUrl: string;
+	isUserArticle?: boolean;
 }
 
 interface TelegramLookupResponse {
@@ -72,7 +80,6 @@ interface CollectionItem {
 	name: string;
 	icon: string | null;
 	isDefault: boolean;
-	isSystem: boolean;
 }
 
 type InlineKeyboardButton = { text: string; callback_data: string } | { text: string; url: string };
@@ -146,18 +153,28 @@ async function sendMessageWithKeyboard(botToken: string, chatId: number, text: s
 	return data.result?.message_id ?? null;
 }
 
-// Edit existing message
-async function editMessage(botToken: string, chatId: number, messageId: number, text: string): Promise<boolean> {
+// Edit existing message text (optionally with keyboard)
+async function editMessageWithKeyboard(
+	botToken: string,
+	chatId: number,
+	messageId: number,
+	text: string,
+	keyboard?: InlineKeyboard,
+): Promise<boolean> {
+	const body: Record<string, unknown> = {
+		chat_id: chatId,
+		message_id: messageId,
+		text,
+		parse_mode: 'HTML',
+		disable_web_page_preview: true,
+	};
+	if (keyboard) {
+		body.reply_markup = { inline_keyboard: keyboard };
+	}
 	const response = await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			chat_id: chatId,
-			message_id: messageId,
-			text,
-			parse_mode: 'HTML',
-			disable_web_page_preview: true,
-		}),
+		body: JSON.stringify(body),
 	});
 	return response.ok;
 }
@@ -179,15 +196,6 @@ async function editMessageReplyMarkup(
 		}),
 	});
 	return response.ok;
-}
-
-// Delete message
-async function deleteMessage(botToken: string, chatId: number, messageId: number): Promise<void> {
-	await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
-	});
 }
 
 // Answer callback query (acknowledge button press)
@@ -250,12 +258,13 @@ async function addToCollection(
 	userId: string,
 	articleId: string,
 	collectionId: string,
+	toType?: string,
 ): Promise<{ success: boolean; error?: string }> {
 	try {
 		const response = await env.CORE.fetch('https://core/telegram/add-to-collection', {
 			method: 'POST',
 			headers: coreHeaders(env),
-			body: JSON.stringify({ userId, articleId, collectionId }),
+			body: JSON.stringify({ userId, articleId, collectionId, ...(toType ? { toType } : {}) }),
 		});
 		return (await response.json()) as { success: boolean; error?: string };
 	} catch {
@@ -263,18 +272,26 @@ async function addToCollection(
 	}
 }
 
-// Find the default collection: isDefault > isSystem > null
+// Find the default collection
 function findDefaultCollection(collections: CollectionItem[]): CollectionItem | null {
-	return collections.find((c) => c.isDefault) ?? collections.find((c) => c.isSystem) ?? null;
+	return collections.find((c) => c.isDefault) ?? null;
 }
 
-// Submit URL to core worker (via Service Binding)
-async function submitUrlToCore(env: Env, url: string, userId: string): Promise<SubmitResponse> {
+// Submit URL to core worker (via Service Binding), with optional notifyContext
+async function submitUrlToCore(
+	env: Env,
+	url: string,
+	userId: string,
+	notifyContext?: { chatId: number; messageId: number; linked: boolean; userId: string; webappUrl: string },
+): Promise<SubmitResponse> {
 	try {
+		const body: Record<string, unknown> = { url, userId };
+		if (notifyContext) body.notifyContext = notifyContext;
+
 		const response = await env.CORE.fetch('https://core/submit', {
 			method: 'POST',
 			headers: coreHeaders(env),
-			body: JSON.stringify({ url, userId }),
+			body: JSON.stringify(body),
 		});
 
 		const text = await response.text();
@@ -294,8 +311,15 @@ async function submitUrlToCore(env: Env, url: string, userId: string): Promise<S
 // Collection keyboard helpers
 // ─────────────────────────────────────────────────────────────
 
-function buildCollectionKeyboard(otherCollections: CollectionItem[], articleId: string, webappUrl: string): InlineKeyboard {
+function buildCollectionKeyboard(
+	otherCollections: CollectionItem[],
+	articleId: string,
+	webappUrl: string,
+	toType = 'article',
+): InlineKeyboard {
 	const keyboard: InlineKeyboard = [];
+	// Encode toType suffix for user_article; omit for article (backward compat)
+	const typeSuffix = toType === 'user_article' ? ':ua' : '';
 
 	// Other collections: 2 per row, max 6
 	for (let i = 0; i < otherCollections.length; i += 2) {
@@ -303,7 +327,7 @@ function buildCollectionKeyboard(otherCollections: CollectionItem[], articleId: 
 		for (let j = i; j < Math.min(i + 2, otherCollections.length); j++) {
 			const col = otherCollections[j];
 			const label = col.icon ? `${col.icon} ${col.name}` : col.name;
-			row.push({ text: label, callback_data: `col:${col.id}` });
+			row.push({ text: label, callback_data: `col:${col.id}${typeSuffix}` });
 		}
 		keyboard.push(row);
 	}
@@ -371,12 +395,7 @@ function formatBasicResult(result: NonNullable<SubmitResponse['results']>[0], we
 	return msg;
 }
 
-function formatAIResult(
-	article: NonNullable<WorkflowStatusResponse['article']>,
-	articleId: string,
-	webappUrl: string,
-	opts: MessageOpts,
-): string {
+function formatAIResult(article: NotifyArticle, articleId: string, webappUrl: string, opts: MessageOpts): string {
 	const title = article.title_cn || article.title;
 	let msg = `<b>${title}</b>\n\n`;
 	const body = article.summary_cn || article.summary;
@@ -388,16 +407,6 @@ function formatAIResult(
 	}
 	msg += formatLinks(article.url, webappUrl, articleId);
 	msg += formatFooter(opts);
-	return msg;
-}
-
-function formatFallbackResult(ctx: PollContext, note: string): string {
-	let msg = '';
-	if (ctx.title) msg += `<b>${ctx.title}</b>\n\n`;
-	if (ctx.sourceType) msg += `${ctx.sourceType}\n\n`;
-	msg += formatLinks(ctx.url, ctx.webappUrl, ctx.articleId);
-	msg += `\n\n${note}`;
-	msg += formatFooter(ctx);
 	return msg;
 }
 
@@ -518,20 +527,21 @@ async function handleLink(env: Env, chatId: number, telegramId: string, firstNam
 }
 
 // ─────────────────────────────────────────────────────────────
-// URL submission flow
+// URL submission flow (push-based, no polling)
 // ─────────────────────────────────────────────────────────────
 
 async function autoSaveToCollection(
 	env: Env,
 	userId: string,
 	articleId: string,
+	toType?: string,
 ): Promise<{ savedTo?: string; collections: CollectionItem[]; defaultCol: CollectionItem | null }> {
 	const collections = await fetchUserCollections(env, userId);
 	const defaultCol = findDefaultCollection(collections);
 	let savedTo: string | undefined;
 
 	if (defaultCol) {
-		const addResult = await addToCollection(env, userId, articleId, defaultCol.id);
+		const addResult = await addToCollection(env, userId, articleId, defaultCol.id, toType);
 		if (addResult.success) {
 			savedTo = `${defaultCol.icon || '📚'} ${defaultCol.name}`;
 		}
@@ -540,75 +550,79 @@ async function autoSaveToCollection(
 	return { savedTo, collections, defaultCol };
 }
 
-interface PollContext extends MessageOpts {
-	instanceId: string;
-	articleId: string;
-	webappUrl: string;
-	otherCols: CollectionItem[];
-	title?: string;
-	sourceType?: string;
-	url: string;
+const MESSAGE_LIMIT = 4096;
+
+function truncateMessage(msg: string): string {
+	return msg.length > MESSAGE_LIMIT ? `${msg.slice(0, MESSAGE_LIMIT - 3)}...` : msg;
 }
 
 async function processSingleUrl(
 	env: Env,
-	ctx: ExecutionContext,
 	chatId: number,
 	url: string,
 	userId: string,
 	linked: boolean,
 	webappUrl: string,
 ): Promise<void> {
+	// 1. Send "正在處理" → pendingMsgId
 	const pendingMsgId = await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `正在處理: ${url}`);
-	const submitResult = await submitUrlToCore(env, url, userId);
+
+	// 2. Build notifyContext (only if we got a message id to edit later)
+	const notifyCtx = pendingMsgId
+		? { chatId, messageId: pendingMsgId, linked, userId, webappUrl }
+		: undefined;
+
+	// 3. Submit to core with notifyContext
+	const submitResult = await submitUrlToCore(env, url, userId, notifyCtx);
 
 	if (!submitResult.success || !submitResult.results?.length) {
-		await editOrSend(env, chatId, pendingMsgId, `${friendlyError(submitResult.error?.message || 'Unknown error')}`);
+		await editOrSend(env, chatId, pendingMsgId, friendlyError(submitResult.error?.message || 'Unknown error'));
 		return;
 	}
 
 	const result = submitResult.results[0];
 	if (result.error) {
-		await editOrSend(env, chatId, pendingMsgId, `${friendlyError(result.error)}`);
+		await editOrSend(env, chatId, pendingMsgId, friendlyError(result.error));
 		return;
 	}
 
 	const articleId = result.articleId;
+	const toType = result.isUserArticle ? 'user_article' : 'article';
 
-	// Auto-save to default collection (silently)
+	// 4. Auto-save to default collection
 	let savedTo: string | undefined;
 	let otherCols: CollectionItem[] = [];
 	if (linked && articleId) {
-		const auto = await autoSaveToCollection(env, userId, articleId);
+		const auto = await autoSaveToCollection(env, userId, articleId, toType);
 		savedTo = auto.savedTo;
-		otherCols = auto.collections.filter((c) => !c.isSystem && c.id !== auto.defaultCol?.id);
+		otherCols = auto.collections.filter((c) => c.id !== auto.defaultCol?.id);
 	}
 
 	const msgOpts: MessageOpts = { savedTo, linked, alreadyExists: result.alreadyExists };
 
-	if (result.instanceId && articleId) {
-		ctx.waitUntil(
-			pollAndShowResult(env, chatId, pendingMsgId, {
-				...msgOpts,
-				instanceId: result.instanceId,
-				articleId,
-				webappUrl,
-				otherCols,
-				title: result.title,
-				sourceType: result.sourceType,
-				url: result.url,
-			}),
-		);
+	// 5. Edit pendingMsg to basic result + keyboard (no polling, AI result comes via /notify)
+	const msg = truncateMessage(formatBasicResult(result, webappUrl, msgOpts));
+	const keyboard = linked && articleId ? buildCollectionKeyboard(otherCols, articleId, webappUrl, toType) : undefined;
+
+	if (pendingMsgId) {
+		const edited = await editMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, pendingMsgId, msg, keyboard);
+		if (!edited) {
+			// Fallback: send new message
+			if (keyboard) {
+				await sendMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, msg, keyboard);
+			} else {
+				await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg);
+			}
+		}
+	} else if (keyboard) {
+		await sendMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, msg, keyboard);
 	} else {
-		const msg = formatBasicResult(result, webappUrl, msgOpts);
-		const keyboard = linked && articleId ? buildCollectionKeyboard(otherCols, articleId, webappUrl) : undefined;
-		await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
+		await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg);
 	}
 }
 
 async function handleUrlSubmission(
 	env: Env,
-	ctx: ExecutionContext,
 	chatId: number,
 	urls: string[],
 	telegramId: string,
@@ -619,68 +633,14 @@ async function handleUrlSubmission(
 	const webappUrl = env.WEBAPP_URL || DEFAULT_WEBAPP_URL;
 
 	for (const url of urls) {
-		await processSingleUrl(env, ctx, chatId, url, userId, linked, webappUrl);
-	}
-}
-
-// Poll workflow status and replace pending message with final result
-async function pollAndShowResult(env: Env, chatId: number, pendingMsgId: number | null, ctx: PollContext): Promise<void> {
-	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-	const keyboard = ctx.linked ? buildCollectionKeyboard(ctx.otherCols, ctx.articleId, ctx.webappUrl) : undefined;
-
-	for (let i = 0; i < 6; i++) {
-		await sendChatAction(env.TELEGRAM_BOT_TOKEN, chatId, 'typing');
-		await sleep(5000);
-		try {
-			const res = await env.CORE.fetch(`https://core/status/${ctx.instanceId}`);
-			if (!res.ok) continue;
-			const data = (await res.json()) as WorkflowStatusResponse;
-
-			if (data.status === 'complete' && data.article) {
-				const msg = formatAIResult(data.article, ctx.articleId, ctx.webappUrl, ctx);
-				await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
-				return;
-			}
-			if (data.status === 'errored') {
-				const msg = formatFallbackResult(ctx, 'AI 處理失敗，可稍後在網站查看');
-				await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
-				return;
-			}
-		} catch {
-			// Continue polling
-		}
-	}
-
-	// Timeout
-	const msg = formatFallbackResult(ctx, 'AI 仍在處理中，可稍後在網站查看完整分析');
-	await replaceWithResult(env, chatId, pendingMsgId, msg, keyboard);
-}
-
-const MESSAGE_LIMIT = 4096;
-
-// Replace pending message with final result (text only, with or without keyboard)
-async function replaceWithResult(
-	env: Env,
-	chatId: number,
-	pendingMsgId: number | null,
-	msg: string,
-	keyboard?: InlineKeyboard,
-): Promise<void> {
-	if (pendingMsgId) await deleteMessage(env.TELEGRAM_BOT_TOKEN, chatId, pendingMsgId);
-
-	const safeMsg = msg.length > MESSAGE_LIMIT ? `${msg.slice(0, MESSAGE_LIMIT - 3)}...` : msg;
-
-	if (keyboard) {
-		await sendMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, safeMsg, keyboard);
-	} else {
-		await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, safeMsg);
+		await processSingleUrl(env, chatId, url, userId, linked, webappUrl);
 	}
 }
 
 // Edit pending message or send new one
 async function editOrSend(env: Env, chatId: number, pendingMsgId: number | null, text: string): Promise<void> {
 	if (pendingMsgId) {
-		const edited = await editMessage(env.TELEGRAM_BOT_TOKEN, chatId, pendingMsgId, text);
+		const edited = await editMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, pendingMsgId, text);
 		if (!edited) await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, text);
 	} else {
 		await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, text);
@@ -697,6 +657,7 @@ async function handleCollectionSelect(
 	from: { id: number },
 	message: NonNullable<TelegramUpdate['callback_query']>['message'],
 	collectionId: string,
+	toType?: string,
 ): Promise<void> {
 	const articleId = parseArticleId(message?.text || message?.caption);
 	const lookup = await lookupTelegramAccount(env, String(from.id));
@@ -706,7 +667,7 @@ async function handleCollectionSelect(
 		return;
 	}
 
-	const result = await addToCollection(env, lookup.userId, articleId, collectionId);
+	const result = await addToCollection(env, lookup.userId, articleId, collectionId, toType);
 	if (result.success) {
 		await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, queryId, '✓ 已加入收藏');
 	} else if (result.error === 'already_exists') {
@@ -733,7 +694,12 @@ async function handleCallbackQuery(env: Env, query: NonNullable<TelegramUpdate['
 	}
 
 	if (data.startsWith('col:')) {
-		await handleCollectionSelect(env, id, from, message, data.slice(4));
+		// Format: col:{collectionId} or col:{collectionId}:ua
+		const payload = data.slice(4);
+		const uaSuffix = payload.endsWith(':ua');
+		const collectionId = uaSuffix ? payload.slice(0, -3) : payload;
+		const toType = uaSuffix ? 'user_article' : undefined;
+		await handleCollectionSelect(env, id, from, message, collectionId, toType);
 		return;
 	}
 
@@ -741,61 +707,131 @@ async function handleCallbackQuery(env: Env, query: NonNullable<TelegramUpdate['
 }
 
 // ─────────────────────────────────────────────────────────────
-// Main fetch handler
+// /notify handler (push from core worker workflow)
+// ─────────────────────────────────────────────────────────────
+
+function isInternalAuthorized(request: Request, env: Env): boolean {
+	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
+	if (!expected) return false;
+	const provided = request.headers.get('x-internal-token')?.trim();
+	if (!provided) return false;
+	// Simple equality — both workers are internal, no timing-attack risk
+	return provided === expected;
+}
+
+async function handleNotify(request: Request, env: Env): Promise<Response> {
+	if (!isInternalAuthorized(request, env)) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { article?: NotifyArticle; notifyContext?: NotifyContext };
+	try {
+		body = (await request.json()) as { article?: NotifyArticle; notifyContext?: NotifyContext };
+	} catch {
+		return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	const { article, notifyContext } = body;
+	if (!article || !notifyContext) {
+		return Response.json({ error: 'Missing article or notifyContext' }, { status: 400 });
+	}
+
+	const { chatId, messageId, linked, userId, articleId, webappUrl, isUserArticle } = notifyContext;
+	const notifyToType = isUserArticle ? 'user_article' : 'article';
+
+	// Build message opts: re-fetch collections for keyboard if linked
+	let savedTo: string | undefined;
+	let otherCols: CollectionItem[] = [];
+	if (linked) {
+		const collections = await fetchUserCollections(env, userId);
+		const defaultCol = findDefaultCollection(collections);
+		if (defaultCol) {
+			savedTo = `${defaultCol.icon || '📚'} ${defaultCol.name}`;
+		}
+		otherCols = collections.filter((c) => c.id !== defaultCol?.id);
+	}
+
+	const msgOpts: MessageOpts = { savedTo, linked, alreadyExists: notifyContext.alreadyExists };
+	const msg = truncateMessage(formatAIResult(article, articleId, webappUrl, msgOpts));
+	const keyboard = linked ? buildCollectionKeyboard(otherCols, articleId, webappUrl, notifyToType) : undefined;
+
+	await editMessageWithKeyboard(env.TELEGRAM_BOT_TOKEN, chatId, messageId, msg, keyboard);
+
+	return Response.json({ ok: true });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Telegram webhook handler
+// ─────────────────────────────────────────────────────────────
+
+async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
+	const payload = (await request.json()) as TelegramUpdate;
+
+	// Handle callback queries (inline keyboard button presses)
+	if (payload.callback_query) {
+		await handleCallbackQuery(env, payload.callback_query);
+		return new Response('ok');
+	}
+
+	const message = payload.message;
+
+	if (!message?.text) {
+		return new Response('ok');
+	}
+
+	const chatId = message.chat.id;
+	const telegramId = String(message.from.id);
+	const username = message.from.username || telegramId;
+	const firstName = message.from.first_name || username;
+
+	// Handle commands
+	if (message.text === '/start') {
+		await handleStart(env, chatId);
+		return new Response('ok');
+	}
+
+	if (message.text === '/help') {
+		await handleHelp(env, chatId);
+		return new Response('ok');
+	}
+
+	if (message.text === '/me') {
+		await handleMe(env, chatId, telegramId, firstName);
+		return new Response('ok');
+	}
+
+	if (message.text === '/link') {
+		await handleLink(env, chatId, telegramId, firstName, username);
+		return new Response('ok');
+	}
+
+	// Extract URLs from message
+	const urls = extractUrls(message.text, message.entities);
+
+	if (urls.length === 0) {
+		await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, '找不到連結。請傳送一個網址給我。');
+		return new Response('ok');
+	}
+
+	// Process URLs
+	await handleUrlSubmission(env, chatId, urls, telegramId, username);
+	return new Response('ok');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main fetch handler (path-based routing)
 // ─────────────────────────────────────────────────────────────
 
 export default {
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		const payload = (await request.json()) as TelegramUpdate;
+	async fetch(request: Request, env: Env): Promise<Response> {
+		const url = new URL(request.url);
 
-		// Handle callback queries (inline keyboard button presses)
-		if (payload.callback_query) {
-			await handleCallbackQuery(env, payload.callback_query);
-			return new Response('ok');
+		// Internal /notify endpoint (push from core worker)
+		if (url.pathname === '/notify' && request.method === 'POST') {
+			return handleNotify(request, env);
 		}
 
-		const message = payload.message;
-
-		if (!message?.text) {
-			return new Response('ok');
-		}
-
-		const chatId = message.chat.id;
-		const telegramId = String(message.from.id);
-		const username = message.from.username || telegramId;
-		const firstName = message.from.first_name || username;
-
-		// Handle commands
-		if (message.text === '/start') {
-			await handleStart(env, chatId);
-			return new Response('ok');
-		}
-
-		if (message.text === '/help') {
-			await handleHelp(env, chatId);
-			return new Response('ok');
-		}
-
-		if (message.text === '/me') {
-			await handleMe(env, chatId, telegramId, firstName);
-			return new Response('ok');
-		}
-
-		if (message.text === '/link') {
-			await handleLink(env, chatId, telegramId, firstName, username);
-			return new Response('ok');
-		}
-
-		// Extract URLs from message
-		const urls = extractUrls(message.text, message.entities);
-
-		if (urls.length === 0) {
-			await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, '找不到連結。請傳送一個網址給我。');
-			return new Response('ok');
-		}
-
-		// Process URLs
-		await handleUrlSubmission(env, ctx, chatId, urls, telegramId, username);
-		return new Response('ok');
+		// Everything else is the Telegram webhook
+		return handleTelegramWebhook(request, env);
 	},
 };
