@@ -997,14 +997,27 @@ function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
 	return merged;
 }
 
+function decodeHtmlEntities(str: string): string {
+	return str
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&#x27;/g, "'")
+		.replace(/&#x2F;/g, '/');
+}
+
 function extractMeta(html: string, property: string): string | null {
 	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
-	return re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw) : null;
 }
 
 function extractMetaName(html: string, name: string): string | null {
 	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
-	return re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw) : null;
 }
