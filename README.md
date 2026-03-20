@@ -1,4 +1,8 @@
+<div align="center">
+
 # newsence
+
+**Open-source AI-powered news intelligence engine**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
@@ -6,11 +10,21 @@
 [![MCP](https://img.shields.io/badge/MCP-Compatible-8A2BE2?logo=anthropic&logoColor=white)](https://www.newsence.app/api/mcp)
 [![Website](https://img.shields.io/badge/newsence.app-live-00c853)](https://www.newsence.app)
 
-> **[newsence.app](https://www.newsence.app)** is an open-source, AI-powered news intelligence platform. It monitors 100+ sources across RSS, Twitter, YouTube, and Hacker News — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/newsence)
+
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
+</div>
 
 ---
 
-## What happens when an article arrives
+## What is newsence?
+
+[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, and Hacker News — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
+
+This repo is the core engine: a single Cloudflare Worker that handles the full content pipeline.
+
+## How it works
 
 Each article goes through a 7-step workflow, fully automated with independent retries:
 
@@ -18,111 +32,85 @@ Each article goes through a 7-step workflow, fully automated with independent re
 URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
   │
   ├─ 1. Scrape ─────────── Platform-aware crawler extracts content, metadata, OG image
-  ├─ 2. AI Analysis ────── Gemini 2.5 Flash generates bilingual title, summary, tags, keywords
-  ├─ 3. Save to DB ─────── Write translations + metadata to Supabase PostgreSQL
-  ├─ 4. Embed ──────────── BGE-M3 generates 1024-dim semantic vector via Workers AI
+  ├─ 2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
+  ├─ 3. Save to DB ─────── Write to Supabase PostgreSQL
+  ├─ 4. Embed ──────────── BGE-M3 → 1024-dim semantic vector via Workers AI
   ├─ 5. Save Embedding ─── Store vector for pgvector similarity search
-  ├─ 6. Topic Clustering ─ Find similar articles (cosine > 0.85), assign to topic group
-  └─ 7. Topic Synthesis ── When topic reaches 2/3/5/10 articles, AI generates a topic headline
+  ├─ 6. Topic Clustering ─ Cosine similarity > 0.85 → assign to topic group
+  └─ 7. Topic Synthesis ── AI generates topic headline at 2/3/5/10 articles
 ```
 
-Average processing time: ~30 seconds per article. Each step retries independently (x3, exponential backoff).
+~30 seconds per article. Each step retries x3 with exponential backoff.
 
 ## Ingestion Sources
 
 | Source | Schedule | How it works |
 |--------|----------|--------------|
-| **RSS Feeds** | Every 5 min | Cron fetches all feeds in `RssList`, deduplicates by URL, saves new articles |
-| **Twitter Lists** | Every 6 hours | Cron pulls high-engagement tweets via Kaito API, extracts threads & media |
-| **User Submissions** | Real-time | `POST /submit` — full crawl + AI inline, returns result synchronously |
-| **Telegram Bot** | Real-time | Users send URLs in chat → calls Core `/submit` → replies with summary |
+| **RSS Feeds** | Every 5 min | Cron fetches feeds, deduplicates by URL |
+| **Twitter Lists** | Every 6 hours | Pulls high-engagement tweets via Kaito API |
+| **User Submissions** | Real-time | `POST /submit` — full crawl + AI, sync response |
+| **Telegram Bot** | Real-time | Send URL in chat → get bilingual summary back |
 
-## Platform-Specific Scrapers
+## Platform Scrapers
 
-Not all content is the same. Each platform gets a specialized scraper:
+| Platform | What it extracts |
+|----------|------------------|
+| **YouTube** | Video metadata, captions, chapters, thumbnails |
+| **Twitter/X** | Tweet text, threads, engagement metrics, media |
+| **Hacker News** | Original article + HN discussion via Algolia API |
+| **Web** (default) | Full content via Cheerio, OG metadata, author, date |
 
-| Platform | Detection | What it extracts |
-|----------|-----------|------------------|
-| **YouTube** | `youtube.com`, `youtu.be` | Video metadata, auto-generated captions, chapters, thumbnails |
-| **Twitter/X** | `twitter.com`, `x.com` | Tweet text, thread reconstruction, engagement metrics, media URLs |
-| **Hacker News** | `news.ycombinator.com` | Original article + HN discussion context via Algolia API |
-| **Web** (default) | Everything else | Full article content via Cheerio, OG metadata, author, publish date |
+All scrapers output a unified `ScrapedContent` shape → same AI pipeline.
 
-All scrapers output a unified `ScrapedContent` shape that feeds into the same AI pipeline.
+## AI Pipeline
 
-## AI Processing
-
-**Translation & Analysis** (OpenRouter → Gemini 2.5 Flash):
-- Input: scraped article content
-- Output: `title_cn`, `summary` (EN), `summary_cn` (繁中), `tags[]`, `keywords[]`
-- Platform-specific processors customize prompts (e.g., HN processor includes discussion context, Twitter processor handles thread formatting)
-
-**Embedding Generation** (Workers AI → BGE-M3):
-- Input: concatenated `title + title_cn + summary + summary_cn + tags`
-- Output: 1024-dimensional dense vector
-- Stored in Supabase with pgvector for similarity search
-
-**Topic Clustering**:
-- After embedding, searches for articles within 7 days with cosine similarity > 0.85
-- Groups matching articles under a shared `topic_id`
-- When a topic accumulates 2, 3, 5, or 10 articles, triggers AI synthesis to generate a headline that captures the full story arc
-
-## Architecture
-
-```
-src/
-├── index.ts              # Entry — routes HTTP, Cron, Queue events
-├── app/
-│   ├── http.ts           # POST /submit, GET /health
-│   └── cron.ts           # RSS monitor (*/5min), Twitter monitor (*/6h)
-├── domain/
-│   ├── workflow.ts       # Queue consumer + 7-step Workflow orchestration
-│   ├── processors.ts     # Platform-specific AI processors (registry pattern)
-│   ├── scrapers.ts       # Platform scrapers (YouTube/Twitter/HN/Web)
-│   └── topics.ts         # Topic clustering + AI synthesis
-├── infra/
-│   ├── ai.ts             # OpenRouter client
-│   ├── embedding.ts      # Workers AI embedding client
-│   ├── db.ts             # Supabase client
-│   └── web.ts            # HTTP utilities, URL normalization
-└── models/
-    └── types.ts          # Type definitions, Env bindings
-```
+| Stage | Model | Input → Output |
+|-------|-------|----------------|
+| **Translation & Analysis** | Gemini 2.5 Flash | Article content → `title_cn`, `summary`, `summary_cn`, `tags[]`, `keywords[]` |
+| **Embedding** | BGE-M3 (1024d) | Title + summary + tags → dense vector for similarity search |
+| **Topic Clustering** | Cosine similarity | Find articles > 0.85 similarity within 7 days → group under `topic_id` |
+| **Topic Synthesis** | Gemini 2.5 Flash | Topic articles → headline + description (EN/繁中) |
 
 ## Stack
 
-- **Runtime**: Cloudflare Workers (V8 isolates)
-- **Orchestration**: Cloudflare Queues + Workflows (durable, auto-retry)
-- **Database**: Supabase PostgreSQL + pgvector
-- **LLM**: OpenRouter → Gemini 2.5 Flash
-- **Embeddings**: Cloudflare Workers AI → BGE-M3 (1024 dims)
-- **Twitter Data**: Kaito API (`api.twitterapi.io`)
+| Layer | Technology |
+|-------|------------|
+| Runtime | Cloudflare Workers (V8 isolates) |
+| Orchestration | Cloudflare Queues + Workflows |
+| Database | Supabase PostgreSQL + pgvector |
+| LLM | OpenRouter → Gemini 2.5 Flash |
+| Embeddings | Cloudflare Workers AI → BGE-M3 |
+| Twitter Data | Kaito API |
 
-## Getting Started
+## Quick Start
 
 ```bash
 pnpm install
-cp wrangler.jsonc.example wrangler.jsonc   # Add your API keys
-pnpm dev                                    # Local dev server
-pnpm run deploy                             # Deploy to Cloudflare
+cp wrangler.jsonc.example wrangler.jsonc   # add your API keys
+pnpm dev                                    # local dev server
+pnpm run deploy                             # deploy to Cloudflare
 ```
 
 ## API
 
 ```bash
 # Health check
-GET /health
+curl https://your-worker.workers.dev/health
 
-# Submit a URL for processing (sync — returns full result)
-POST /submit
-Content-Type: application/json
-{"url": "https://example.com/article"}
+# Submit a URL
+curl -X POST https://your-worker.workers.dev/submit \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+```
 
-# Response
+<details>
+<summary>Response example</summary>
+
+```json
 {
   "success": true,
   "results": [{
-    "articleId": "uuid",
+    "articleId": "550e8400-e29b-41d4-a716-446655440000",
     "title": "Article Title",
     "sourceType": "web",
     "alreadyExists": false
@@ -130,22 +118,42 @@ Content-Type: application/json
 }
 ```
 
-Optional auth via `X-Internal-Token` header. Built-in rate limiting: 20 requests per 60s per key (configurable).
+</details>
 
-## CLI & MCP Server
+Optional auth: `X-Internal-Token` header. Rate limiting: 20 req/60s per key (configurable).
 
-Also available as a CLI tool and MCP server via the [`newsence`](https://www.npmjs.com/package/newsence) npm package:
+## CLI & MCP
+
+Also available as a CLI and [MCP](https://modelcontextprotocol.io) server:
 
 ```bash
-# Search from terminal
-npx newsence search "AI agents"
-npx newsence recent --hours 6
+npx newsence search "AI agents"       # search articles
+npx newsence recent --hours 6         # recent articles
 
-# Add as MCP server for Claude Code
-claude mcp add newsence -- npx newsence mcp
+claude mcp add newsence -- npx newsence mcp   # Claude Code
+# Remote MCP: https://www.newsence.app/api/mcp
+```
 
-# Remote MCP endpoint for Claude Cowork
-# https://www.newsence.app/api/mcp
+## Architecture
+
+```
+src/
+├── index.ts              # Entry — routes HTTP, Cron, Queue
+├── app/
+│   ├── http.ts           # POST /submit, GET /health
+│   └── cron.ts           # RSS (*/5min), Twitter (*/6h)
+├── domain/
+│   ├── workflow.ts       # 7-step Workflow orchestration
+│   ├── processors.ts     # AI processors (registry pattern)
+│   ├── scrapers.ts       # Platform scrapers
+│   └── topics.ts         # Topic clustering + synthesis
+├── infra/
+│   ├── ai.ts             # OpenRouter client
+│   ├── embedding.ts      # Workers AI client
+│   ├── db.ts             # Supabase client
+│   └── web.ts            # HTTP utilities
+└── models/
+    └── types.ts          # Types & bindings
 ```
 
 ## Environment Variables
@@ -154,11 +162,11 @@ claude mcp add newsence -- npx newsence mcp
 |----------|----------|-------------|
 | `SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key |
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key (Gemini 2.5 Flash) |
-| `CORE_WORKER_INTERNAL_TOKEN` | No | Auth token for `/submit` endpoint |
-| `YOUTUBE_API_KEY` | No | YouTube Data API key |
-| `KAITO_API_KEY` | No | Kaito API key (Twitter data) |
-| `TRANSCRIPT_API_KEY` | No | YouTube transcript API key |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter API key |
+| `CORE_WORKER_INTERNAL_TOKEN` | No | Auth token for `/submit` |
+| `YOUTUBE_API_KEY` | No | YouTube Data API |
+| `KAITO_API_KEY` | No | Kaito API (Twitter) |
+| `TRANSCRIPT_API_KEY` | No | YouTube transcript API |
 
 ## License
 
