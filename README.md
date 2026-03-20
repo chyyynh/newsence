@@ -1,217 +1,173 @@
-# Newsence Core Worker
+<div align="center">
 
-統一的 Cloudflare Worker，負責內容聚合、AI 分析、翻譯與 embedding 生成。
+# newsence
 
-**URL:** `https://newsence-core.chinyuhsu1023.workers.dev`
+**Open-source AI-powered news intelligence engine**
 
-## 功能
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![npm: newsence](https://img.shields.io/npm/v/newsence?label=npm%3A%20newsence&color=cb3837&logo=npm)](https://www.npmjs.com/package/newsence)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-8A2BE2?logo=anthropic&logoColor=white)](https://www.newsence.app/api/mcp)
+[![Website](https://img.shields.io/badge/newsence.app-live-00c853)](https://www.newsence.app)
 
-- RSS 監控與抓取
-- Twitter 高互動推文追蹤
-- 多平台 Scraping (YouTube/Twitter/HackerNews/Web)
-- AI 翻譯與摘要 (Gemini 2.5 Flash)
-- Embedding 生成 (BGE-M3)
-- **Topic 聚類** — 自動將相似文章歸類到同一主題
-- **Topic 摘要合成** — AI 生成主題標題與描述
-- Queue 異步處理
-- Workflow 編排
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/newsence)
 
-## 專案結構
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
+</div>
+
+---
+
+## What is newsence?
+
+[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, and Hacker News — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
+
+This repo is the core engine: a single Cloudflare Worker that handles the full content pipeline.
+
+## How it works
+
+Each article goes through a 7-step workflow, fully automated with independent retries:
 
 ```
-src/
-├── index.ts              # 入口 - HTTP/Cron/Queue 路由
-├── app/
-│   ├── http.ts           # HTTP 端點處理
-│   └── schedule.ts       # 定時任務 (RSS/Twitter)
-├── domain/
-│   ├── workflow.ts       # Workflow + Queue 消費者
-│   ├── processors.ts     # 平台處理器 + 共用處理流程
-│   ├── scrapers.ts       # 平台抓取器 (YouTube/Twitter/HN/Web)
-│   └── topics.ts         # Topic 聚類與摘要合成
-├── infra/
-│   ├── ai.ts             # OpenRouter AI 分析
-│   ├── embedding.ts      # Workers AI embedding
-│   ├── db.ts             # Supabase 客戶端
-│   ├── web.ts            # 網頁抓取與 URL 工具
-│   └── platform.ts       # 平台 metadata 抓取
-└── models/
-    └── types.ts          # 型別定義
+URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
+  │
+  ├─ 1. Scrape ─────────── Platform-aware crawler extracts content, metadata, OG image
+  ├─ 2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
+  ├─ 3. Save to DB ─────── Write to Supabase PostgreSQL
+  ├─ 4. Embed ──────────── BGE-M3 → 1024-dim semantic vector via Workers AI
+  ├─ 5. Save Embedding ─── Store vector for pgvector similarity search
+  ├─ 6. Topic Clustering ─ Cosine similarity > 0.85 → assign to topic group
+  └─ 7. Topic Synthesis ── AI generates topic headline at 2/3/5/10 articles
 ```
 
-## HTTP 端點
+~30 seconds per article. Each step retries x3 with exponential backoff.
 
-| Method | Path | 說明 |
-|--------|------|------|
-| GET | `/health` | 健康檢查 |
-| POST | `/submit` | 提交 URL (完整 crawl + AI 處理) |
+## Ingestion Sources
 
-## Submit API
+| Source | Schedule | How it works |
+|--------|----------|--------------|
+| **RSS Feeds** | Every 5 min | Cron fetches feeds, deduplicates by URL |
+| **Twitter Lists** | Every 6 hours | Pulls high-engagement tweets via Kaito API |
+| **User Submissions** | Real-time | `POST /submit` — full crawl + AI, sync response |
+| **Telegram Bot** | Real-time | Send URL in chat → get bilingual summary back |
+
+## Platform Scrapers
+
+| Platform | What it extracts |
+|----------|------------------|
+| **YouTube** | Video metadata, captions, chapters, thumbnails |
+| **Twitter/X** | Tweet text, threads, engagement metrics, media |
+| **Hacker News** | Original article + HN discussion via Algolia API |
+| **Web** (default) | Full content via Cheerio, OG metadata, author, date |
+
+All scrapers output a unified `ScrapedContent` shape → same AI pipeline.
+
+## AI Pipeline
+
+| Stage | Model | Input → Output |
+|-------|-------|----------------|
+| **Translation & Analysis** | Gemini 2.5 Flash | Article content → `title_cn`, `summary`, `summary_cn`, `tags[]`, `keywords[]` |
+| **Embedding** | BGE-M3 (1024d) | Title + summary + tags → dense vector for similarity search |
+| **Topic Clustering** | Cosine similarity | Find articles > 0.85 similarity within 7 days → group under `topic_id` |
+| **Topic Synthesis** | Gemini 2.5 Flash | Topic articles → headline + description (EN/繁中) |
+
+## Stack
+
+| Layer | Technology |
+|-------|------------|
+| Runtime | Cloudflare Workers (V8 isolates) |
+| Orchestration | Cloudflare Queues + Workflows |
+| Database | Supabase PostgreSQL + pgvector |
+| LLM | OpenRouter → Gemini 2.5 Flash |
+| Embeddings | Cloudflare Workers AI → BGE-M3 |
+| Twitter Data | Kaito API |
+
+## Quick Start
 
 ```bash
-curl -X POST https://newsence-core.chinyuhsu1023.workers.dev/submit \
+pnpm install
+cp wrangler.jsonc.example wrangler.jsonc   # add your API keys
+pnpm dev                                    # local dev server
+pnpm run deploy                             # deploy to Cloudflare
+```
+
+## API
+
+```bash
+# Health check
+curl https://your-worker.workers.dev/health
+
+# Submit a URL
+curl -X POST https://your-worker.workers.dev/submit \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/article"}'
 ```
 
-**Response:**
+<details>
+<summary>Response example</summary>
+
 ```json
 {
   "success": true,
-  "data": {
-    "articleId": "uuid",
-    "url": "https://example.com/article",
+  "results": [{
+    "articleId": "550e8400-e29b-41d4-a716-446655440000",
     "title": "Article Title",
-    "titleCn": "文章標題",
-    "summary": "English summary...",
-    "summaryCn": "中文摘要...",
     "sourceType": "web",
-    "ogImageUrl": "https://...",
-    "tags": ["tag1", "tag2"],
-    "metadata": {}
-  }
+    "alreadyExists": false
+  }]
 }
 ```
 
-## 定時任務
+</details>
 
-| Cron | 任務 | 說明 |
-|------|------|------|
-| `*/5 * * * *` | RSS Monitor | 每 5 分鐘抓取 RSS feeds |
-| `0 */6 * * *` | Twitter Monitor | 每 6 小時追蹤高互動推文 |
+Optional auth: `X-Internal-Token` header. Rate limiting: 20 req/60s per key (configurable).
 
-## Queue 系統
+## CLI & MCP
 
-| Queue | 訊息類型 | 用途 |
-|-------|---------|------|
-| `article-processing-queue-core` | `article_process` / `batch_process` | 觸發 Workflow 進行 AI 分析與 embedding |
-
-配置：
-- `max_batch_size`: 10
-- `max_batch_timeout`: 30s
-- `max_retries`: 3
-
-## 平台支援
-
-| 平台 | 偵測 | Metadata |
-|------|------|----------|
-| YouTube | `youtube.com`, `youtu.be` | 影片資訊、字幕、章節 |
-| Twitter | `twitter.com`, `x.com` | 推文、互動數據、Article |
-| HackerNews | `news.ycombinator.com` | 討論、評論摘要 |
-| Web | 其他 | OG metadata、內容 |
-
-## AI 處理
-
-### 分析 (OpenRouter)
-- **Model:** `google/gemini-2.5-flash-preview-05-20`
-- **輸出:** tags, keywords, summary_en, summary_cn, title_cn
-
-### Embedding (Workers AI)
-- **Model:** `@cf/baai/bge-m3`
-- **維度:** 1024
-- **輸入:** title + title_cn + summary + summary_cn + tags
-
-### Topic 聚類
-- **相似度門檻:** 0.85 (cosine similarity)
-- **時間窗口:** 7 天內的文章
-- **流程:**
-  1. 文章 embedding 生成後，搜尋相似文章
-  2. 若有相似文章已有 topic → 加入該 topic
-  3. 若無 → 建立新 topic，將所有相似文章歸類
-
-### Topic 摘要合成
-- **觸發時機:** topic 文章數達到 2, 3, 5, 10 篇時
-- **輸出:** 綜合標題 (EN/CN) + 描述 (EN/CN)
-- **目的:** 生成概括性標題，而非直接複製第一篇文章的標題
-
-## 環境變數
-
-| 變數 | 必要 | 說明 |
-|------|------|------|
-| `SUPABASE_URL` | Yes | Supabase URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase key |
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key |
-| `CORE_WORKER_INTERNAL_TOKEN` | No | 啟用 `/submit` 驗證用的內部 token (header: `X-Internal-Token`) |
-| `SUBMIT_RATE_LIMIT_MAX` | No | `/submit` 單一 key 於時間窗內最大請求數 (預設: `20`) |
-| `SUBMIT_RATE_LIMIT_WINDOW_SEC` | No | `/submit` 限流時間窗秒數 (預設: `60`) |
-| `ARTICLES_TABLE` | No | Table 名稱 (預設: `articles`) |
-| `YOUTUBE_API_KEY` | No | YouTube Data API |
-| `KAITO_API_KEY` | No | Kaito API (Twitter) |
-| `TRANSCRIPT_API_KEY` | No | Transcript API |
-
-## 開發
+Also available as a CLI and [MCP](https://modelcontextprotocol.io) server:
 
 ```bash
-# 安裝
-pnpm install
+npx newsence search "AI agents"       # search articles
+npx newsence recent --hours 6         # recent articles
 
-# 本地開發
-pnpm dev
-
-# TypeScript 檢查
-pnpm exec tsc --noEmit
-
-# 部署
-pnpm run deploy
-
-# 查看 logs
-pnpm wrangler tail
+claude mcp add newsence -- npx newsence mcp   # Claude Code
+# Remote MCP: https://www.newsence.app/api/mcp
 ```
 
-## Workflow 步驟
-
-| Step | 名稱 | 說明 |
-|------|------|------|
-| 1 | `fetch-article` | 從 DB 讀取文章 |
-| 2 | `ai-analysis` | AI 翻譯、標籤、摘要 |
-| 3 | `update-db` | 更新分析結果到 DB |
-| 4 | `generate-embedding` | 生成 1024 維向量 |
-| 5 | `save-embedding` | 儲存 embedding |
-| 6 | `assign-topic` | 聚類到 topic |
-| 7 | `synthesize-topic` | AI 合成 topic 摘要 (條件觸發) |
-
-## 資料流
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    資料來源                              │
-│  RSS Feeds  │  Twitter Lists  │  Manual URL  │  Webhook │
-└──────┬──────┴────────┬────────┴───────┬──────┴─────┬────┘
-       │               │                │            │
-       ▼               ▼                ▼            │
-  ┌─────────┐    ┌──────────┐    ┌──────────┐       │
-  │RSS Cron │    │Twitter   │    │ /submit  │       │
-  │ */5min  │    │ */6h     │    │   API    │       │
-  └────┬────┘    └────┬─────┘    └────┬─────┘       │
-       │              │               │             │
-       └──────────────┼───────────────┘             │
-                      ▼                             │
-         ┌────────────────────────┐                 │
-         │ Platform Scraper       │◄────────────────┘
-         │ (YouTube/Twitter/HN)   │
-         └───────────┬────────────┘
-                     ▼
-         ┌────────────────────────┐
-         │ Save to Supabase       │
-         └───────────┬────────────┘
-                     ▼
-         ┌────────────────────────┐
-         │ Queue Message          │
-         └───────────┬────────────┘
-                     ▼
-    ┌────────────────────────────────────┐
-    │        Workflow (7 Steps)          │
-    ├────────────────────────────────────┤
-    │ 1. fetch-article                   │
-    │ 2. ai-analysis (Gemini)            │
-    │    → 翻譯、標籤、摘要               │
-    │ 3. update-db                       │
-    │ 4. generate-embedding (BGE-M3)     │
-    │    → 1024 維向量                   │
-    │ 5. save-embedding                  │
-    │ 6. assign-topic                    │
-    │    → 相似度 > 0.85 歸類到 topic     │
-    │ 7. synthesize-topic (條件觸發)     │
-    │    → AI 合成主題標題與描述          │
-    └────────────────────────────────────┘
+src/
+├── index.ts              # Entry — routes HTTP, Cron, Queue
+├── app/
+│   ├── http.ts           # POST /submit, GET /health
+│   └── cron.ts           # RSS (*/5min), Twitter (*/6h)
+├── domain/
+│   ├── workflow.ts       # 7-step Workflow orchestration
+│   ├── processors.ts     # AI processors (registry pattern)
+│   ├── scrapers.ts       # Platform scrapers
+│   └── topics.ts         # Topic clustering + synthesis
+├── infra/
+│   ├── ai.ts             # OpenRouter client
+│   ├── embedding.ts      # Workers AI client
+│   ├── db.ts             # Supabase client
+│   └── web.ts            # HTTP utilities
+└── models/
+    └── types.ts          # Types & bindings
 ```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter API key |
+| `CORE_WORKER_INTERNAL_TOKEN` | No | Auth token for `/submit` |
+| `YOUTUBE_API_KEY` | No | YouTube Data API |
+| `KAITO_API_KEY` | No | Kaito API (Twitter) |
+| `TRANSCRIPT_API_KEY` | No | YouTube transcript API |
+
+## License
+
+MIT
