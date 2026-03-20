@@ -870,76 +870,6 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 	return result;
 }
 
-/** Scrape using only cheerio (for comparison/testing) */
-export async function scrapeWebPageCheerio(url: string): Promise<ScrapedContent> {
-	logInfo('WEB', 'Scraping (cheerio only)', { url });
-
-	const response = await fetch(url, {
-		headers: {
-			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-		},
-	});
-
-	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-	const html = await response.text();
-	const $ = cheerio.load(html);
-	const metadata = extractMetadata($, url);
-	const content = extractContentCheerio($, metadata.title, url);
-
-	logInfo('WEB', 'Scraped (cheerio)', { url, chars: content.length });
-
-	return {
-		title: metadata.title,
-		content,
-		summary: metadata.description || undefined,
-		ogImageUrl: metadata.ogImageUrl,
-		ogImageWidth: metadata.ogImageWidth,
-		ogImageHeight: metadata.ogImageHeight,
-		siteName: metadata.siteName,
-		author: metadata.author,
-		publishedDate: metadata.publishedDate,
-	};
-}
-
-/** Scrape using only Readability (for comparison/testing) */
-export async function scrapeWebPageReadability(url: string): Promise<ScrapedContent> {
-	logInfo('WEB', 'Scraping (readability only)', { url });
-
-	const response = await fetch(url, {
-		headers: {
-			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-		},
-	});
-
-	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-	const html = await response.text();
-	const $ = cheerio.load(html);
-	const metadata = extractMetadata($, url);
-
-	const readabilityContent = extractContentReadability(html, url);
-	if (!readabilityContent) throw new Error('Readability failed to extract content');
-
-	logInfo('WEB', 'Scraped (readability)', { url, chars: readabilityContent.length });
-
-	return {
-		title: metadata.title,
-		content: readabilityContent,
-		summary: metadata.description || undefined,
-		ogImageUrl: metadata.ogImageUrl,
-		ogImageWidth: metadata.ogImageWidth,
-		ogImageHeight: metadata.ogImageHeight,
-		siteName: metadata.siteName,
-		author: metadata.author,
-		publishedDate: metadata.publishedDate,
-	};
-}
-
 // ─────────────────────────────────────────────────────────────
 // Unified Scraper
 // ─────────────────────────────────────────────────────────────
@@ -1067,14 +997,27 @@ function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
 	return merged;
 }
 
+function decodeHtmlEntities(str: string): string {
+	return str
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&#x27;/g, "'")
+		.replace(/&#x2F;/g, '/');
+}
+
 function extractMeta(html: string, property: string): string | null {
 	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
-	return re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw) : null;
 }
 
 function extractMetaName(html: string, name: string): string | null {
 	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
-	return re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw) : null;
 }
