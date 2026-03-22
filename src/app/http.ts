@@ -597,10 +597,10 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 	const db = await createDbClient(env);
 	try {
 		const result = await db.query(
-			`SELECT id, name, icon, is_default
+			`SELECT id, name, icon
 			FROM collections
 			WHERE user_id = $1
-			ORDER BY is_default DESC, updated_at DESC
+			ORDER BY updated_at DESC
 			LIMIT 10`,
 			[body.userId],
 		);
@@ -609,7 +609,6 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 			id: c.id,
 			name: c.name,
 			icon: c.icon,
-			isDefault: c.is_default,
 		}));
 
 		return Response.json({ collections });
