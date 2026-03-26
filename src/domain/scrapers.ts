@@ -668,6 +668,8 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 	return content.trim();
 }
 
+import { cleanExtractedContent } from './content-cleanup';
+
 /** Extract article content using Mozilla Readability + turndown (primary method) */
 function extractContentReadability(html: string, url: string): string | null {
 	try {
@@ -793,8 +795,8 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 
-	const readabilityContent = extractContentReadability(html, finalUrl);
-	const content = readabilityContent ?? extractContentCheerio($, metadata.title, finalUrl);
+	const rawContent = extractContentReadability(html, finalUrl) ?? extractContentCheerio($, metadata.title, finalUrl);
+	const content = cleanExtractedContent(rawContent);
 
 	return {
 		title: metadata.title,
