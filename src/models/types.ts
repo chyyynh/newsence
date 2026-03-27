@@ -13,7 +13,7 @@ export interface Env extends Cloudflare.Env {
 	SUBMIT_RATE_LIMIT_WINDOW_SEC?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	CLIP_API_SECRET?: string;
+
 	CF_ACCOUNT_ID: string;
 	CF_API_TOKEN: string;
 }
@@ -66,6 +66,7 @@ export interface RSSFeed {
 	url: string;
 	type: string;
 	scraped_at?: string;
+	avatar_url?: string;
 }
 
 // Twitter related (Kaito API response shape)

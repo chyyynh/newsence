@@ -19,6 +19,7 @@
 		"crons": [
 			"*/5 * * * *", // RSS monitor (every 5 minutes)
 			"0 */6 * * *", // Twitter monitor (every 6 hours)
+			"*/30 * * * *", // YouTube channel monitor (every 30 minutes)
 			"0 3 * * *" // Retry failed articles (daily 3 AM UTC)
 		]
 	},
@@ -83,7 +84,5 @@
 	"placement": {
 		"mode": "smart"
 	},
-	"vars": {
-		"CLIP_API_URL": "https://clip-api-production-8bf7.up.railway.app"
-	}
+	"vars": {}
 }
