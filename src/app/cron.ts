@@ -879,7 +879,7 @@ export async function handleYouTubeCron(
 	const db = await createDbClient(env);
 	try {
 		const result = await db.query(
-			`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1`,
+			`SELECT id, name, "RSSLink", url, type, scraped_at, avatar_url FROM "RssList" WHERE type = $1`,
 			["youtube_channel"],
 		);
 		const channels = result.rows as RSSFeed[];
@@ -1010,6 +1010,13 @@ export async function handleYouTubeCron(
 
 						totalInserted++;
 						logInfo("YOUTUBE-CRON", "Inserted video", { channel: channel.name, title: scraped.title.slice(0, 60) });
+
+						// Backfill channel avatar on RssList if missing
+						const avatar = scraped.metadata?.channelAvatar as string | undefined;
+						if (avatar && !channel.avatar_url) {
+							await db.query(`UPDATE "RssList" SET avatar_url = $1 WHERE id = $2`, [avatar, channel.id]);
+							channel.avatar_url = avatar;
+						}
 					} catch (err) {
 						logWarn("YOUTUBE-CRON", "Video process failed", { videoId, error: String(err) });
 					}

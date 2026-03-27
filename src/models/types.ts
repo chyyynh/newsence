@@ -66,6 +66,7 @@ export interface RSSFeed {
 	url: string;
 	type: string;
 	scraped_at?: string;
+	avatar_url?: string;
 }
 
 // Twitter related (Kaito API response shape)
