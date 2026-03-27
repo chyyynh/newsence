@@ -145,20 +145,15 @@ const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null
 async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
 	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
 
-	const { YoutubeTranscript } = await import('youtube-transcript');
-	const items = await YoutubeTranscript.fetchTranscript(videoId);
+	const { fetchTranscript: fetchYT } = await import('youtube-transcript-plus');
+	const items = await fetchYT(videoId);
 
 	if (!items?.length) return EMPTY_TRANSCRIPT;
 
-	// youtube-transcript returns offset/duration in ms (srv3 format) or seconds (classic XML).
-	// srv3 offsets for any video > ~2 min will exceed 100,000 ms; no real video has 100,000+ seconds (~27h).
-	const maxOffset = items.reduce((max: number, i: { offset: number }) => Math.max(max, i.offset), 0);
-	const isMs = maxOffset > 100_000;
-	const divisor = isMs ? 1000 : 1;
-
-	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
-		startTime: item.offset / divisor,
-		endTime: (item.offset + item.duration) / divisor,
+	// youtube-transcript-plus normalizes offset/duration to seconds for all caption formats
+	const segments: TranscriptSegment[] = items.map((item) => ({
+		startTime: item.offset,
+		endTime: item.offset + item.duration,
 		text: item.text,
 	}));
 
