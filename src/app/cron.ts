@@ -882,6 +882,10 @@ export async function handleYouTubeCron(
 	env: Env,
 	_ctx: ExecutionContext,
 ): Promise<void> {
+	if (!env.YOUTUBE_API_KEY) {
+		logInfo("YOUTUBE-CRON", "Skipped — YOUTUBE_API_KEY not configured");
+		return;
+	}
 	logInfo("YOUTUBE-CRON", "start");
 	const db = await createDbClient(env);
 	try {

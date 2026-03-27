@@ -150,14 +150,10 @@ async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptS
 
 	if (!items?.length) return EMPTY_TRANSCRIPT;
 
-	// youtube-transcript returns offset/duration in ms (srv3: parseInt, always integers)
-	// or seconds (classic XML: parseFloat, typically has decimals).
-	// srv3 offsets are always whole numbers (ms); classic offsets have fractional seconds.
-	// Use a two-signal heuristic: srv3 values are integers AND large relative to seconds.
-	const sample = items.slice(0, 20);
-	const allIntegers = sample.every((i: { offset: number; duration: number }) => Number.isInteger(i.offset) && Number.isInteger(i.duration));
+	// youtube-transcript returns offset/duration in ms (srv3 format) or seconds (classic XML).
+	// srv3 offsets for any video > ~2 min will exceed 100,000 ms; no real video has 100,000+ seconds (~27h).
 	const maxOffset = items.reduce((max: number, i: { offset: number }) => Math.max(max, i.offset), 0);
-	const isMs = allIntegers && maxOffset > 500;
+	const isMs = maxOffset > 100_000;
 	const divisor = isMs ? 1000 : 1;
 
 	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
