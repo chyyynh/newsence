@@ -142,51 +142,26 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 
 const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 
-async function fetchTranscript(
-	videoId: string,
-	clipApiUrl: string,
-	clipApiSecret: string,
-): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	logInfo('YOUTUBE', 'Fetching transcript via clip-api', { videoId });
+async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
+	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
 
-	const response = await fetch(`${clipApiUrl}/transcript`, {
-		method: 'POST',
-		headers: { Authorization: `Bearer ${clipApiSecret}`, 'Content-Type': 'application/json' },
-		body: JSON.stringify({ videoId }),
-	});
+	const { YoutubeTranscript } = await import('youtube-transcript');
+	const items = await YoutubeTranscript.fetchTranscript(videoId);
 
-	if (!response.ok) {
-		const errorBody = await response.text().catch(() => '');
-		logWarn('YOUTUBE', 'clip-api transcript failed', { status: response.status, body: errorBody.slice(0, 200) });
-		return EMPTY_TRANSCRIPT;
-	}
+	if (!items?.length) return EMPTY_TRANSCRIPT;
 
-	const json = (await response.json()) as {
-		ok?: boolean;
-		data?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
-		// Legacy format
-		status?: string;
-		result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
-		error?: string;
-	};
+	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
+		startTime: item.offset / 1000,
+		endTime: (item.offset + item.duration) / 1000,
+		text: item.text,
+	}));
 
-	// Current envelope format: { ok, data: { segments, language } }
-	const result = json.data ?? (json.status === 'done' ? json.result : undefined);
-	if (result?.segments) {
-		logInfo('YOUTUBE', 'Transcript fetched', { count: result.segments.length });
-		return { segments: result.segments, language: result.language };
-	}
-
-	logWarn('YOUTUBE', 'Transcript failed', { error: json.error });
-	return EMPTY_TRANSCRIPT;
+	const language = items[0].lang ?? null;
+	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length, language });
+	return { segments, language };
 }
 
-export async function scrapeYouTube(
-	videoId: string,
-	youtubeApiKey: string,
-	clipApiUrl?: string,
-	clipApiSecret?: string,
-): Promise<ScrapedContent> {
+export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
@@ -231,14 +206,12 @@ export async function scrapeYouTube(
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
-	// Fetch transcript via clip-api (if configured)
+	// Fetch transcript via InnerTube API (youtube-transcript package)
 	let transcriptResult = EMPTY_TRANSCRIPT;
-	if (clipApiUrl && clipApiSecret) {
-		try {
-			transcriptResult = await fetchTranscript(videoId, clipApiUrl, clipApiSecret);
-		} catch (e) {
-			logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
-		}
+	try {
+		transcriptResult = await fetchTranscript(videoId);
+	} catch (e) {
+		logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
 	}
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 
@@ -878,8 +851,6 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 
 export interface ScrapeOptions {
 	youtubeApiKey?: string;
-	clipApiUrl?: string;
-	clipApiSecret?: string;
 	kaitoApiKey?: string;
 }
 
@@ -891,7 +862,7 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 			const videoId = extractYouTubeId(url);
 			if (!videoId) throw new Error('Invalid YouTube URL');
 			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-			return scrapeYouTube(videoId, options.youtubeApiKey, options.clipApiUrl, options.clipApiSecret);
+			return scrapeYouTube(videoId, options.youtubeApiKey);
 		}
 
 		case 'twitter': {
