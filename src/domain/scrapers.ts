@@ -150,9 +150,15 @@ async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptS
 
 	if (!items?.length) return EMPTY_TRANSCRIPT;
 
+	// youtube-transcript returns offset/duration in ms (srv3 format) or seconds (classic XML).
+	// Detect by checking if the max offset is implausibly large for seconds.
+	const maxOffset = items.reduce((max: number, i: { offset: number }) => Math.max(max, i.offset), 0);
+	const isMs = maxOffset > 10_000;
+	const divisor = isMs ? 1000 : 1;
+
 	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
-		startTime: item.offset / 1000,
-		endTime: (item.offset + item.duration) / 1000,
+		startTime: item.offset / divisor,
+		endTime: (item.offset + item.duration) / divisor,
 		text: item.text,
 	}));
 

@@ -976,7 +976,7 @@ export async function handleYouTubeCron(
 							[
 								url,
 								scraped.title,
-								scraped.author || channel.name,
+								channel.name,
 								scraped.publishedDate || new Date().toISOString(),
 								new Date().toISOString(),
 								scraped.summary || "",
