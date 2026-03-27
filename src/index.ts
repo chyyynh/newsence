@@ -8,7 +8,7 @@ import {
 	handleWorkflowStatus,
 	handleWorkflowStream,
 } from './app/http';
-import { handleRetryCron, handleRSSCron, handleTwitterCron } from './app/cron';
+import { handleRetryCron, handleRSSCron, handleTwitterCron, handleYouTubeCron } from './app/cron';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 import { logInfo } from './infra/log';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
@@ -73,6 +73,7 @@ export default {
 
 		if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
 		else if (event.cron === '0 */6 * * *') ctx.waitUntil(handleTwitterCron(env, ctx));
+		else if (event.cron === '*/30 * * * *') ctx.waitUntil(handleYouTubeCron(env, ctx));
 		else if (event.cron === '0 3 * * *') ctx.waitUntil(handleRetryCron(env, ctx));
 	},
 

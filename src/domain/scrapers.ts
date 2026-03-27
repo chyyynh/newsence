@@ -142,51 +142,36 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 
 const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 
-async function fetchTranscript(
-	videoId: string,
-	clipApiUrl: string,
-	clipApiSecret: string,
-): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	logInfo('YOUTUBE', 'Fetching transcript via clip-api', { videoId });
+async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
+	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
 
-	const response = await fetch(`${clipApiUrl}/transcript`, {
-		method: 'POST',
-		headers: { Authorization: `Bearer ${clipApiSecret}`, 'Content-Type': 'application/json' },
-		body: JSON.stringify({ videoId }),
-	});
+	const { YoutubeTranscript } = await import('youtube-transcript');
+	const items = await YoutubeTranscript.fetchTranscript(videoId);
 
-	if (!response.ok) {
-		const errorBody = await response.text().catch(() => '');
-		logWarn('YOUTUBE', 'clip-api transcript failed', { status: response.status, body: errorBody.slice(0, 200) });
-		return EMPTY_TRANSCRIPT;
-	}
+	if (!items?.length) return EMPTY_TRANSCRIPT;
 
-	const json = (await response.json()) as {
-		ok?: boolean;
-		data?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
-		// Legacy format
-		status?: string;
-		result?: { segments: Array<{ startTime: number; endTime: number; text: string }>; language: string };
-		error?: string;
-	};
+	// youtube-transcript returns offset/duration in ms (srv3: parseInt, always integers)
+	// or seconds (classic XML: parseFloat, typically has decimals).
+	// srv3 offsets are always whole numbers (ms); classic offsets have fractional seconds.
+	// Use a two-signal heuristic: srv3 values are integers AND large relative to seconds.
+	const sample = items.slice(0, 20);
+	const allIntegers = sample.every((i: { offset: number; duration: number }) => Number.isInteger(i.offset) && Number.isInteger(i.duration));
+	const maxOffset = items.reduce((max: number, i: { offset: number }) => Math.max(max, i.offset), 0);
+	const isMs = allIntegers && maxOffset > 500;
+	const divisor = isMs ? 1000 : 1;
 
-	// Current envelope format: { ok, data: { segments, language } }
-	const result = json.data ?? (json.status === 'done' ? json.result : undefined);
-	if (result?.segments) {
-		logInfo('YOUTUBE', 'Transcript fetched', { count: result.segments.length });
-		return { segments: result.segments, language: result.language };
-	}
+	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
+		startTime: item.offset / divisor,
+		endTime: (item.offset + item.duration) / divisor,
+		text: item.text,
+	}));
 
-	logWarn('YOUTUBE', 'Transcript failed', { error: json.error });
-	return EMPTY_TRANSCRIPT;
+	const language = items[0].lang ?? null;
+	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length, language });
+	return { segments, language };
 }
 
-export async function scrapeYouTube(
-	videoId: string,
-	youtubeApiKey: string,
-	clipApiUrl?: string,
-	clipApiSecret?: string,
-): Promise<ScrapedContent> {
+export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
@@ -231,14 +216,12 @@ export async function scrapeYouTube(
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
-	// Fetch transcript via clip-api (if configured)
+	// Fetch transcript via InnerTube API (youtube-transcript package)
 	let transcriptResult = EMPTY_TRANSCRIPT;
-	if (clipApiUrl && clipApiSecret) {
-		try {
-			transcriptResult = await fetchTranscript(videoId, clipApiUrl, clipApiSecret);
-		} catch (e) {
-			logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
-		}
+	try {
+		transcriptResult = await fetchTranscript(videoId);
+	} catch (e) {
+		logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
 	}
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 
@@ -668,6 +651,8 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 	return content.trim();
 }
 
+import { cleanExtractedContent } from './content-cleanup';
+
 /** Extract article content using Mozilla Readability + turndown (primary method) */
 function extractContentReadability(html: string, url: string): string | null {
 	try {
@@ -793,8 +778,8 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 
-	const readabilityContent = extractContentReadability(html, finalUrl);
-	const content = readabilityContent ?? extractContentCheerio($, metadata.title, finalUrl);
+	const rawContent = extractContentReadability(html, finalUrl) ?? extractContentCheerio($, metadata.title, finalUrl);
+	const content = cleanExtractedContent(rawContent);
 
 	return {
 		title: metadata.title,
@@ -876,8 +861,6 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 
 export interface ScrapeOptions {
 	youtubeApiKey?: string;
-	clipApiUrl?: string;
-	clipApiSecret?: string;
 	kaitoApiKey?: string;
 }
 
@@ -889,7 +872,7 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 			const videoId = extractYouTubeId(url);
 			if (!videoId) throw new Error('Invalid YouTube URL');
 			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-			return scrapeYouTube(videoId, options.youtubeApiKey, options.clipApiUrl, options.clipApiSecret);
+			return scrapeYouTube(videoId, options.youtubeApiKey);
 		}
 
 		case 'twitter': {
