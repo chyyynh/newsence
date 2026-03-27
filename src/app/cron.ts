@@ -858,6 +858,13 @@ export async function handleTwitterCron(
 import { scrapeYouTube } from "../domain/scrapers";
 import { buildYouTube } from "../models/platform-metadata";
 
+/** Parse ISO 8601 duration (e.g. PT1H2M3S) to seconds */
+function parseDurationSeconds(iso: string): number {
+	const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+	if (!m) return 0;
+	return (parseInt(m[1] || "0") * 3600) + (parseInt(m[2] || "0") * 60) + parseInt(m[3] || "0");
+}
+
 interface YouTubeAtomEntry {
 	"yt:videoId": string;
 	title: string;
@@ -935,6 +942,14 @@ export async function handleYouTubeCron(
 					const videoId = entry["yt:videoId"];
 					try {
 						const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || "");
+
+						// Skip Shorts (< 90 seconds)
+						const duration = scraped.metadata?.duration as string | undefined;
+						if (duration && parseDurationSeconds(duration) < 90) {
+							logInfo("YOUTUBE-CRON", "Skipping short", { videoId, duration });
+							continue;
+						}
+
 						const url = normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
 
 						const platformMetadata = buildYouTube({
