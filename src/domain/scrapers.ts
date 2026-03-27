@@ -145,15 +145,17 @@ const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null
 async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
 	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
 
-	const { fetchTranscript: fetchYT } = await import('youtube-transcript-plus');
-	const items = await fetchYT(videoId);
+	const { YoutubeTranscript } = await import('youtube-transcript');
+	const items = await YoutubeTranscript.fetchTranscript(videoId);
 
 	if (!items?.length) return EMPTY_TRANSCRIPT;
 
-	// youtube-transcript-plus normalizes offset/duration to seconds for all caption formats
-	const segments: TranscriptSegment[] = items.map((item) => ({
-		startTime: item.offset,
-		endTime: item.offset + item.duration,
+	// In Worker environment, only the ANDROID InnerTube path succeeds (video page
+	// scrape is blocked by YouTube from datacenter IPs). The ANDROID path always
+	// returns srv3 format where offset/duration are in milliseconds.
+	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
+		startTime: item.offset / 1000,
+		endTime: (item.offset + item.duration) / 1000,
 		text: item.text,
 	}));
 
