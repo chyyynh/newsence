@@ -733,11 +733,24 @@ async function addToUnsortedCollection(env: Env, userId: string, articleId: stri
 		if (existing.rows[0]) {
 			collectionId = existing.rows[0].id;
 		} else {
+			// ON CONFLICT handles race condition (partial unique index on is_system + user/org)
 			const ins = await db.query(
-				`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count) VALUES ($1, $2, 'Unsorted', true, 'private', 0) RETURNING id`,
+				`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+				VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+				ON CONFLICT DO NOTHING
+				RETURNING id`,
 				[userId, orgId],
 			);
-			collectionId = ins.rows[0].id;
+			if (ins.rows[0]) {
+				collectionId = ins.rows[0].id;
+			} else {
+				// Race: another request created it first, re-query
+				const retry = orgId
+					? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+					: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+				if (!retry.rows[0]) return;
+				collectionId = retry.rows[0].id;
+			}
 		}
 
 		// Check not already in collection
@@ -791,10 +804,18 @@ export async function handleBotGetUnsorted(request: Request, env: Env): Promise<
 		const insertResult = await db.query(
 			`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
 			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			ON CONFLICT DO NOTHING
 			RETURNING id`,
 			[body.userId, orgId],
 		);
-		return Response.json({ collectionId: insertResult.rows[0].id });
+		if (insertResult.rows[0]) {
+			return Response.json({ collectionId: insertResult.rows[0].id });
+		}
+		// Race: re-query
+		const retry = orgId
+			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [body.userId]);
+		return Response.json({ collectionId: retry.rows[0]?.id });
 	} finally {
 		await db.end();
 	}
