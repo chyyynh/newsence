@@ -718,6 +718,82 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 }
 
 // ─────────────────────────────────────────────────────────────
+// List articles (for bot export)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotListArticles(request: Request, env: Env): Promise<Response> {
+	if (!(await isBotAuthorized(request, env))) {
+		return Response.json({ articles: [], error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { userId?: string; period?: string; organizationId?: string };
+	try {
+		body = (await request.json()) as { userId?: string; period?: string; organizationId?: string };
+	} catch {
+		return Response.json({ articles: [] }, { status: 400 });
+	}
+
+	if (!body.userId) {
+		return Response.json({ articles: [], error: 'Missing userId' }, { status: 400 });
+	}
+
+	const period = body.period || 'unsorted';
+	const orgId = body.organizationId || null;
+	const db = await createDbClient(env);
+
+	try {
+		let dateFilter = '';
+		if (period === 'week') {
+			dateFilter = `AND scraped_date >= NOW() - INTERVAL '7 days'`;
+		}
+
+		// Query user_articles first, then public articles
+		const cols = 'title, COALESCE(title_cn, title) as display_title, url, source_type, COALESCE(tags, ARRAY[]::text[]) as tags, COALESCE(summary_cn, summary, \'\') as summary, published_date, scraped_date';
+
+		let query: string;
+		let params: unknown[];
+
+		if (period === 'unsorted' && orgId) {
+			// Unsorted = articles in the system collection for this org
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
+				JOIN citations c ON c.to_type = 'user_article' AND c.to_id = ua.id::text
+				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.organization_id = $1
+				WHERE c.from_type = 'collection' ${dateFilter}
+				ORDER BY ua.scraped_date DESC LIMIT 500`;
+			params = [orgId];
+		} else if (period === 'unsorted') {
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
+				JOIN citations c ON c.to_type = 'user_article' AND c.to_id = ua.id::text
+				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.user_id = $1 AND col.organization_id IS NULL
+				WHERE c.from_type = 'collection' ${dateFilter}
+				ORDER BY ua.scraped_date DESC LIMIT 500`;
+			params = [body.userId];
+		} else if (orgId) {
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
+			params = [orgId];
+		} else {
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
+			params = [body.userId];
+		}
+
+		const result = await db.query(query, params);
+		const articles = (result.rows ?? []).map((r: Record<string, unknown>) => ({
+			title: (r.display_title as string) || (r.title as string) || '',
+			url: (r.url as string) || '',
+			sourceType: (r.source_type as string) || '',
+			tags: (r.tags as string[]) || [],
+			summary: (r.summary as string) || '',
+			publishedDate: r.published_date ? String(r.published_date) : '',
+			scrapedDate: r.scraped_date ? String(r.scraped_date) : '',
+		}));
+
+		return Response.json({ articles });
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
 // Unsorted collection helpers
 // ─────────────────────────────────────────────────────────────
 

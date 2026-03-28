@@ -1,5 +1,6 @@
 import {
 	handleBotGetUnsorted,
+	handleBotListArticles,
 	handleBotLookup,
 	handleBotResolveOrg,
 	handleHealth,
@@ -25,6 +26,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/bot/lookup': handleBotLookup,
 	'/bot/resolve-org': handleBotResolveOrg,
 	'/bot/get-unsorted': handleBotGetUnsorted,
+	'/bot/list-articles': handleBotListArticles,
 	'/telegram/lookup': handleTelegramLookup,
 	'/telegram/collections': handleTelegramCollections,
 	'/telegram/add-to-collection': handleTelegramAddToCollection,
