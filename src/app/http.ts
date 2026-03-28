@@ -708,6 +708,50 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 	}
 }
 
+// ─────────────────────────────────────────────────────────────
+// Get or create unsorted (system) collection
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotGetUnsorted(request: Request, env: Env): Promise<Response> {
+	if (!(await isBotAuthorized(request, env))) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { userId?: string; organizationId?: string };
+	try {
+		body = (await request.json()) as { userId?: string; organizationId?: string };
+	} catch {
+		return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.userId) {
+		return Response.json({ error: 'Missing userId' }, { status: 400 });
+	}
+
+	const db = await createDbClient(env);
+	try {
+		const orgId = body.organizationId || null;
+		const scopeWhere = orgId
+			? `organization_id = '${orgId}'`
+			: `user_id = '${body.userId}' AND organization_id IS NULL`;
+
+		const existing = await db.query(`SELECT id FROM collections WHERE is_system = true AND ${scopeWhere} LIMIT 1`);
+		if (existing.rows[0]) {
+			return Response.json({ collectionId: existing.rows[0].id });
+		}
+
+		const insertResult = await db.query(
+			`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			RETURNING id`,
+			[body.userId, orgId],
+		);
+		return Response.json({ collectionId: insertResult.rows[0].id });
+	} finally {
+		await db.end();
+	}
+}
+
 function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined, fallbackType: string): PlatformMetadata | null {
 	if (!metadata) return null;
 	const rawType = metadata.type;
