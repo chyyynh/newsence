@@ -79,7 +79,7 @@
 	 * Smart Placement — run close to database
 	 */
 	"services": [
-		{ "binding": "TELEGRAM_BOT", "service": "newsence-telegram-bot" }
+		{ "binding": "TELEGRAM_BOT", "service": "newsence-bot" }
 	],
 	"placement": {
 		"mode": "smart"
