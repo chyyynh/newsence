@@ -142,8 +142,9 @@ type SubmitBody = {
 	userId?: string;
 	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
 	notifyContext?: {
-		chatId: number;
-		messageId: number;
+		platform: 'telegram' | 'feishu';
+		chatId: string;
+		messageId: string;
 		linked: boolean;
 		userId: string;
 		webappUrl: string;

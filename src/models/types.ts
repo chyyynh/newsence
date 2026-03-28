@@ -102,10 +102,11 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 }
 
-// Telegram push notification context (passed through workflow)
-export interface TelegramNotifyContext {
-	chatId: number;
-	messageId: number;
+// Bot push notification context (passed through workflow, platform-agnostic)
+export interface BotNotifyContext {
+	platform: 'telegram' | 'feishu';
+	chatId: string;
+	messageId: string;
 	linked: boolean;
 	userId: string;
 	articleId: string;
@@ -113,6 +114,9 @@ export interface TelegramNotifyContext {
 	webappUrl: string;
 	isUserArticle?: boolean;
 }
+
+/** @deprecated Use BotNotifyContext instead */
+export type TelegramNotifyContext = BotNotifyContext;
 
 // Queue message types
 export type QueueMessage =
