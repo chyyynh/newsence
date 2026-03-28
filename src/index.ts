@@ -1,4 +1,6 @@
 import {
+	handleBotLookup,
+	handleBotResolveOrg,
 	handleHealth,
 	handleSubmitUrl,
 	handleTelegramAddToCollection,
@@ -19,6 +21,8 @@ type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/submit': handleSubmitUrl,
+	'/bot/lookup': handleBotLookup,
+	'/bot/resolve-org': handleBotResolveOrg,
 	'/telegram/lookup': handleTelegramLookup,
 	'/telegram/collections': handleTelegramCollections,
 	'/telegram/add-to-collection': handleTelegramAddToCollection,

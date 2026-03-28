@@ -140,6 +140,7 @@ type SubmitBody = {
 	url?: string; // Legacy single URL (backward compatible)
 	urls?: string[]; // Batch URLs
 	userId?: string;
+	organizationId?: string;
 	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
 	notifyContext?: {
 		platform: 'telegram' | 'feishu';
@@ -156,6 +157,9 @@ type SubmitResult = {
 	articleId?: string;
 	instanceId?: string;
 	title?: string;
+	titleCn?: string;
+	summaryCn?: string;
+	tags?: string[];
 	ogImageUrl?: string | null;
 	sourceType?: string;
 	alreadyExists?: boolean;
@@ -192,6 +196,7 @@ async function scrapeAndInsert(
 	userId?: string,
 	targetTable?: string,
 	visibility = 'public',
+	organizationId?: string,
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
@@ -217,8 +222,8 @@ async function scrapeAndInsert(
 		if (isUserArticle) {
 			insertResult = await db.query(
 				`INSERT INTO ${table}
-					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility, organization_id)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 				RETURNING id`,
 				[
 					url,
@@ -235,6 +240,7 @@ async function scrapeAndInsert(
 					platformMetadataJson,
 					userId,
 					visibility,
+					organizationId || null,
 				],
 			);
 		} else {
@@ -327,6 +333,9 @@ async function returnExisting(
 		articleId: row.id,
 		instanceId,
 		title: row.title,
+		titleCn: row.title_cn || undefined,
+		summaryCn: row.summary_cn || undefined,
+		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
 		ogImageUrl: row.og_image_url,
 		sourceType: row.source_type,
 		alreadyExists: true,
@@ -344,9 +353,10 @@ async function processUrl(
 	userId?: string,
 	notifyContext?: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'>,
 	visibility = 'public',
+	organizationId?: string,
 ): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
-	const EXIST_COLS = 'id, title, title_cn, source_type, og_image_url';
+	const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
 
 	// 1. Check for existing article
 	const db = await createDbClient(env);
@@ -371,7 +381,7 @@ async function processUrl(
 	const targetTable = userId ? USER_ARTICLES_TABLE : undefined;
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, userId, targetTable, visibility);
+		result = await scrapeAndInsert(url, env, userId, targetTable, visibility, organizationId);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -443,10 +453,11 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
 	const userId = body.userId;
+	const organizationId = body.organizationId;
 	const articleVisibility = body.visibility ?? 'public';
-	// Only pass notifyContext for single-URL submissions (Telegram sends one at a time)
+	// Only pass notifyContext for single-URL submissions (bot sends one at a time)
 	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
-	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility)));
+	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
 	return Response.json({ success: true, results });
 }
 
@@ -754,5 +765,73 @@ function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined
 		}
 		default:
 			return buildDefault();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Generic bot account lookup (supports any platform)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotLookup(request: Request, env: Env): Promise<Response> {
+	if (!(await isTelegramAuthorized(request, env))) {
+		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { platform?: string; externalId?: string };
+	try {
+		body = (await request.json()) as { platform?: string; externalId?: string };
+	} catch {
+		return Response.json({ found: false, error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.platform || !body.externalId) {
+		return Response.json({ found: false, error: 'Missing platform or externalId' }, { status: 400 });
+	}
+
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(`SELECT "userId" FROM account WHERE "providerId" = $1 AND "accountId" = $2`, [
+			body.platform,
+			body.externalId,
+		]);
+		const data = result.rows[0];
+		if (!data) return Response.json({ found: false });
+		return Response.json({ found: true, userId: data.userId });
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Resolve feishu chat_id → organization
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotResolveOrg(request: Request, env: Env): Promise<Response> {
+	if (!(await isTelegramAuthorized(request, env))) {
+		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { feishuChatId?: string };
+	try {
+		body = (await request.json()) as { feishuChatId?: string };
+	} catch {
+		return Response.json({ found: false, error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.feishuChatId) {
+		return Response.json({ found: false, error: 'Missing feishuChatId' }, { status: 400 });
+	}
+
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(
+			`SELECT id, name FROM organization WHERE metadata->>'feishuChatId' = $1 LIMIT 1`,
+			[body.feishuChatId],
+		);
+		const data = result.rows[0];
+		if (!data) return Response.json({ found: false });
+		return Response.json({ found: true, organizationId: data.id, orgName: data.name });
+	} finally {
+		await db.end();
 	}
 }
