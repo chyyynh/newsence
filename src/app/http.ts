@@ -388,7 +388,16 @@ async function processUrl(
 	}
 	if ('error' in result) return { url, error: result.error };
 
-	// 3. Create workflow for background AI processing
+	// 3. Auto-add to unsorted collection (if user-submitted)
+	if (userId) {
+		try {
+			await addToUnsortedCollection(env, userId, result.articleId, organizationId, userId ? 'user_article' : 'article');
+		} catch (err) {
+			logWarn('SUBMIT', 'Failed to add to unsorted collection', { error: String(err) });
+		}
+	}
+
+	// 4. Create workflow for background AI processing
 	const enrichedNotify = notifyContext
 		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(userId ? { isUserArticle: true } : {}) }
 		: undefined;
@@ -709,7 +718,47 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 }
 
 // ─────────────────────────────────────────────────────────────
-// Get or create unsorted (system) collection
+// Unsorted collection helpers
+// ─────────────────────────────────────────────────────────────
+
+async function addToUnsortedCollection(env: Env, userId: string, articleId: string, organizationId?: string, toType = 'article'): Promise<void> {
+	const db = await createDbClient(env);
+	try {
+		const orgId = organizationId || null;
+		const existing = orgId
+			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+
+		let collectionId: string;
+		if (existing.rows[0]) {
+			collectionId = existing.rows[0].id;
+		} else {
+			const ins = await db.query(
+				`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count) VALUES ($1, $2, 'Unsorted', true, 'private', 0) RETURNING id`,
+				[userId, orgId],
+			);
+			collectionId = ins.rows[0].id;
+		}
+
+		// Check not already in collection
+		const dup = await db.query(
+			`SELECT id FROM citations WHERE from_type = 'collection' AND from_id = $1 AND to_type = $2 AND to_id = $3 LIMIT 1`,
+			[collectionId, toType, articleId],
+		);
+		if (dup.rows.length > 0) return;
+
+		await db.query(
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id) VALUES ('collection', $1, $2, $3, 'resource', $4)`,
+			[collectionId, toType, articleId, userId],
+		);
+		await db.query(`UPDATE collections SET article_count = article_count + 1 WHERE id = $1`, [collectionId]);
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Get or create unsorted (system) collection (bot endpoint)
 // ─────────────────────────────────────────────────────────────
 
 export async function handleBotGetUnsorted(request: Request, env: Env): Promise<Response> {
@@ -731,11 +780,10 @@ export async function handleBotGetUnsorted(request: Request, env: Env): Promise<
 	const db = await createDbClient(env);
 	try {
 		const orgId = body.organizationId || null;
-		const scopeWhere = orgId
-			? `organization_id = '${orgId}'`
-			: `user_id = '${body.userId}' AND organization_id IS NULL`;
+		const existing = orgId
+			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [body.userId]);
 
-		const existing = await db.query(`SELECT id FROM collections WHERE is_system = true AND ${scopeWhere} LIMIT 1`);
 		if (existing.rows[0]) {
 			return Response.json({ collectionId: existing.rows[0].id });
 		}
