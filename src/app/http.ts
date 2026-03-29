@@ -409,6 +409,46 @@ async function returnExisting(
 }
 
 /**
+ * Copy a public article row into user_articles so it appears in all user-scoped queries (export, library, etc.).
+ * Returns the new user_articles row (with EXIST_COLS) on success, or null if the copy failed / already existed.
+ */
+async function copyArticleToUserTable(
+	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+	articleId: string,
+	userId: string,
+	organizationId?: string,
+	visibility = 'public',
+): Promise<Record<string, string> | null> {
+	const COPY_COLS = 'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
+	const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
+	try {
+		const result = await db.query(
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, user_id, organization_id, visibility)
+			SELECT ${COPY_COLS}, $2, $3, $4
+			FROM ${ARTICLES_TABLE} WHERE id = $1
+			ON CONFLICT DO NOTHING
+			RETURNING ${EXIST_COLS}`,
+			[articleId, userId, organizationId || null, visibility],
+		);
+		if (result.rows[0]) return result.rows[0] as Record<string, string>;
+		// ON CONFLICT — row already exists, look it up
+		const lookup = organizationId
+			? await db.query(
+					`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
+					[organizationId, articleId],
+				)
+			: await db.query(
+					`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
+					[userId, articleId],
+				);
+		return (lookup.rows[0] as Record<string, string>) ?? null;
+	} catch (err) {
+		logWarn('SUBMIT', 'Failed to copy article to user_articles', { articleId, error: String(err) });
+		return null;
+	}
+}
+
+/**
  * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
  * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
  */
@@ -429,18 +469,21 @@ async function processUrl(
 	const db = await createDbClient(env);
 	try {
 		if (userId) {
-			const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
-			if (pub.rows.length > 0) {
-				existingRow = pub.rows[0];
-				existingIsUserArticle = false;
+			// Check user_articles first (exact user/org scope), then public articles
+			const uaQuery = organizationId
+				? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
+				: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
+			const ua = await db.query(uaQuery, [organizationId || userId, url]);
+			if (ua.rows.length > 0) {
+				existingRow = ua.rows[0];
+				existingIsUserArticle = true;
 			} else {
-				const uaQuery = organizationId
-					? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
-					: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
-				const ua = await db.query(uaQuery, [organizationId || userId, url]);
-				if (ua.rows.length > 0) {
-					existingRow = ua.rows[0];
-					existingIsUserArticle = true;
+				const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
+				if (pub.rows.length > 0) {
+					// Public article exists — copy to user_articles so all user-scoped queries see it
+					const copied = await copyArticleToUserTable(db, pub.rows[0].id, userId, organizationId, visibility);
+					existingRow = copied ?? pub.rows[0];
+					existingIsUserArticle = !!copied;
 				}
 			}
 		} else {
@@ -453,9 +496,8 @@ async function processUrl(
 
 	// Handle existing article — add to unsorted (connection now closed, addToUnsortedCollection manages its own)
 	if (existingRow && userId) {
-		const toType = existingIsUserArticle ? 'user_article' : 'article';
-		await addToUnsortedCollection(env, userId, existingRow.id, organizationId, toType).catch((err) =>
-			logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
+		await addToUnsortedCollection(env, userId, existingRow.id, organizationId, existingIsUserArticle ? 'user_article' : 'article').catch(
+			(err) => logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
 		);
 		return returnExisting(url, existingRow, env, notifyContext, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
 	}
