@@ -362,11 +362,14 @@ async function processUrl(
 	const db = await createDbClient(env);
 	try {
 		if (userId) {
-			// User submission: check public articles first, then user_articles
+			// User submission: check public articles first, then user_articles (scoped by org)
 			const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
 			if (pub.rows.length > 0) return returnExisting(url, pub.rows[0], env, notifyContext, false);
 
-			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [userId, url]);
+			const uaQuery = organizationId
+				? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
+				: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
+			const ua = await db.query(uaQuery, [organizationId || userId, url]);
 			if (ua.rows.length > 0) return returnExisting(url, ua.rows[0], env, notifyContext, true, USER_ARTICLES_TABLE);
 		} else {
 			// System/cron: check articles table
@@ -837,8 +840,8 @@ async function addToUnsortedCollection(env: Env, userId: string, articleId: stri
 		if (dup.rows.length > 0) return;
 
 		await db.query(
-			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id) VALUES ('collection', $1, $2, $3, 'resource', $4)`,
-			[collectionId, toType, articleId, userId],
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id, organization_id) VALUES ('collection', $1, $2, $3, 'resource', $4, $5)`,
+			[collectionId, toType, articleId, userId, orgId],
 		);
 		await db.query(`UPDATE collections SET article_count = article_count + 1 WHERE id = $1`, [collectionId]);
 	} finally {
