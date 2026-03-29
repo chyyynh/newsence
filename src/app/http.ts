@@ -46,6 +46,25 @@ async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> 
 	return timingSafeEqual(provided, expected);
 }
 
+/** Validate that a user is a member of the given organization. Caller manages the db lifecycle. */
+async function checkOrgMembership(db: { query: (q: string, p: unknown[]) => Promise<{ rows: unknown[] }> }, userId: string, organizationId: string): Promise<boolean> {
+	const r = await db.query(
+		`SELECT 1 FROM member WHERE "organizationId" = $1 AND "userId" = $2 LIMIT 1`,
+		[organizationId, userId],
+	);
+	return r.rows.length > 0;
+}
+
+/** Standalone version — creates its own connection for entry-point validation. */
+async function validateOrgMembership(env: Env, userId: string, organizationId: string): Promise<boolean> {
+	const db = await createDbClient(env);
+	try {
+		return await checkOrgMembership(db, userId, organizationId);
+	} finally {
+		await db.end();
+	}
+}
+
 async function isBotAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
@@ -404,26 +423,44 @@ async function processUrl(
 	const url = normalizeUrl(rawUrl);
 	const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
 
-	// 1. Check for existing article
+	// 1. Check for existing article — close connection before any addToUnsortedCollection calls
+	let existingRow: Record<string, string> | null = null;
+	let existingIsUserArticle = false;
 	const db = await createDbClient(env);
 	try {
 		if (userId) {
-			// User submission: check public articles first, then user_articles (scoped by org)
 			const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
-			if (pub.rows.length > 0) return returnExisting(url, pub.rows[0], env, notifyContext, false);
-
-			const uaQuery = organizationId
-				? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
-				: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
-			const ua = await db.query(uaQuery, [organizationId || userId, url]);
-			if (ua.rows.length > 0) return returnExisting(url, ua.rows[0], env, notifyContext, true, USER_ARTICLES_TABLE);
+			if (pub.rows.length > 0) {
+				existingRow = pub.rows[0];
+				existingIsUserArticle = false;
+			} else {
+				const uaQuery = organizationId
+					? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
+					: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
+				const ua = await db.query(uaQuery, [organizationId || userId, url]);
+				if (ua.rows.length > 0) {
+					existingRow = ua.rows[0];
+					existingIsUserArticle = true;
+				}
+			}
 		} else {
-			// System/cron: check articles table
 			const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1`, [url]);
 			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, notifyContext, false);
 		}
 	} finally {
 		await db.end();
+	}
+
+	// Handle existing article — add to unsorted (connection now closed, addToUnsortedCollection manages its own)
+	if (existingRow && userId) {
+		const toType = existingIsUserArticle ? 'user_article' : 'article';
+		await addToUnsortedCollection(env, userId, existingRow.id, organizationId, toType).catch((err) =>
+			logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
+		);
+		return returnExisting(url, existingRow, env, notifyContext, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
+	}
+	if (existingRow) {
+		return returnExisting(url, existingRow, env, notifyContext, false);
 	}
 
 	// 2. Scrape + insert (user → user_articles, system → articles)
@@ -511,7 +548,19 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
 	const userId = body.userId;
-	const organizationId = body.organizationId;
+	let organizationId = body.organizationId;
+	// Validate org membership — reject spoofed organizationId
+	if (organizationId && userId) {
+		const isMember = await validateOrgMembership(env, userId, organizationId);
+		if (!isMember) {
+			return Response.json(
+				{ success: false, error: { code: 'FORBIDDEN', message: 'User is not a member of this organization' } },
+				{ status: 403 },
+			);
+		}
+	} else if (organizationId && !userId) {
+		organizationId = undefined; // org without user makes no sense
+	}
 	const articleVisibility = body.visibility ?? 'public';
 	// Only pass notifyContext for single-URL submissions (bot sends one at a time)
 	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
@@ -791,6 +840,14 @@ export async function handleBotListArticles(request: Request, env: Env): Promise
 	const db = await createDbClient(env);
 
 	try {
+		// Validate org membership using the same connection
+		if (orgId) {
+			const isMember = await checkOrgMembership(db, body.userId, orgId);
+			if (!isMember) {
+				return Response.json({ articles: [], error: 'Not a member of this organization' }, { status: 403 });
+			}
+		}
+
 		let dateFilter = '';
 		if (period === 'week') {
 			dateFilter = `AND scraped_date >= NOW() - INTERVAL '7 days'`;
@@ -821,7 +878,7 @@ export async function handleBotListArticles(request: Request, env: Env): Promise
 			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
 			params = [orgId];
 		} else {
-			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
 			params = [body.userId];
 		}
 
@@ -918,6 +975,14 @@ export async function handleBotGetUnsorted(request: Request, env: Env): Promise<
 	const db = await createDbClient(env);
 	try {
 		const orgId = body.organizationId || null;
+
+		if (orgId) {
+			const isMember = await checkOrgMembership(db, body.userId, orgId);
+			if (!isMember) {
+				return Response.json({ error: 'Not a member of this organization' }, { status: 403 });
+			}
+		}
+
 		const existing = orgId
 			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
 			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [body.userId]);
