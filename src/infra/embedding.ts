@@ -12,19 +12,34 @@ export function prepareArticleTextForEmbedding(article: {
 	title_cn?: string | null;
 	summary?: string | null;
 	summary_cn?: string | null;
+	content?: string | null;
+	content_cn?: string | null;
 	tags?: string[] | null;
 	keywords?: string[] | null;
 }): string {
-	const textParts = [article.title, article.title_cn, article.summary, article.summary_cn];
+	// Priority: title + summary (high signal density), then metadata, then content (fills remaining budget)
+	const priorityParts = [article.title, article.title_cn, article.summary, article.summary_cn].filter(Boolean) as string[];
 
-	if (article.tags?.length) {
-		textParts.push(article.tags.join(' '));
-	}
-	if (article.keywords?.length) {
-		textParts.push(article.keywords.join(' '));
+	const metaParts: string[] = [];
+	if (article.tags?.length) metaParts.push(article.tags.join(' '));
+	if (article.keywords?.length) metaParts.push(article.keywords.join(' '));
+
+	const headerText = [...priorityParts, ...metaParts].join(' ');
+	const contentBudget = MAX_TEXT_LENGTH - headerText.length - 1;
+
+	if (contentBudget <= 200) return headerText.slice(0, MAX_TEXT_LENGTH);
+
+	const contentParts: string[] = [];
+	if (article.content && article.content_cn) {
+		const half = Math.floor(contentBudget / 2);
+		contentParts.push(article.content.slice(0, half));
+		contentParts.push(article.content_cn.slice(0, half));
+	} else {
+		const src = article.content || article.content_cn;
+		if (src) contentParts.push(src.slice(0, contentBudget));
 	}
 
-	return textParts.filter(Boolean).join(' ').slice(0, MAX_TEXT_LENGTH);
+	return [headerText, ...contentParts].join(' ').slice(0, MAX_TEXT_LENGTH);
 }
 
 export function normalizeVector(values: number[]): number[] {

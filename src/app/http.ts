@@ -1,5 +1,6 @@
 import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPage } from '../domain/scrapers';
 import { ARTICLES_TABLE, createDbClient, USER_ARTICLES_TABLE } from '../infra/db';
+import { generateArticleEmbedding, prepareArticleTextForEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
@@ -1023,6 +1024,72 @@ export async function handleBotResolveOrg(request: Request, env: Env): Promise<R
 		const data = result.rows[0];
 		if (!data) return Response.json({ found: false });
 		return Response.json({ found: true, organizationId: data.id, orgName: data.name });
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Backfill embeddings (internal, auth-gated)
+// ─────────────────────────────────────────────────────────────
+
+const BACKFILL_FIELDS = 'id, title, title_cn, summary, summary_cn, content, content_cn, tags, keywords';
+const BACKFILL_BATCH_SIZE = 20;
+
+export async function handleBackfillEmbeddings(request: Request, env: Env): Promise<Response> {
+	if (!(await isSubmitAuthorized(request, env))) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 });
+	}
+
+	const body = (await request.json().catch(() => ({}))) as { offset?: number; limit?: number; table?: string };
+	const offset = body.offset ?? 0;
+	const batchLimit = Math.min(body.limit ?? BACKFILL_BATCH_SIZE, 100);
+	const table = body.table === 'user_articles' ? USER_ARTICLES_TABLE : ARTICLES_TABLE;
+
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(`SELECT ${BACKFILL_FIELDS} FROM ${table} ORDER BY id OFFSET $1 LIMIT $2`, [
+			offset,
+			batchLimit,
+		]);
+		const articles = result.rows as Array<{
+			id: string;
+			title: string;
+			title_cn?: string | null;
+			summary?: string | null;
+			summary_cn?: string | null;
+			content?: string | null;
+			content_cn?: string | null;
+			tags?: string[] | null;
+			keywords?: string[] | null;
+		}>;
+
+		if (articles.length === 0) {
+			return Response.json({ done: true, processed: 0, offset });
+		}
+
+		let processed = 0;
+		let failed = 0;
+		for (const article of articles) {
+			const text = prepareArticleTextForEmbedding(article);
+			if (!text || !env.AI) continue;
+			const embedding = await generateArticleEmbedding(text, env.AI);
+			if (!embedding) {
+				failed++;
+				continue;
+			}
+			const saved = await saveArticleEmbedding(db, article.id, embedding, table);
+			if (saved) processed++;
+			else failed++;
+		}
+
+		logInfo('BACKFILL', 'Batch complete', { offset, processed, failed, total: articles.length });
+		return Response.json({
+			done: articles.length < batchLimit,
+			processed,
+			failed,
+			nextOffset: offset + articles.length,
+		});
 	} finally {
 		await db.end();
 	}

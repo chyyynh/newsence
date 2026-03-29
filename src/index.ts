@@ -1,4 +1,5 @@
 import {
+	handleBackfillEmbeddings,
 	handleBotGetUnsorted,
 	handleBotListArticles,
 	handleBotLookup,
@@ -23,6 +24,7 @@ type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/submit': handleSubmitUrl,
+	'/internal/backfill-embeddings': handleBackfillEmbeddings,
 	'/bot/lookup': handleBotLookup,
 	'/bot/resolve-org': handleBotResolveOrg,
 	'/bot/get-unsorted': handleBotGetUnsorted,
