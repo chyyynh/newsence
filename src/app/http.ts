@@ -1,6 +1,5 @@
 import { detectPlatformType, type ScrapedContent, scrapeUrl, scrapeWebPage } from '../domain/scrapers';
 import { ARTICLES_TABLE, createDbClient, USER_ARTICLES_TABLE } from '../infra/db';
-import { generateArticleEmbedding, prepareArticleTextForEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import { normalizeUrl } from '../infra/web';
 import type { PlatformMetadata } from '../models/platform-metadata';
@@ -94,6 +93,52 @@ function hitSubmitRateLimit(key: string, max: number, windowSec: number, cost = 
 	existing.count += cost;
 	submitRateBuckets.set(key, existing);
 	return { limited: false, retryAfterSec: 0 };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Embed (replaces embedding-proxy worker)
+// ─────────────────────────────────────────────────────────────
+
+const CORS_HEADERS: Record<string, string> = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+const EMBEDDING_MODEL = '@cf/baai/bge-m3';
+const EMBED_MAX_TEXT = 8000;
+
+function normalizeEmbedding(v: number[]): number[] {
+	const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+	return norm === 0 ? v : v.map((x) => x / norm);
+}
+
+export async function handleEmbed(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+
+	const body = (await request.json().catch(() => ({}))) as { text?: string; texts?: string[] };
+	const input = body.texts || (body.text ? [body.text] : []);
+	if (input.length === 0) {
+		return Response.json({ error: 'No text provided' }, { status: 400, headers: CORS_HEADERS });
+	}
+
+	const sanitized = input.map((t) => t.trim().slice(0, EMBED_MAX_TEXT));
+
+	try {
+		const result = (await env.AI.run(EMBEDDING_MODEL as Parameters<Ai['run']>[0], { text: sanitized })) as {
+			data: number[][];
+		};
+		return Response.json(
+			{ embeddings: result.data.map(normalizeEmbedding), model: EMBEDDING_MODEL, dimensions: 1024 },
+			{ headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
+		);
+	} catch (error) {
+		logError('EMBED', 'Generation failed', { error: String(error) });
+		return Response.json(
+			{ error: 'Embedding generation failed', details: error instanceof Error ? error.message : 'Unknown error' },
+			{ status: 500, headers: CORS_HEADERS },
+		);
+	}
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1024,72 +1069,6 @@ export async function handleBotResolveOrg(request: Request, env: Env): Promise<R
 		const data = result.rows[0];
 		if (!data) return Response.json({ found: false });
 		return Response.json({ found: true, organizationId: data.id, orgName: data.name });
-	} finally {
-		await db.end();
-	}
-}
-
-// ─────────────────────────────────────────────────────────────
-// Backfill embeddings (internal, auth-gated)
-// ─────────────────────────────────────────────────────────────
-
-const BACKFILL_FIELDS = 'id, title, title_cn, summary, summary_cn, content, content_cn, tags, keywords';
-const BACKFILL_BATCH_SIZE = 20;
-
-export async function handleBackfillEmbeddings(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
-		return Response.json({ error: 'Unauthorized' }, { status: 401 });
-	}
-
-	const body = (await request.json().catch(() => ({}))) as { offset?: number; limit?: number; table?: string };
-	const offset = body.offset ?? 0;
-	const batchLimit = Math.min(body.limit ?? BACKFILL_BATCH_SIZE, 100);
-	const table = body.table === 'user_articles' ? USER_ARTICLES_TABLE : ARTICLES_TABLE;
-
-	const db = await createDbClient(env);
-	try {
-		const result = await db.query(`SELECT ${BACKFILL_FIELDS} FROM ${table} ORDER BY id OFFSET $1 LIMIT $2`, [
-			offset,
-			batchLimit,
-		]);
-		const articles = result.rows as Array<{
-			id: string;
-			title: string;
-			title_cn?: string | null;
-			summary?: string | null;
-			summary_cn?: string | null;
-			content?: string | null;
-			content_cn?: string | null;
-			tags?: string[] | null;
-			keywords?: string[] | null;
-		}>;
-
-		if (articles.length === 0) {
-			return Response.json({ done: true, processed: 0, offset });
-		}
-
-		let processed = 0;
-		let failed = 0;
-		for (const article of articles) {
-			const text = prepareArticleTextForEmbedding(article);
-			if (!text || !env.AI) continue;
-			const embedding = await generateArticleEmbedding(text, env.AI);
-			if (!embedding) {
-				failed++;
-				continue;
-			}
-			const saved = await saveArticleEmbedding(db, article.id, embedding, table);
-			if (saved) processed++;
-			else failed++;
-		}
-
-		logInfo('BACKFILL', 'Batch complete', { offset, processed, failed, total: articles.length });
-		return Response.json({
-			done: articles.length < batchLimit,
-			processed,
-			failed,
-			nextOffset: offset + articles.length,
-		});
 	} finally {
 		await db.end();
 	}

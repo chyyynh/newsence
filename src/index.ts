@@ -1,9 +1,9 @@
 import {
-	handleBackfillEmbeddings,
 	handleBotGetUnsorted,
 	handleBotListArticles,
 	handleBotLookup,
 	handleBotResolveOrg,
+	handleEmbed,
 	handleHealth,
 	handleSubmitUrl,
 	handleTelegramAddToCollection,
@@ -23,8 +23,8 @@ export { NewsenceMonitorWorkflow };
 type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
+	'/embed': handleEmbed,
 	'/submit': handleSubmitUrl,
-	'/internal/backfill-embeddings': handleBackfillEmbeddings,
 	'/bot/lookup': handleBotLookup,
 	'/bot/resolve-org': handleBotResolveOrg,
 	'/bot/get-unsorted': handleBotGetUnsorted,
@@ -51,6 +51,8 @@ function routeRequest(request: Request, env: Env): Response | Promise<Response> 
 
 	if (pathname === '/health') return handleHealth(env);
 	if (pathname === '/scrape') return handleTestScrape(request, env);
+
+	if (request.method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
 
 	if (request.method === 'POST') {
 		const handler = POST_ROUTES[pathname];
