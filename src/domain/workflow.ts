@@ -264,35 +264,29 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 		}
 
-		// Step 8: Generate embedding
-		const embedding = (await step.do(
-			'generate-embedding',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+		// Step 8: Generate and save embedding
+		const hasEmbedding = (await step.do(
+			'generate-and-save-embedding',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
 				const text = buildEmbeddingTextForArticle(article, processorResult);
-				if (!text || !this.env.AI) return null;
-				return await generateArticleEmbedding(text, this.env.AI);
+				if (!text || !this.env.AI) return false;
+				const embedding = await generateArticleEmbedding(text, this.env.AI);
+				if (!embedding) return false;
+				const db = await createDbClient(this.env);
+				try {
+					const saved = await saveArticleEmbedding(db, article_id, embedding, table);
+					if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
+					logInfo('WORKFLOW', 'Embedding saved', { article_id });
+					return true;
+				} finally {
+					await db.end();
+				}
 			},
-		)) as number[] | null;
+		)) as boolean;
 
-		// Step 9: Save embedding
-		if (embedding) {
-			await step.do(
-				'save-embedding',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				async () => {
-					const db = await createDbClient(this.env);
-					try {
-						const saved = await saveArticleEmbedding(db, article_id, embedding, table);
-						if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
-						logInfo('WORKFLOW', 'Embedding saved', { article_id });
-					} finally {
-						await db.end();
-					}
-				},
-			);
-
-			// Step 10: Assign topic (cluster similar articles) — skip for user_articles
+		// Step 9: Assign topic (cluster similar articles) — skip for user_articles
+		if (hasEmbedding) {
 			if (!isUserArticle) {
 				const topicResult = (await step.do(
 					'assign-topic',
@@ -307,7 +301,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					},
 				)) as TopicAssignmentResult;
 
-				// Step 11: Synthesize topic summary if needed
+				// Step 10: Synthesize topic summary if needed
 				if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
 					await step.do(
 						'synthesize-topic',

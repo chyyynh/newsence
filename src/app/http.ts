@@ -46,7 +46,26 @@ async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> 
 	return timingSafeEqual(provided, expected);
 }
 
-async function isTelegramAuthorized(request: Request, env: Env): Promise<boolean> {
+/** Validate that a user is a member of the given organization. Caller manages the db lifecycle. */
+async function checkOrgMembership(db: { query: (q: string, p: unknown[]) => Promise<{ rows: unknown[] }> }, userId: string, organizationId: string): Promise<boolean> {
+	const r = await db.query(
+		`SELECT 1 FROM member WHERE "organizationId" = $1 AND "userId" = $2 LIMIT 1`,
+		[organizationId, userId],
+	);
+	return r.rows.length > 0;
+}
+
+/** Standalone version — creates its own connection for entry-point validation. */
+async function validateOrgMembership(env: Env, userId: string, organizationId: string): Promise<boolean> {
+	const db = await createDbClient(env);
+	try {
+		return await checkOrgMembership(db, userId, organizationId);
+	} finally {
+		await db.end();
+	}
+}
+
+async function isBotAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
 		logWarn('TELEGRAM', 'CORE_WORKER_INTERNAL_TOKEN is not configured; denying request');
@@ -96,6 +115,52 @@ function hitSubmitRateLimit(key: string, max: number, windowSec: number, cost = 
 }
 
 // ─────────────────────────────────────────────────────────────
+// Embed (replaces embedding-proxy worker)
+// ─────────────────────────────────────────────────────────────
+
+const CORS_HEADERS: Record<string, string> = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+const EMBEDDING_MODEL = '@cf/baai/bge-m3';
+const EMBED_MAX_TEXT = 8000;
+
+function normalizeEmbedding(v: number[]): number[] {
+	const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+	return norm === 0 ? v : v.map((x) => x / norm);
+}
+
+export async function handleEmbed(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+
+	const body = (await request.json().catch(() => ({}))) as { text?: string; texts?: string[] };
+	const input = body.texts || (body.text ? [body.text] : []);
+	if (input.length === 0) {
+		return Response.json({ error: 'No text provided' }, { status: 400, headers: CORS_HEADERS });
+	}
+
+	const sanitized = input.map((t) => t.trim().slice(0, EMBED_MAX_TEXT));
+
+	try {
+		const result = (await env.AI.run(EMBEDDING_MODEL as Parameters<Ai['run']>[0], { text: sanitized })) as {
+			data: number[][];
+		};
+		return Response.json(
+			{ embeddings: result.data.map(normalizeEmbedding), model: EMBEDDING_MODEL, dimensions: 1024 },
+			{ headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } },
+		);
+	} catch (error) {
+		logError('EMBED', 'Generation failed', { error: String(error) });
+		return Response.json(
+			{ error: 'Embedding generation failed', details: error instanceof Error ? error.message : 'Unknown error' },
+			{ status: 500, headers: CORS_HEADERS },
+		);
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
 // Health
 // ─────────────────────────────────────────────────────────────
 
@@ -140,10 +205,12 @@ type SubmitBody = {
 	url?: string; // Legacy single URL (backward compatible)
 	urls?: string[]; // Batch URLs
 	userId?: string;
+	organizationId?: string;
 	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
 	notifyContext?: {
-		chatId: number;
-		messageId: number;
+		platform: 'telegram' | 'feishu';
+		chatId: string;
+		messageId: string;
 		linked: boolean;
 		userId: string;
 		webappUrl: string;
@@ -155,6 +222,9 @@ type SubmitResult = {
 	articleId?: string;
 	instanceId?: string;
 	title?: string;
+	titleCn?: string;
+	summaryCn?: string;
+	tags?: string[];
 	ogImageUrl?: string | null;
 	sourceType?: string;
 	alreadyExists?: boolean;
@@ -191,6 +261,7 @@ async function scrapeAndInsert(
 	userId?: string,
 	targetTable?: string,
 	visibility = 'public',
+	organizationId?: string,
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
@@ -216,8 +287,8 @@ async function scrapeAndInsert(
 		if (isUserArticle) {
 			insertResult = await db.query(
 				`INSERT INTO ${table}
-					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility, organization_id)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 				RETURNING id`,
 				[
 					url,
@@ -234,6 +305,7 @@ async function scrapeAndInsert(
 					platformMetadataJson,
 					userId,
 					visibility,
+					organizationId || null,
 				],
 			);
 		} else {
@@ -326,11 +398,54 @@ async function returnExisting(
 		articleId: row.id,
 		instanceId,
 		title: row.title,
+		titleCn: row.title_cn || undefined,
+		summaryCn: row.summary_cn || undefined,
+		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
 		ogImageUrl: row.og_image_url,
 		sourceType: row.source_type,
 		alreadyExists: true,
 		isUserArticle,
 	};
+}
+
+/**
+ * Copy a public article row into user_articles so it appears in all user-scoped queries (export, library, etc.).
+ * Returns the new user_articles row (with EXIST_COLS) on success, or null if the copy failed / already existed.
+ */
+async function copyArticleToUserTable(
+	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+	articleId: string,
+	userId: string,
+	organizationId?: string,
+	visibility = 'public',
+): Promise<Record<string, string> | null> {
+	const COPY_COLS = 'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
+	const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
+	try {
+		const result = await db.query(
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, user_id, organization_id, visibility)
+			SELECT ${COPY_COLS}, $2, $3, $4
+			FROM ${ARTICLES_TABLE} WHERE id = $1
+			ON CONFLICT DO NOTHING
+			RETURNING ${EXIST_COLS}`,
+			[articleId, userId, organizationId || null, visibility],
+		);
+		if (result.rows[0]) return result.rows[0] as Record<string, string>;
+		// ON CONFLICT — row already exists, look it up
+		const lookup = organizationId
+			? await db.query(
+					`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
+					[organizationId, articleId],
+				)
+			: await db.query(
+					`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
+					[userId, articleId],
+				);
+		return (lookup.rows[0] as Record<string, string>) ?? null;
+	} catch (err) {
+		logWarn('SUBMIT', 'Failed to copy article to user_articles', { articleId, error: String(err) });
+		return null;
+	}
 }
 
 /**
@@ -343,22 +458,35 @@ async function processUrl(
 	userId?: string,
 	notifyContext?: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'>,
 	visibility = 'public',
+	organizationId?: string,
 ): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
-	const EXIST_COLS = 'id, title, title_cn, source_type, og_image_url';
+	const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
 
-	// 1. Check for existing article
+	// 1. Check for existing article — close connection before any addToUnsortedCollection calls
+	let existingRow: Record<string, string> | null = null;
+	let existingIsUserArticle = false;
 	const db = await createDbClient(env);
 	try {
 		if (userId) {
-			// User submission: check public articles first, then user_articles
-			const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
-			if (pub.rows.length > 0) return returnExisting(url, pub.rows[0], env, notifyContext, false);
-
-			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [userId, url]);
-			if (ua.rows.length > 0) return returnExisting(url, ua.rows[0], env, notifyContext, true, USER_ARTICLES_TABLE);
+			// Check user_articles first (exact user/org scope), then public articles
+			const uaQuery = organizationId
+				? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
+				: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
+			const ua = await db.query(uaQuery, [organizationId || userId, url]);
+			if (ua.rows.length > 0) {
+				existingRow = ua.rows[0];
+				existingIsUserArticle = true;
+			} else {
+				const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
+				if (pub.rows.length > 0) {
+					// Public article exists — copy to user_articles so all user-scoped queries see it
+					const copied = await copyArticleToUserTable(db, pub.rows[0].id, userId, organizationId, visibility);
+					existingRow = copied ?? pub.rows[0];
+					existingIsUserArticle = !!copied;
+				}
+			}
 		} else {
-			// System/cron: check articles table
 			const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1`, [url]);
 			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, notifyContext, false);
 		}
@@ -366,18 +494,38 @@ async function processUrl(
 		await db.end();
 	}
 
+	// Handle existing article — add to unsorted (connection now closed, addToUnsortedCollection manages its own)
+	if (existingRow && userId) {
+		await addToUnsortedCollection(env, userId, existingRow.id, organizationId, existingIsUserArticle ? 'user_article' : 'article').catch(
+			(err) => logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
+		);
+		return returnExisting(url, existingRow, env, notifyContext, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
+	}
+	if (existingRow) {
+		return returnExisting(url, existingRow, env, notifyContext, false);
+	}
+
 	// 2. Scrape + insert (user → user_articles, system → articles)
 	const targetTable = userId ? USER_ARTICLES_TABLE : undefined;
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, userId, targetTable, visibility);
+		result = await scrapeAndInsert(url, env, userId, targetTable, visibility, organizationId);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
 
-	// 3. Create workflow for background AI processing
+	// 3. Auto-add to unsorted collection (if user-submitted)
+	if (userId) {
+		try {
+			await addToUnsortedCollection(env, userId, result.articleId, organizationId, userId ? 'user_article' : 'article');
+		} catch (err) {
+			logWarn('SUBMIT', 'Failed to add to unsorted collection', { error: String(err) });
+		}
+	}
+
+	// 4. Create workflow for background AI processing
 	const enrichedNotify = notifyContext
 		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(userId ? { isUserArticle: true } : {}) }
 		: undefined;
@@ -442,10 +590,23 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 
 	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
 	const userId = body.userId;
+	let organizationId = body.organizationId;
+	// Validate org membership — reject spoofed organizationId
+	if (organizationId && userId) {
+		const isMember = await validateOrgMembership(env, userId, organizationId);
+		if (!isMember) {
+			return Response.json(
+				{ success: false, error: { code: 'FORBIDDEN', message: 'User is not a member of this organization' } },
+				{ status: 403 },
+			);
+		}
+	} else if (organizationId && !userId) {
+		organizationId = undefined; // org without user makes no sense
+	}
 	const articleVisibility = body.visibility ?? 'public';
-	// Only pass notifyContext for single-URL submissions (Telegram sends one at a time)
+	// Only pass notifyContext for single-URL submissions (bot sends one at a time)
 	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
-	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility)));
+	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
 	return Response.json({ success: true, results });
 }
 
@@ -542,7 +703,7 @@ export async function handleWorkflowStream(instanceId: string, env: Env): Promis
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramLookup(request: Request, env: Env): Promise<Response> {
-	if (!(await isTelegramAuthorized(request, env))) {
+	if (!(await isBotAuthorized(request, env))) {
 		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -577,7 +738,7 @@ export async function handleTelegramLookup(request: Request, env: Env): Promise<
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramCollections(request: Request, env: Env): Promise<Response> {
-	if (!(await isTelegramAuthorized(request, env))) {
+	if (!(await isBotAuthorized(request, env))) {
 		return Response.json({ collections: [], error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -623,7 +784,7 @@ export async function handleTelegramCollections(request: Request, env: Env): Pro
 // ─────────────────────────────────────────────────────────────
 
 export async function handleTelegramAddToCollection(request: Request, env: Env): Promise<Response> {
-	if (!(await isTelegramAuthorized(request, env))) {
+	if (!(await isBotAuthorized(request, env))) {
 		return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -696,6 +857,202 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 	}
 }
 
+// ─────────────────────────────────────────────────────────────
+// List articles (for bot export)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotListArticles(request: Request, env: Env): Promise<Response> {
+	if (!(await isBotAuthorized(request, env))) {
+		return Response.json({ articles: [], error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { userId?: string; period?: string; organizationId?: string };
+	try {
+		body = (await request.json()) as { userId?: string; period?: string; organizationId?: string };
+	} catch {
+		return Response.json({ articles: [] }, { status: 400 });
+	}
+
+	if (!body.userId) {
+		return Response.json({ articles: [], error: 'Missing userId' }, { status: 400 });
+	}
+
+	const period = body.period || 'unsorted';
+	const orgId = body.organizationId || null;
+	const db = await createDbClient(env);
+
+	try {
+		// Validate org membership using the same connection
+		if (orgId) {
+			const isMember = await checkOrgMembership(db, body.userId, orgId);
+			if (!isMember) {
+				return Response.json({ articles: [], error: 'Not a member of this organization' }, { status: 403 });
+			}
+		}
+
+		let dateFilter = '';
+		if (period === 'week') {
+			dateFilter = `AND scraped_date >= NOW() - INTERVAL '7 days'`;
+		}
+
+		// Query user_articles first, then public articles
+		const cols = 'title, COALESCE(title_cn, title) as display_title, url, source_type, COALESCE(tags, ARRAY[]::text[]) as tags, COALESCE(summary_cn, summary, \'\') as summary, published_date, scraped_date';
+
+		let query: string;
+		let params: unknown[];
+
+		if (period === 'unsorted' && orgId) {
+			// Unsorted = articles in the system collection for this org
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
+				JOIN citations c ON c.to_type = 'user_article' AND c.to_id = ua.id::text
+				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.organization_id = $1
+				WHERE c.from_type = 'collection' ${dateFilter}
+				ORDER BY ua.scraped_date DESC LIMIT 500`;
+			params = [orgId];
+		} else if (period === 'unsorted') {
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
+				JOIN citations c ON c.to_type = 'user_article' AND c.to_id = ua.id::text
+				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.user_id = $1 AND col.organization_id IS NULL
+				WHERE c.from_type = 'collection' ${dateFilter}
+				ORDER BY ua.scraped_date DESC LIMIT 500`;
+			params = [body.userId];
+		} else if (orgId) {
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
+			params = [orgId];
+		} else {
+			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
+			params = [body.userId];
+		}
+
+		const result = await db.query(query, params);
+		const articles = (result.rows ?? []).map((r: Record<string, unknown>) => ({
+			title: (r.display_title as string) || (r.title as string) || '',
+			url: (r.url as string) || '',
+			sourceType: (r.source_type as string) || '',
+			tags: (r.tags as string[]) || [],
+			summary: (r.summary as string) || '',
+			publishedDate: r.published_date ? String(r.published_date) : '',
+			scrapedDate: r.scraped_date ? String(r.scraped_date) : '',
+		}));
+
+		return Response.json({ articles });
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Unsorted collection helpers
+// ─────────────────────────────────────────────────────────────
+
+async function addToUnsortedCollection(env: Env, userId: string, articleId: string, organizationId?: string, toType = 'article'): Promise<void> {
+	const db = await createDbClient(env);
+	try {
+		const orgId = organizationId || null;
+		const existing = orgId
+			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+
+		let collectionId: string;
+		if (existing.rows[0]) {
+			collectionId = existing.rows[0].id;
+		} else {
+			// ON CONFLICT handles race condition (partial unique index on is_system + user/org)
+			const ins = await db.query(
+				`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+				VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+				ON CONFLICT DO NOTHING
+				RETURNING id`,
+				[userId, orgId],
+			);
+			if (ins.rows[0]) {
+				collectionId = ins.rows[0].id;
+			} else {
+				// Race: another request created it first, re-query
+				const retry = orgId
+					? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+					: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+				if (!retry.rows[0]) return;
+				collectionId = retry.rows[0].id;
+			}
+		}
+
+		// Check not already in collection
+		const dup = await db.query(
+			`SELECT id FROM citations WHERE from_type = 'collection' AND from_id = $1 AND to_type = $2 AND to_id = $3 LIMIT 1`,
+			[collectionId, toType, articleId],
+		);
+		if (dup.rows.length > 0) return;
+
+		await db.query(
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id, organization_id) VALUES ('collection', $1, $2, $3, 'resource', $4, $5)`,
+			[collectionId, toType, articleId, userId, orgId],
+		);
+		await db.query(`UPDATE collections SET article_count = article_count + 1 WHERE id = $1`, [collectionId]);
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Get or create unsorted (system) collection (bot endpoint)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotGetUnsorted(request: Request, env: Env): Promise<Response> {
+	if (!(await isBotAuthorized(request, env))) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { userId?: string; organizationId?: string };
+	try {
+		body = (await request.json()) as { userId?: string; organizationId?: string };
+	} catch {
+		return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.userId) {
+		return Response.json({ error: 'Missing userId' }, { status: 400 });
+	}
+
+	const db = await createDbClient(env);
+	try {
+		const orgId = body.organizationId || null;
+
+		if (orgId) {
+			const isMember = await checkOrgMembership(db, body.userId, orgId);
+			if (!isMember) {
+				return Response.json({ error: 'Not a member of this organization' }, { status: 403 });
+			}
+		}
+
+		const existing = orgId
+			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [body.userId]);
+
+		if (existing.rows[0]) {
+			return Response.json({ collectionId: existing.rows[0].id });
+		}
+
+		const insertResult = await db.query(
+			`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			ON CONFLICT DO NOTHING
+			RETURNING id`,
+			[body.userId, orgId],
+		);
+		if (insertResult.rows[0]) {
+			return Response.json({ collectionId: insertResult.rows[0].id });
+		}
+		// Race: re-query
+		const retry = orgId
+			? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
+			: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [body.userId]);
+		return Response.json({ collectionId: retry.rows[0]?.id });
+	} finally {
+		await db.end();
+	}
+}
+
 function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined, fallbackType: string): PlatformMetadata | null {
 	if (!metadata) return null;
 	const rawType = metadata.type;
@@ -753,5 +1110,73 @@ function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined
 		}
 		default:
 			return buildDefault();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Generic bot account lookup (supports any platform)
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotLookup(request: Request, env: Env): Promise<Response> {
+	if (!(await isBotAuthorized(request, env))) {
+		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { platform?: string; externalId?: string };
+	try {
+		body = (await request.json()) as { platform?: string; externalId?: string };
+	} catch {
+		return Response.json({ found: false, error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.platform || !body.externalId) {
+		return Response.json({ found: false, error: 'Missing platform or externalId' }, { status: 400 });
+	}
+
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(`SELECT "userId" FROM account WHERE "providerId" = $1 AND "accountId" = $2`, [
+			body.platform,
+			body.externalId,
+		]);
+		const data = result.rows[0];
+		if (!data) return Response.json({ found: false });
+		return Response.json({ found: true, userId: data.userId });
+	} finally {
+		await db.end();
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Resolve feishu chat_id → organization
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBotResolveOrg(request: Request, env: Env): Promise<Response> {
+	if (!(await isBotAuthorized(request, env))) {
+		return Response.json({ found: false, error: 'Unauthorized' }, { status: 401 });
+	}
+
+	let body: { feishuChatId?: string };
+	try {
+		body = (await request.json()) as { feishuChatId?: string };
+	} catch {
+		return Response.json({ found: false, error: 'Invalid JSON' }, { status: 400 });
+	}
+
+	if (!body.feishuChatId) {
+		return Response.json({ found: false, error: 'Missing feishuChatId' }, { status: 400 });
+	}
+
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(
+			`SELECT id, name FROM organization WHERE metadata->>'feishuChatId' = $1 LIMIT 1`,
+			[body.feishuChatId],
+		);
+		const data = result.rows[0];
+		if (!data) return Response.json({ found: false });
+		return Response.json({ found: true, organizationId: data.id, orgName: data.name });
+	} finally {
+		await db.end();
 	}
 }

@@ -26,21 +26,24 @@
 
 ## 運作流程
 
-每篇文章經過 7 步驟的自動化 workflow：
+每篇文章經過 10 步驟的自動化 workflow：
 
 ```
 URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
   │
-  ├─ 1. 抓取 ─────────── 平台感知爬蟲，提取內容、metadata、OG 圖片
-  ├─ 2. AI 分析 ────────── Gemini 2.5 Flash → 中英標題、摘要、標籤、關鍵字
-  ├─ 3. 存入資料庫 ─────── 寫入 Supabase PostgreSQL
-  ├─ 4. 生成 Embedding ── BGE-M3 → 1024 維語意向量
-  ├─ 5. 儲存向量 ────────── 存入 pgvector 用於相似度搜尋
-  ├─ 6. 主題聚類 ────────── 餘弦相似度 > 0.85 → 歸入主題群組
-  └─ 7. 主題合成 ────────── 當主題累積 2/3/5/10 篇文章時，AI 生成主題標題
+  ├─  1. 讀取文章 ────────── 從 Supabase 載入文章
+  ├─  2. AI 分析 ─────────── Gemini 2.5 Flash → 中英標題、摘要、標籤、關鍵字
+  ├─  3. 抓取 OG 圖片 ────── 若缺少圖片則輕量抓取（僅前 32KB）
+  ├─  4. 翻譯全文 ─────────── 全文 → 繁體中文
+  ├─  5. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
+  ├─  6. 通知 Telegram ────── 推送結果至 Telegram 機器人（若經由 bot 觸發）
+  ├─  7. YouTube 精華 ─────── 從字幕生成 AI 精華段落（僅 YouTube）
+  ├─  8. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文）
+  ├─  9. 主題聚類 ─────────── 餘弦相似度 > 0.85 → 歸入主題群組
+  └─ 10. 主題合成 ─────────── 當主題累積 2/3/5/10 篇時，AI 生成主題標題
 ```
 
-每篇約 30 秒完成。每步獨立重試 3 次，指數退避。
+每篇約 30 秒完成。每步獨立重試，指數退避。
 
 ## 資料來源
 
@@ -67,7 +70,7 @@ URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
 | 階段 | 模型 | 輸入 → 輸出 |
 |------|------|-------------|
 | **翻譯與分析** | Gemini 2.5 Flash | 文章內容 → `title_cn`、`summary`、`summary_cn`、`tags[]`、`keywords[]` |
-| **向量生成** | BGE-M3（1024 維） | 標題 + 摘要 + 標籤 → 語意向量 |
+| **向量生成** | BGE-M3（1024 維） | 標題 + 摘要 + 全文 → 語意向量（HNSW 索引） |
 | **主題聚類** | 餘弦相似度 | 7 天內相似度 > 0.85 的文章 → 歸入 `topic_id` |
 | **主題合成** | Gemini 2.5 Flash | 主題文章群 → 標題 + 描述（中英雙語） |
 
@@ -101,6 +104,11 @@ curl https://your-worker.workers.dev/health
 curl -X POST https://your-worker.workers.dev/submit \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/article"}'
+
+# 生成 Embedding
+curl -X POST https://your-worker.workers.dev/embed \
+  -H "Content-Type: application/json" \
+  -d '{"text": "搜尋關鍵字"}'
 ```
 
 <details>
