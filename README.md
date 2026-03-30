@@ -26,21 +26,24 @@ This repo is the core engine: a single Cloudflare Worker that handles the full c
 
 ## How it works
 
-Each article goes through a 7-step workflow, fully automated with independent retries:
+Each article goes through a 10-step workflow, fully automated with independent retries:
 
 ```
 URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
   │
-  ├─ 1. Scrape ─────────── Platform-aware crawler extracts content, metadata, OG image
-  ├─ 2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
-  ├─ 3. Save to DB ─────── Write to Supabase PostgreSQL
-  ├─ 4. Embed ──────────── BGE-M3 → 1024-dim semantic vector via Workers AI
-  ├─ 5. Save Embedding ─── Store vector for pgvector similarity search
-  ├─ 6. Topic Clustering ─ Cosine similarity > 0.85 → assign to topic group
-  └─ 7. Topic Synthesis ── AI generates topic headline at 2/3/5/10 articles
+  ├─  1. Fetch Article ──── Load article from Supabase
+  ├─  2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
+  ├─  3. Fetch OG Image ─── Grab OG image if missing (lightweight, first 32KB)
+  ├─  4. Translate Content ─ Full article → Traditional Chinese
+  ├─  5. Save to DB ──────── Write all AI results in a single UPDATE
+  ├─  6. Notify Telegram ─── Push results to Telegram bot (if triggered via bot)
+  ├─  7. YouTube Highlights  Generate AI highlights from transcript (YouTube only)
+  ├─  8. Embed ───────────── BGE-M3 → 1024-dim vector from title + summary + content
+  ├─  9. Topic Clustering ── Cosine similarity > 0.85 → assign to topic group
+  └─ 10. Topic Synthesis ─── AI generates topic headline at 2/3/5/10 articles
 ```
 
-~30 seconds per article. Each step retries x3 with exponential backoff.
+~30 seconds per article. Each step retries independently with exponential backoff.
 
 ## Ingestion Sources
 
@@ -67,7 +70,7 @@ All scrapers output a unified `ScrapedContent` shape → same AI pipeline.
 | Stage | Model | Input → Output |
 |-------|-------|----------------|
 | **Translation & Analysis** | Gemini 2.5 Flash | Article content → `title_cn`, `summary`, `summary_cn`, `tags[]`, `keywords[]` |
-| **Embedding** | BGE-M3 (1024d) | Title + summary + tags → dense vector for similarity search |
+| **Embedding** | BGE-M3 (1024d) | Title + summary + content → dense vector (HNSW-indexed) |
 | **Topic Clustering** | Cosine similarity | Find articles > 0.85 similarity within 7 days → group under `topic_id` |
 | **Topic Synthesis** | Gemini 2.5 Flash | Topic articles → headline + description (EN/繁中) |
 
@@ -101,6 +104,11 @@ curl https://your-worker.workers.dev/health
 curl -X POST https://your-worker.workers.dev/submit \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/article"}'
+
+# Generate embeddings
+curl -X POST https://your-worker.workers.dev/embed \
+  -H "Content-Type: application/json" \
+  -d '{"text": "search query"}'
 ```
 
 <details>
@@ -140,7 +148,7 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 src/
 ├── index.ts              # Entry — routes HTTP, Cron, Queue
 ├── app/
-│   ├── http.ts           # POST /submit, GET /health
+│   ├── http.ts           # POST /submit, POST /embed, GET /health
 │   └── cron.ts           # RSS (*/5min), Twitter (*/6h)
 ├── domain/
 │   ├── workflow.ts       # 7-step Workflow orchestration

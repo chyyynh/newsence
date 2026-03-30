@@ -882,6 +882,10 @@ export async function handleYouTubeCron(
 	env: Env,
 	_ctx: ExecutionContext,
 ): Promise<void> {
+	if (!env.YOUTUBE_API_KEY) {
+		logInfo("YOUTUBE-CRON", "Skipped — YOUTUBE_API_KEY not configured");
+		return;
+	}
 	logInfo("YOUTUBE-CRON", "start");
 	const db = await createDbClient(env);
 	try {
@@ -943,9 +947,9 @@ export async function handleYouTubeCron(
 					try {
 						const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || "");
 
-						// Skip Shorts (< 90 seconds)
+						// Skip Shorts (< 3 minutes — YouTube Shorts max is 3 min)
 						const duration = scraped.metadata?.duration as string | undefined;
-						if (duration && parseDurationSeconds(duration) < 90) {
+						if (duration && parseDurationSeconds(duration) < 180) {
 							logInfo("YOUTUBE-CRON", "Skipping short", { videoId, duration });
 							continue;
 						}
