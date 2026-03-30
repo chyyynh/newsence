@@ -18,7 +18,7 @@ import {
 	scrapeTwitterArticle,
 	scrapeWebPage,
 } from "../domain/scrapers";
-import { ARTICLES_TABLE, createDbClient } from "../infra/db";
+import { ARTICLES_TABLE, createDbClient, USER_ARTICLES_TABLE } from "../infra/db";
 import { logError, logInfo, logWarn } from "../infra/log";
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from "../infra/web";
 import type {
@@ -342,6 +342,190 @@ async function processFeed(
 	]);
 }
 
+// ─────────────────────────────────────────────────────────────
+// Subscription Pass — processes non-default sources with subscribers
+// Fetches each feed once, then fans out articles to each subscriber's user_articles
+// ─────────────────────────────────────────────────────────────
+
+interface Subscriber { user_id: string | null; organization_id: string | null }
+
+async function getSubscribedSources(db: Client, sourceType: string): Promise<RSSFeed[]> {
+	const result = await db.query(
+		`SELECT DISTINCT r.id, r.name, r."RSSLink", r.url, r.type, r.scraped_at, r.avatar_url
+		FROM "RssList" r JOIN rss_subscriptions s ON s.rss_list_id = r.id
+		WHERE r.is_default = false AND r.type = $1`,
+		[sourceType],
+	);
+	return result.rows as RSSFeed[];
+}
+
+async function getSourceSubscribers(db: Client, rssListId: string | number | bigint): Promise<Subscriber[]> {
+	const result = await db.query(
+		`SELECT user_id, organization_id FROM rss_subscriptions WHERE rss_list_id = $1`,
+		[rssListId],
+	);
+	return result.rows as Subscriber[];
+}
+
+async function fanOutToSubscribers(
+	db: Client,
+	env: Env,
+	articleData: {
+		url: string; title: string; source: string; publishedDate: string; summary: string;
+		sourceType: string; content: string | null; ogImageUrl: string | null; platformMetadata: string | null;
+	},
+	subscribers: Subscriber[],
+	rssListId: string | number | bigint,
+): Promise<void> {
+	for (const sub of subscribers) {
+		const userId = sub.user_id;
+		const orgId = sub.organization_id;
+
+		// Check if already exists in user_articles for this subscriber + source
+		const dedup = orgId
+			? await db.query(
+				`SELECT 1 FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`,
+				[orgId, articleData.url],
+			)
+			: await db.query(
+				`SELECT 1 FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`,
+				[userId, articleData.url],
+			);
+		if (dedup.rows.length > 0) continue;
+
+		// Check if exists in global articles — if so, copy it
+		const existing = await db.query(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [articleData.url]);
+		if (existing.rows[0]) {
+			// Copy from articles table (reuse existing AI analysis + embedding)
+			await db.query(
+				`INSERT INTO ${USER_ARTICLES_TABLE} (url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding, user_id, organization_id, visibility, rss_list_id)
+				SELECT url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding, $2, $3, 'public', $4
+				FROM ${ARTICLES_TABLE} WHERE id = $1
+				ON CONFLICT DO NOTHING`,
+				[existing.rows[0].id, userId, orgId, rssListId],
+			);
+			continue;
+		}
+
+		// Insert new article into user_articles
+		const result = await db.query(
+			`INSERT INTO ${USER_ARTICLES_TABLE}
+				(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, platform_metadata, keywords, tags, user_id, organization_id, visibility, rss_list_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'public', $15)
+			ON CONFLICT DO NOTHING RETURNING id`,
+			[
+				articleData.url, articleData.title, articleData.source,
+				articleData.publishedDate, new Date().toISOString(),
+				articleData.summary, articleData.sourceType,
+				articleData.content, articleData.ogImageUrl, articleData.platformMetadata,
+				[], [], userId, orgId, rssListId,
+			],
+		);
+
+		const articleId = result.rows[0]?.id;
+		if (articleId) {
+			await env.ARTICLE_QUEUE.send({
+				type: "article_process",
+				article_id: articleId,
+				source_type: articleData.sourceType,
+				target_table: USER_ARTICLES_TABLE,
+			});
+		}
+	}
+}
+
+/**
+ * Post-cron distribution: for non-default sources, copy recently inserted articles
+ * from the global articles table to each subscriber's user_articles.
+ * This lets Twitter/YouTube crons keep their existing logic unchanged.
+ */
+async function distributeNonDefaultArticles(db: Client, sourceType: string): Promise<void> {
+	const sources = await getSubscribedSources(db, sourceType);
+	if (!sources.length) return;
+
+	let copied = 0;
+	for (const source of sources) {
+		const subscribers = await getSourceSubscribers(db, source.id);
+		if (!subscribers.length) continue;
+
+		// Get articles from the last 24h for this source
+		const recent = await db.query(
+			`SELECT id FROM ${ARTICLES_TABLE} WHERE source = $1 AND scraped_date > NOW() - INTERVAL '24 hours'`,
+			[source.name],
+		);
+		if (!recent.rows.length) continue;
+
+		for (const row of recent.rows as { id: string }[]) {
+			for (const sub of subscribers) {
+				await db.query(
+					`INSERT INTO ${USER_ARTICLES_TABLE}
+						(url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn,
+						 source_type, content, content_cn, og_image_url, platform_metadata, embedding,
+						 user_id, organization_id, visibility, rss_list_id)
+					SELECT url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn,
+						source_type, content, content_cn, og_image_url, platform_metadata, embedding,
+						$2, $3, 'public', $4
+					FROM ${ARTICLES_TABLE} WHERE id = $1
+					ON CONFLICT DO NOTHING`,
+					[row.id, sub.user_id, sub.organization_id, source.id],
+				);
+				copied++;
+			}
+		}
+	}
+	if (copied > 0) logInfo("DISTRIBUTE", `Copied ${copied} articles for ${sourceType} subscribers`);
+}
+
+async function processSubscribedFeeds(db: Client, env: Env, parser: XMLParser, sourceType: string): Promise<void> {
+	const feeds = await getSubscribedSources(db, sourceType);
+	if (!feeds.length) return;
+
+	logInfo("RSS-SUB", "Processing subscribed feeds", { count: feeds.length });
+	for (const feed of feeds) {
+		if (!feed.RSSLink || feed.type !== "rss") continue;
+		try {
+			const res = await fetch(feed.RSSLink, {
+				headers: { "User-Agent": USER_AGENT, Accept: "application/rss+xml, application/xml, text/xml, */*" },
+			});
+			if (!res.ok) { logWarn("RSS-SUB", "Feed fetch failed", { feed: feed.name, status: res.status }); continue; }
+
+			const items = extractItemsFromFeed(parser.parse(await res.text())).slice(0, 30);
+			if (!items.length) continue;
+
+			const subscribers = await getSourceSubscribers(db, feed.id);
+			if (!subscribers.length) continue;
+
+			const config = getFeedConfig(feed.name);
+			let inserted = 0;
+			for (const item of items) {
+				const rawUrl = extractUrlFromItem(item);
+				if (!rawUrl) continue;
+				const url = normalizeUrl(rawUrl);
+
+				const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
+				const title = item.title ?? item.text ?? "No Title";
+				const summary = config.summarySource === "ai" ? "" : stripHtml(item.description ?? item.summary ?? "");
+				let content = "";
+				if (config.contentSource === "content_encoded") content = extractRssFullContent(item) || "";
+				else if (config.contentSource === "description") content = htmlToMarkdown(toPlainText(item.description) || "");
+				const ogImageUrl = extractImageFromItem(item) || null;
+
+				await fanOutToSubscribers(db, env, {
+					url, title, source: feed.name,
+					publishedDate: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
+					summary, sourceType: "rss", content: content || null, ogImageUrl,
+					platformMetadata: null,
+				}, subscribers, feed.id);
+				inserted++;
+			}
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+			logInfo("RSS-SUB", "Feed done", { feed: feed.name, items: inserted, subscribers: subscribers.length });
+		} catch (err) {
+			logWarn("RSS-SUB", "Feed failed", { feed: feed.name, error: String(err) });
+		}
+	}
+}
+
 export async function handleRSSCron(
 	env: Env,
 	_ctx: ExecutionContext,
@@ -350,10 +534,13 @@ export async function handleRSSCron(
 	const db = await createDbClient(env);
 	try {
 		const parser = new XMLParser({ ignoreAttributes: false });
-		const result = await db.query(
-			`SELECT id, name, "RSSLink", url, type FROM "RssList"`,
+
+		// Pass 1: default sources → articles table (unchanged)
+		// Pass 1: default sources → articles table
+		const defaultResult = await db.query(
+			`SELECT id, name, "RSSLink", url, type FROM "RssList" WHERE is_default = true AND type = 'rss'`,
 		);
-		const feeds = result.rows as RSSFeed[];
+		const feeds = defaultResult.rows as RSSFeed[];
 		const FEED_CONCURRENCY = 5;
 		for (let i = 0; i < feeds.length; i += FEED_CONCURRENCY) {
 			const batch = feeds.slice(i, i + FEED_CONCURRENCY);
@@ -369,6 +556,10 @@ export async function handleRSSCron(
 				}
 			}
 		}
+
+		// Pass 2: subscribed non-default sources → user_articles (fan-out per subscriber)
+		await processSubscribedFeeds(db, env, parser, "rss");
+
 		logInfo("RSS", "end");
 	} finally {
 		await db.end();
@@ -845,6 +1036,9 @@ export async function handleTwitterCron(
 			);
 		}
 
+		// Distribute non-default Twitter articles to subscribers
+		await distributeNonDefaultArticles(db, "twitter_user");
+
 		logInfo("TWITTER", "end", { inserted: total, users: users.length, batches: batches.length });
 	} finally {
 		await db.end();
@@ -1047,6 +1241,9 @@ export async function handleYouTubeCron(
 				logError("YOUTUBE-CRON", "Channel failed", { channel: channel.name, error: String(err) });
 			}
 		}
+
+		// Distribute non-default YouTube articles to subscribers
+		await distributeNonDefaultArticles(db, "youtube_channel");
 
 		logInfo("YOUTUBE-CRON", "end", { inserted: totalInserted, channels: channels.length });
 	} finally {
