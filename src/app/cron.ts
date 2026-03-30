@@ -371,7 +371,7 @@ async function copyArticleToUser(
 async function getSubscribedSources(db: Client, sourceType: string): Promise<RSSFeed[]> {
 	const result = await db.query(
 		`SELECT DISTINCT r.id, r.name, r."RSSLink", r.url, r.type, r.scraped_at, r.avatar_url
-		FROM "RssList" r JOIN rss_subscriptions s ON s.rss_list_id = r.id
+		FROM "RssList" r JOIN feed_sources s ON s.rss_list_id = r.id
 		WHERE r.is_default = false AND r.type = $1`,
 		[sourceType],
 	);
@@ -380,7 +380,7 @@ async function getSubscribedSources(db: Client, sourceType: string): Promise<RSS
 
 async function getSourceSubscribers(db: Client, rssListId: string | number | bigint): Promise<Subscriber[]> {
 	const result = await db.query(
-		`SELECT user_id, organization_id FROM rss_subscriptions WHERE rss_list_id = $1`,
+		`SELECT DISTINCT f.user_id, f.organization_id FROM feed_sources fs JOIN feeds f ON f.id = fs.feed_id WHERE fs.rss_list_id = $1`,
 		[rssListId],
 	);
 	return result.rows as Subscriber[];
@@ -403,12 +403,12 @@ async function fanOutToSubscribers(
 	const globalArticleId = existing.rows[0]?.id as string | undefined;
 
 	if (globalArticleId) {
-		// Batch copy from articles → user_articles for all subscribers via rss_subscriptions JOIN
+		// Batch copy from articles → user_articles for all subscribers via feeds JOIN
 		await db.query(
 			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
-			SELECT ${COPY_ARTICLE_COLS}, s.user_id, s.organization_id, 'public', s.rss_list_id
-			FROM ${ARTICLES_TABLE} a, rss_subscriptions s
-			WHERE a.id = $1 AND s.rss_list_id = $2
+			SELECT DISTINCT ${COPY_ARTICLE_COLS}, f.user_id, f.organization_id, 'public', fs.rss_list_id
+			FROM ${ARTICLES_TABLE} a, feed_sources fs JOIN feeds f ON f.id = fs.feed_id
+			WHERE a.id = $1 AND fs.rss_list_id = $2
 			ON CONFLICT DO NOTHING`,
 			[globalArticleId, rssListId],
 		);
@@ -460,11 +460,14 @@ async function distributeNonDefaultArticles(db: Client, sourceType: string): Pro
 		// Batch: cross-join recent articles with subscribers in a single INSERT
 		const result = await db.query(
 			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
-			SELECT ${COPY_ARTICLE_COLS}, s.user_id, s.organization_id, 'public', s.rss_list_id
+			SELECT DISTINCT ${COPY_ARTICLE_COLS}, f.user_id, f.organization_id, 'public', fs.rss_list_id
 			FROM ${ARTICLES_TABLE} a
-			CROSS JOIN rss_subscriptions s
-			WHERE s.rss_list_id = $1
-				AND a.source = $2
+			CROSS JOIN (
+				SELECT fs.rss_list_id, f.user_id, f.organization_id
+				FROM feed_sources fs JOIN feeds f ON f.id = fs.feed_id
+				WHERE fs.rss_list_id = $1
+			) sub
+			WHERE a.source = $2
 				AND a.scraped_date > NOW() - INTERVAL '24 hours'
 			ON CONFLICT DO NOTHING`,
 			[source.id, source.name],
