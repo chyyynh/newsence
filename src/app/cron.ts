@@ -349,6 +349,25 @@ async function processFeed(
 
 interface Subscriber { user_id: string | null; organization_id: string | null }
 
+const COPY_ARTICLE_COLS = 'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
+
+/** Copy a single article from the global articles table to user_articles for a subscriber. */
+async function copyArticleToUser(
+	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+	articleId: string,
+	userId: string | null,
+	orgId: string | null,
+	rssListId?: string | number | bigint,
+): Promise<void> {
+	await db.query(
+		`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
+		SELECT ${COPY_ARTICLE_COLS}, $2, $3, 'public', $4
+		FROM ${ARTICLES_TABLE} WHERE id = $1
+		ON CONFLICT DO NOTHING`,
+		[articleId, userId, orgId, rssListId ?? null],
+	);
+}
+
 async function getSubscribedSources(db: Client, sourceType: string): Promise<RSSFeed[]> {
 	const result = await db.query(
 		`SELECT DISTINCT r.id, r.name, r."RSSLink", r.url, r.type, r.scraped_at, r.avatar_url
@@ -393,17 +412,10 @@ async function fanOutToSubscribers(
 			);
 		if (dedup.rows.length > 0) continue;
 
-		// Check if exists in global articles — if so, copy it
+		// If exists in global articles, copy it (reuse AI analysis + embedding)
 		const existing = await db.query(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [articleData.url]);
 		if (existing.rows[0]) {
-			// Copy from articles table (reuse existing AI analysis + embedding)
-			await db.query(
-				`INSERT INTO ${USER_ARTICLES_TABLE} (url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding, user_id, organization_id, visibility, rss_list_id)
-				SELECT url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding, $2, $3, 'public', $4
-				FROM ${ARTICLES_TABLE} WHERE id = $1
-				ON CONFLICT DO NOTHING`,
-				[existing.rows[0].id, userId, orgId, rssListId],
-			);
+			await copyArticleToUser(db, existing.rows[0].id as string, userId, orgId, rssListId);
 			continue;
 		}
 
@@ -445,35 +457,21 @@ async function distributeNonDefaultArticles(db: Client, sourceType: string): Pro
 
 	let copied = 0;
 	for (const source of sources) {
-		const subscribers = await getSourceSubscribers(db, source.id);
-		if (!subscribers.length) continue;
-
-		// Get articles from the last 24h for this source
-		const recent = await db.query(
-			`SELECT id FROM ${ARTICLES_TABLE} WHERE source = $1 AND scraped_date > NOW() - INTERVAL '24 hours'`,
-			[source.name],
+		// Batch: cross-join recent articles with subscribers in a single INSERT
+		const result = await db.query(
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
+			SELECT ${COPY_ARTICLE_COLS}, s.user_id, s.organization_id, 'public', s.rss_list_id
+			FROM ${ARTICLES_TABLE} a
+			CROSS JOIN rss_subscriptions s
+			WHERE s.rss_list_id = $1
+				AND a.source = $2
+				AND a.scraped_date > NOW() - INTERVAL '24 hours'
+			ON CONFLICT DO NOTHING`,
+			[source.id, source.name],
 		);
-		if (!recent.rows.length) continue;
-
-		for (const row of recent.rows as { id: string }[]) {
-			for (const sub of subscribers) {
-				await db.query(
-					`INSERT INTO ${USER_ARTICLES_TABLE}
-						(url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn,
-						 source_type, content, content_cn, og_image_url, platform_metadata, embedding,
-						 user_id, organization_id, visibility, rss_list_id)
-					SELECT url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn,
-						source_type, content, content_cn, og_image_url, platform_metadata, embedding,
-						$2, $3, 'public', $4
-					FROM ${ARTICLES_TABLE} WHERE id = $1
-					ON CONFLICT DO NOTHING`,
-					[row.id, sub.user_id, sub.organization_id, source.id],
-				);
-				copied++;
-			}
-		}
+		copied += result.rowCount ?? 0;
 	}
-	if (copied > 0) logInfo("DISTRIBUTE", `Copied ${copied} articles for ${sourceType} subscribers`);
+	if (copied > 0) logInfo("DISTRIBUTE", `Distributed ${copied} rows for ${sourceType} subscribers`);
 }
 
 async function processSubscribedFeeds(db: Client, env: Env, parser: XMLParser, sourceType: string): Promise<void> {
@@ -535,7 +533,6 @@ export async function handleRSSCron(
 	try {
 		const parser = new XMLParser({ ignoreAttributes: false });
 
-		// Pass 1: default sources → articles table (unchanged)
 		// Pass 1: default sources → articles table
 		const defaultResult = await db.query(
 			`SELECT id, name, "RSSLink", url, type FROM "RssList" WHERE is_default = true AND type = 'rss'`,
