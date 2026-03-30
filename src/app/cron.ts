@@ -396,52 +396,52 @@ async function fanOutToSubscribers(
 	subscribers: Subscriber[],
 	rssListId: string | number | bigint,
 ): Promise<void> {
-	for (const sub of subscribers) {
-		const userId = sub.user_id;
-		const orgId = sub.organization_id;
+	if (!subscribers.length) return;
 
-		// Check if already exists in user_articles for this subscriber + source
-		const dedup = orgId
-			? await db.query(
-				`SELECT 1 FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`,
-				[orgId, articleData.url],
-			)
-			: await db.query(
-				`SELECT 1 FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`,
-				[userId, articleData.url],
-			);
-		if (dedup.rows.length > 0) continue;
+	// Check once if article exists in global articles table
+	const existing = await db.query(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [articleData.url]);
+	const globalArticleId = existing.rows[0]?.id as string | undefined;
 
-		// If exists in global articles, copy it (reuse AI analysis + embedding)
-		const existing = await db.query(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [articleData.url]);
-		if (existing.rows[0]) {
-			await copyArticleToUser(db, existing.rows[0].id as string, userId, orgId, rssListId);
-			continue;
-		}
-
-		// Insert new article into user_articles
-		const result = await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE}
-				(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, platform_metadata, keywords, tags, user_id, organization_id, visibility, rss_list_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'public', $15)
-			ON CONFLICT DO NOTHING RETURNING id`,
-			[
-				articleData.url, articleData.title, articleData.source,
-				articleData.publishedDate, new Date().toISOString(),
-				articleData.summary, articleData.sourceType,
-				articleData.content, articleData.ogImageUrl, articleData.platformMetadata,
-				[], [], userId, orgId, rssListId,
-			],
+	if (globalArticleId) {
+		// Batch copy from articles → user_articles for all subscribers via rss_subscriptions JOIN
+		await db.query(
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
+			SELECT ${COPY_ARTICLE_COLS}, s.user_id, s.organization_id, 'public', s.rss_list_id
+			FROM ${ARTICLES_TABLE} a, rss_subscriptions s
+			WHERE a.id = $1 AND s.rss_list_id = $2
+			ON CONFLICT DO NOTHING`,
+			[globalArticleId, rssListId],
 		);
+		return;
+	}
 
-		const articleId = result.rows[0]?.id;
-		if (articleId) {
-			await env.ARTICLE_QUEUE.send({
-				type: "article_process",
-				article_id: articleId,
-				source_type: articleData.sourceType,
-				target_table: USER_ARTICLES_TABLE,
-			});
+	// New article: insert for the first subscriber, then copy for the rest
+	const firstSub = subscribers[0];
+	const result = await db.query(
+		`INSERT INTO ${USER_ARTICLES_TABLE}
+			(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, platform_metadata, keywords, tags, user_id, organization_id, visibility, rss_list_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'public', $15)
+		ON CONFLICT DO NOTHING RETURNING id`,
+		[
+			articleData.url, articleData.title, articleData.source,
+			articleData.publishedDate, new Date().toISOString(),
+			articleData.summary, articleData.sourceType,
+			articleData.content, articleData.ogImageUrl, articleData.platformMetadata,
+			[], [], firstSub.user_id, firstSub.organization_id, rssListId,
+		],
+	);
+
+	const articleId = result.rows[0]?.id;
+	if (articleId) {
+		await env.ARTICLE_QUEUE.send({
+			type: "article_process",
+			article_id: articleId,
+			source_type: articleData.sourceType,
+			target_table: USER_ARTICLES_TABLE,
+		});
+		// Copy to remaining subscribers
+		for (const sub of subscribers.slice(1)) {
+			await copyArticleToUser(db, articleId as string, sub.user_id, sub.organization_id, rssListId);
 		}
 	}
 }
