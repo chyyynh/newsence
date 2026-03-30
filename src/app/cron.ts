@@ -460,7 +460,7 @@ async function distributeNonDefaultArticles(db: Client, sourceType: string): Pro
 		// Batch: cross-join recent articles with subscribers in a single INSERT
 		const result = await db.query(
 			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
-			SELECT DISTINCT ${COPY_ARTICLE_COLS}, f.user_id, f.organization_id, 'public', fs.rss_list_id
+			SELECT DISTINCT ${COPY_ARTICLE_COLS}, sub.user_id, sub.organization_id, 'public', sub.rss_list_id
 			FROM ${ARTICLES_TABLE} a
 			CROSS JOIN (
 				SELECT fs.rss_list_id, f.user_id, f.organization_id
