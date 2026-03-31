@@ -191,19 +191,29 @@ export async function handleBotListArticles(request: Request, env: Env): Promise
 		let params: unknown[];
 
 		if (period === 'unsorted' && orgId) {
-			// Unsorted = articles in the system collection for this org
-			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
+			// Unsorted = articles in the system collection for this org (both user_articles and legacy articles)
+			query = `(SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
 				JOIN citations c ON c.to_type = 'user_article' AND c.to_id = ua.id::text
 				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.organization_id = $1
-				WHERE c.from_type = 'collection' ${dateFilter}
-				ORDER BY ua.scraped_date DESC LIMIT 500`;
+				WHERE c.from_type = 'collection' ${dateFilter})
+				UNION ALL
+				(SELECT ${cols} FROM ${ARTICLES_TABLE} a
+				JOIN citations c ON c.to_type = 'article' AND c.to_id = a.id::text
+				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.organization_id = $1
+				WHERE c.from_type = 'collection' ${dateFilter})
+				ORDER BY scraped_date DESC LIMIT 500`;
 			params = [orgId];
 		} else if (period === 'unsorted') {
-			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
+			query = `(SELECT ${cols} FROM ${USER_ARTICLES_TABLE} ua
 				JOIN citations c ON c.to_type = 'user_article' AND c.to_id = ua.id::text
 				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.user_id = $1 AND col.organization_id IS NULL
-				WHERE c.from_type = 'collection' ${dateFilter}
-				ORDER BY ua.scraped_date DESC LIMIT 500`;
+				WHERE c.from_type = 'collection' ${dateFilter})
+				UNION ALL
+				(SELECT ${cols} FROM ${ARTICLES_TABLE} a
+				JOIN citations c ON c.to_type = 'article' AND c.to_id = a.id::text
+				JOIN collections col ON col.id = c.from_id AND col.is_system = true AND col.user_id = $1 AND col.organization_id IS NULL
+				WHERE c.from_type = 'collection' ${dateFilter})
+				ORDER BY scraped_date DESC LIMIT 500`;
 			params = [body.userId];
 		} else if (orgId) {
 			query = `SELECT ${cols} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 ${dateFilter} ORDER BY scraped_date DESC LIMIT 500`;
