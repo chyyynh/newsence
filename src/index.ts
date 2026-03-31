@@ -5,6 +5,7 @@ import {
 	handleBotResolveOrg,
 	handleEmbed,
 	handleHealth,
+	handlePreview,
 	handleSubmitUrl,
 	handleTelegramAddToCollection,
 	handleTelegramCollections,
@@ -50,6 +51,7 @@ function routeRequest(request: Request, env: Env): Response | Promise<Response> 
 	const { pathname } = new URL(request.url);
 
 	if (pathname === '/health') return handleHealth(env);
+	if (pathname === '/preview') return handlePreview(request, env);
 	if (pathname === '/scrape') return handleTestScrape(request, env);
 
 	if (request.method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
@@ -68,6 +70,7 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'Endpoints:\n' +
 	'GET  /health\n' +
+	'*    /preview                    - Scrape-only: {"url":"..."} or {"message":"..."}\n' +
 	'POST /submit                     - Submit URL: {"url": "..."}\n' +
 	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
