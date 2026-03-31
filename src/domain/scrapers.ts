@@ -936,8 +936,7 @@ export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
 
 		// Parse meta tags from partial HTML
-		let ogImageUrl =
-			extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
+		let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
 		if (!ogImageUrl) return null;
 
 		if (!ogImageUrl.startsWith('http')) {
