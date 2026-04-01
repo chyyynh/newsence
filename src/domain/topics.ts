@@ -1,6 +1,6 @@
 import type { Client } from 'pg';
-import { callOpenRouter, extractJson } from '../infra/openrouter';
 import { logInfo, logWarn } from '../infra/log';
+import { callOpenRouter, extractJson } from '../infra/openrouter';
 
 const TOPIC_CONFIG = {
 	SIMILARITY_THRESHOLD: 0.85,

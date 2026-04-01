@@ -2,18 +2,19 @@ import {
 	handleBotGetUnsorted,
 	handleBotListArticles,
 	handleBotLookup,
-	handleBotResolveOrg,
-	handleEmbed,
-	handleHealth,
-	handleSubmitUrl,
 	handleTelegramAddToCollection,
 	handleTelegramCollections,
 	handleTelegramLookup,
-	handleTestScrape,
-	handleWorkflowStatus,
-	handleWorkflowStream,
-} from './app/http';
-import { handleRetryCron, handleRSSCron, handleTwitterCron, handleYouTubeCron } from './app/cron';
+} from './app/handlers/bot-api';
+import { handleEmbed } from './app/handlers/embed';
+import { handleHealth, handleTestScrape } from './app/handlers/health';
+import { handlePreview } from './app/handlers/preview';
+import { handleSubmitUrl } from './app/handlers/submit';
+import { handleWorkflowStatus, handleWorkflowStream } from './app/handlers/workflow-status';
+import { handleRetryCron } from './app/monitors/retry';
+import { handleRSSCron } from './app/monitors/rss';
+import { handleTwitterCron } from './app/monitors/twitter';
+import { handleYouTubeCron } from './app/monitors/youtube';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 import { logInfo } from './infra/log';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
@@ -26,7 +27,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': handleEmbed,
 	'/submit': handleSubmitUrl,
 	'/bot/lookup': handleBotLookup,
-	'/bot/resolve-org': handleBotResolveOrg,
 	'/bot/get-unsorted': handleBotGetUnsorted,
 	'/bot/list-articles': handleBotListArticles,
 	'/telegram/lookup': handleTelegramLookup,
@@ -50,6 +50,7 @@ function routeRequest(request: Request, env: Env): Response | Promise<Response> 
 	const { pathname } = new URL(request.url);
 
 	if (pathname === '/health') return handleHealth(env);
+	if (pathname === '/preview') return handlePreview(request, env);
 	if (pathname === '/scrape') return handleTestScrape(request, env);
 
 	if (request.method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
@@ -68,6 +69,7 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'Endpoints:\n' +
 	'GET  /health\n' +
+	'*    /preview                    - Scrape-only: {"url":"..."} or {"message":"..."}\n' +
 	'POST /submit                     - Submit URL: {"url": "..."}\n' +
 	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
