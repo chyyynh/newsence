@@ -1,11 +1,11 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { generateYouTubeHighlights } from './processors';
 import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage, TelegramNotifyContext } from '../models/types';
 import {
 	buildEmbeddingTextForArticle,
+	generateYouTubeHighlights,
 	type ProcessorResult,
 	persistProcessorResult,
 	runArticleProcessor,
@@ -144,10 +144,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 		// Step 3: Fetch OG image if missing (lightweight — only downloads first 32KB of HTML)
 		if (!article.og_image_url && !processorResult.updateData.og_image_url) {
-			const ogResult = await step.do(
-				'fetch-og-image',
-				{ retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' },
-				async () => fetchOgImage(article.url),
+			const ogResult = await step.do('fetch-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' }, async () =>
+				fetchOgImage(article.url),
 			);
 			if (ogResult?.ogImageUrl) {
 				processorResult.updateData.og_image_url = ogResult.ogImageUrl;
@@ -198,10 +196,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				async () => {
 					const db = await createDbClient(this.env);
 					try {
-						const result = await db.query(
-							`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`,
-							[article_id],
-						);
+						const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [article_id]);
 						const updatedArticle = result.rows[0];
 						if (!updatedArticle) return;
 
@@ -236,10 +231,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 					const db = await createDbClient(this.env);
 					try {
-						const result = await db.query<{ transcript: Array<{ startTime: number; endTime: number; text: string }> | null; ai_highlights: unknown }>(
-							'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
-							[videoId],
-						);
+						const result = await db.query<{
+							transcript: Array<{ startTime: number; endTime: number; text: string }> | null;
+							ai_highlights: unknown;
+						}>('SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1', [videoId]);
 						const row = result.rows[0];
 						if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return;
 
@@ -252,10 +247,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 							highlights: highlights.highlights,
 							generatedAt: new Date().toISOString(),
 						};
-						await db.query(
-							'UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3',
-							[JSON.stringify(aiHighlights), new Date().toISOString(), videoId],
-						);
+						await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
+							JSON.stringify(aiHighlights),
+							new Date().toISOString(),
+							videoId,
+						]);
 						logInfo('WORKFLOW', 'YouTube highlights saved', { videoId, count: highlights.highlights.length });
 					} finally {
 						await db.end();

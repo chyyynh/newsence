@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client } from 'pg';
-import { prepareArticleTextForEmbedding, normalizeVector } from '../src/infra/embedding';
+import { normalizeVector, prepareArticleTextForEmbedding } from '../src/infra/embedding';
 
 const EMBEDDING_URL = 'https://newsence-core.chinyuhsu1023.workers.dev/embed';
 const BATCH_SIZE = 20;
@@ -60,10 +60,7 @@ async function fetchEmbedding(text: string): Promise<number[]> {
 	return normalizeVector(data.embeddings[0]);
 }
 
-async function processArticle(
-	db: Client,
-	article: ArticleRow,
-): Promise<boolean> {
+async function processArticle(db: Client, article: ArticleRow): Promise<boolean> {
 	const text = prepareArticleTextForEmbedding(article);
 	const embedding = await fetchEmbedding(text);
 	const vecStr = `[${embedding.join(',')}]`;
@@ -79,7 +76,9 @@ async function main() {
 	const db = new Client({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
 	await db.connect();
 
-	const { rows: [{ count }] } = await db.query('SELECT COUNT(*) FROM articles');
+	const {
+		rows: [{ count }],
+	} = await db.query('SELECT COUNT(*) FROM articles');
 	const total = parseInt(count, 10);
 	const startOffset = parseOffset();
 	console.log(`Total: ${total} | offset: ${startOffset} | concurrency: ${CONCURRENCY}`);
@@ -102,7 +101,10 @@ async function main() {
 			const results = await Promise.allSettled(chunk.map((a) => processArticle(db, a)));
 			for (const r of results) {
 				if (r.status === 'fulfilled') processed++;
-				else { failed++; console.error(`\n  Error:`, r.reason); }
+				else {
+					failed++;
+					console.error(`\n  Error:`, r.reason);
+				}
 			}
 		}
 
@@ -117,4 +119,7 @@ async function main() {
 	await db.end();
 }
 
-main().catch((err) => { console.error('Fatal:', err); process.exit(1); });
+main().catch((err) => {
+	console.error('Fatal:', err);
+	process.exit(1);
+});

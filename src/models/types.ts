@@ -104,7 +104,7 @@ export interface Tweet {
 
 // Bot push notification context (passed through workflow, platform-agnostic)
 export interface BotNotifyContext {
-	platform: 'telegram' | 'feishu';
+	platform: 'telegram';
 	chatId: string;
 	messageId: string;
 	linked: boolean;
