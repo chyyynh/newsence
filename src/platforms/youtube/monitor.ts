@@ -1,11 +1,11 @@
 import { XMLParser } from 'fast-xml-parser';
-import { scrapeYouTube } from '../../domain/scrapers';
+import { distributeNonDefaultArticles } from '../../domain/distribute';
+import { scrapeYouTube } from './scraper';
 import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
-import { buildYouTube } from '../../models/platform-metadata';
+import { buildYouTube } from './metadata';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
-import { distributeNonDefaultArticles } from './rss';
 
 // ─────────────────────────────────────────────────────────────
 // YouTube Channel Monitor
