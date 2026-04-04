@@ -18,33 +18,6 @@
 
 ---
 
-## newsence 是什麼？
-
-[newsence.app](https://www.newsence.app) 自動監控超過 100 個來源（RSS、Twitter、YouTube、Hacker News），將每篇文章翻譯成中英雙語摘要、生成語意向量用於搜尋，並將相關報導自動聚類成主題 —— 全部即時完成。
-
-這個 repo 是核心引擎：一個 Cloudflare Worker 處理完整的內容管線。
-
-## 運作流程
-
-每篇文章經過 10 步驟的自動化 workflow：
-
-```
-URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
-  │
-  ├─  1. 讀取文章 ────────── 從 Supabase 載入文章
-  ├─  2. AI 分析 ─────────── Gemini 2.5 Flash → 中英標題、摘要、標籤、關鍵字
-  ├─  3. 抓取 OG 圖片 ────── 若缺少圖片則輕量抓取（僅前 32KB）
-  ├─  4. 翻譯全文 ─────────── 全文 → 繁體中文
-  ├─  5. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
-  ├─  6. 通知 Telegram ────── 推送結果至 Telegram 機器人（若經由 bot 觸發）
-  ├─  7. YouTube 精華 ─────── 從字幕生成 AI 精華段落（僅 YouTube）
-  ├─  8. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文）
-  ├─  9. 主題聚類 ─────────── 餘弦相似度 > 0.85 → 歸入主題群組
-  └─ 10. 主題合成 ─────────── 當主題累積 2/3/5/10 篇時，AI 生成主題標題
-```
-
-每篇約 30 秒完成。每步獨立重試，指數退避。
-
 ## 支援平台
 
 ![RSS](https://img.shields.io/badge/RSS-F99000?logo=rss&logoColor=white)
@@ -59,12 +32,41 @@ URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
 | **RSS 訂閱** | 監控 | 每 5 分鐘 | 抓取 feed、依 URL 去重、偵測 HN 連結 |
 | **Twitter/X** | 監控 | 每 6 小時 | 透過 Kaito API 追蹤用戶 — 推文、串文、長文、媒體 |
 | **YouTube** | 監控 | 每 30 分鐘 | Atom feed → 影片資訊、字幕、章節、AI 精華段落 |
+| **Bilibili** | 監控 | 每 30 分鐘 | gRPC 移動端 API → 用戶動態、影片卡片 |
+| **小紅書** | 監控 | 每 30 分鐘 | 用戶主頁抓取 → 筆記、封面 |
 | **Hacker News** | 處理器 | 經由 RSS | 偵測 HN 連結 → Algolia 取評論 → 生成編輯筆記 |
 | **網頁** | 爬蟲 | 按需 | 全文擷取（Readability + Cheerio）、OG metadata |
 | **用戶投稿** | 入口 | 即時 | `POST /submit` — 完整抓取 + AI 分析，同步回應 |
 | **Telegram 機器人** | 入口 | 即時 | 傳送 URL → 回覆中英雙語摘要 |
 
 所有平台輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
+
+## newsence 是什麼？
+
+[newsence.app](https://www.newsence.app) 自動監控超過 100 個來源（RSS、Twitter、YouTube、Hacker News、Bilibili、小紅書），將每篇文章翻譯成中英雙語摘要、生成語意向量用於搜尋，並將相關報導自動聚類成主題 —— 全部即時完成。
+
+這個 repo 是核心引擎：一個 Cloudflare Worker 處理完整的內容管線。
+
+## 運作流程
+
+每篇文章經過 10 步驟的自動化 workflow：
+
+```
+URL 進入（RSS 排程 / Twitter 排程 / Bilibili gRPC / 用戶投稿 / Telegram 機器人）
+  │
+  ├─  1. 讀取文章 ────────── 從 Supabase 載入文章
+  ├─  2. AI 分析 ─────────── Gemini 2.5 Flash → 中英標題、摘要、標籤、關鍵字
+  ├─  3. 抓取 OG 圖片 ────── 若缺少圖片則輕量抓取（僅前 32KB）
+  ├─  4. 翻譯全文 ─────────── 全文 → 繁體中文
+  ├─  5. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
+  ├─  6. 通知 Telegram ────── 推送結果至 Telegram 機器人（若經由 bot 觸發）
+  ├─  7. YouTube 精華 ─────── 從字幕生成 AI 精華段落（僅 YouTube）
+  ├─  8. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文）
+  ├─  9. 主題聚類 ─────────── 餘弦相似度 > 0.85 → 歸入主題群組
+  └─ 10. 主題合成 ─────────── 當主題累積 2/3/5/10 篇時，AI 生成主題標題
+```
+
+每篇約 30 秒完成。每步獨立重試，指數退避。
 
 ## AI 管線
 

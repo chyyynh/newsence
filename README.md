@@ -18,33 +18,6 @@
 
 ---
 
-## What is newsence?
-
-[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, and Hacker News — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
-
-This repo is the core engine: a single Cloudflare Worker that handles the full content pipeline.
-
-## How it works
-
-Each article goes through a 10-step workflow, fully automated with independent retries:
-
-```
-URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
-  │
-  ├─  1. Fetch Article ──── Load article from Supabase
-  ├─  2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
-  ├─  3. Fetch OG Image ─── Grab OG image if missing (lightweight, first 32KB)
-  ├─  4. Translate Content ─ Full article → Traditional Chinese
-  ├─  5. Save to DB ──────── Write all AI results in a single UPDATE
-  ├─  6. Notify Telegram ─── Push results to Telegram bot (if triggered via bot)
-  ├─  7. YouTube Highlights  Generate AI highlights from transcript (YouTube only)
-  ├─  8. Embed ───────────── BGE-M3 → 1024-dim vector from title + summary + content
-  ├─  9. Topic Clustering ── Cosine similarity > 0.85 → assign to topic group
-  └─ 10. Topic Synthesis ─── AI generates topic headline at 2/3/5/10 articles
-```
-
-~30 seconds per article. Each step retries independently with exponential backoff.
-
 ## Supported Platforms
 
 ![RSS](https://img.shields.io/badge/RSS-F99000?logo=rss&logoColor=white)
@@ -59,12 +32,41 @@ URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
 | **RSS Feeds** | Monitor | Every 5 min | Fetches feeds, deduplicates by URL, detects HN links |
 | **Twitter/X** | Monitor | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media |
 | **YouTube** | Monitor | Every 30 min | Atom feed → video metadata, transcripts, chapters, AI highlights |
+| **Bilibili** | Monitor | Every 30 min | gRPC mobile API → user dynamics, video cards |
+| **Xiaohongshu** | Monitor | Every 30 min | Profile scraping → user notes, covers |
 | **Hacker News** | Processor | Via RSS | Detects HN links → fetches comments via Algolia → generates editorial notes |
 | **Web** | Scraper | On demand | Full content extraction (Readability + Cheerio), OG metadata |
 | **User Submissions** | Ingestion | Real-time | `POST /submit` — full crawl + AI, sync response |
 | **Telegram Bot** | Ingestion | Real-time | Send URL in chat → get bilingual summary back |
 
 All platforms output a unified `ScrapedContent` shape → same AI pipeline.
+
+## What is newsence?
+
+[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, Hacker News, Bilibili, and Xiaohongshu — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
+
+This repo is the core engine: a single Cloudflare Worker that handles the full content pipeline.
+
+## How it works
+
+Each article goes through a 10-step workflow, fully automated with independent retries:
+
+```
+URL arrives (RSS cron / Twitter cron / Bilibili gRPC / user submit / Telegram bot)
+  │
+  ├─  1. Fetch Article ──── Load article from Supabase
+  ├─  2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
+  ├─  3. Fetch OG Image ─── Grab OG image if missing (lightweight, first 32KB)
+  ├─  4. Translate Content ─ Full article → Traditional Chinese
+  ├─  5. Save to DB ──────── Write all AI results in a single UPDATE
+  ├─  6. Notify Telegram ─── Push results to Telegram bot (if triggered via bot)
+  ├─  7. YouTube Highlights  Generate AI highlights from transcript (YouTube only)
+  ├─  8. Embed ───────────── BGE-M3 → 1024-dim vector from title + summary + content
+  ├─  9. Topic Clustering ── Cosine similarity > 0.85 → assign to topic group
+  └─ 10. Topic Synthesis ─── AI generates topic headline at 2/3/5/10 articles
+```
+
+~30 seconds per article. Each step retries independently with exponential backoff.
 
 ## AI Pipeline
 
