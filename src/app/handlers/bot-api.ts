@@ -124,17 +124,12 @@ export async function handleTelegramAddToCollection(request: Request, env: Env):
 			return Response.json({ success: false, error: 'already_exists' });
 		}
 
-		// Insert citation
+		// Insert citation — articleCount is maintained by DB trigger
 		await db.query(
 			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id)
 			VALUES ($1, $2, $3, $4, $5, $6)`,
 			['collection', collectionId, toType, articleId, 'resource', userId],
 		);
-
-		await db.query(`UPDATE collections SET article_count = article_count + 1 WHERE id = $1 AND user_id = $2`, [
-			collectionId,
-			userId,
-		]);
 
 		return Response.json({ success: true });
 	} catch (err) {

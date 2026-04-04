@@ -487,7 +487,7 @@ async function addToUnsortedCollection(
 			ON CONFLICT DO NOTHING`,
 			[collectionId, toType, articleId, userId, orgId],
 		);
-		await db.query(`UPDATE collections SET article_count = article_count + 1 WHERE id = $1`, [collectionId]);
+		// articleCount is maintained by DB trigger on citations table
 	} finally {
 		await db.end();
 	}
