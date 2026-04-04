@@ -12,6 +12,13 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/chyyynh/newsence)
 
+![RSS](https://img.shields.io/badge/RSS-F99000?logo=rss&logoColor=white)
+![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)
+![X](https://img.shields.io/badge/X%2FTwitter-000000?logo=x&logoColor=white)
+![Hacker News](https://img.shields.io/badge/Hacker%20News-F0652F?logo=ycombinator&logoColor=white)
+![Bilibili](https://img.shields.io/badge/Bilibili-00A1D6?logo=bilibili&logoColor=white)
+![Xiaohongshu](https://img.shields.io/badge/Xiaohongshu-FF2442?logo=xiaohongshu&logoColor=white)
+
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
 </div>
