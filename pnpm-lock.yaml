@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@bufbuild/protobuf':
+        specifier: ^2.11.0
+        version: 2.11.0
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -17,9 +20,15 @@ importers:
       fast-xml-parser:
         specifier: ^5.3.4
         version: 5.3.4
+      hpack:
+        specifier: ^1.0.0
+        version: 1.0.0
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
+      node-forge:
+        specifier: ^1.4.0
+        version: 1.4.0
       pg:
         specifier: ^8.20.0
         version: 8.20.0
@@ -42,6 +51,9 @@ importers:
       '@types/node':
         specifier: ^22.19.7
         version: 22.19.7
+      '@types/node-forge':
+        specifier: ^1.3.14
+        version: 1.3.14
       '@types/pg':
         specifier: ^8.18.0
         version: 8.18.0
@@ -112,6 +124,9 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
+
+  '@bufbuild/protobuf@2.11.0':
+    resolution: {integrity: sha512-sBXGT13cpmPR5BMgHE6UEEfEaShh5Ror6rfN3yEK5si7QVrtZg8LEPQb0VVhiLRUslD2yLnXtnRzG035J/mZXQ==}
 
   '@cloudflare/kv-asset-handler@0.4.0':
     resolution: {integrity: sha512-+tv3z+SPp+gqTIcImN9o0hqE9xyfQjI1XD9pL6NuKjua9B1y7mNYv0S9cP+QEbA4ppVgGZEmKOvHX5G5Ei1CVA==}
@@ -1087,6 +1102,9 @@ packages:
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
+  '@types/node-forge@1.3.14':
+    resolution: {integrity: sha512-mhVF2BnD4BO+jtOp7z1CdzaK4mbuK0LLQYAvdOLqHTavxFNq4zA1EmYkpnFjP8HOUzedfQkRnp0E2ulSAYSzAw==}
+
   '@types/node@22.19.7':
     resolution: {integrity: sha512-MciR4AKGHWl7xwxkBa6xUGxQJ4VBOmPTF7sL+iGzuahOFaO0jHCsuEfS80pan1ef4gWId1oWOweIhrDEYLuaOw==}
 
@@ -1316,6 +1334,9 @@ packages:
   glob-to-regexp@0.4.1:
     resolution: {integrity: sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==}
 
+  hpack@1.0.0:
+    resolution: {integrity: sha512-em/r9erFKtDnTxS+S2+tEUDn3uUM75DC+QnUkYyBEyfCKQAdDsPrEt1T5V0/knrcue1ukxU74/JaVMkJ7CdeNg==}
+
   html-escaper@3.0.3:
     resolution: {integrity: sha512-RuMffC89BOWQoY0WKGpIhn5gX3iI54O6nRA0yC124NYVtzjmFWBIiFd8M0x+ZdX0P9R4lADg1mgP8C7PxGOWuQ==}
 
@@ -1373,6 +1394,10 @@ packages:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
+
+  node-forge@1.4.0:
+    resolution: {integrity: sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==}
+    engines: {node: '>= 6.13.0'}
 
   nth-check@2.1.1:
     resolution: {integrity: sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==}
@@ -1765,6 +1790,8 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.4.4':
     optional: true
+
+  '@bufbuild/protobuf@2.11.0': {}
 
   '@cloudflare/kv-asset-handler@0.4.0':
     dependencies:
@@ -2357,6 +2384,10 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/node-forge@1.3.14':
+    dependencies:
+      '@types/node': 22.19.7
+
   '@types/node@22.19.7':
     dependencies:
       undici-types: 6.21.0
@@ -2664,6 +2695,8 @@ snapshots:
 
   glob-to-regexp@0.4.1: {}
 
+  hpack@1.0.0: {}
+
   html-escaper@3.0.3: {}
 
   htmlparser2@10.1.0:
@@ -2732,6 +2765,8 @@ snapshots:
   ms@2.1.3: {}
 
   nanoid@3.3.11: {}
+
+  node-forge@1.4.0: {}
 
   nth-check@2.1.1:
     dependencies:

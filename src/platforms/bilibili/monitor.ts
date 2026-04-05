@@ -1,0 +1,133 @@
+// ─────────────────────────────────────────────────────────────
+// Bilibili User Dynamic Monitor
+// ─────────────────────────────────────────────────────────────
+
+import { distributeNonDefaultArticles } from '../../domain/distribute';
+import type { DbClient } from '../../infra/db';
+import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
+import { logError, logInfo, logWarn } from '../../infra/log';
+import { normalizeUrl } from '../../infra/web';
+import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
+import { getDynSpace } from './grpc';
+import { buildBilibili } from './metadata';
+import type { ParsedDynamic } from './parser';
+import { parseVideoCards } from './parser';
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+
+async function deduplicateUrls(db: DbClient, urls: string[], table: string): Promise<Set<string>> {
+	const existingSet = new Set<string>();
+	for (let i = 0; i < urls.length; i += 50) {
+		const chunk = urls.slice(i, i + 50);
+		const existing = await db.query(`SELECT url FROM ${table} WHERE url = ANY($1)`, [chunk]);
+		for (const row of existing.rows as { url: string }[]) {
+			existingSet.add(normalizeUrl(row.url));
+		}
+	}
+	return existingSet;
+}
+
+async function insertVideo(db: DbClient, env: Env, video: ParsedDynamic, feed: RSSFeed, table: string): Promise<boolean> {
+	const url = normalizeUrl(video.url);
+	const platformMetadata = buildBilibili({
+		uid: feed.RSSLink,
+		authorName: video.author || feed.name,
+		cardType: video.cardType,
+		dynamicId: video.dynamicId,
+		coverUrl: video.imageUrl || undefined,
+	});
+
+	const insertResult = await db.query(
+		`INSERT INTO ${table}
+			(url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (url) DO NOTHING
+		RETURNING id`,
+		[
+			url,
+			video.title,
+			feed.name,
+			video.publishedDate,
+			new Date().toISOString(),
+			[],
+			[],
+			[],
+			'',
+			'bilibili',
+			video.description || null,
+			video.imageUrl || null,
+			JSON.stringify(platformMetadata),
+		],
+	);
+
+	const articleId = insertResult.rows[0]?.id;
+	if (!articleId) return false;
+
+	await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'bilibili' });
+	logInfo('BILIBILI-CRON', 'Inserted video', { user: feed.name, title: video.title.slice(0, 60) });
+	return true;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Cron Handler
+// ─────────────────────────────────────────────────────────────
+
+export async function handleBilibiliCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+	logInfo('BILIBILI-CRON', 'start');
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(
+			`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1 AND is_default = true`,
+			['bilibili_user'],
+		);
+		const users = result.rows as RSSFeed[];
+		if (!users.length) {
+			logInfo('BILIBILI-CRON', 'No bilibili_user entries in RssList');
+			return;
+		}
+
+		const table = ARTICLES_TABLE;
+		let totalInserted = 0;
+
+		for (const feed of users) {
+			if (!feed.RSSLink) continue;
+			try {
+				const jsonStr = await getDynSpace(feed.RSSLink);
+				const videos = parseVideoCards(jsonStr);
+
+				if (!videos.length) {
+					logInfo('BILIBILI-CRON', 'No new video dynamics', { user: feed.name });
+					continue;
+				}
+
+				const allUrls = videos.map((v) => normalizeUrl(v.url));
+				const existingSet = await deduplicateUrls(db, allUrls, table);
+				const newVideos = videos.filter((v) => !existingSet.has(normalizeUrl(v.url)));
+
+				if (!newVideos.length) {
+					logInfo('BILIBILI-CRON', 'All videos already exist', { user: feed.name });
+					continue;
+				}
+
+				for (const video of newVideos) {
+					try {
+						if (await insertVideo(db, env, video, feed, table)) totalInserted++;
+					} catch (err) {
+						logWarn('BILIBILI-CRON', 'Video insert failed', { url: video.url, error: String(err) });
+					}
+				}
+
+				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+			} catch (err) {
+				logError('BILIBILI-CRON', 'User failed', { user: feed.name, error: String(err) });
+			}
+		}
+
+		await distributeNonDefaultArticles(db, 'bilibili_user');
+		logInfo('BILIBILI-CRON', 'end', { inserted: totalInserted, users: users.length });
+	} finally {
+		await db.end();
+	}
+}

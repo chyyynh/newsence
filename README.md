@@ -18,9 +18,32 @@
 
 ---
 
+## Supported Platforms
+
+![RSS](https://img.shields.io/badge/RSS-F99000?logo=rss&logoColor=white)
+![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)
+![X](https://img.shields.io/badge/X%2FTwitter-000000?logo=x&logoColor=white)
+![Hacker News](https://img.shields.io/badge/Hacker%20News-F0652F?logo=ycombinator&logoColor=white)
+![Bilibili](https://img.shields.io/badge/Bilibili-00A1D6?logo=bilibili&logoColor=white)
+![Xiaohongshu](https://img.shields.io/badge/Xiaohongshu-FF2442?logo=xiaohongshu&logoColor=white)
+
+| Platform | Type | Schedule | What it does |
+|----------|------|----------|--------------|
+| **RSS Feeds** | Monitor | Every 5 min | Fetches feeds, deduplicates by URL, detects HN links |
+| **Twitter/X** | Monitor | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media |
+| **YouTube** | Monitor | Every 30 min | Atom feed → video metadata, transcripts, chapters, AI highlights |
+| **Bilibili** | Monitor | Every 30 min | gRPC mobile API → user dynamics, video cards |
+| **Xiaohongshu** | Monitor | Every 30 min | Profile scraping → user notes, covers |
+| **Hacker News** | Processor | Via RSS | Detects HN links → fetches comments via Algolia → generates editorial notes |
+| **Web** | Scraper | On demand | Full content extraction (Readability + Cheerio), OG metadata |
+| **User Submissions** | Ingestion | Real-time | `POST /submit` — full crawl + AI, sync response |
+| **Telegram Bot** | Ingestion | Real-time | Send URL in chat → get bilingual summary back |
+
+All platforms output a unified `ScrapedContent` shape → same AI pipeline.
+
 ## What is newsence?
 
-[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, and Hacker News — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
+[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, Hacker News, Bilibili, and Xiaohongshu — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
 
 This repo is the core engine: a single Cloudflare Worker that handles the full content pipeline.
 
@@ -29,7 +52,7 @@ This repo is the core engine: a single Cloudflare Worker that handles the full c
 Each article goes through a 10-step workflow, fully automated with independent retries:
 
 ```
-URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
+URL arrives (RSS cron / Twitter cron / Bilibili gRPC / user submit / Telegram bot)
   │
   ├─  1. Fetch Article ──── Load article from Supabase
   ├─  2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
@@ -44,26 +67,6 @@ URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
 ```
 
 ~30 seconds per article. Each step retries independently with exponential backoff.
-
-## Ingestion Sources
-
-| Source | Schedule | How it works |
-|--------|----------|--------------|
-| **RSS Feeds** | Every 5 min | Cron fetches feeds, deduplicates by URL |
-| **Twitter Lists** | Every 6 hours | Pulls high-engagement tweets via Kaito API |
-| **User Submissions** | Real-time | `POST /submit` — full crawl + AI, sync response |
-| **Telegram Bot** | Real-time | Send URL in chat → get bilingual summary back |
-
-## Platform Scrapers
-
-| Platform | What it extracts |
-|----------|------------------|
-| **YouTube** | Video metadata, captions, chapters, thumbnails |
-| **Twitter/X** | Tweet text, threads, engagement metrics, media |
-| **Hacker News** | Original article + HN discussion via Algolia API |
-| **Web** (default) | Full content via Cheerio, OG metadata, author, date |
-
-All scrapers output a unified `ScrapedContent` shape → same AI pipeline.
 
 ## AI Pipeline
 
@@ -146,22 +149,22 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 
 ```
 src/
-├── index.ts              # Entry — routes HTTP, Cron, Queue
-├── app/
-│   ├── http.ts           # POST /submit, POST /embed, GET /health
-│   └── cron.ts           # RSS (*/5min), Twitter (*/6h)
+├── index.ts                  # Entry — routes HTTP, Cron, Queue
+├── platforms/                # Each platform is self-contained
+│   ├── twitter/              # monitor, scraper, processor, metadata
+│   ├── youtube/              # monitor, scraper, highlights, metadata
+│   ├── hackernews/           # scraper, processor, metadata
+│   ├── rss/                  # monitor, parser, feed-config
+│   └── web/                  # scraper (shared web + OG extraction)
 ├── domain/
-│   ├── workflow.ts       # 7-step Workflow orchestration
-│   ├── processors.ts     # AI processors (registry pattern)
-│   ├── scrapers.ts       # Platform scrapers
-│   └── topics.ts         # Topic clustering + synthesis
-├── infra/
-│   ├── ai.ts             # OpenRouter client
-│   ├── embedding.ts      # Workers AI client
-│   ├── db.ts             # Supabase client
-│   └── web.ts            # HTTP utilities
-└── models/
-    └── types.ts          # Types & bindings
+│   ├── workflow.ts           # 10-step Workflow orchestration
+│   ├── processors.ts         # AI processor factory + DefaultProcessor
+│   ├── ai-utils.ts           # Shared AI functions (Gemini, translation)
+│   ├── distribute.ts         # Subscription fan-out for non-default sources
+│   └── topics.ts             # Topic clustering + synthesis
+├── infra/                    # OpenRouter, Workers AI, DB, HTTP utilities
+├── models/                   # Types, platform metadata union
+└── app/handlers/             # HTTP route handlers
 ```
 
 ## Environment Variables

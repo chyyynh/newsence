@@ -1,12 +1,13 @@
 import type { Client } from 'pg';
-import { scrapeTwitterArticle, scrapeWebPage } from '../../domain/scrapers';
+import { distributeNonDefaultArticles } from '../../domain/distribute';
+import { scrapeTwitterArticle } from './scraper';
+import { scrapeWebPage } from '../web/scraper';
 import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../../infra/web';
 import type { PlatformMetadata, QuotedTweetData, TwitterMedia } from '../../models/platform-metadata';
 import { buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../../models/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../../models/types';
-import { distributeNonDefaultArticles } from './rss';
 
 // ─────────────────────────────────────────────────────────────
 // Twitter Monitor
