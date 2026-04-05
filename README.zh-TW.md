@@ -18,9 +18,32 @@
 
 ---
 
+## 支援平台
+
+![RSS](https://img.shields.io/badge/RSS-F99000?logo=rss&logoColor=white)
+![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)
+![X](https://img.shields.io/badge/X%2FTwitter-000000?logo=x&logoColor=white)
+![Hacker News](https://img.shields.io/badge/Hacker%20News-F0652F?logo=ycombinator&logoColor=white)
+![Bilibili](https://img.shields.io/badge/Bilibili-00A1D6?logo=bilibili&logoColor=white)
+![Xiaohongshu](https://img.shields.io/badge/Xiaohongshu-FF2442?logo=xiaohongshu&logoColor=white)
+
+| 平台 | 類型 | 排程 | 說明 |
+|------|------|------|------|
+| **RSS 訂閱** | 監控 | 每 5 分鐘 | 抓取 feed、依 URL 去重、偵測 HN 連結 |
+| **Twitter/X** | 監控 | 每 6 小時 | 透過 Kaito API 追蹤用戶 — 推文、串文、長文、媒體 |
+| **YouTube** | 監控 | 每 30 分鐘 | Atom feed → 影片資訊、字幕、章節、AI 精華段落 |
+| **Bilibili** | 監控 | 每 30 分鐘 | gRPC 移動端 API → 用戶動態、影片卡片 |
+| **小紅書** | 監控 | 每 30 分鐘 | 用戶主頁抓取 → 筆記、封面 |
+| **Hacker News** | 處理器 | 經由 RSS | 偵測 HN 連結 → Algolia 取評論 → 生成編輯筆記 |
+| **網頁** | 爬蟲 | 按需 | 全文擷取（Readability + Cheerio）、OG metadata |
+| **用戶投稿** | 入口 | 即時 | `POST /submit` — 完整抓取 + AI 分析，同步回應 |
+| **Telegram 機器人** | 入口 | 即時 | 傳送 URL → 回覆中英雙語摘要 |
+
+所有平台輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
+
 ## newsence 是什麼？
 
-[newsence.app](https://www.newsence.app) 自動監控超過 100 個來源（RSS、Twitter、YouTube、Hacker News），將每篇文章翻譯成中英雙語摘要、生成語意向量用於搜尋，並將相關報導自動聚類成主題 —— 全部即時完成。
+[newsence.app](https://www.newsence.app) 自動監控超過 100 個來源（RSS、Twitter、YouTube、Hacker News、Bilibili、小紅書），將每篇文章翻譯成中英雙語摘要、生成語意向量用於搜尋，並將相關報導自動聚類成主題 —— 全部即時完成。
 
 這個 repo 是核心引擎：一個 Cloudflare Worker 處理完整的內容管線。
 
@@ -29,7 +52,7 @@
 每篇文章經過 10 步驟的自動化 workflow：
 
 ```
-URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
+URL 進入（RSS 排程 / Twitter 排程 / Bilibili gRPC / 用戶投稿 / Telegram 機器人）
   │
   ├─  1. 讀取文章 ────────── 從 Supabase 載入文章
   ├─  2. AI 分析 ─────────── Gemini 2.5 Flash → 中英標題、摘要、標籤、關鍵字
@@ -44,26 +67,6 @@ URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
 ```
 
 每篇約 30 秒完成。每步獨立重試，指數退避。
-
-## 資料來源
-
-| 來源 | 排程 | 說明 |
-|------|------|------|
-| **RSS 訂閱** | 每 5 分鐘 | 排程抓取所有 feed，依 URL 去重 |
-| **Twitter 列表** | 每 6 小時 | 透過 Kaito API 取得高互動推文 |
-| **用戶投稿** | 即時 | `POST /submit` — 完整抓取 + AI 分析，同步回應 |
-| **Telegram 機器人** | 即時 | 傳送 URL → 回覆中英雙語摘要 |
-
-## 平台爬蟲
-
-| 平台 | 擷取內容 |
-|------|----------|
-| **YouTube** | 影片資訊、自動字幕、章節、縮圖 |
-| **Twitter/X** | 推文內容、串文重組、互動數據、媒體 |
-| **Hacker News** | 原始文章 + HN 討論（Algolia API） |
-| **網頁**（預設） | 全文（Cheerio）、OG metadata、作者、日期 |
-
-所有爬蟲輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
 
 ## AI 管線
 

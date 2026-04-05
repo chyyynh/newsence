@@ -12,12 +12,14 @@ import { handlePreview } from './app/handlers/preview';
 import { handleSubmitUrl } from './app/handlers/submit';
 import { handleWorkflowStatus, handleWorkflowStream } from './app/handlers/workflow-status';
 import { handleRetryCron } from './app/monitors/retry';
-import { handleRSSCron } from './app/monitors/rss';
-import { handleTwitterCron } from './app/monitors/twitter';
-import { handleYouTubeCron } from './app/monitors/youtube';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 import { logInfo } from './infra/log';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
+import { handleBilibiliCron } from './platforms/bilibili/monitor';
+import { handleRSSCron } from './platforms/rss/monitor';
+import { handleTwitterCron } from './platforms/twitter/monitor';
+import { handleXiaohongshuCron } from './platforms/xiaohongshu/monitor';
+import { handleYouTubeCron } from './platforms/youtube/monitor';
 
 export { NewsenceMonitorWorkflow };
 
@@ -87,8 +89,11 @@ export default {
 
 		if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
 		else if (event.cron === '0 */6 * * *') ctx.waitUntil(handleTwitterCron(env, ctx));
-		else if (event.cron === '*/30 * * * *') ctx.waitUntil(handleYouTubeCron(env, ctx));
-		else if (event.cron === '0 3 * * *') ctx.waitUntil(handleRetryCron(env, ctx));
+		else if (event.cron === '*/30 * * * *') {
+			ctx.waitUntil(handleYouTubeCron(env, ctx));
+			ctx.waitUntil(handleBilibiliCron(env, ctx));
+			ctx.waitUntil(handleXiaohongshuCron(env, ctx));
+		} else if (event.cron === '0 3 * * *') ctx.waitUntil(handleRetryCron(env, ctx));
 	},
 
 	async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
