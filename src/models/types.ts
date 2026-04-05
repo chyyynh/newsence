@@ -87,7 +87,12 @@ export interface Tweet {
 	replyCount?: number;
 	quoteCount?: number;
 	extendedEntities?: {
-		media?: Array<{ media_url_https: string; type: string }>;
+		media?: Array<{
+			media_url_https: string;
+			type: string;
+			sizes?: { large?: { w: number; h: number } };
+			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
+		}>;
 	};
 	hashTags?: string[];
 	urls?: Array<{ expanded_url?: string; url?: string }>;
