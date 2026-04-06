@@ -3,6 +3,7 @@ import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage, TelegramNotifyContext } from '../models/types';
+import { syncArticleEntities } from './entities';
 import {
 	buildEmbeddingTextForArticle,
 	generateYouTubeHighlights,
@@ -15,7 +16,7 @@ import { fetchOgImage } from './scrapers';
 import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS =
-	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata';
+	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
 
 type WorkflowParams = {
 	article_id: string;
@@ -187,6 +188,22 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				await db.end();
 			}
 		});
+
+		// Step 5b: Sync entities to normalized tables
+		if (processorResult.updateData.entities?.length) {
+			await step.do(
+				'sync-entities',
+				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
+				async () => {
+					const db = await createDbClient(this.env);
+					try {
+						await syncArticleEntities(db, article_id, processorResult.updateData.entities!);
+					} finally {
+						await db.end();
+					}
+				},
+			);
+		}
 
 		// Step 6: Notify Telegram bot with AI results (push-based)
 		if (notify_context && this.env.TELEGRAM_BOT) {

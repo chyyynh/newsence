@@ -39,6 +39,14 @@ export interface Article {
 }
 
 // AI Analysis result
+export type EntityType = 'person' | 'company' | 'product' | 'technology' | 'event';
+
+export interface ExtractedEntity {
+	name: string;
+	name_cn: string;
+	type: EntityType;
+}
+
 export interface AIAnalysisResult {
 	tags: string[];
 	keywords: string[];
@@ -47,6 +55,7 @@ export interface AIAnalysisResult {
 	title_en?: string;
 	title_cn?: string;
 	category: string;
+	entities?: ExtractedEntity[];
 }
 
 // OpenRouter API response

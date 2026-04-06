@@ -13,7 +13,7 @@ export interface Subscriber {
 }
 
 export const COPY_ARTICLE_COLS =
-	'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
+	'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding, entities';
 
 /** Copy a single article from the global articles table to user_articles for a subscriber. */
 export async function copyArticleToUser(
