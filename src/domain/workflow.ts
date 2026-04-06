@@ -13,7 +13,6 @@ import {
 	translateContent,
 } from './processors';
 import { fetchOgImage } from './scrapers';
-import { assignArticleTopic, synthesizeTopicSummary, type TopicAssignmentResult } from './topics';
 
 const ARTICLE_FIELDS =
 	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
@@ -297,40 +296,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				}
 			},
 		)) as boolean;
-
-		// Step 9: Assign topic (cluster similar articles) — skip for user_articles
-		if (hasEmbedding) {
-			if (!isUserArticle) {
-				const topicResult = (await step.do(
-					'assign-topic',
-					{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					async () => {
-						const db = await createDbClient(this.env);
-						try {
-							return await assignArticleTopic(db, article_id, table);
-						} finally {
-							await db.end();
-						}
-					},
-				)) as TopicAssignmentResult;
-
-				// Step 10: Synthesize topic summary if needed
-				if (topicResult.needsSynthesis && topicResult.topicId && this.env.OPENROUTER_API_KEY) {
-					await step.do(
-						'synthesize-topic',
-						{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-						async () => {
-							const db = await createDbClient(this.env);
-							try {
-								await synthesizeTopicSummary(db, topicResult.topicId!, table, this.env.OPENROUTER_API_KEY);
-							} finally {
-								await db.end();
-							}
-						},
-					);
-				}
-			}
-		}
 
 		logInfo('WORKFLOW', 'Completed', { article_id });
 		return { success: true, article_id };
