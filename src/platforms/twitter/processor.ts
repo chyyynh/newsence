@@ -139,11 +139,11 @@ ${tweetText}
   "summary_cn": "繁體中文直接翻譯",
   "tags": ["標籤1", "標籤2", "標籤3"],
   "keywords": ["關鍵字1", "關鍵字2", "關鍵字3"],
-  "entities": [{"name": "English Name", "name_cn": "繁體中文名稱", "type": "person|company|product|technology|event"}]
+  "entities": [{"name": "English Name", "name_cn": "繁體中文名稱", "type": "person|organization|product|technology|event"}]
 }
 
 實體擷取規則：
-- 從推文中提取重要的具名實體（人物、公司、產品、技術、事件）
+- 從推文中提取重要的具名實體（人物、組織、產品、技術、事件）
 - name 用英文, name_cn 用繁體中文
 
 標籤規則：

@@ -39,7 +39,7 @@ export interface Article {
 }
 
 // AI Analysis result
-export type EntityType = 'person' | 'company' | 'product' | 'technology' | 'event';
+export type EntityType = 'person' | 'organization' | 'product' | 'technology' | 'event';
 
 export interface ExtractedEntity {
 	name: string;
