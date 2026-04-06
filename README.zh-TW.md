@@ -2,7 +2,7 @@
 
 # newsence
 
-**開源 AI 新聞智慧引擎**
+**幫助 LLM 理解你的世界的內容發現引擎**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
@@ -17,6 +17,24 @@
 </div>
 
 ---
+
+## newsence 是什麼？
+
+newsence 是一個內容發現系統。它持續監控網路上的各種來源，從每篇文章中提取結構化知識，並讓這些知識可被搜尋、分析和 AI 工作流使用。
+
+你可以把它想成一個永不休息的研究助手 — 閱讀所有內容、提取其中提到的人物、組織、技術和事件，然後把一切整理成可搜尋的知識庫。
+
+**核心循環：**
+```
+來源進入（RSS、Twitter、YouTube、HN、Bilibili、小紅書、手動提交）
+  → AI 閱讀並分析每篇文章
+  → 提取實體（人物、組織、產品、技術、事件）
+  → 生成中英雙語摘要
+  → 建立語意向量用於搜尋
+  → 透過共享實體連結文章
+```
+
+這個 repo 是核心引擎：一個 Cloudflare Worker 處理完整的內容管線。
 
 ## 支援平台
 
@@ -41,41 +59,36 @@
 
 所有平台輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
 
-## newsence 是什麼？
-
-[newsence.app](https://www.newsence.app) 自動監控超過 100 個來源（RSS、Twitter、YouTube、Hacker News、Bilibili、小紅書），將每篇文章翻譯成中英雙語摘要、生成語意向量用於搜尋，並將相關報導自動聚類成主題 —— 全部即時完成。
-
-這個 repo 是核心引擎：一個 Cloudflare Worker 處理完整的內容管線。
-
 ## 運作流程
 
-每篇文章經過 10 步驟的自動化 workflow：
+每篇文章經過自動化 workflow，各步驟獨立重試：
 
 ```
-URL 進入（RSS 排程 / Twitter 排程 / Bilibili gRPC / 用戶投稿 / Telegram 機器人）
+URL 進入（RSS 排程 / Twitter 排程 / 用戶投稿 / Telegram 機器人）
   │
-  ├─  1. 讀取文章 ────────── 從 Supabase 載入文章
-  ├─  2. AI 分析 ─────────── Gemini 2.5 Flash → 中英標題、摘要、標籤、關鍵字
+  ├─  1. 讀取文章 ────────── 從資料庫載入文章
+  ├─  2. AI 分析 ─────────── Gemini Flash → 中英標題、摘要、標籤、關鍵字、實體
   ├─  3. 抓取 OG 圖片 ────── 若缺少圖片則輕量抓取（僅前 32KB）
   ├─  4. 翻譯全文 ─────────── 全文 → 繁體中文
   ├─  5. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
+  ├─ 5b. 同步實體 ─────────── 將實體寫入正規化表格，建立文章-實體關聯
   ├─  6. 通知 Telegram ────── 推送結果至 Telegram 機器人（若經由 bot 觸發）
   ├─  7. YouTube 精華 ─────── 從字幕生成 AI 精華段落（僅 YouTube）
-  ├─  8. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文）
-  ├─  9. 主題聚類 ─────────── 餘弦相似度 > 0.85 → 歸入主題群組
-  └─ 10. 主題合成 ─────────── 當主題累積 2/3/5/10 篇時，AI 生成主題標題
+  └─  8. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文 + 實體名稱）
 ```
 
 每篇約 30 秒完成。每步獨立重試，指數退避。
 
 ## AI 管線
 
-| 階段 | 模型 | 輸入 → 輸出 |
-|------|------|-------------|
-| **翻譯與分析** | Gemini 2.5 Flash | 文章內容 → `title_cn`、`summary`、`summary_cn`、`tags[]`、`keywords[]` |
-| **向量生成** | BGE-M3（1024 維） | 標題 + 摘要 + 全文 → 語意向量（HNSW 索引） |
-| **主題聚類** | 餘弦相似度 | 7 天內相似度 > 0.85 的文章 → 歸入 `topic_id` |
-| **主題合成** | Gemini 2.5 Flash | 主題文章群 → 標題 + 描述（中英雙語） |
+| 階段 | 模型 | 說明 |
+|------|------|------|
+| **分析** | Gemini Flash Lite | 文章 → 中英標題、摘要、標籤、關鍵字、分類 |
+| **實體提取** | Gemini Flash Lite | 文章 → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
+| **全文翻譯** | Gemini Flash | 全文內容 → 繁體中文 |
+| **向量生成** | BGE-M3（1024 維） | 標題 + 摘要 + 全文 + 實體名稱 → 語意向量（HNSW 索引） |
+
+實體提取與分析在同一次 LLM 呼叫中完成 — 零額外 API 成本。
 
 ## 技術棧
 
@@ -84,7 +97,7 @@ URL 進入（RSS 排程 / Twitter 排程 / Bilibili gRPC / 用戶投稿 / Telegr
 | 運行環境 | Cloudflare Workers（V8 isolates） |
 | 任務編排 | Cloudflare Queues + Workflows |
 | 資料庫 | Supabase PostgreSQL + pgvector |
-| 大語言模型 | OpenRouter → Gemini 2.5 Flash |
+| 大語言模型 | OpenRouter → Gemini Flash / Flash Lite |
 | 向量生成 | Cloudflare Workers AI → BGE-M3 |
 | Twitter 數據 | Kaito API |
 
@@ -143,6 +156,28 @@ npx newsence recent --hours 6         # 最近幾小時的文章
 
 claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 # 遠端 MCP：https://www.newsence.app/api/mcp
+```
+
+## 架構
+
+```
+src/
+├── index.ts                  # 入口 — 路由 HTTP、Cron、Queue
+├── platforms/                # 各平台獨立實作
+│   ├── twitter/              # monitor, scraper, processor, metadata
+│   ├── youtube/              # monitor, scraper, highlights, metadata
+│   ├── hackernews/           # scraper, processor, metadata
+│   ├── rss/                  # monitor, parser, feed-config
+│   └── web/                  # scraper（共用網頁 + OG 擷取）
+├── domain/
+│   ├── workflow.ts           # Workflow 編排
+│   ├── processors.ts         # AI 處理器工廠 + DefaultProcessor
+│   ├── ai-utils.ts           # 共用 AI 函式（Gemini、翻譯）
+│   ├── entities.ts           # 實體同步至正規化表格
+│   └── distribute.ts         # 非預設來源的訂閱分發
+├── infra/                    # OpenRouter、Workers AI、DB、HTTP 工具
+├── models/                   # 型別、平台 metadata 聯合型別
+└── app/handlers/             # HTTP 路由處理器
 ```
 
 ## 環境變數
