@@ -248,8 +248,8 @@ async function copyArticleToUserTable(
 		'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
 	try {
 		const result = await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, user_id, organization_id, visibility)
-			SELECT ${COPY_COLS}, $2, $3, $4
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, source_article_id, user_id, organization_id, visibility)
+			SELECT ${COPY_COLS}, id, $2, $3, $4
 			FROM ${ARTICLES_TABLE} WHERE id = $1
 			ON CONFLICT DO NOTHING
 			RETURNING ${EXIST_COLS}`,
