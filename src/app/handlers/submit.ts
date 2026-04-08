@@ -373,6 +373,66 @@ export async function processUrl(
 	};
 }
 
+// ── Pure submitUrls action (RPC + HTTP entry points share this) ──
+
+export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'FORBIDDEN' | 'BAD_REQUEST';
+export type SubmitOutcome =
+	| { ok: true; results: SubmitResult[] }
+	| { ok: false; code: SubmitErrorCode; message: string; retryAfterSec?: number };
+
+export type SubmitArgs = {
+	urls: string[];
+	userId?: string;
+	organizationId?: string;
+	visibility?: 'public' | 'private';
+	notifyContext?: SubmitBody['notifyContext'];
+	rateKey: string;
+};
+
+const SUBMIT_MAX_BATCH_SIZE = 20;
+
+export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutcome> {
+	if (args.urls.length === 0) {
+		return { ok: false, code: 'BAD_REQUEST', message: 'Missing url or urls field' };
+	}
+	if (args.urls.length > SUBMIT_MAX_BATCH_SIZE) {
+		return {
+			ok: false,
+			code: 'BATCH_TOO_LARGE',
+			message: `Maximum ${SUBMIT_MAX_BATCH_SIZE} URLs per request, got ${args.urls.length}`,
+		};
+	}
+
+	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
+	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
+	const rateResult = hitSubmitRateLimit(args.rateKey, Math.max(max, 1), Math.max(windowSec, 1), args.urls.length);
+	if (rateResult.limited) {
+		return {
+			ok: false,
+			code: 'RATE_LIMITED',
+			message: `Too many submit requests. Retry in ${rateResult.retryAfterSec}s`,
+			retryAfterSec: rateResult.retryAfterSec,
+		};
+	}
+
+	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length });
+	const userId = args.userId;
+	let organizationId = args.organizationId;
+	if (organizationId && userId) {
+		const isMember = await validateOrgMembership(env, userId, organizationId);
+		if (!isMember) {
+			return { ok: false, code: 'FORBIDDEN', message: 'User is not a member of this organization' };
+		}
+	} else if (organizationId && !userId) {
+		organizationId = undefined;
+	}
+
+	const articleVisibility = args.visibility ?? 'public';
+	const notifyCtx = args.urls.length === 1 && args.notifyContext ? args.notifyContext : undefined;
+	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
+	return { ok: true, results };
+}
+
 export async function handleSubmitUrl(request: Request, env: Env): Promise<Response> {
 	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json(
@@ -388,57 +448,25 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 		return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
 	}
 
-	// Support both legacy `url` and new `urls` format
 	const urls = body.urls ?? (body.url ? [body.url] : []);
-	if (urls.length === 0) {
-		return Response.json({ error: 'Missing url or urls field' }, { status: 400 });
-	}
+	const outcome = await submitUrls(env, {
+		urls,
+		userId: body.userId,
+		organizationId: body.organizationId,
+		visibility: body.visibility,
+		notifyContext: body.notifyContext,
+		rateKey: getSubmitRateKey(request, body.userId),
+	});
+	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
 
-	const MAX_BATCH_SIZE = 20;
-	if (urls.length > MAX_BATCH_SIZE) {
+	if (outcome.code === 'RATE_LIMITED') {
 		return Response.json(
-			{
-				success: false,
-				error: { code: 'BATCH_TOO_LARGE', message: `Maximum ${MAX_BATCH_SIZE} URLs per request, got ${urls.length}` },
-			},
-			{ status: 400 },
+			{ success: false, error: { code: outcome.code, message: outcome.message } },
+			{ status: 429, headers: { 'Retry-After': String(outcome.retryAfterSec ?? 1) } },
 		);
 	}
-
-	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
-	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
-	const rateKey = getSubmitRateKey(request, body.userId);
-	const rateResult = hitSubmitRateLimit(rateKey, Math.max(max, 1), Math.max(windowSec, 1), urls.length);
-	if (rateResult.limited) {
-		return Response.json(
-			{
-				success: false,
-				error: { code: 'RATE_LIMITED', message: `Too many submit requests. Retry in ${rateResult.retryAfterSec}s` },
-			},
-			{ status: 429, headers: { 'Retry-After': String(rateResult.retryAfterSec) } },
-		);
-	}
-
-	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
-	const userId = body.userId;
-	let organizationId = body.organizationId;
-	// Validate org membership — reject spoofed organizationId
-	if (organizationId && userId) {
-		const isMember = await validateOrgMembership(env, userId, organizationId);
-		if (!isMember) {
-			return Response.json(
-				{ success: false, error: { code: 'FORBIDDEN', message: 'User is not a member of this organization' } },
-				{ status: 403 },
-			);
-		}
-	} else if (organizationId && !userId) {
-		organizationId = undefined; // org without user makes no sense
-	}
-	const articleVisibility = body.visibility ?? 'public';
-	// Only pass notifyContext for single-URL submissions (bot sends one at a time)
-	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
-	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
-	return Response.json({ success: true, results });
+	const status = outcome.code === 'FORBIDDEN' ? 403 : 400;
+	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
 }
 
 /**

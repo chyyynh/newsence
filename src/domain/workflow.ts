@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
-import type { Article, Env, MessageBatch, QueueMessage, TelegramNotifyContext } from '../models/types';
+import type { Article, BotNotifyArticle, Env, MessageBatch, QueueMessage, TelegramNotifyContext } from '../models/types';
 import { syncArticleEntities } from './entities';
 import {
 	buildEmbeddingTextForArticle,
@@ -204,7 +204,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 		}
 
-		// Step 6: Notify Telegram bot with AI results (push-based)
+		// Step 6: Notify Telegram bot with AI results (push-based, via RPC)
 		if (notify_context && this.env.TELEGRAM_BOT) {
 			await step.do(
 				'notify-telegram',
@@ -213,21 +213,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					const db = await createDbClient(this.env);
 					try {
 						const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [article_id]);
-						const updatedArticle = result.rows[0];
+						const updatedArticle = result.rows[0] as BotNotifyArticle | undefined;
 						if (!updatedArticle) return;
 
-						const res = await this.env.TELEGRAM_BOT.fetch('https://telegram-bot/notify', {
-							method: 'POST',
-							headers: {
-								'Content-Type': 'application/json',
-								'X-Internal-Token': this.env.CORE_WORKER_INTERNAL_TOKEN || '',
-							},
-							body: JSON.stringify({ article: updatedArticle, notifyContext: notify_context }),
-						});
-						if (!res.ok) {
-							logWarn('WORKFLOW', 'Telegram notify failed', { status: res.status });
-						} else {
+						try {
+							await this.env.TELEGRAM_BOT.notify(updatedArticle, notify_context);
 							logInfo('WORKFLOW', 'Telegram notified', { article_id });
+						} catch (err) {
+							logWarn('WORKFLOW', 'Telegram notify failed', { error: String(err) });
 						}
 					} finally {
 						await db.end();
