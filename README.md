@@ -2,7 +2,7 @@
 
 # newsence
 
-**Open-source AI-powered news intelligence engine**
+**A content discovery engine that helps LLMs understand your world**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
@@ -17,6 +17,24 @@
 </div>
 
 ---
+
+## What is newsence?
+
+newsence is a content discovery system. It continuously monitors sources across the web, extracts structured knowledge from every article, and makes it available for search, analysis, and AI-powered workflows.
+
+Think of it as an always-on research assistant that reads everything, extracts who's involved, what technologies are mentioned, and what events are happening — then organizes it all into a searchable knowledge base.
+
+**Core loop:**
+```
+Sources arrive (RSS, Twitter, YouTube, HN, Bilibili, Xiaohongshu, manual)
+  → AI reads and analyzes each article
+  → Extracts entities (people, orgs, products, tech, events)
+  → Generates bilingual summaries (EN + Traditional Chinese)
+  → Creates semantic embeddings for search
+  → Links articles through shared entities
+```
+
+This repo is the engine: a single Cloudflare Worker that handles the full content pipeline.
 
 ## Supported Platforms
 
@@ -41,41 +59,36 @@
 
 All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 
-## What is newsence?
-
-[newsence.app](https://www.newsence.app) monitors 100+ sources across RSS, Twitter, YouTube, Hacker News, Bilibili, and Xiaohongshu — translating every article into bilingual summaries (EN/繁中), generating semantic embeddings for search, and clustering breaking stories into topics, all in real time.
-
-This repo is the core engine: a single Cloudflare Worker that handles the full content pipeline.
-
 ## How it works
 
-Each article goes through a 10-step workflow, fully automated with independent retries:
+Each article goes through an automated workflow with independent retries:
 
 ```
-URL arrives (RSS cron / Twitter cron / Bilibili gRPC / user submit / Telegram bot)
+URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
   │
-  ├─  1. Fetch Article ──── Load article from Supabase
-  ├─  2. AI Analysis ────── Gemini 2.5 Flash → bilingual title, summary, tags, keywords
+  ├─  1. Fetch Article ──── Load article from database
+  ├─  2. AI Analysis ────── Gemini Flash → bilingual title, summary, tags, keywords, entities
   ├─  3. Fetch OG Image ─── Grab OG image if missing (lightweight, first 32KB)
   ├─  4. Translate Content ─ Full article → Traditional Chinese
   ├─  5. Save to DB ──────── Write all AI results in a single UPDATE
+  ├─  5b. Sync Entities ─── Upsert entities to normalized tables, link to article
   ├─  6. Notify Telegram ─── Push results to Telegram bot (if triggered via bot)
   ├─  7. YouTube Highlights  Generate AI highlights from transcript (YouTube only)
-  ├─  8. Embed ───────────── BGE-M3 → 1024-dim vector from title + summary + content
-  ├─  9. Topic Clustering ── Cosine similarity > 0.85 → assign to topic group
-  └─ 10. Topic Synthesis ─── AI generates topic headline at 2/3/5/10 articles
+  └─  8. Embed ───────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
 ```
 
 ~30 seconds per article. Each step retries independently with exponential backoff.
 
 ## AI Pipeline
 
-| Stage | Model | Input → Output |
-|-------|-------|----------------|
-| **Translation & Analysis** | Gemini 2.5 Flash | Article content → `title_cn`, `summary`, `summary_cn`, `tags[]`, `keywords[]` |
-| **Embedding** | BGE-M3 (1024d) | Title + summary + content → dense vector (HNSW-indexed) |
-| **Topic Clustering** | Cosine similarity | Find articles > 0.85 similarity within 7 days → group under `topic_id` |
-| **Topic Synthesis** | Gemini 2.5 Flash | Topic articles → headline + description (EN/繁中) |
+| Stage | Model | What it does |
+|-------|-------|--------------|
+| **Analysis** | Gemini Flash Lite | Article → bilingual title, summary, tags, keywords, category |
+| **Entity Extraction** | Gemini Flash Lite | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
+| **Content Translation** | Gemini Flash | Full article content → Traditional Chinese |
+| **Embedding** | BGE-M3 (1024d) | Title + summary + content + entity names → dense vector (HNSW-indexed) |
+
+Entity extraction happens in the same LLM call as analysis — zero extra API cost.
 
 ## Stack
 
@@ -84,7 +97,7 @@ URL arrives (RSS cron / Twitter cron / Bilibili gRPC / user submit / Telegram bo
 | Runtime | Cloudflare Workers (V8 isolates) |
 | Orchestration | Cloudflare Queues + Workflows |
 | Database | Supabase PostgreSQL + pgvector |
-| LLM | OpenRouter → Gemini 2.5 Flash |
+| LLM | OpenRouter → Gemini Flash / Flash Lite |
 | Embeddings | Cloudflare Workers AI → BGE-M3 |
 | Twitter Data | Kaito API |
 
@@ -157,11 +170,11 @@ src/
 │   ├── rss/                  # monitor, parser, feed-config
 │   └── web/                  # scraper (shared web + OG extraction)
 ├── domain/
-│   ├── workflow.ts           # 10-step Workflow orchestration
+│   ├── workflow.ts           # Workflow orchestration
 │   ├── processors.ts         # AI processor factory + DefaultProcessor
 │   ├── ai-utils.ts           # Shared AI functions (Gemini, translation)
-│   ├── distribute.ts         # Subscription fan-out for non-default sources
-│   └── topics.ts             # Topic clustering + synthesis
+│   ├── entities.ts           # Entity sync to normalized tables
+│   └── distribute.ts         # Subscription fan-out for non-default sources
 ├── infra/                    # OpenRouter, Workers AI, DB, HTTP utilities
 ├── models/                   # Types, platform metadata union
 └── app/handlers/             # HTTP route handlers

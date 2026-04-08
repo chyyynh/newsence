@@ -13,7 +13,7 @@ export interface Subscriber {
 }
 
 export const COPY_ARTICLE_COLS =
-	'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
+	'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding, entities';
 
 /** Copy a single article from the global articles table to user_articles for a subscriber. */
 export async function copyArticleToUser(
@@ -24,8 +24,8 @@ export async function copyArticleToUser(
 	rssListId?: string | number | bigint,
 ): Promise<void> {
 	await db.query(
-		`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
-		SELECT ${COPY_ARTICLE_COLS}, $2, $3, 'public', $4
+		`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, source_article_id, user_id, organization_id, visibility, rss_list_id)
+		SELECT ${COPY_ARTICLE_COLS}, id, $2, $3, 'public', $4
 		FROM ${ARTICLES_TABLE} WHERE id = $1
 		ON CONFLICT DO NOTHING`,
 		[articleId, userId, orgId, rssListId ?? null],
@@ -76,8 +76,8 @@ export async function fanOutToSubscribers(
 	if (globalArticleId) {
 		// Batch copy from articles → user_articles for all subscribers via feeds JOIN
 		await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
-			SELECT DISTINCT ${COPY_ARTICLE_COLS}, f.user_id, f.organization_id, 'public', fs.rss_list_id
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, source_article_id, user_id, organization_id, visibility, rss_list_id)
+			SELECT DISTINCT ${COPY_ARTICLE_COLS}, a.id, f.user_id, f.organization_id, 'public', fs.rss_list_id
 			FROM ${ARTICLES_TABLE} a, feed_sources fs JOIN feeds f ON f.id = fs.feed_id
 			WHERE a.id = $1 AND fs.rss_list_id = $2
 			ON CONFLICT DO NOTHING`,
@@ -140,8 +140,8 @@ export async function distributeNonDefaultArticles(db: Client, sourceType: strin
 	for (const source of sources) {
 		// Batch: cross-join recent articles with subscribers in a single INSERT
 		const result = await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, user_id, organization_id, visibility, rss_list_id)
-			SELECT DISTINCT ${COPY_ARTICLE_COLS}, sub.user_id, sub.organization_id, 'public', sub.rss_list_id
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_ARTICLE_COLS}, source_article_id, user_id, organization_id, visibility, rss_list_id)
+			SELECT DISTINCT ${COPY_ARTICLE_COLS}, a.id, sub.user_id, sub.organization_id, 'public', sub.rss_list_id
 			FROM ${ARTICLES_TABLE} a
 			CROSS JOIN (
 				SELECT fs.rss_list_id, f.user_id, f.organization_id

@@ -1,12 +1,44 @@
-import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
+import type { ExecutionContext, Fetcher, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 import type { PlatformMetadata } from './platform-metadata';
+
+/**
+ * Local mirror of the RPC surface exposed by `cf-worker/bot`'s `BotWorker`
+ * entrypoint. The two packages have separate tsconfigs and no shared module
+ * path, so we describe the bot's contract here. Update both sides together.
+ *
+ * Intersected with `Fetcher` because the wrangler `Service` binding type
+ * always carries the legacy `fetch` method alongside the RPC surface.
+ */
+export interface BotEntrypoint {
+	notify(article: BotNotifyArticle, notifyContext: BotNotifyContext): Promise<{ ok: true }>;
+}
+
+/** Article shape sent to the bot's notify RPC method. */
+export interface BotNotifyArticle {
+	id: string;
+	title: string;
+	title_cn?: string;
+	summary?: string;
+	summary_cn?: string;
+	content_cn?: string;
+	source: string;
+	source_type: string;
+	og_image_url?: string | null;
+	published_date?: string;
+	tags?: string[];
+	keywords?: string[];
+	url: string;
+}
 
 /**
  * Environment bindings.
  * Extends wrangler-generated Cloudflare.Env (from worker-configuration.d.ts)
- * with secrets that are not in wrangler.jsonc.
+ * with secrets that are not in wrangler.jsonc and overrides the TELEGRAM_BOT
+ * binding to expose the typed RPC entrypoint alongside the legacy Fetcher API.
  */
-export interface Env extends Cloudflare.Env {
+export interface Env extends Omit<Cloudflare.Env, 'TELEGRAM_BOT'> {
+	TELEGRAM_BOT: Fetcher & BotEntrypoint;
+
 	OPENROUTER_API_KEY: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	SUBMIT_RATE_LIMIT_MAX?: string;
@@ -39,6 +71,14 @@ export interface Article {
 }
 
 // AI Analysis result
+export type EntityType = 'person' | 'organization' | 'product' | 'technology' | 'event';
+
+export interface ExtractedEntity {
+	name: string;
+	name_cn: string;
+	type: EntityType;
+}
+
 export interface AIAnalysisResult {
 	tags: string[];
 	keywords: string[];
@@ -47,6 +87,7 @@ export interface AIAnalysisResult {
 	title_en?: string;
 	title_cn?: string;
 	category: string;
+	entities?: ExtractedEntity[];
 }
 
 // OpenRouter API response
@@ -87,7 +128,12 @@ export interface Tweet {
 	replyCount?: number;
 	quoteCount?: number;
 	extendedEntities?: {
-		media?: Array<{ media_url_https: string; type: string }>;
+		media?: Array<{
+			media_url_https: string;
+			type: string;
+			sizes?: { large?: { w: number; h: number } };
+			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
+		}>;
 	};
 	hashTags?: string[];
 	urls?: Array<{ expanded_url?: string; url?: string }>;

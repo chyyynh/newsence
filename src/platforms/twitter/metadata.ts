@@ -9,6 +9,9 @@ function now(): string {
 export interface TwitterMedia {
 	url: string;
 	type: 'photo' | 'video' | 'animated_gif';
+	videoUrl?: string;
+	width?: number;
+	height?: number;
 }
 
 export interface TwitterAuthorFields {

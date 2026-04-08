@@ -2,21 +2,20 @@ import { prepareArticleTextForEmbedding } from '../infra/embedding';
 import type { PlatformEnrichments, PlatformMetadata } from '../models/platform-metadata';
 import type { Article, Env } from '../models/types';
 import {
+	type ArticleProcessor,
 	callGeminiForAnalysis,
 	isEmpty,
-	type ArticleProcessor,
 	type ProcessingDeps,
 	type ProcessorContext,
 	type ProcessorResult,
 } from './ai-utils';
 
-// Re-exports
-export { isEmpty, callOpenRouterChat, callGeminiForAnalysis, translateContent, createFallbackResult } from './ai-utils';
-export type { ProcessorResult, ProcessorContext, ProcessingDeps, ArticleProcessor } from './ai-utils';
-
-export { translateTweet } from '../platforms/twitter/processor';
 export { collectAllComments } from '../platforms/hackernews/processor';
-export { generateYouTubeHighlights, type YouTubeHighlightsResult, type YouTubeHighlight } from '../platforms/youtube/highlights';
+export { translateTweet } from '../platforms/twitter/processor';
+export { generateYouTubeHighlights, type YouTubeHighlight, type YouTubeHighlightsResult } from '../platforms/youtube/highlights';
+export type { ArticleProcessor, ProcessingDeps, ProcessorContext, ProcessorResult } from './ai-utils';
+// Re-exports
+export { callGeminiForAnalysis, callOpenRouterChat, createFallbackResult, isEmpty, translateContent } from './ai-utils';
 
 // ─────────────────────────────────────────────────────────────
 // Default Processor
@@ -37,6 +36,7 @@ class DefaultProcessor implements ArticleProcessor {
 		if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.title_en && !article.title_cn) updateData.title = analysis.title_en;
+		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData };
 	}
@@ -46,8 +46,8 @@ class DefaultProcessor implements ArticleProcessor {
 // Factory
 // ─────────────────────────────────────────────────────────────
 
-import { TwitterProcessor } from '../platforms/twitter/processor';
 import { HackerNewsProcessor } from '../platforms/hackernews/processor';
+import { TwitterProcessor } from '../platforms/twitter/processor';
 
 const processors: Record<string, ArticleProcessor> = {
 	hackernews: new HackerNewsProcessor(),
@@ -137,4 +137,3 @@ export function buildEmbeddingTextForArticle(
 		keywords: result.updateData.keywords ?? article.keywords,
 	});
 }
-

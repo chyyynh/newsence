@@ -2,19 +2,19 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
-import { logError, logInfo, logWarn } from '../../infra/log';
-import type { PlatformEnrichments } from '../../models/platform-metadata';
-import type { Article, Env } from '../../models/types';
 import {
+	type ArticleProcessor,
 	callGeminiForAnalysis,
 	callOpenRouterChat,
 	isEmpty,
-	type ArticleProcessor,
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
-import { HN_ALGOLIA_API } from './scraper';
+import { logError, logInfo, logWarn } from '../../infra/log';
+import type { PlatformEnrichments } from '../../models/platform-metadata';
+import type { Article, Env } from '../../models/types';
 import { scrapeWebPage } from '../web/scraper';
+import { HN_ALGOLIA_API } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -283,6 +283,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
 		updateData.summary = analysis.summary_en;
 		updateData.summary_cn = analysis.summary_cn;
+		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData, enrichments };
 	}

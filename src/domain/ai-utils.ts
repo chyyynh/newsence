@@ -23,6 +23,7 @@ export interface ProcessorResult {
 		content_cn?: string;
 		title?: string;
 		og_image_url?: string;
+		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
 }
@@ -83,6 +84,7 @@ export function createFallbackResult(article: Article): AIAnalysisResult {
 		title_en: article.title,
 		title_cn: article.title_cn ?? article.title,
 		category: 'Other',
+		entities: [],
 	};
 }
 
@@ -101,6 +103,7 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 {
 "tags": ["標籤1", "標籤2", "標籤3"],
 "keywords": ["關鍵字1", "關鍵字2", "關鍵字3", "關鍵字4", "關鍵字5"],
+"entities": [{"name": "English Name", "name_cn": "繁體中文名稱", "type": "person|organization|product|technology|event"}],
 "title_en": "英文標題翻譯",
 "title_cn": "繁體中文標題翻譯",
 "summary_en": "English summary in 1-2 sentences",
@@ -122,11 +125,21 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 - 事件類型: Funding, IPO, Acquisition, ProductLaunch, Research, Partnership
 - 新聞性質: Review, Opinion, Analysis, Feature, Interview, Tutorial, Announcement
 
+實體擷取規則:
+- 從文章中提取 3-8 個最重要的具名實體
+- type 必須是以下之一:
+  person: 人物 (如 Jensen Huang / 黃仁勳)
+  organization: 公司/組織/機構 (如 NVIDIA / 輝達, MIT, 歐盟)
+  product: 產品/服務/平台 (如 ChatGPT, Claude Code, GitHub)
+  technology: 技術/框架/語言/概念 (如 Transformer, Rust, RAG, RLHF)
+  event: 具體事件 (如 Claude Code source code leak, CES 2026, Series B funding)
+- name 用英文, name_cn 用繁體中文（若無慣用中文名則與 name 相同）
+
 分類選項: AI, Tech, Finance, Research, Business, Other
 
 請只回傳JSON,不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 800 });
+	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 1000 });
 	if (!rawContent?.trim()) return createFallbackResult(article);
 
 	logInfo('AI', 'Response', { content: rawContent });
@@ -145,6 +158,7 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 			title_en: result.title_en,
 			title_cn: result.title_cn,
 			category: result.category ?? 'Other',
+			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
 		};
 	} catch (error) {
 		logError('AI', 'Parse failed', { error: String(error) });

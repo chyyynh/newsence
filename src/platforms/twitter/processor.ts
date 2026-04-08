@@ -2,16 +2,16 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { logError, logInfo, logWarn } from '../../infra/log';
-import { callOpenRouter, extractJson } from '../../infra/openrouter';
 import {
+	type ArticleProcessor,
 	callGeminiForAnalysis,
 	callOpenRouterChat,
 	isEmpty,
-	type ArticleProcessor,
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
+import { logError, logInfo, logWarn } from '../../infra/log';
+import { callOpenRouter, extractJson } from '../../infra/openrouter';
 import type { Article } from '../../models/types';
 import { scrapeWebPage } from '../web/scraper';
 
@@ -36,6 +36,7 @@ export class TwitterProcessor implements ArticleProcessor {
 			if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 			if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
 			if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+			if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 			return { updateData };
 		}
@@ -72,6 +73,7 @@ export class TwitterProcessor implements ArticleProcessor {
 					if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 					if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
 					if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+					if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 					return { updateData };
 				}
@@ -86,6 +88,7 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (!article.tags?.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData };
 	}
@@ -112,9 +115,10 @@ interface TweetAnalysis {
 	summary_cn: string;
 	tags: string[];
 	keywords: string[];
+	entities: Array<{ name: string; name_cn: string; type: string }>;
 }
 
-const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [] };
+const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [], entities: [] };
 
 export async function translateTweet(tweetText: string, apiKey: string): Promise<TweetAnalysis> {
 	logInfo('AI', 'Translating tweet', { text: tweetText.substring(0, 60) });
@@ -134,8 +138,13 @@ ${tweetText}
 {
   "summary_cn": "繁體中文直接翻譯",
   "tags": ["標籤1", "標籤2", "標籤3"],
-  "keywords": ["關鍵字1", "關鍵字2", "關鍵字3"]
+  "keywords": ["關鍵字1", "關鍵字2", "關鍵字3"],
+  "entities": [{"name": "English Name", "name_cn": "繁體中文名稱", "type": "person|organization|product|technology|event"}]
 }
+
+實體擷取規則：
+- 從推文中提取重要的具名實體（人物、組織、產品、技術、事件）
+- name 用英文, name_cn 用繁體中文
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
@@ -145,7 +154,7 @@ ${tweetText}
 
 請只回傳JSON，不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 500 });
+	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 600 });
 	if (!rawContent) return { ...TWEET_FALLBACK, summary_cn: tweetText };
 
 	try {
@@ -156,6 +165,7 @@ ${tweetText}
 			summary_cn: result.summary_cn ?? tweetText,
 			tags: (result.tags ?? ['Twitter']).slice(0, 5),
 			keywords: (result.keywords ?? []).slice(0, 8),
+			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
 		};
 	} catch (error) {
 		logError('AI', 'Tweet translation failed', { error: String(error) });
