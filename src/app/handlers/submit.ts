@@ -441,30 +441,47 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	return Response.json({ success: true, results });
 }
 
-/** Get or create the system "Unsorted" collection. Caller manages the db lifecycle. */
+/**
+ * Get or create the system "Unsorted" collection. Caller manages the db lifecycle.
+ *
+ * Race-safety: the INSERT targets the partial unique indexes defined in
+ * frontend/prisma/manual-indexes.sql (`collections_system_user_personal_uq` for
+ * personal mode, `collections_system_org_uq` for org mode). The explicit
+ * conflict target makes the index dependency obvious AND prevents two concurrent
+ * submissions from each creating a separate Unsorted row.
+ */
 export async function getOrCreateUnsortedCollection(
 	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
 	userId: string,
 	orgId: string | null,
 ): Promise<string | null> {
-	const existing = orgId
-		? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
-		: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+	const selectExistingSql = orgId
+		? `SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`
+		: `SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`;
+	const selectKey = orgId ?? userId;
+
+	// Fast path — the row already exists in the vast majority of submissions.
+	const existing = await db.query(selectExistingSql, [selectKey]);
 	if (existing.rows[0]) return existing.rows[0].id as string;
 
-	const ins = await db.query(
-		`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
-		VALUES ($1, $2, 'Unsorted', true, 'private', 0)
-		ON CONFLICT DO NOTHING
-		RETURNING id`,
-		[userId, orgId],
-	);
+	// Race-safe creation. The conflict target matches the partial unique indexes
+	// (`is_system = true` plus the appropriate org/user predicate) so concurrent
+	// submissions deduplicate at the DB layer instead of producing duplicate rows.
+	const insertSql = orgId
+		? `INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			ON CONFLICT (organization_id) WHERE is_system = true AND organization_id IS NOT NULL DO NOTHING
+			RETURNING id`
+		: `INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			ON CONFLICT (user_id) WHERE is_system = true AND organization_id IS NULL DO NOTHING
+			RETURNING id`;
+	const ins = await db.query(insertSql, [userId, orgId]);
 	if (ins.rows[0]) return ins.rows[0].id as string;
 
-	// Race: another request created it first, re-query
-	const retry = orgId
-		? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
-		: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+	// We lost the race — another submission created the row between our SELECT and
+	// INSERT. Re-query to grab the winning row's id.
+	const retry = await db.query(selectExistingSql, [selectKey]);
 	return (retry.rows[0]?.id as string) ?? null;
 }
 
