@@ -24,7 +24,12 @@ interface KaitoTweet {
 		profilePicture?: string;
 	};
 	extendedEntities?: {
-		media?: Array<{ media_url_https: string; type: string }>;
+		media?: Array<{
+			media_url_https: string;
+			type: string;
+			sizes?: { large?: { w: number; h: number } };
+			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
+		}>;
 	};
 	entities?: {
 		hashtags?: Array<{ text: string }>;
@@ -114,15 +119,32 @@ function extractTweetAuthor(tweet: KaitoTweet): TweetAuthor {
 	};
 }
 
-function extractMedia(media?: Array<{ media_url_https: string; type: string }>): TwitterMedia[] {
-	return media?.map((m) => ({ url: m.media_url_https, type: m.type as TwitterMedia['type'] })) ?? [];
+type KaitoMedia = NonNullable<NonNullable<KaitoTweet['extendedEntities']>['media']>;
+
+function extractMedia(media?: KaitoMedia): TwitterMedia[] {
+	return (
+		media?.map((m) => {
+			const result: TwitterMedia = { url: m.media_url_https, type: m.type as TwitterMedia['type'] };
+			if (m.sizes?.large) {
+				result.width = m.sizes.large.w;
+				result.height = m.sizes.large.h;
+			}
+			if (m.video_info?.variants) {
+				const mp4 = m.video_info.variants
+					.filter((v) => v.content_type === 'video/mp4')
+					.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+				if (mp4) result.videoUrl = mp4.url;
+			}
+			return result;
+		}) ?? []
+	);
 }
 
 export function buildTweetMetadata(
 	tweet: KaitoTweet,
 	_hashtags: string[],
 	expandedUrls: string[],
-	media?: Array<{ media_url_https: string; type: string }>,
+	media?: KaitoMedia,
 	extra?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));

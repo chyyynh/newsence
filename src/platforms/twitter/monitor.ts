@@ -36,9 +36,21 @@ function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 
 function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
 	return (
-		tweet.extendedEntities?.media?.flatMap((m) =>
-			m.media_url_https ? [{ url: m.media_url_https, type: m.type as TwitterMedia['type'] }] : [],
-		) ?? []
+		tweet.extendedEntities?.media?.flatMap((m) => {
+			if (!m.media_url_https) return [];
+			const result: TwitterMedia = { url: m.media_url_https, type: m.type as TwitterMedia['type'] };
+			if (m.sizes?.large) {
+				result.width = m.sizes.large.w;
+				result.height = m.sizes.large.h;
+			}
+			if (m.video_info?.variants) {
+				const mp4 = m.video_info.variants
+					.filter((v) => v.content_type === 'video/mp4')
+					.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+				if (mp4) result.videoUrl = mp4.url;
+			}
+			return [result];
+		}) ?? []
 	);
 }
 

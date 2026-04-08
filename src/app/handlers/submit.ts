@@ -248,8 +248,8 @@ async function copyArticleToUserTable(
 		'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
 	try {
 		const result = await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, user_id, organization_id, visibility)
-			SELECT ${COPY_COLS}, $2, $3, $4
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, source_article_id, user_id, organization_id, visibility)
+			SELECT ${COPY_COLS}, id, $2, $3, $4
 			FROM ${ARTICLES_TABLE} WHERE id = $1
 			ON CONFLICT DO NOTHING
 			RETURNING ${EXIST_COLS}`,
@@ -373,6 +373,66 @@ export async function processUrl(
 	};
 }
 
+// ── Pure submitUrls action (RPC + HTTP entry points share this) ──
+
+export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'FORBIDDEN' | 'BAD_REQUEST';
+export type SubmitOutcome =
+	| { ok: true; results: SubmitResult[] }
+	| { ok: false; code: SubmitErrorCode; message: string; retryAfterSec?: number };
+
+export type SubmitArgs = {
+	urls: string[];
+	userId?: string;
+	organizationId?: string;
+	visibility?: 'public' | 'private';
+	notifyContext?: SubmitBody['notifyContext'];
+	rateKey: string;
+};
+
+const SUBMIT_MAX_BATCH_SIZE = 20;
+
+export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutcome> {
+	if (args.urls.length === 0) {
+		return { ok: false, code: 'BAD_REQUEST', message: 'Missing url or urls field' };
+	}
+	if (args.urls.length > SUBMIT_MAX_BATCH_SIZE) {
+		return {
+			ok: false,
+			code: 'BATCH_TOO_LARGE',
+			message: `Maximum ${SUBMIT_MAX_BATCH_SIZE} URLs per request, got ${args.urls.length}`,
+		};
+	}
+
+	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
+	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
+	const rateResult = hitSubmitRateLimit(args.rateKey, Math.max(max, 1), Math.max(windowSec, 1), args.urls.length);
+	if (rateResult.limited) {
+		return {
+			ok: false,
+			code: 'RATE_LIMITED',
+			message: `Too many submit requests. Retry in ${rateResult.retryAfterSec}s`,
+			retryAfterSec: rateResult.retryAfterSec,
+		};
+	}
+
+	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length });
+	const userId = args.userId;
+	let organizationId = args.organizationId;
+	if (organizationId && userId) {
+		const isMember = await validateOrgMembership(env, userId, organizationId);
+		if (!isMember) {
+			return { ok: false, code: 'FORBIDDEN', message: 'User is not a member of this organization' };
+		}
+	} else if (organizationId && !userId) {
+		organizationId = undefined;
+	}
+
+	const articleVisibility = args.visibility ?? 'public';
+	const notifyCtx = args.urls.length === 1 && args.notifyContext ? args.notifyContext : undefined;
+	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
+	return { ok: true, results };
+}
+
 export async function handleSubmitUrl(request: Request, env: Env): Promise<Response> {
 	if (!(await isSubmitAuthorized(request, env))) {
 		return Response.json(
@@ -388,83 +448,68 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 		return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
 	}
 
-	// Support both legacy `url` and new `urls` format
 	const urls = body.urls ?? (body.url ? [body.url] : []);
-	if (urls.length === 0) {
-		return Response.json({ error: 'Missing url or urls field' }, { status: 400 });
-	}
+	const outcome = await submitUrls(env, {
+		urls,
+		userId: body.userId,
+		organizationId: body.organizationId,
+		visibility: body.visibility,
+		notifyContext: body.notifyContext,
+		rateKey: getSubmitRateKey(request, body.userId),
+	});
+	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
 
-	const MAX_BATCH_SIZE = 20;
-	if (urls.length > MAX_BATCH_SIZE) {
+	if (outcome.code === 'RATE_LIMITED') {
 		return Response.json(
-			{
-				success: false,
-				error: { code: 'BATCH_TOO_LARGE', message: `Maximum ${MAX_BATCH_SIZE} URLs per request, got ${urls.length}` },
-			},
-			{ status: 400 },
+			{ success: false, error: { code: outcome.code, message: outcome.message } },
+			{ status: 429, headers: { 'Retry-After': String(outcome.retryAfterSec ?? 1) } },
 		);
 	}
-
-	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
-	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
-	const rateKey = getSubmitRateKey(request, body.userId);
-	const rateResult = hitSubmitRateLimit(rateKey, Math.max(max, 1), Math.max(windowSec, 1), urls.length);
-	if (rateResult.limited) {
-		return Response.json(
-			{
-				success: false,
-				error: { code: 'RATE_LIMITED', message: `Too many submit requests. Retry in ${rateResult.retryAfterSec}s` },
-			},
-			{ status: 429, headers: { 'Retry-After': String(rateResult.retryAfterSec) } },
-		);
-	}
-
-	logInfo('SUBMIT', 'Processing URLs', { count: urls.length });
-	const userId = body.userId;
-	let organizationId = body.organizationId;
-	// Validate org membership — reject spoofed organizationId
-	if (organizationId && userId) {
-		const isMember = await validateOrgMembership(env, userId, organizationId);
-		if (!isMember) {
-			return Response.json(
-				{ success: false, error: { code: 'FORBIDDEN', message: 'User is not a member of this organization' } },
-				{ status: 403 },
-			);
-		}
-	} else if (organizationId && !userId) {
-		organizationId = undefined; // org without user makes no sense
-	}
-	const articleVisibility = body.visibility ?? 'public';
-	// Only pass notifyContext for single-URL submissions (bot sends one at a time)
-	const notifyCtx = urls.length === 1 && body.notifyContext ? body.notifyContext : undefined;
-	const results = await Promise.all(urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
-	return Response.json({ success: true, results });
+	const status = outcome.code === 'FORBIDDEN' ? 403 : 400;
+	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
 }
 
-/** Get or create the system "Unsorted" collection. Caller manages the db lifecycle. */
+/**
+ * Get or create the system "Unsorted" collection. Caller manages the db lifecycle.
+ *
+ * Race-safety: the INSERT targets the partial unique indexes defined in
+ * frontend/prisma/manual-indexes.sql (`collections_system_user_personal_uq` for
+ * personal mode, `collections_system_org_uq` for org mode). The explicit
+ * conflict target makes the index dependency obvious AND prevents two concurrent
+ * submissions from each creating a separate Unsorted row.
+ */
 export async function getOrCreateUnsortedCollection(
 	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
 	userId: string,
 	orgId: string | null,
 ): Promise<string | null> {
-	const existing = orgId
-		? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
-		: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+	const selectExistingSql = orgId
+		? `SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`
+		: `SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`;
+	const selectKey = orgId ?? userId;
+
+	// Fast path — the row already exists in the vast majority of submissions.
+	const existing = await db.query(selectExistingSql, [selectKey]);
 	if (existing.rows[0]) return existing.rows[0].id as string;
 
-	const ins = await db.query(
-		`INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
-		VALUES ($1, $2, 'Unsorted', true, 'private', 0)
-		ON CONFLICT DO NOTHING
-		RETURNING id`,
-		[userId, orgId],
-	);
+	// Race-safe creation. The conflict target matches the partial unique indexes
+	// (`is_system = true` plus the appropriate org/user predicate) so concurrent
+	// submissions deduplicate at the DB layer instead of producing duplicate rows.
+	const insertSql = orgId
+		? `INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			ON CONFLICT (organization_id) WHERE is_system = true AND organization_id IS NOT NULL DO NOTHING
+			RETURNING id`
+		: `INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
+			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
+			ON CONFLICT (user_id) WHERE is_system = true AND organization_id IS NULL DO NOTHING
+			RETURNING id`;
+	const ins = await db.query(insertSql, [userId, orgId]);
 	if (ins.rows[0]) return ins.rows[0].id as string;
 
-	// Race: another request created it first, re-query
-	const retry = orgId
-		? await db.query(`SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`, [orgId])
-		: await db.query(`SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`, [userId]);
+	// We lost the race — another submission created the row between our SELECT and
+	// INSERT. Re-query to grab the winning row's id.
+	const retry = await db.query(selectExistingSql, [selectKey]);
 	return (retry.rows[0]?.id as string) ?? null;
 }
 

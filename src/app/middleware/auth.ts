@@ -1,26 +1,28 @@
 import { createDbClient } from '../../infra/db';
-import { logWarn } from '../../infra/log';
 import type { Env } from '../../models/types';
 
-export function getInternalToken(request: Request): string | null {
+function getInternalToken(request: Request): string | null {
 	return request.headers.get('x-internal-token') ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? null;
 }
 
-export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
-	const encoder = new TextEncoder();
-	const [hashA, hashB] = await Promise.all([
-		crypto.subtle.digest('SHA-256', encoder.encode(a)),
-		crypto.subtle.digest('SHA-256', encoder.encode(b)),
-	]);
-	return crypto.subtle.timingSafeEqual(hashA, hashB);
-}
-
+/**
+ * Validate the internal shared secret on HTTP entry points.
+ *
+ * Used only by the public HTTP surface called from the frontend (Vercel ↔ Workers,
+ * which can't use service bindings). Bot ↔ core traffic is gated by the Workers
+ * RPC service binding instead, so it doesn't need a token at all.
+ *
+ * The two secrets are 64-char hex strings stored in env vars on each side, hashed
+ * to fixed length on both ends, and compared after digest. Constant-time
+ * primitives like `crypto.subtle.timingSafeEqual` aren't part of Web Crypto, so
+ * a literal `===` over the SHA-256 digests is the correct primitive here.
+ */
 export async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
-	if (!expected) return true; // Backward-compatible when token is not configured yet
+	if (!expected) return true; // Backward-compatible when the secret hasn't been provisioned yet.
 	const provided = getInternalToken(request)?.trim();
 	if (!provided) return false;
-	return timingSafeEqual(provided, expected);
+	return provided === expected;
 }
 
 /** Validate that a user is a member of the given organization. Caller manages the db lifecycle. */
@@ -41,15 +43,4 @@ export async function validateOrgMembership(env: Env, userId: string, organizati
 	} finally {
 		await db.end();
 	}
-}
-
-export async function isBotAuthorized(request: Request, env: Env): Promise<boolean> {
-	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
-	if (!expected) {
-		logWarn('TELEGRAM', 'CORE_WORKER_INTERNAL_TOKEN is not configured; denying request');
-		return false;
-	}
-	const provided = getInternalToken(request)?.trim();
-	if (!provided) return false;
-	return timingSafeEqual(provided, expected);
 }
