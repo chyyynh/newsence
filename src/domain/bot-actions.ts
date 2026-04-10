@@ -20,7 +20,6 @@ export type AccountLookupResult = { found: boolean; userId?: string };
 export type CollectionItem = {
 	id: string;
 	name: string;
-	icon: string | null;
 };
 
 export type AddToCollectionResult = { success: boolean; error?: string };
@@ -59,7 +58,7 @@ export async function getCollections(env: Env, userId: string): Promise<Collecti
 	const db = await createDbClient(env);
 	try {
 		const result = await db.query(
-			`SELECT id, name, icon
+			`SELECT id, name
 			FROM collections
 			WHERE user_id = $1
 			ORDER BY updated_at DESC
@@ -69,7 +68,6 @@ export async function getCollections(env: Env, userId: string): Promise<Collecti
 		return (result.rows ?? []).map((c: Record<string, unknown>) => ({
 			id: c.id as string,
 			name: c.name as string,
-			icon: (c.icon as string | null) ?? null,
 		}));
 	} catch (err) {
 		logError('TELEGRAM', 'Collections query error', { error: String(err) });

@@ -44,9 +44,9 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 		$('meta[property="og:title"]').attr('content') || $('meta[name="twitter:title"]').attr('content') || $('title').text() || '';
 
 	let ogImageUrl =
-		$('meta[property="og:image"]').attr('content') ||
-		$('meta[property="og:image:url"]').attr('content') ||
-		$('meta[name="twitter:image"]').attr('content') ||
+		$('meta[property="og:image"]').attr('content')?.trim() ||
+		$('meta[property="og:image:url"]').attr('content')?.trim() ||
+		$('meta[name="twitter:image"]').attr('content')?.trim() ||
 		null;
 
 	if (ogImageUrl && !ogImageUrl.startsWith('http')) {
@@ -454,12 +454,15 @@ function extractMeta(html: string, property: string): string | null {
 	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
 	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw) : null;
+	// Always trim — scraped meta values (Substack's CDN URLs in particular)
+	// can carry trailing whitespace that breaks downstream consumers like
+	// next/image which throws on URLs with trailing spaces.
+	return raw ? decodeHtmlEntities(raw).trim() || null : null;
 }
 
 function extractMetaName(html: string, name: string): string | null {
 	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
 	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw) : null;
+	return raw ? decodeHtmlEntities(raw).trim() || null : null;
 }
