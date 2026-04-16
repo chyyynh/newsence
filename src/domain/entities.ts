@@ -31,22 +31,13 @@ export async function syncArticleEntities(db: Client, articleId: string, entitie
 			const entityId = result.rows[0]?.id;
 			if (!entityId) continue;
 
-			// Link article to entity
+			// Link article to entity; entities.article_count is maintained by the
+			// article_entities_count_{insert,delete} triggers on the DB side.
 			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
 		} catch (err) {
 			logError('ENTITIES', 'Failed to sync entity', { entity: entity.name, error: String(err) });
 		}
 	}
-
-	// Batch update article counts for all entities linked to this article
-	await db.query(
-		`UPDATE entities SET article_count = (
-		   SELECT COUNT(*) FROM article_entities WHERE entity_id = entities.id
-		 ) WHERE id IN (
-		   SELECT entity_id FROM article_entities WHERE article_id = $1
-		 )`,
-		[articleId],
-	);
 
 	logInfo('ENTITIES', 'Synced', { articleId, count: entities.length });
 }
