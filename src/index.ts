@@ -92,17 +92,13 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 		url?: string;
 		urls?: string[];
 		userId?: string;
-		organizationId?: string;
 		visibility?: 'public' | 'private';
 	}): Promise<SubmitOutcome> {
 		const urls = args.urls ?? (args.url ? [args.url] : []);
 		return submitUrls(this.env, {
 			urls,
 			userId: args.userId,
-			organizationId: args.organizationId,
 			visibility: args.visibility,
-			// RPC callers don't have an HTTP request, so the rate-limit bucket is keyed
-			// strictly by user/anonymous identity.
 			rateKey: args.userId ? `user:${args.userId}` : 'rpc:anon',
 		});
 	}
