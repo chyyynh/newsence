@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { ARTICLES_TABLE, createDbClient } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
-import type { Article, BotNotifyArticle, Env, MessageBatch, QueueMessage, TelegramNotifyContext } from '../models/types';
+import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
 import { syncArticleEntities } from './entities';
 import {
 	buildEmbeddingTextForArticle,
@@ -20,7 +20,6 @@ const ARTICLE_FIELDS =
 type WorkflowParams = {
 	article_id: string;
 	source_type: string;
-	notify_context?: TelegramNotifyContext;
 	target_table?: string;
 };
 
@@ -97,7 +96,7 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
-		const { article_id, source_type, notify_context, target_table } = event.payload;
+		const { article_id, source_type, target_table } = event.payload;
 		const table = target_table ?? ARTICLES_TABLE;
 		const isUserArticle = table !== ARTICLES_TABLE;
 
@@ -204,32 +203,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 		}
 
-		// Step 6: Notify Telegram bot with AI results (push-based, via RPC)
-		if (notify_context && this.env.TELEGRAM_BOT) {
-			await step.do(
-				'notify-telegram',
-				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
-				async () => {
-					const db = await createDbClient(this.env);
-					try {
-						const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [article_id]);
-						const updatedArticle = result.rows[0] as BotNotifyArticle | undefined;
-						if (!updatedArticle) return;
-
-						try {
-							await this.env.TELEGRAM_BOT.notify(updatedArticle, notify_context);
-							logInfo('WORKFLOW', 'Telegram notified', { article_id });
-						} catch (err) {
-							logWarn('WORKFLOW', 'Telegram notify failed', { error: String(err) });
-						}
-					} finally {
-						await db.end();
-					}
-				},
-			);
-		}
-
-		// Step 7: Generate YouTube highlights (if applicable)
+		// Step 6: Generate YouTube highlights (if applicable)
 		if (source_type === 'youtube' && article.platform_metadata?.type === 'youtube') {
 			await step.do(
 				'generate-youtube-highlights',

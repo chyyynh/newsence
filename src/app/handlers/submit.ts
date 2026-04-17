@@ -11,7 +11,7 @@ import {
 	buildTwitterStandard,
 	buildYouTube,
 } from '../../models/platform-metadata';
-import type { Env, TelegramNotifyContext } from '../../models/types';
+import type { Env } from '../../models/types';
 import { isSubmitAuthorized, validateOrgMembership } from '../middleware/auth';
 import {
 	DEFAULT_SUBMIT_RATE_LIMIT_MAX,
@@ -28,14 +28,6 @@ type SubmitBody = {
 	userId?: string;
 	organizationId?: string;
 	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
-	notifyContext?: {
-		platform: 'telegram';
-		chatId: string;
-		messageId: string;
-		linked: boolean;
-		userId: string;
-		webappUrl: string;
-	};
 };
 
 type SubmitResult = {
@@ -57,7 +49,6 @@ async function createWorkflow(
 	env: Env,
 	articleId: string,
 	sourceType: string,
-	notifyContext?: TelegramNotifyContext,
 	targetTable?: string,
 ): Promise<string | undefined> {
 	try {
@@ -65,7 +56,6 @@ async function createWorkflow(
 			params: {
 				article_id: articleId,
 				source_type: sourceType,
-				...(notifyContext ? { notify_context: notifyContext } : {}),
 				...(targetTable ? { target_table: targetTable } : {}),
 			},
 		});
@@ -208,16 +198,10 @@ async function returnExisting(
 	url: string,
 	row: Record<string, string>,
 	env: Env,
-	notifyContext: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'> | undefined,
 	isUserArticle: boolean,
 	targetTable?: string,
 ): Promise<SubmitResult> {
-	const enrichedNotify = notifyContext
-		? { ...notifyContext, articleId: row.id, alreadyExists: true, ...(isUserArticle ? { isUserArticle: true } : {}) }
-		: undefined;
-	const instanceId = row.title_cn
-		? undefined
-		: await createWorkflow(env, row.id, row.source_type || 'article', enrichedNotify, targetTable);
+	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, row.source_type || 'article', targetTable);
 	return {
 		url,
 		articleId: row.id,
@@ -281,7 +265,6 @@ export async function processUrl(
 	rawUrl: string,
 	env: Env,
 	userId?: string,
-	notifyContext?: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'>,
 	visibility = 'public',
 	organizationId?: string,
 ): Promise<SubmitResult> {
@@ -312,7 +295,7 @@ export async function processUrl(
 			}
 		} else {
 			const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1`, [url]);
-			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, notifyContext, false);
+			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, false);
 		}
 	} finally {
 		await db.end();
@@ -323,17 +306,10 @@ export async function processUrl(
 		await addToUnsortedCollection(env, userId, existingRow.id, organizationId, existingIsUserArticle ? 'user_article' : 'article').catch(
 			(err) => logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
 		);
-		return returnExisting(
-			url,
-			existingRow,
-			env,
-			notifyContext,
-			existingIsUserArticle,
-			existingIsUserArticle ? USER_ARTICLES_TABLE : undefined,
-		);
+		return returnExisting(url, existingRow, env, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
 	}
 	if (existingRow) {
-		return returnExisting(url, existingRow, env, notifyContext, false);
+		return returnExisting(url, existingRow, env, false);
 	}
 
 	// 2. Scrape + insert (user → user_articles, system → articles)
@@ -357,10 +333,7 @@ export async function processUrl(
 	}
 
 	// 4. Create workflow for background AI processing
-	const enrichedNotify = notifyContext
-		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(userId ? { isUserArticle: true } : {}) }
-		: undefined;
-	const instanceId = await createWorkflow(env, result.articleId, result.platformType, enrichedNotify, targetTable);
+	const instanceId = await createWorkflow(env, result.articleId, result.platformType, targetTable);
 	return {
 		url,
 		articleId: result.articleId,
@@ -385,7 +358,6 @@ export type SubmitArgs = {
 	userId?: string;
 	organizationId?: string;
 	visibility?: 'public' | 'private';
-	notifyContext?: SubmitBody['notifyContext'];
 	rateKey: string;
 };
 
@@ -428,8 +400,7 @@ export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutc
 	}
 
 	const articleVisibility = args.visibility ?? 'public';
-	const notifyCtx = args.urls.length === 1 && args.notifyContext ? args.notifyContext : undefined;
-	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
+	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, articleVisibility, organizationId)));
 	return { ok: true, results };
 }
 
@@ -454,7 +425,6 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 		userId: body.userId,
 		organizationId: body.organizationId,
 		visibility: body.visibility,
-		notifyContext: body.notifyContext,
 		rateKey: getSubmitRateKey(request, body.userId),
 	});
 	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
