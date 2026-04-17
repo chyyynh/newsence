@@ -79,12 +79,6 @@
 	/**
 	 * Smart Placement — run close to database
 	 */
-	"services": [
-		// Typed RPC binding to the bot worker. Notify calls go through
-		// env.TELEGRAM_BOT.notify(...) — not HTTP — so the bot doesn't need a
-		// token check. The only caller is this worker.
-		{ "binding": "TELEGRAM_BOT", "service": "newsence-bot", "entrypoint": "BotWorker" }
-	],
 	"placement": {
 		"mode": "smart"
 	},
