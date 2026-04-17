@@ -11,8 +11,8 @@ import {
 	buildTwitterStandard,
 	buildYouTube,
 } from '../../models/platform-metadata';
-import type { Env, TelegramNotifyContext } from '../../models/types';
-import { isSubmitAuthorized, validateOrgMembership } from '../middleware/auth';
+import type { Env } from '../../models/types';
+import { isSubmitAuthorized } from '../middleware/auth';
 import {
 	DEFAULT_SUBMIT_RATE_LIMIT_MAX,
 	DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC,
@@ -26,16 +26,7 @@ type SubmitBody = {
 	url?: string; // Legacy single URL (backward compatible)
 	urls?: string[]; // Batch URLs
 	userId?: string;
-	organizationId?: string;
 	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
-	notifyContext?: {
-		platform: 'telegram';
-		chatId: string;
-		messageId: string;
-		linked: boolean;
-		userId: string;
-		webappUrl: string;
-	};
 };
 
 type SubmitResult = {
@@ -57,7 +48,6 @@ async function createWorkflow(
 	env: Env,
 	articleId: string,
 	sourceType: string,
-	notifyContext?: TelegramNotifyContext,
 	targetTable?: string,
 ): Promise<string | undefined> {
 	try {
@@ -65,7 +55,6 @@ async function createWorkflow(
 			params: {
 				article_id: articleId,
 				source_type: sourceType,
-				...(notifyContext ? { notify_context: notifyContext } : {}),
 				...(targetTable ? { target_table: targetTable } : {}),
 			},
 		});
@@ -82,7 +71,6 @@ async function scrapeAndInsert(
 	userId?: string,
 	targetTable?: string,
 	visibility = 'public',
-	organizationId?: string,
 ): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
@@ -112,8 +100,8 @@ async function scrapeAndInsert(
 		if (isUserArticle) {
 			insertResult = await db.query(
 				`INSERT INTO ${table}
-					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility, organization_id)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 				RETURNING id`,
 				[
 					url,
@@ -130,7 +118,6 @@ async function scrapeAndInsert(
 					platformMetadataJson,
 					userId,
 					visibility,
-					organizationId || null,
 				],
 			);
 		} else {
@@ -208,16 +195,10 @@ async function returnExisting(
 	url: string,
 	row: Record<string, string>,
 	env: Env,
-	notifyContext: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'> | undefined,
 	isUserArticle: boolean,
 	targetTable?: string,
 ): Promise<SubmitResult> {
-	const enrichedNotify = notifyContext
-		? { ...notifyContext, articleId: row.id, alreadyExists: true, ...(isUserArticle ? { isUserArticle: true } : {}) }
-		: undefined;
-	const instanceId = row.title_cn
-		? undefined
-		: await createWorkflow(env, row.id, row.source_type || 'article', enrichedNotify, targetTable);
+	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, row.source_type || 'article', targetTable);
 	return {
 		url,
 		articleId: row.id,
@@ -241,31 +222,24 @@ async function copyArticleToUserTable(
 	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
 	articleId: string,
 	userId: string,
-	organizationId?: string,
 	visibility = 'public',
 ): Promise<Record<string, string> | null> {
 	const COPY_COLS =
 		'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
 	try {
 		const result = await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, source_article_id, user_id, organization_id, visibility)
-			SELECT ${COPY_COLS}, id, $2, $3, $4
+			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, source_article_id, user_id, visibility)
+			SELECT ${COPY_COLS}, id, $2, $3
 			FROM ${ARTICLES_TABLE} WHERE id = $1
 			ON CONFLICT DO NOTHING
 			RETURNING ${EXIST_COLS}`,
-			[articleId, userId, organizationId || null, visibility],
+			[articleId, userId, visibility],
 		);
 		if (result.rows[0]) return result.rows[0] as Record<string, string>;
-		// ON CONFLICT — row already exists, look it up
-		const lookup = organizationId
-			? await db.query(
-					`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
-					[organizationId, articleId],
-				)
-			: await db.query(
-					`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
-					[userId, articleId],
-				);
+		const lookup = await db.query(
+			`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
+			[userId, articleId],
+		);
 		return (lookup.rows[0] as Record<string, string>) ?? null;
 	} catch (err) {
 		logWarn('SUBMIT', 'Failed to copy article to user_articles', { articleId, error: String(err) });
@@ -281,86 +255,68 @@ export async function processUrl(
 	rawUrl: string,
 	env: Env,
 	userId?: string,
-	notifyContext?: Omit<TelegramNotifyContext, 'articleId' | 'alreadyExists'>,
 	visibility = 'public',
-	organizationId?: string,
 ): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 
-	// 1. Check for existing article — close connection before any addToUnsortedCollection calls
 	let existingRow: Record<string, string> | null = null;
 	let existingIsUserArticle = false;
 	const db = await createDbClient(env);
 	try {
 		if (userId) {
-			// Check user_articles first (exact user/org scope), then public articles
-			const uaQuery = organizationId
-				? `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE organization_id = $1 AND url = $2 LIMIT 1`
-				: `SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND organization_id IS NULL AND url = $2 LIMIT 1`;
-			const ua = await db.query(uaQuery, [organizationId || userId, url]);
+			const ua = await db.query(
+				`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`,
+				[userId, url],
+			);
 			if (ua.rows.length > 0) {
 				existingRow = ua.rows[0];
 				existingIsUserArticle = true;
 			} else {
 				const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
 				if (pub.rows.length > 0) {
-					// Public article exists — copy to user_articles so all user-scoped queries see it
-					const copied = await copyArticleToUserTable(db, pub.rows[0].id, userId, organizationId, visibility);
+					const copied = await copyArticleToUserTable(db, pub.rows[0].id, userId, visibility);
 					existingRow = copied ?? pub.rows[0];
 					existingIsUserArticle = !!copied;
 				}
 			}
 		} else {
 			const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1`, [url]);
-			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, notifyContext, false);
+			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, false);
 		}
 	} finally {
 		await db.end();
 	}
 
-	// Handle existing article — add to unsorted (connection now closed, addToUnsortedCollection manages its own)
 	if (existingRow && userId) {
-		await addToUnsortedCollection(env, userId, existingRow.id, organizationId, existingIsUserArticle ? 'user_article' : 'article').catch(
-			(err) => logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
+		await addToUnsortedCollection(env, userId, existingRow.id, existingIsUserArticle ? 'user_article' : 'article').catch((err) =>
+			logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
 		);
-		return returnExisting(
-			url,
-			existingRow,
-			env,
-			notifyContext,
-			existingIsUserArticle,
-			existingIsUserArticle ? USER_ARTICLES_TABLE : undefined,
-		);
+		return returnExisting(url, existingRow, env, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
 	}
 	if (existingRow) {
-		return returnExisting(url, existingRow, env, notifyContext, false);
+		return returnExisting(url, existingRow, env, false);
 	}
 
-	// 2. Scrape + insert (user → user_articles, system → articles)
 	const targetTable = userId ? USER_ARTICLES_TABLE : undefined;
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, userId, targetTable, visibility, organizationId);
+		result = await scrapeAndInsert(url, env, userId, targetTable, visibility);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
 
-	// 3. Auto-add to unsorted collection (if user-submitted)
 	if (userId) {
 		try {
-			await addToUnsortedCollection(env, userId, result.articleId, organizationId, userId ? 'user_article' : 'article');
+			await addToUnsortedCollection(env, userId, result.articleId, 'user_article');
 		} catch (err) {
 			logWarn('SUBMIT', 'Failed to add to unsorted collection', { error: String(err) });
 		}
 	}
 
 	// 4. Create workflow for background AI processing
-	const enrichedNotify = notifyContext
-		? { ...notifyContext, articleId: result.articleId, alreadyExists: false, ...(userId ? { isUserArticle: true } : {}) }
-		: undefined;
-	const instanceId = await createWorkflow(env, result.articleId, result.platformType, enrichedNotify, targetTable);
+	const instanceId = await createWorkflow(env, result.articleId, result.platformType, targetTable);
 	return {
 		url,
 		articleId: result.articleId,
@@ -375,7 +331,7 @@ export async function processUrl(
 
 // ── Pure submitUrls action (RPC + HTTP entry points share this) ──
 
-export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'FORBIDDEN' | 'BAD_REQUEST';
+export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST';
 export type SubmitOutcome =
 	| { ok: true; results: SubmitResult[] }
 	| { ok: false; code: SubmitErrorCode; message: string; retryAfterSec?: number };
@@ -383,9 +339,7 @@ export type SubmitOutcome =
 export type SubmitArgs = {
 	urls: string[];
 	userId?: string;
-	organizationId?: string;
 	visibility?: 'public' | 'private';
-	notifyContext?: SubmitBody['notifyContext'];
 	rateKey: string;
 };
 
@@ -416,20 +370,8 @@ export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutc
 	}
 
 	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length });
-	const userId = args.userId;
-	let organizationId = args.organizationId;
-	if (organizationId && userId) {
-		const isMember = await validateOrgMembership(env, userId, organizationId);
-		if (!isMember) {
-			return { ok: false, code: 'FORBIDDEN', message: 'User is not a member of this organization' };
-		}
-	} else if (organizationId && !userId) {
-		organizationId = undefined;
-	}
-
 	const articleVisibility = args.visibility ?? 'public';
-	const notifyCtx = args.urls.length === 1 && args.notifyContext ? args.notifyContext : undefined;
-	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, notifyCtx, articleVisibility, organizationId)));
+	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, args.userId, articleVisibility)));
 	return { ok: true, results };
 }
 
@@ -452,9 +394,7 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	const outcome = await submitUrls(env, {
 		urls,
 		userId: body.userId,
-		organizationId: body.organizationId,
 		visibility: body.visibility,
-		notifyContext: body.notifyContext,
 		rateKey: getSubmitRateKey(request, body.userId),
 	});
 	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
@@ -465,74 +405,49 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 			{ status: 429, headers: { 'Retry-After': String(outcome.retryAfterSec ?? 1) } },
 		);
 	}
-	const status = outcome.code === 'FORBIDDEN' ? 403 : 400;
-	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
+	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status: 400 });
 }
 
 /**
  * Get or create the system "Unsorted" collection. Caller manages the db lifecycle.
  *
- * Race-safety: the INSERT targets the partial unique indexes defined in
- * frontend/prisma/manual-indexes.sql (`collections_system_user_personal_uq` for
- * personal mode, `collections_system_org_uq` for org mode). The explicit
- * conflict target makes the index dependency obvious AND prevents two concurrent
- * submissions from each creating a separate Unsorted row.
+ * Race-safety: the INSERT targets the partial unique index `collections_system_user_uq`
+ * (is_system = true per user) so concurrent submissions deduplicate at the DB layer.
  */
 export async function getOrCreateUnsortedCollection(
 	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
 	userId: string,
-	orgId: string | null,
 ): Promise<string | null> {
-	const selectExistingSql = orgId
-		? `SELECT id FROM collections WHERE is_system = true AND organization_id = $1 LIMIT 1`
-		: `SELECT id FROM collections WHERE is_system = true AND user_id = $1 AND organization_id IS NULL LIMIT 1`;
-	const selectKey = orgId ?? userId;
+	const selectSql = `SELECT id FROM collections WHERE is_system = true AND user_id = $1 LIMIT 1`;
 
-	// Fast path — the row already exists in the vast majority of submissions.
-	const existing = await db.query(selectExistingSql, [selectKey]);
+	const existing = await db.query(selectSql, [userId]);
 	if (existing.rows[0]) return existing.rows[0].id as string;
 
-	// Race-safe creation. The conflict target matches the partial unique indexes
-	// (`is_system = true` plus the appropriate org/user predicate) so concurrent
-	// submissions deduplicate at the DB layer instead of producing duplicate rows.
-	const insertSql = orgId
-		? `INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
-			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
-			ON CONFLICT (organization_id) WHERE is_system = true AND organization_id IS NOT NULL DO NOTHING
-			RETURNING id`
-		: `INSERT INTO collections (user_id, organization_id, name, is_system, visibility, article_count)
-			VALUES ($1, $2, 'Unsorted', true, 'private', 0)
-			ON CONFLICT (user_id) WHERE is_system = true AND organization_id IS NULL DO NOTHING
-			RETURNING id`;
-	const ins = await db.query(insertSql, [userId, orgId]);
+	const ins = await db.query(
+		`INSERT INTO collections (user_id, name, is_system, visibility, article_count)
+		VALUES ($1, 'Unsorted', true, 'private', 0)
+		ON CONFLICT (user_id) WHERE is_system = true DO NOTHING
+		RETURNING id`,
+		[userId],
+	);
 	if (ins.rows[0]) return ins.rows[0].id as string;
 
-	// We lost the race — another submission created the row between our SELECT and
-	// INSERT. Re-query to grab the winning row's id.
-	const retry = await db.query(selectExistingSql, [selectKey]);
+	const retry = await db.query(selectSql, [userId]);
 	return (retry.rows[0]?.id as string) ?? null;
 }
 
-async function addToUnsortedCollection(
-	env: Env,
-	userId: string,
-	articleId: string,
-	organizationId?: string,
-	toType = 'article',
-): Promise<void> {
+async function addToUnsortedCollection(env: Env, userId: string, articleId: string, toType = 'article'): Promise<void> {
 	const db = await createDbClient(env);
 	try {
-		const orgId = organizationId || null;
-		const collectionId = await getOrCreateUnsortedCollection(db, userId, orgId);
+		const collectionId = await getOrCreateUnsortedCollection(db, userId);
 		if (!collectionId) return;
 
 		await db.query(
-			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id, organization_id)
-			VALUES ('collection', $1, $2, $3, 'resource', $4, $5)
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id)
+			VALUES ('collection', $1, $2, $3, 'resource', $4)
 			ON CONFLICT DO NOTHING`,
-			[collectionId, toType, articleId, userId, orgId],
+			[collectionId, toType, articleId, userId],
 		);
-		// articleCount is maintained by DB trigger on citations table
 	} finally {
 		await db.end();
 	}

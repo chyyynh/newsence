@@ -5,18 +5,6 @@ import { handlePreview } from './app/handlers/preview';
 import { handleSubmitUrl, type SubmitOutcome, submitUrls } from './app/handlers/submit';
 import { handleWorkflowStatus, handleWorkflowStream } from './app/handlers/workflow-status';
 import { handleRetryCron } from './app/monitors/retry';
-import {
-	type AccountLookupResult,
-	type AddToCollectionResult,
-	addArticleToCollection,
-	type CollectionItem,
-	type GetUnsortedResult,
-	getCollections as getCollectionsForUser,
-	getUnsortedCollection,
-	type ListArticlesResult,
-	listArticles,
-	lookupAccount,
-} from './domain/bot-actions';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 import { logInfo } from './infra/log';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
@@ -74,22 +62,8 @@ const HELP_TEXT =
 	'POST /submit                     - Submit URL\n' +
 	'POST /embed                      - Generate embeddings\n' +
 	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
-	'GET  /stream/:instanceId         - Workflow status (SSE)\n\n' +
-	'Bot endpoints are exposed as RPC methods on the CoreWorker class —\n' +
-	'reachable only through the service binding from `newsence-bot`.\n';
+	'GET  /stream/:instanceId         - Workflow status (SSE)\n';
 
-/**
- * Core worker entrypoint.
- *
- * - `fetch`/`scheduled`/`queue` keep the existing HTTP / cron / queue surface.
- * - The remaining methods are RPC-only: they are NOT routed by `routeRequest`,
- *   so they are unreachable over the public internet. The only callers are
- *   Workers that have a service binding to `newsence-core` and target this
- *   entrypoint (currently just `newsence-bot`).
- *
- * Authorization for RPC methods is the service binding itself — only the
- * configured caller worker can invoke them, so no token check is needed.
- */
 export default class CoreWorker extends WorkerEntrypoint<Env> {
 	override async fetch(request: Request): Promise<Response> {
 		return (await routeRequest(request, this.env)) ?? new Response(HELP_TEXT, { headers: { 'Content-Type': 'text/plain' } });
@@ -113,59 +87,18 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 		await handleArticleQueue(batch, this.env);
 	}
 
-	// ── RPC: bot account lookup ──────────────────────────────
-	async lookupBotAccount(platform: string, externalId: string): Promise<AccountLookupResult> {
-		return lookupAccount(this.env, platform, externalId);
-	}
-
-	// ── RPC: collections ─────────────────────────────────────
-	async getCollections(userId: string): Promise<CollectionItem[]> {
-		return getCollectionsForUser(this.env, userId);
-	}
-
-	async addToCollection(args: {
-		userId: string;
-		articleId: string;
-		collectionId: string;
-		toType?: string;
-	}): Promise<AddToCollectionResult> {
-		return addArticleToCollection(this.env, args);
-	}
-
-	async getOrCreateUnsorted(userId: string, organizationId?: string): Promise<GetUnsortedResult> {
-		return getUnsortedCollection(this.env, userId, organizationId);
-	}
-
-	// ── RPC: list articles for export ────────────────────────
-	async listArticlesForExport(args: { userId: string; period?: string; organizationId?: string }): Promise<ListArticlesResult> {
-		return listArticles(this.env, args);
-	}
-
 	// ── RPC: submit URL ──────────────────────────────────────
 	async submitUrl(args: {
 		url?: string;
 		urls?: string[];
 		userId?: string;
-		organizationId?: string;
 		visibility?: 'public' | 'private';
-		notifyContext?: {
-			platform: 'telegram';
-			chatId: string;
-			messageId: string;
-			linked: boolean;
-			userId: string;
-			webappUrl: string;
-		};
 	}): Promise<SubmitOutcome> {
 		const urls = args.urls ?? (args.url ? [args.url] : []);
 		return submitUrls(this.env, {
 			urls,
 			userId: args.userId,
-			organizationId: args.organizationId,
 			visibility: args.visibility,
-			notifyContext: args.notifyContext,
-			// RPC callers don't have an HTTP request, so the rate-limit bucket is keyed
-			// strictly by user/anonymous identity.
 			rateKey: args.userId ? `user:${args.userId}` : 'rpc:anon',
 		});
 	}

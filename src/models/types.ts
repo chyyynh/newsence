@@ -1,44 +1,12 @@
-import type { ExecutionContext, Fetcher, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
+import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 import type { PlatformMetadata } from './platform-metadata';
-
-/**
- * Local mirror of the RPC surface exposed by `cf-worker/bot`'s `BotWorker`
- * entrypoint. The two packages have separate tsconfigs and no shared module
- * path, so we describe the bot's contract here. Update both sides together.
- *
- * Intersected with `Fetcher` because the wrangler `Service` binding type
- * always carries the legacy `fetch` method alongside the RPC surface.
- */
-export interface BotEntrypoint {
-	notify(article: BotNotifyArticle, notifyContext: BotNotifyContext): Promise<{ ok: true }>;
-}
-
-/** Article shape sent to the bot's notify RPC method. */
-export interface BotNotifyArticle {
-	id: string;
-	title: string;
-	title_cn?: string;
-	summary?: string;
-	summary_cn?: string;
-	content_cn?: string;
-	source: string;
-	source_type: string;
-	og_image_url?: string | null;
-	published_date?: string;
-	tags?: string[];
-	keywords?: string[];
-	url: string;
-}
 
 /**
  * Environment bindings.
  * Extends wrangler-generated Cloudflare.Env (from worker-configuration.d.ts)
- * with secrets that are not in wrangler.jsonc and overrides the TELEGRAM_BOT
- * binding to expose the typed RPC entrypoint alongside the legacy Fetcher API.
+ * with secrets that are not in wrangler.jsonc.
  */
-export interface Env extends Omit<Cloudflare.Env, 'TELEGRAM_BOT'> {
-	TELEGRAM_BOT: Fetcher & BotEntrypoint;
-
+export interface Env extends Cloudflare.Env {
 	OPENROUTER_API_KEY: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	SUBMIT_RATE_LIMIT_MAX?: string;
@@ -147,22 +115,6 @@ export interface Tweet {
 	quoted_tweet?: Tweet | null;
 	retweeted_tweet?: Tweet | null;
 }
-
-// Bot push notification context (passed through workflow, platform-agnostic)
-export interface BotNotifyContext {
-	platform: 'telegram';
-	chatId: string;
-	messageId: string;
-	linked: boolean;
-	userId: string;
-	articleId: string;
-	alreadyExists: boolean;
-	webappUrl: string;
-	isUserArticle?: boolean;
-}
-
-/** @deprecated Use BotNotifyContext instead */
-export type TelegramNotifyContext = BotNotifyContext;
 
 // Queue message types
 export type QueueMessage =
