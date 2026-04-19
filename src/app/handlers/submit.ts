@@ -443,8 +443,8 @@ async function addToUnsortedCollection(env: Env, userId: string, articleId: stri
 		if (!collectionId) return;
 
 		await db.query(
-			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id)
-			VALUES ('collection', $1, $2, $3, 'resource', $4)
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, user_id)
+			VALUES ('collection', $1, $2, $3, $4)
 			ON CONFLICT DO NOTHING`,
 			[collectionId, toType, articleId, userId],
 		);
