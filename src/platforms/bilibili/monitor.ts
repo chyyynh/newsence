@@ -4,7 +4,7 @@
 
 import { distributeNonDefaultArticles } from '../../domain/distribute';
 import type { DbClient } from '../../infra/db';
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
+import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
@@ -17,19 +17,7 @@ import { parseVideoCards } from './parser';
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-async function deduplicateUrls(db: DbClient, urls: string[], table: string): Promise<Set<string>> {
-	const existingSet = new Set<string>();
-	for (let i = 0; i < urls.length; i += 50) {
-		const chunk = urls.slice(i, i + 50);
-		const existing = await db.query(`SELECT url FROM ${table} WHERE url = ANY($1)`, [chunk]);
-		for (const row of existing.rows as { url: string }[]) {
-			existingSet.add(normalizeUrl(row.url));
-		}
-	}
-	return existingSet;
-}
-
-async function insertVideo(db: DbClient, env: Env, video: ParsedDynamic, feed: RSSFeed, table: string): Promise<boolean> {
+async function insertVideo(db: DbClient, env: Env, video: ParsedDynamic, feed: RSSFeed): Promise<boolean> {
 	const url = normalizeUrl(video.url);
 	const platformMetadata = buildBilibili({
 		uid: feed.RSSLink,
@@ -39,33 +27,21 @@ async function insertVideo(db: DbClient, env: Env, video: ParsedDynamic, feed: R
 		coverUrl: video.imageUrl || undefined,
 	});
 
-	const insertResult = await db.query(
-		`INSERT INTO ${table}
-			(url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (url) DO NOTHING
-		RETURNING id`,
-		[
-			url,
-			video.title,
-			feed.name,
-			video.publishedDate,
-			new Date().toISOString(),
-			[],
-			[],
-			[],
-			'',
-			'bilibili',
-			video.description || null,
-			video.imageUrl || null,
-			JSON.stringify(platformMetadata),
-		],
-	);
+	const articleId = await insertArticle(db, {
+		url,
+		title: video.title,
+		source: feed.name,
+		publishedDate: video.publishedDate,
+		summary: '',
+		sourceType: 'bilibili',
+		content: video.description || null,
+		ogImageUrl: video.imageUrl || null,
+		platformMetadata,
+	});
 
-	const articleId = insertResult.rows[0]?.id;
 	if (!articleId) return false;
 
-	await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'bilibili' });
+	await enqueueArticleProcess(env, articleId, 'bilibili');
 	logInfo('BILIBILI-CRON', 'Inserted video', { user: feed.name, title: video.title.slice(0, 60) });
 	return true;
 }
@@ -88,7 +64,6 @@ export async function handleBilibiliCron(env: Env, _ctx: ExecutionContext): Prom
 			return;
 		}
 
-		const table = ARTICLES_TABLE;
 		let totalInserted = 0;
 
 		for (const feed of users) {
@@ -103,7 +78,7 @@ export async function handleBilibiliCron(env: Env, _ctx: ExecutionContext): Prom
 				}
 
 				const allUrls = videos.map((v) => normalizeUrl(v.url));
-				const existingSet = await deduplicateUrls(db, allUrls, table);
+				const existingSet = await getExistingUrls(db, allUrls);
 				const newVideos = videos.filter((v) => !existingSet.has(normalizeUrl(v.url)));
 
 				if (!newVideos.length) {
@@ -113,7 +88,7 @@ export async function handleBilibiliCron(env: Env, _ctx: ExecutionContext): Prom
 
 				for (const video of newVideos) {
 					try {
-						if (await insertVideo(db, env, video, feed, table)) totalInserted++;
+						if (await insertVideo(db, env, video, feed)) totalInserted++;
 					} catch (err) {
 						logWarn('BILIBILI-CRON', 'Video insert failed', { url: video.url, error: String(err) });
 					}
