@@ -44,12 +44,7 @@ type SubmitResult = {
 	error?: string;
 };
 
-async function createWorkflow(
-	env: Env,
-	articleId: string,
-	sourceType: string,
-	targetTable?: string,
-): Promise<string | undefined> {
+async function createWorkflow(env: Env, articleId: string, sourceType: string, targetTable?: string): Promise<string | undefined> {
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
 			params: {
@@ -215,7 +210,7 @@ async function returnExisting(
 }
 
 /**
- * Copy a public article row into user_articles so it appears in all user-scoped queries (export, library, etc.).
+ * Copy a public article row into user_articles so it appears in all user-scoped queries (export, profile saves, etc.).
  * Returns the new user_articles row (with EXIST_COLS) on success, or null if the copy failed / already existed.
  */
 async function copyArticleToUserTable(
@@ -251,12 +246,7 @@ async function copyArticleToUserTable(
  * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
  * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
  */
-export async function processUrl(
-	rawUrl: string,
-	env: Env,
-	userId?: string,
-	visibility = 'public',
-): Promise<SubmitResult> {
+export async function processUrl(rawUrl: string, env: Env, userId?: string, visibility = 'public'): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 
 	let existingRow: Record<string, string> | null = null;
@@ -264,10 +254,7 @@ export async function processUrl(
 	const db = await createDbClient(env);
 	try {
 		if (userId) {
-			const ua = await db.query(
-				`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`,
-				[userId, url],
-			);
+			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [userId, url]);
 			if (ua.rows.length > 0) {
 				existingRow = ua.rows[0];
 				existingIsUserArticle = true;
@@ -288,8 +275,8 @@ export async function processUrl(
 	}
 
 	if (existingRow && userId) {
-		await addToUnsortedCollection(env, userId, existingRow.id, existingIsUserArticle ? 'user_article' : 'article').catch((err) =>
-			logWarn('SUBMIT', 'Failed to add existing to unsorted', { error: String(err) }),
+		await addToProfileSaves(env, userId, existingRow.id, existingIsUserArticle ? 'user_article' : 'article').catch((err) =>
+			logWarn('SUBMIT', 'Failed to add existing to profile saves', { error: String(err) }),
 		);
 		return returnExisting(url, existingRow, env, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
 	}
@@ -309,9 +296,9 @@ export async function processUrl(
 
 	if (userId) {
 		try {
-			await addToUnsortedCollection(env, userId, result.articleId, 'user_article');
+			await addToProfileSaves(env, userId, result.articleId, 'user_article');
 		} catch (err) {
-			logWarn('SUBMIT', 'Failed to add to unsorted collection', { error: String(err) });
+			logWarn('SUBMIT', 'Failed to add to profile saves', { error: String(err) });
 		}
 	}
 
@@ -408,45 +395,14 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status: 400 });
 }
 
-/**
- * Get or create the system "Unsorted" collection. Caller manages the db lifecycle.
- *
- * Race-safety: the INSERT targets the partial unique index `collections_system_user_uq`
- * (is_system = true per user) so concurrent submissions deduplicate at the DB layer.
- */
-export async function getOrCreateUnsortedCollection(
-	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
-	userId: string,
-): Promise<string | null> {
-	const selectSql = `SELECT id FROM collections WHERE is_system = true AND user_id = $1 LIMIT 1`;
-
-	const existing = await db.query(selectSql, [userId]);
-	if (existing.rows[0]) return existing.rows[0].id as string;
-
-	const ins = await db.query(
-		`INSERT INTO collections (user_id, name, is_system, visibility, article_count)
-		VALUES ($1, 'Unsorted', true, 'private', 0)
-		ON CONFLICT (user_id) WHERE is_system = true DO NOTHING
-		RETURNING id`,
-		[userId],
-	);
-	if (ins.rows[0]) return ins.rows[0].id as string;
-
-	const retry = await db.query(selectSql, [userId]);
-	return (retry.rows[0]?.id as string) ?? null;
-}
-
-async function addToUnsortedCollection(env: Env, userId: string, articleId: string, toType = 'article'): Promise<void> {
+async function addToProfileSaves(env: Env, userId: string, articleId: string, toType: 'article' | 'user_article'): Promise<void> {
 	const db = await createDbClient(env);
 	try {
-		const collectionId = await getOrCreateUnsortedCollection(db, userId);
-		if (!collectionId) return;
-
 		await db.query(
-			`INSERT INTO citations (from_type, from_id, to_type, to_id, relation_type, user_id)
-			VALUES ('collection', $1, $2, $3, 'resource', $4)
+			`INSERT INTO citations (from_type, from_id, to_type, to_id, user_id)
+			VALUES ('user', $1, $2, $3, $1)
 			ON CONFLICT DO NOTHING`,
-			[collectionId, toType, articleId, userId],
+			[userId, toType, articleId],
 		);
 	} finally {
 		await db.end();
