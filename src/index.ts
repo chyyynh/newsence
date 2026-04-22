@@ -7,7 +7,7 @@ import { handleWorkflowStatus, handleWorkflowStream } from './app/handlers/workf
 import { handleRetryCron } from './app/monitors/retry';
 import { handleArticleQueue, NewsenceMonitorWorkflow } from './domain/workflow';
 import { logInfo } from './infra/log';
-import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
+import type { Env, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
 import { handleBilibiliCron } from './platforms/bilibili/monitor';
 import { handleRSSCron } from './platforms/rss/monitor';
 import { handleTwitterCron } from './platforms/twitter/monitor';
@@ -69,7 +69,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 		return (await routeRequest(request, this.env)) ?? new Response(HELP_TEXT, { headers: { 'Content-Type': 'text/plain' } });
 	}
 
-	async scheduled(event: ScheduledEvent, _env?: Env, _ctx?: ExecutionContext): Promise<void> {
+	async scheduled(event: ScheduledEvent): Promise<void> {
 		logInfo('CORE', 'Scheduled', { cron: event.cron });
 		const ctx = this.ctx;
 
@@ -88,12 +88,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	}
 
 	// ── RPC: submit URL ──────────────────────────────────────
-	async submitUrl(args: {
-		url?: string;
-		urls?: string[];
-		userId?: string;
-		visibility?: 'public' | 'private';
-	}): Promise<SubmitOutcome> {
+	async submitUrl(args: { url?: string; urls?: string[]; userId?: string; visibility?: 'public' | 'private' }): Promise<SubmitOutcome> {
 		const urls = args.urls ?? (args.url ? [args.url] : []);
 		return submitUrls(this.env, {
 			urls,

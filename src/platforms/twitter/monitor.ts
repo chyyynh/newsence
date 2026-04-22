@@ -1,13 +1,14 @@
 import type { Client } from 'pg';
 import { distributeNonDefaultArticles } from '../../domain/distribute';
-import { scrapeTwitterArticle } from './scraper';
-import { scrapeWebPage } from '../web/scraper';
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
+import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
+import { fetchWithTimeout } from '../../infra/fetch';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '../../infra/web';
 import type { PlatformMetadata, QuotedTweetData, TwitterMedia } from '../../models/platform-metadata';
 import { buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '../../models/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '../../models/types';
+import { scrapeWebPage } from '../web/scraper';
+import { scrapeTwitterArticle } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Twitter Monitor
@@ -90,31 +91,22 @@ async function insertTwitterArticle(
 		hashTags?: string[];
 	},
 ): Promise<string | null> {
-	const result = await db.query(
-		`INSERT INTO ${ARTICLES_TABLE} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		 RETURNING id`,
-		[
-			data.url,
-			data.title,
-			data.source,
-			data.publishedDate,
-			new Date(),
-			data.hashTags || [],
-			[],
-			[],
-			data.summary,
-			'twitter',
-			data.content,
-			data.ogImage,
-			JSON.stringify(data.metadata),
-		],
-	);
-	const articleId = result.rows[0]?.id;
+	const articleId = await insertArticle(db, {
+		url: data.url,
+		title: data.title,
+		source: data.source,
+		publishedDate: data.publishedDate,
+		summary: data.summary,
+		sourceType: 'twitter',
+		content: data.content,
+		ogImageUrl: data.ogImage,
+		platformMetadata: data.metadata,
+		keywords: data.hashTags,
+	});
 	if (articleId) {
-		await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'twitter' });
+		await enqueueArticleProcess(env, articleId, 'twitter');
 	}
-	return articleId || null;
+	return articleId;
 }
 
 // -- Twitter Article (long-form) ----------------------------------------------
@@ -178,13 +170,11 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: st
 		return false;
 	}
 
-	let scraped;
-	try {
-		scraped = await scrapeWebPage(resolvedUrl);
-	} catch (err) {
+	const scraped = await scrapeWebPage(resolvedUrl).catch((err) => {
 		logWarn('TWITTER', 'Failed to scrape followed link', { url: resolvedUrl, error: String(err) });
-		return false;
-	}
+		return null;
+	});
+	if (!scraped) return false;
 
 	// Skip if scraped content is too short to be meaningful
 	if (!scraped.content || scraped.content.length < 100) {
@@ -257,8 +247,8 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 			externalOgImage = scraped.ogImageUrl;
 			externalTitle = scraped.title || null;
 			if (scraped.content && scraped.content.length > 100) externalContent = scraped.content;
-		} catch {
-			logWarn('TWITTER', 'Failed to fetch external link metadata', { url: externalUrl });
+		} catch (err) {
+			logWarn('TWITTER', 'Failed to fetch external link metadata', { url: externalUrl, error: String(err) });
 		}
 	}
 
@@ -324,7 +314,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 			`UPDATE ${ARTICLES_TABLE} SET summary = $1, content = $2, platform_metadata = $3, summary_cn = NULL, content_cn = NULL, title_cn = NULL, embedding = NULL WHERE id = $4`,
 			[combinedText, combinedText, JSON.stringify(metadata), existingId],
 		);
-		await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: existingId, source_type: 'twitter' });
+		await enqueueArticleProcess(env, existingId, 'twitter');
 		logInfo('TWITTER', 'Updated thread', { author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
@@ -356,51 +346,59 @@ function toTwitterDate(epochSec: number): string {
 		.replace(/\.\d+Z$/, '_UTC');
 }
 
+// -- Twitter Cron: staged pipeline --------------------------------------------
+
+async function getTwitterUsersToMonitor(db: Client): Promise<RSSFeed[]> {
+	const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1`, ['twitter_user']);
+	return result.rows as RSSFeed[];
+}
+
 /**
- * Fetch tweets for a batch of users via Advanced Search API.
- * Builds a query like: (from:user1 OR from:user2 ...) since:2025-01-01_00:00:00_UTC
+ * Global sinceTime = oldest scraped_at across all users minus a 1h overlap.
+ * If no user has been scraped before, fall back to 24h ago.
  */
-async function fetchBatchTweets(
+function calculateMonitoringSinceTime(users: RSSFeed[]): number {
+	if (!users.some((u) => u.scraped_at)) {
+		return Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+	}
+	const oldest = users.reduce((min, u) => {
+		if (!u.scraped_at) return min;
+		const t = new Date(u.scraped_at).getTime();
+		return t < min ? t : min;
+	}, Date.now());
+	return Math.floor((oldest - 60 * 60 * 1000) / 1000);
+}
+
+/** Fetch all tweets matching `(from:u1 OR from:u2 …) since:<date>`, paginating through cursors. */
+async function fetchTweetsForBatch(
 	apiKey: string,
 	userNames: string[],
 	sinceTime: number,
-	db: Client,
-	env: Env,
-): Promise<{ count: number; completed: boolean }> {
+): Promise<{ tweets: Tweet[]; completed: boolean }> {
 	const fromClause = userNames.map((u) => `from:${u}`).join(' OR ');
 	const sinceDate = toTwitterDate(sinceTime);
 	const query = `(${fromClause}) since:${sinceDate}`;
 
-	const allTweets: Tweet[] = [];
+	const tweets: Tweet[] = [];
 	let cursor = '';
-	let completed = true;
 
-	// Phase 1: Paginate through all results
 	while (true) {
-		const params = new URLSearchParams({
-			query,
-			queryType: 'Latest',
-		});
+		const params = new URLSearchParams({ query, queryType: 'Latest' });
 		if (cursor) params.set('cursor', cursor);
 
-		const res = await fetch(`${TWITTER_ADVANCED_SEARCH_API}?${params}`, {
-			headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
-		});
+		const res = await fetchWithTimeout(
+			`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
+			{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
+			20_000,
+		);
 		if (!res.ok) {
 			logError('TWITTER', 'Advanced Search HTTP error', { status: res.status, statusText: res.statusText });
-			completed = false;
-			break;
+			return { tweets, completed: false };
 		}
 
-		const apiRes = (await res.json()) as {
-			tweets?: Tweet[];
-			has_next_page?: boolean;
-			next_cursor?: string;
-		};
-
-		const tweets = apiRes.tweets || [];
-		for (const tweet of tweets) {
-			if (isNotRetweet(tweet)) allTweets.push(tweet);
+		const apiRes = (await res.json()) as { tweets?: Tweet[]; has_next_page?: boolean; next_cursor?: string };
+		for (const tweet of apiRes.tweets || []) {
+			if (isNotRetweet(tweet)) tweets.push(tweet);
 		}
 
 		if (!apiRes.has_next_page) break;
@@ -409,9 +407,17 @@ async function fetchBatchTweets(
 		await new Promise((r) => setTimeout(r, 1000));
 	}
 
-	// Phase 2: Thread detection — group by author then by conversationId
-	const rootTweets = allTweets.filter((t) => !t.isReply);
-	const selfReplies = allTweets.filter((t) => t.isReply && t.inReplyToUsername === t.author?.userName);
+	return { tweets, completed: true };
+}
+
+/**
+ * Group tweets by conversation so threads can be saved as a single merged article.
+ * Root tweets + self-replies in the same conversation merge; orphan self-replies
+ * (reply targets we didn't fetch) get saved as standalone tweets.
+ */
+function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
+	const rootTweets = tweets.filter((t) => !t.isReply);
+	const selfReplies = tweets.filter((t) => t.isReply && t.inReplyToUsername === t.author?.userName);
 
 	const rootConversationIds = new Set(rootTweets.map((t) => t.conversationId || t.id));
 	const threadReplies = selfReplies.filter((t) => t.conversationId && rootConversationIds.has(t.conversationId));
@@ -423,78 +429,60 @@ async function fetchBatchTweets(
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)!.push(tweet);
 	}
+	return [...groups.values()];
+}
 
-	// Phase 3: Save each group
+async function saveTweetGroups(db: Client, env: Env, groups: Tweet[][]): Promise<number> {
 	let count = 0;
-	for (const tweets of groups.values()) {
+	for (const group of groups) {
 		try {
-			if (tweets.length >= 2) {
-				if (await saveThread(tweets, db, env)) count++;
+			if (group.length >= 2) {
+				if (await saveThread(group, db, env)) count++;
 			} else {
-				if (await saveTweet(tweets[0], db, env)) count++;
+				if (await saveTweet(group[0], db, env)) count++;
 			}
 		} catch (err) {
-			logError('TWITTER', 'Save failed', { url: tweets[0]?.url, error: String(err) });
+			logError('TWITTER', 'Save failed', { url: group[0]?.url, error: String(err) });
 		}
 	}
-
-	return { count, completed };
+	return count;
 }
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('TWITTER', 'start');
 	const db = await createDbClient(env);
 	try {
-		const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1`, ['twitter_user']);
-		const users = result.rows as RSSFeed[];
-
+		const users = await getTwitterUsersToMonitor(db);
 		if (!users.length) {
 			logInfo('TWITTER', 'No twitter_user entries in RssList');
 			return;
 		}
 
-		// Compute the global sinceTime from the oldest scraped_at across all users
-		// (with 1-hour overlap for safety)
-		const oldestScrapedAt = users.reduce((min, u) => {
-			if (!u.scraped_at) return min;
-			const t = new Date(u.scraped_at).getTime();
-			return t < min ? t : min;
-		}, Date.now());
-		const sinceTime = Math.floor((oldestScrapedAt - 60 * 60 * 1000) / 1000);
-		// Fallback: if no user has been scraped before, look back 24h
-		const effectiveSince = users.some((u) => u.scraped_at) ? sinceTime : Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
-
-		// Batch users into groups of TWITTER_BATCH_SIZE
+		const sinceTime = calculateMonitoringSinceTime(users);
 		const userNames = users.map((u) => u.RSSLink).filter(Boolean);
 		const batches: string[][] = [];
 		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
 			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
 		}
 
-		logInfo('TWITTER', 'Fetching via Advanced Search', {
-			users: userNames.length,
-			batches: batches.length,
-			sinceTime: effectiveSince,
-		});
+		logInfo('TWITTER', 'Fetching via Advanced Search', { users: userNames.length, batches: batches.length, sinceTime });
 
 		let total = 0;
 		let allCompleted = true;
 		for (const batch of batches) {
-			const batchResult = await fetchBatchTweets(env.KAITO_API_KEY || '', batch, effectiveSince, db, env);
-			total += batchResult.count;
-			if (!batchResult.completed) allCompleted = false;
+			const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY || '', batch, sinceTime);
+			if (!completed) allCompleted = false;
+			const groups = groupTweetsIntoThreads(tweets);
+			total += await saveTweetGroups(db, env, groups);
 		}
 
-		// Advance scraped_at only for users that were actually fetched
+		// Advance scraped_at only if every batch completed — partial fetches would
+		// let the next cron skip tweets we failed to pull.
 		if (allCompleted) {
-			const now = new Date();
-			const ids = users.map((u) => u.id);
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [now, ids]);
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), users.map((u) => u.id)]);
 		}
 
-		// Distribute non-default Twitter articles to subscribers
 		await distributeNonDefaultArticles(db, 'twitter_user');
-
 		logInfo('TWITTER', 'end', { inserted: total, users: users.length, batches: batches.length });
 	} finally {
 		await db.end();

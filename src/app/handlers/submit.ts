@@ -1,5 +1,12 @@
 import { detectPlatformType, type ScrapedContent, scrapeUrl } from '../../domain/scrapers';
-import { ARTICLES_TABLE, createDbClient, USER_ARTICLES_TABLE } from '../../infra/db';
+import {
+	ARTICLES_TABLE,
+	createDbClient,
+	insertArticle,
+	insertUserArticle,
+	USER_ARTICLES_TABLE,
+	upsertYoutubeTranscript,
+} from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { PlatformMetadata } from '../../models/platform-metadata';
@@ -83,97 +90,49 @@ async function scrapeAndInsert(
 		const table = targetTable ?? ARTICLES_TABLE;
 		const isUserArticle = table === USER_ARTICLES_TABLE;
 		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
-		const platformMetadataJson = normalizedPlatformMetadata
-			? JSON.stringify({
+		const platformMetadataToStore = normalizedPlatformMetadata
+			? {
 					...normalizedPlatformMetadata,
 					ogImageWidth: scraped.ogImageWidth ?? null,
 					ogImageHeight: scraped.ogImageHeight ?? null,
-				})
+				}
 			: null;
 
-		let insertResult: { rows: { id: string }[] };
-		if (isUserArticle) {
-			insertResult = await db.query(
-				`INSERT INTO ${table}
-					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-				RETURNING id`,
-				[
-					url,
-					scraped.title,
-					scraped.siteName || 'External',
-					scraped.publishedDate || new Date().toISOString(),
-					new Date().toISOString(),
-					scraped.summary || '',
-					platformType,
-					scraped.content || null,
-					scraped.ogImageUrl || null,
-					[],
-					[],
-					platformMetadataJson,
-					userId,
-					visibility,
-				],
-			);
-		} else {
-			insertResult = await db.query(
-				`INSERT INTO ${table}
-					(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-				RETURNING id`,
-				[
-					url,
-					scraped.title,
-					scraped.siteName || 'External',
-					scraped.publishedDate || new Date().toISOString(),
-					new Date().toISOString(),
-					scraped.summary || '',
-					platformType,
-					scraped.content || null,
-					scraped.ogImageUrl || null,
-					[],
-					[],
-					[],
-					platformMetadataJson,
-				],
-			);
-		}
+		const baseData = {
+			url,
+			title: scraped.title,
+			source: scraped.siteName || 'External',
+			publishedDate: scraped.publishedDate || new Date().toISOString(),
+			summary: scraped.summary || '',
+			sourceType: platformType,
+			content: scraped.content || null,
+			ogImageUrl: scraped.ogImageUrl || null,
+			platformMetadata: platformMetadataToStore,
+		};
 
-		const inserted = insertResult.rows;
-		if (!inserted?.[0]?.id) {
-			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned' });
+		const articleId = isUserArticle
+			? await insertUserArticle(db, { ...baseData, userId: userId as string, visibility: visibility as 'public' | 'private' })
+			: await insertArticle(db, baseData);
+
+		if (!articleId) {
+			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned (duplicate?)' });
 			return { error: 'DB insert failed' };
 		}
 
 		// Save YouTube transcript to dedicated table (after article insert so no orphans)
 		if (scraped.youtubeTranscript) {
-			const yt = scraped.youtubeTranscript;
 			try {
-				await db.query(
-					`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
-					VALUES ($1, $2, $3, $4, $5, $6)
-					ON CONFLICT (video_id) DO UPDATE SET
-						transcript = EXCLUDED.transcript,
-						language = EXCLUDED.language,
-						chapters = EXCLUDED.chapters,
-						chapters_from_description = EXCLUDED.chapters_from_description,
-						fetched_at = EXCLUDED.fetched_at`,
-					[
-						yt.videoId,
-						JSON.stringify(yt.segments),
-						yt.language,
-						yt.chapters ? JSON.stringify(yt.chapters) : null,
-						yt.chaptersFromDescription,
-						new Date().toISOString(),
-					],
-				);
+				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
 			} catch (transcriptErr) {
-				logError('YOUTUBE', 'Failed to save transcript', { videoId: yt.videoId, error: String(transcriptErr) });
+				logError('YOUTUBE', 'Failed to save transcript', {
+					videoId: scraped.youtubeTranscript.videoId,
+					error: String(transcriptErr),
+				});
 			}
 		}
 
 		logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50), table });
-		return { articleId: inserted[0].id, scraped, platformType };
+		return { articleId, scraped, platformType };
 	} catch (err) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
 		return { error: 'DB insert failed' };

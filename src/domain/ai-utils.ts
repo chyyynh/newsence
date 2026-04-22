@@ -34,11 +34,7 @@ export interface ProcessorContext {
 	table: string;
 }
 
-export interface ProcessingDeps {
-	env: Env;
-	db: Client;
-	table: string;
-}
+export type ProcessingDeps = ProcessorContext;
 
 export interface ArticleProcessor {
 	readonly sourceType: string;

@@ -1,6 +1,14 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
 import { fanOutToSubscribers, getSourceSubscribers, getSubscribedSources } from '../../domain/distribute';
+import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API, scrapeWebPage } from '../../domain/scrapers';
+import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
+import { fetchWithTimeout } from '../../infra/fetch';
+import { logInfo, logWarn } from '../../infra/log';
+import { normalizeUrl } from '../../infra/web';
+import type { PlatformMetadata } from '../../models/platform-metadata';
+import { buildHackerNews } from '../../models/platform-metadata';
+import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
 import { type FeedConfig, getFeedConfig } from './feed-config';
 import {
 	extractImageFromItem,
@@ -12,13 +20,6 @@ import {
 	stripHtml,
 	toPlainText,
 } from './parser';
-import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API, scrapeWebPage } from '../../domain/scrapers';
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
-import { logError, logInfo, logWarn } from '../../infra/log';
-import { normalizeUrl } from '../../infra/web';
-import type { PlatformMetadata } from '../../models/platform-metadata';
-import { buildHackerNews } from '../../models/platform-metadata';
-import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -122,69 +123,50 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
 	const content = crawledContent || null;
 
-	const table = ARTICLES_TABLE;
 	const publishedDate = pubDate ? new Date(pubDate) : new Date();
-	const scrapedDate = new Date();
 	const title = item.title ?? item.text ?? 'No Title';
 	const source = feed.name ?? 'Unknown';
 	const summary = sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
 
-	const result = await db.query(
-		`INSERT INTO ${table} (url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		 RETURNING id`,
-		[
-			url,
-			title,
-			source,
-			publishedDate,
-			scrapedDate,
-			[],
-			[],
-			[],
-			summary,
-			sourceType,
-			content,
-			ogImageUrl,
-			platformMetadata
-				? JSON.stringify({ ...platformMetadata, ogImageWidth, ogImageHeight })
-				: ogImageWidth && ogImageHeight
-					? JSON.stringify({
-							type: 'default',
-							fetchedAt: new Date().toISOString(),
-							data: null,
-							ogImageWidth,
-							ogImageHeight,
-						})
-					: null,
-		],
-	);
+	const metadataToStore = platformMetadata
+		? { ...platformMetadata, ogImageWidth, ogImageHeight }
+		: ogImageWidth && ogImageHeight
+			? { type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
+			: null;
 
-	if (result.rows.length === 0)
-		return logError('RSS', 'Insert error', {
-			feed: feed.name,
-			error: 'No rows returned',
-		});
+	const articleId = await insertArticle(db, {
+		url,
+		title,
+		source,
+		publishedDate,
+		summary,
+		sourceType,
+		content,
+		ogImageUrl,
+		platformMetadata: metadataToStore,
+	});
 
-	const articleId = result.rows[0]?.id;
-	if (articleId) {
-		await env.ARTICLE_QUEUE.send({
-			type: 'article_process',
-			article_id: articleId,
-			source_type: sourceType,
-		});
+	if (!articleId) {
+		return logInfo('RSS', 'Insert skipped (duplicate URL)', { feed: feed.name, url });
 	}
+
+	await enqueueArticleProcess(env, articleId, sourceType);
 }
 
 async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
-	const res = await fetch(feed.RSSLink, {
-		headers: {
-			'User-Agent': USER_AGENT,
-			Accept: 'application/rss+xml, application/xml, text/xml, */*',
-		},
-	});
+	let res: Response;
+	try {
+		res = await fetchWithTimeout(feed.RSSLink, {
+			headers: {
+				'User-Agent': USER_AGENT,
+				Accept: 'application/rss+xml, application/xml, text/xml, */*',
+			},
+		});
+	} catch (err) {
+		return logWarn('RSS', 'Feed fetch failed', { feed: feed.name, error: String(err) });
+	}
 	if (!res.ok)
 		return logWarn('RSS', 'Feed fetch failed', {
 			feed: feed.name,
@@ -314,7 +296,7 @@ async function processSubscribedFeeds(db: Client, env: Env, parser: XMLParser, s
 	for (const feed of feeds) {
 		if (!feed.RSSLink || feed.type !== 'rss') continue;
 		try {
-			const res = await fetch(feed.RSSLink, {
+			const res = await fetchWithTimeout(feed.RSSLink, {
 				headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/xml, text/xml, */*' },
 			});
 			if (!res.ok) {

@@ -1,11 +1,12 @@
 import { XMLParser } from 'fast-xml-parser';
 import { distributeNonDefaultArticles } from '../../domain/distribute';
-import { scrapeYouTube } from './scraper';
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
+import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '../../infra/db';
+import { fetchWithTimeout } from '../../infra/fetch';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
-import { buildYouTube } from './metadata';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
+import { buildYouTube } from './metadata';
+import { scrapeYouTube } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // YouTube Channel Monitor
@@ -51,14 +52,13 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 		}
 
 		const parser = new XMLParser({ ignoreAttributes: false });
-		const table = ARTICLES_TABLE;
 		let totalInserted = 0;
 
 		for (const channel of channels) {
 			if (!channel.RSSLink) continue;
 			try {
 				// Fetch YouTube Atom feed
-				const res = await fetch(channel.RSSLink, {
+				const res = await fetchWithTimeout(channel.RSSLink, {
 					headers: { 'User-Agent': USER_AGENT },
 				});
 				if (!res.ok) {
@@ -75,8 +75,7 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 
 				// Dedup: check which video URLs already exist
 				const videoUrls = entries.map((e) => normalizeUrl(`https://www.youtube.com/watch?v=${e['yt:videoId']}`));
-				const existing = await db.query(`SELECT url FROM ${table} WHERE url = ANY($1)`, [videoUrls]);
-				const existingSet = new Set((existing.rows as { url: string }[]).map((r) => normalizeUrl(r.url)));
+				const existingSet = await getExistingUrls(db, videoUrls);
 
 				const newEntries = entries.filter((e) => !existingSet.has(normalizeUrl(`https://www.youtube.com/watch?v=${e['yt:videoId']}`)));
 
@@ -115,61 +114,27 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 							tags: (scraped.metadata?.tags as string[]) || undefined,
 						});
 
-						const insertResult = await db.query(
-							`INSERT INTO ${table}
-								(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, tokens, platform_metadata)
-							VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-							ON CONFLICT (url) DO NOTHING
-							RETURNING id`,
-							[
-								url,
-								scraped.title,
-								channel.name,
-								scraped.publishedDate || new Date().toISOString(),
-								new Date().toISOString(),
-								scraped.summary || '',
-								'youtube',
-								scraped.content || null,
-								scraped.ogImageUrl || null,
-								[],
-								[],
-								[],
-								JSON.stringify(platformMetadata),
-							],
-						);
+						const articleId = await insertArticle(db, {
+							url,
+							title: scraped.title,
+							source: channel.name,
+							publishedDate: scraped.publishedDate || new Date().toISOString(),
+							summary: scraped.summary || '',
+							sourceType: 'youtube',
+							content: scraped.content || null,
+							ogImageUrl: scraped.ogImageUrl || null,
+							platformMetadata,
+						});
 
-						const articleId = insertResult.rows[0]?.id;
 						if (!articleId) continue;
 
 						// Save transcript
 						if (scraped.youtubeTranscript) {
-							const yt = scraped.youtubeTranscript;
-							await db.query(
-								`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
-								VALUES ($1, $2, $3, $4, $5, $6)
-								ON CONFLICT (video_id) DO UPDATE SET
-									transcript = EXCLUDED.transcript,
-									language = EXCLUDED.language,
-									chapters = EXCLUDED.chapters,
-									chapters_from_description = EXCLUDED.chapters_from_description,
-									fetched_at = EXCLUDED.fetched_at`,
-								[
-									yt.videoId,
-									JSON.stringify(yt.segments),
-									yt.language,
-									yt.chapters ? JSON.stringify(yt.chapters) : null,
-									yt.chaptersFromDescription,
-									new Date().toISOString(),
-								],
-							);
+							await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
 						}
 
 						// Queue for AI processing
-						await env.ARTICLE_QUEUE.send({
-							type: 'article_process',
-							article_id: articleId,
-							source_type: 'youtube',
-						});
+						await enqueueArticleProcess(env, articleId, 'youtube');
 
 						totalInserted++;
 						logInfo('YOUTUBE-CRON', 'Inserted video', { channel: channel.name, title: scraped.title.slice(0, 60) });

@@ -68,7 +68,12 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
 		save = params.get('save') === 'true';
 		model = params.get('model') || model;
 	} else {
-		const body = (await request.json().catch(() => ({}))) as PreviewBody;
+		let body: PreviewBody;
+		try {
+			body = (await request.json()) as PreviewBody;
+		} catch {
+			return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+		}
 		url = body.url ?? (body.message ? extractUrl(body.message) : null);
 		save = body.save ?? false;
 		model = body.model || model;
