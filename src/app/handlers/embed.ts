@@ -18,7 +18,12 @@ function normalizeEmbedding(v: number[]): number[] {
 export async function handleEmbed(request: Request, env: Env): Promise<Response> {
 	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
-	const body = (await request.json().catch(() => ({}))) as { text?: string; texts?: string[] };
+	let body: { text?: string; texts?: string[] };
+	try {
+		body = (await request.json()) as { text?: string; texts?: string[] };
+	} catch {
+		return Response.json({ error: 'Invalid JSON body' }, { status: 400, headers: CORS_HEADERS });
+	}
 	const input = body.texts || (body.text ? [body.text] : []);
 	if (input.length === 0) {
 		return Response.json({ error: 'No text provided' }, { status: 400, headers: CORS_HEADERS });

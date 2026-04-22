@@ -4,7 +4,7 @@
 
 import { distributeNonDefaultArticles } from '../../domain/distribute';
 import type { DbClient } from '../../infra/db';
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
+import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
@@ -20,19 +20,7 @@ function noteUrl(uid: string, noteId: string): string {
 	return normalizeUrl(`https://www.xiaohongshu.com/user/profile/${uid}/${noteId}`);
 }
 
-async function deduplicateUrls(db: DbClient, urls: string[], table: string): Promise<Set<string>> {
-	const existingSet = new Set<string>();
-	for (let i = 0; i < urls.length; i += 50) {
-		const chunk = urls.slice(i, i + 50);
-		const existing = await db.query(`SELECT url FROM ${table} WHERE url = ANY($1)`, [chunk]);
-		for (const row of existing.rows as { url: string }[]) {
-			existingSet.add(normalizeUrl(row.url));
-		}
-	}
-	return existingSet;
-}
-
-async function insertNote(db: DbClient, env: Env, note: XhsNote, feed: RSSFeed, nickname: string, table: string): Promise<boolean> {
+async function insertNote(db: DbClient, env: Env, note: XhsNote, feed: RSSFeed, nickname: string): Promise<boolean> {
 	const url = noteUrl(feed.RSSLink, note.noteId);
 	const authorName = note.user?.nickname || nickname || feed.name;
 
@@ -44,33 +32,21 @@ async function insertNote(db: DbClient, env: Env, note: XhsNote, feed: RSSFeed, 
 		likeCount: note.likeCount,
 	});
 
-	const insertResult = await db.query(
-		`INSERT INTO ${table}
-			(url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (url) DO NOTHING
-		RETURNING id`,
-		[
-			url,
-			note.displayTitle || `Xiaohongshu Note ${note.noteId}`,
-			feed.name,
-			new Date().toISOString(),
-			new Date().toISOString(),
-			[],
-			[],
-			[],
-			'',
-			'xiaohongshu',
-			null,
-			note.coverUrl || null,
-			JSON.stringify(platformMetadata),
-		],
-	);
+	const articleId = await insertArticle(db, {
+		url,
+		title: note.displayTitle || `Xiaohongshu Note ${note.noteId}`,
+		source: feed.name,
+		publishedDate: new Date().toISOString(),
+		summary: '',
+		sourceType: 'xiaohongshu',
+		content: null,
+		ogImageUrl: note.coverUrl || null,
+		platformMetadata,
+	});
 
-	const articleId = insertResult.rows[0]?.id;
 	if (!articleId) return false;
 
-	await env.ARTICLE_QUEUE.send({ type: 'article_process', article_id: articleId, source_type: 'xiaohongshu' });
+	await enqueueArticleProcess(env, articleId, 'xiaohongshu');
 	logInfo('XHS-CRON', 'Inserted note', { user: feed.name, title: (note.displayTitle || note.noteId).slice(0, 60) });
 	return true;
 }
@@ -93,7 +69,6 @@ export async function handleXiaohongshuCron(env: Env, _ctx: ExecutionContext): P
 			return;
 		}
 
-		const table = ARTICLES_TABLE;
 		let totalInserted = 0;
 
 		for (const feed of users) {
@@ -106,7 +81,7 @@ export async function handleXiaohongshuCron(env: Env, _ctx: ExecutionContext): P
 				}
 
 				const allUrls = userData.notes.map((n) => noteUrl(feed.RSSLink, n.noteId));
-				const existingSet = await deduplicateUrls(db, allUrls, table);
+				const existingSet = await getExistingUrls(db, allUrls);
 				const newNotes = userData.notes.filter((n) => !existingSet.has(noteUrl(feed.RSSLink, n.noteId)));
 
 				if (!newNotes.length) {
@@ -116,7 +91,7 @@ export async function handleXiaohongshuCron(env: Env, _ctx: ExecutionContext): P
 
 				for (const note of newNotes) {
 					try {
-						if (await insertNote(db, env, note, feed, userData.nickname, table)) totalInserted++;
+						if (await insertNote(db, env, note, feed, userData.nickname)) totalInserted++;
 					} catch (err) {
 						logWarn('XHS-CRON', 'Note insert failed', { noteId: note.noteId, error: String(err) });
 					}

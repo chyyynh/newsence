@@ -1,6 +1,6 @@
 import { prepareArticleTextForEmbedding } from '../infra/embedding';
 import type { PlatformEnrichments, PlatformMetadata } from '../models/platform-metadata';
-import type { Article, Env } from '../models/types';
+import type { Article } from '../models/types';
 import {
 	type ArticleProcessor,
 	callGeminiForAnalysis,
@@ -82,13 +82,7 @@ export async function runArticleProcessor(
 	sourceType: string | undefined,
 	deps: ProcessingDeps,
 ): Promise<ProcessorResult> {
-	const processor = getProcessor(sourceType);
-	const ctx: ProcessorContext = {
-		env: deps.env,
-		db: deps.db,
-		table: deps.table,
-	};
-	return processor.process(article, ctx);
+	return getProcessor(sourceType).process(article, deps);
 }
 
 export async function persistProcessorResult(

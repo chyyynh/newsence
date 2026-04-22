@@ -20,21 +20,7 @@
 
 ## What is newsence?
 
-newsence is a content discovery system. It continuously monitors sources across the web, extracts structured knowledge from every article, and makes it available for search, analysis, and AI-powered workflows.
-
-Think of it as an always-on research assistant that reads everything, extracts who's involved, what technologies are mentioned, and what events are happening — then organizes it all into a searchable knowledge base.
-
-**Core loop:**
-```
-Sources arrive (RSS, Twitter, YouTube, HN, Bilibili, Xiaohongshu, manual)
-  → AI reads and analyzes each article
-  → Extracts entities (people, orgs, products, tech, events)
-  → Generates bilingual summaries (EN + Traditional Chinese)
-  → Creates semantic embeddings for search
-  → Links articles through shared entities
-```
-
-This repo is the engine: a single Cloudflare Worker that handles the full content pipeline.
+Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter / YouTube / HN / Bilibili / Xiaohongshu, runs bilingual AI analysis on each, stores them as searchable embeddings, entities graph. Follows the [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern — each source is read once and integrated into a persistent artifact (summaries, entities, embeddings, cross-refs), not RAG'd at query time.
 
 ## Supported Platforms
 
@@ -45,17 +31,16 @@ This repo is the engine: a single Cloudflare Worker that handles the full conten
 ![Bilibili](https://img.shields.io/badge/Bilibili-00A1D6?logo=bilibili&logoColor=white)
 ![Xiaohongshu](https://img.shields.io/badge/Xiaohongshu-FF2442?logo=xiaohongshu&logoColor=white)
 
-| Platform | Type | Schedule | What it does |
-|----------|------|----------|--------------|
-| **RSS Feeds** | Monitor | Every 5 min | Fetches feeds, deduplicates by URL, detects HN links |
-| **Twitter/X** | Monitor | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media |
-| **YouTube** | Monitor | Every 30 min | Atom feed → video metadata, transcripts, chapters, AI highlights |
-| **Bilibili** | Monitor | Every 30 min | gRPC mobile API → user dynamics, video cards |
-| **Xiaohongshu** | Monitor | Every 30 min | Profile scraping → user notes, covers |
-| **Hacker News** | Processor | Via RSS | Detects HN links → fetches comments via Algolia → generates editorial notes |
-| **Web** | Scraper | On demand | Full content extraction (Readability + Cheerio), OG metadata |
-| **User Submissions** | Ingestion | Real-time | `POST /submit` — full crawl + AI, sync response |
-| **Telegram Bot** | Ingestion | Real-time | Send URL in chat → get bilingual summary back |
+| Platform             | Type      | Schedule      | What it does                                                                |
+| -------------------- | --------- | ------------- | --------------------------------------------------------------------------- |
+| **RSS Feeds**        | Monitor   | Every 5 min   | Fetches feeds, deduplicates by URL, detects HN links                        |
+| **Twitter/X**        | Monitor   | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media               |
+| **YouTube**          | Monitor   | Every 30 min  | Atom feed → video metadata, transcripts, chapters, AI highlights            |
+| **Bilibili**         | Monitor   | Every 30 min  | gRPC mobile API → user dynamics, video cards                                |
+| **Xiaohongshu**      | Monitor   | Every 30 min  | Profile scraping → user notes, covers                                       |
+| **Hacker News**      | Processor | Via RSS       | Detects HN links → fetches comments via Algolia → generates editorial notes |
+| **Web**              | Scraper   | On demand     | Full content extraction (Readability + Cheerio), OG metadata                |
+| **User Submissions** | Ingestion | Real-time     | `POST /submit` — full crawl + workflow, sync response                       |
 
 All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 
@@ -64,51 +49,93 @@ All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 Each article goes through an automated workflow with independent retries:
 
 ```
-URL arrives (RSS cron / Twitter cron / user submit / Telegram bot)
+URL arrives (RSS cron / Twitter cron / YouTube cron / /submit)
   │
-  ├─  1. Fetch Article ──── Load article from database
-  ├─  2. AI Analysis ────── Gemini Flash → bilingual title, summary, tags, keywords, entities
-  ├─  3. Fetch OG Image ─── Grab OG image if missing (lightweight, first 32KB)
-  ├─  4. Translate Content ─ Full article → Traditional Chinese
-  ├─  5. Save to DB ──────── Write all AI results in a single UPDATE
-  ├─  5b. Sync Entities ─── Upsert entities to normalized tables, link to article
-  ├─  6. Notify Telegram ─── Push results to Telegram bot (if triggered via bot)
-  ├─  7. YouTube Highlights  Generate AI highlights from transcript (YouTube only)
-  └─  8. Embed ───────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
+  ├─ 1. Fetch Article ──────── Load article row from database
+  ├─ 2. AI Analysis ────────── Gemini Flash Lite → bilingual title, summary, tags, keywords, entities
+  ├─ 3. Fetch OG Image ─────── Grab OG image if missing (first 32 KB of HTML)
+  ├─ 4. Translate Content ──── Full article → Traditional Chinese
+  ├─ 5. Save to DB ─────────── Write all AI results in a single UPDATE
+  ├─    Sync Entities ──────── (conditional) Upsert entities, link to article
+  ├─ 6. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
+  └─ 7. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
 ```
 
-~30 seconds per article. Each step retries independently with exponential backoff.
+Roughly 30 seconds per article. Each step retries independently with exponential backoff.
 
 ## AI Pipeline
 
-| Stage | Model | What it does |
-|-------|-------|--------------|
-| **Analysis** | Gemini Flash Lite | Article → bilingual title, summary, tags, keywords, category |
-| **Entity Extraction** | Gemini Flash Lite | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
-| **Content Translation** | Gemini Flash | Full article content → Traditional Chinese |
-| **Embedding** | BGE-M3 (1024d) | Title + summary + content + entity names → dense vector (HNSW-indexed) |
+| Stage                   | Model             | What it does                                                                                      |
+| ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
+| **Analysis**            | Gemini Flash Lite | Article → bilingual title, summary, tags, keywords, category                                      |
+| **Entity Extraction**   | Gemini Flash Lite | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
+| **Content Translation** | Gemini Flash      | Full article content → Traditional Chinese                                                        |
+| **Embedding**           | BGE-M3 (1024d)    | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
 Entity extraction happens in the same LLM call as analysis — zero extra API cost.
 
 ## Stack
 
-| Layer | Technology |
-|-------|------------|
-| Runtime | Cloudflare Workers (V8 isolates) |
-| Orchestration | Cloudflare Queues + Workflows |
-| Database | Supabase PostgreSQL + pgvector |
-| LLM | OpenRouter → Gemini Flash / Flash Lite |
-| Embeddings | Cloudflare Workers AI → BGE-M3 |
-| Twitter Data | Kaito API |
+| Layer         | Technology                                        |
+| ------------- | ------------------------------------------------- |
+| Runtime       | Cloudflare Workers (V8 isolates)                  |
+| Orchestration | Cloudflare Queues + Workflows                     |
+| Database      | PostgreSQL + pgvector (via Cloudflare Hyperdrive) |
+| LLM           | OpenRouter → Gemini Flash / Flash Lite            |
+| Embeddings    | Cloudflare Workers AI → BGE-M3                    |
+| Twitter Data  | Kaito API (third-party)                           |
 
-## Quick Start
+## Self-Hosting
+
+The one-click Deploy button above handles Worker + Queue + Workflow, but **Hyperdrive, the database, and secrets need manual setup**. Full walkthrough:
+
+### 1. Database
+
+You need a PostgreSQL instance with pgvector. Tested with Supabase; any Postgres ≥ 15 with the `vector` extension works.
+
+Required tables: `articles`, `user_articles`, `RssList`, `youtube_transcripts`, plus entity/citation tables. The canonical schema is defined in `frontend/prisma/schema.prisma` in the parent monorepo — a standalone `schema.sql` is on the roadmap. For now, inspect the Prisma models or reach out via Issues if you want to run just the worker.
+
+### 2. Hyperdrive binding
+
+Create a Hyperdrive that points to your database:
+
+```bash
+wrangler hyperdrive create newsence-db \
+  --connection-string="postgres://user:pass@host:5432/dbname"
+```
+
+Copy the returned ID into `wrangler.jsonc` under the `hyperdrive[].id` field.
+
+### 3. Cloudflare Queues + Workflow
+
+Create the article-processing queue (the Worker is already configured as both producer and consumer):
+
+```bash
+wrangler queues create article-processing-queue-core
+wrangler queues create article-processing-dlq-core
+```
+
+Workflows are provisioned automatically on first deploy via the `workflows` binding in `wrangler.jsonc`.
+
+### 4. Secrets
+
+Only `OPENROUTER_API_KEY` is strictly required. The others enable specific platforms:
+
+```bash
+wrangler secret put OPENROUTER_API_KEY       # required — AI analysis
+wrangler secret put KAITO_API_KEY            # optional — Twitter monitoring
+wrangler secret put YOUTUBE_API_KEY          # optional — YouTube monitoring
+wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # optional — auth for /submit
+```
+
+### 5. Deploy
 
 ```bash
 pnpm install
-cp wrangler.jsonc.example wrangler.jsonc   # add your API keys
-pnpm dev                                    # local dev server
-pnpm run deploy                             # deploy to Cloudflare
+pnpm run deploy
 ```
+
+Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can curl `/__scheduled?cron=*/5+*+*+*+*` to trigger RSS manually).
 
 ## API
 
@@ -133,22 +160,24 @@ curl -X POST https://your-worker.workers.dev/embed \
 ```json
 {
   "success": true,
-  "results": [{
-    "articleId": "550e8400-e29b-41d4-a716-446655440000",
-    "title": "Article Title",
-    "sourceType": "web",
-    "alreadyExists": false
-  }]
+  "results": [
+    {
+      "articleId": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "Article Title",
+      "sourceType": "web",
+      "alreadyExists": false
+    }
+  ]
 }
 ```
 
 </details>
 
-Optional auth: `X-Internal-Token` header. Rate limiting: 20 req/60s per key (configurable).
+Optional auth: `X-Internal-Token` header. Rate limiting: 20 req/60s per key (configurable via `SUBMIT_RATE_LIMIT_MAX` / `SUBMIT_RATE_LIMIT_WINDOW_SEC`).
 
 ## CLI & MCP
 
-Also available as a CLI and [MCP](https://modelcontextprotocol.io) server:
+Also available as a CLI and [MCP](https://modelcontextprotocol.io) server via the separate [`newsence`](https://www.npmjs.com/package/newsence) npm package:
 
 ```bash
 npx newsence search "AI agents"       # search articles
@@ -162,35 +191,66 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 
 ```
 src/
-├── index.ts                  # Entry — routes HTTP, Cron, Queue
-├── platforms/                # Each platform is self-contained
-│   ├── twitter/              # monitor, scraper, processor, metadata
-│   ├── youtube/              # monitor, scraper, highlights, metadata
-│   ├── hackernews/           # scraper, processor, metadata
-│   ├── rss/                  # monitor, parser, feed-config
-│   └── web/                  # scraper (shared web + OG extraction)
+├── index.ts              # Entry — routes HTTP, Cron, Queue, Workflow
+├── platforms/            # Each platform lives in its own folder
+│   ├── twitter/          # monitor + scraper + processor + metadata
+│   ├── youtube/          # monitor + scraper + highlights + metadata
+│   ├── hackernews/       # scraper + processor + metadata (no monitor — fed by RSS)
+│   ├── bilibili/         # monitor + scraper + metadata
+│   ├── xiaohongshu/      # monitor + scraper + metadata
+│   ├── rss/              # monitor + parser + feed-config
+│   └── web/              # shared scraper (Readability + Cheerio + OG extraction)
 ├── domain/
-│   ├── workflow.ts           # Workflow orchestration
-│   ├── processors.ts         # AI processor factory + DefaultProcessor
-│   ├── ai-utils.ts           # Shared AI functions (Gemini, translation)
-│   ├── entities.ts           # Entity sync to normalized tables
-│   └── distribute.ts         # Subscription fan-out for non-default sources
-├── infra/                    # OpenRouter, Workers AI, DB, HTTP utilities
-├── models/                   # Types, platform metadata union
-└── app/handlers/             # HTTP route handlers
+│   ├── workflow.ts       # Queue consumer + NewsenceMonitorWorkflow orchestration
+│   ├── processors.ts     # AI processor registry + DefaultProcessor
+│   ├── ai-utils.ts       # Shared AI helpers (Gemini, translation)
+│   ├── entities.ts       # Entity sync to normalized tables
+│   └── distribute.ts     # Subscription fan-out for non-default sources
+├── infra/
+│   ├── db.ts             # Hyperdrive client + insertArticle / dedup / transcript helpers
+│   ├── fetch.ts          # fetchWithTimeout
+│   ├── log.ts            # Structured JSON logging
+│   └── openrouter.ts     # OpenRouter + embedding wrappers
+├── models/               # Types + PlatformMetadata discriminated union
+└── app/handlers/         # HTTP route handlers (/submit, /preview, /embed, /health)
 ```
 
-## Environment Variables
+## Environment Variables & Bindings
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SUPABASE_URL` | Yes | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key |
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key |
-| `CORE_WORKER_INTERNAL_TOKEN` | No | Auth token for `/submit` |
-| `YOUTUBE_API_KEY` | No | YouTube Data API |
-| `KAITO_API_KEY` | No | Kaito API (Twitter) |
-| `TRANSCRIPT_API_KEY` | No | YouTube transcript API |
+Bindings (in `wrangler.jsonc`):
+
+| Binding            | Purpose                                      |
+| ------------------ | -------------------------------------------- |
+| `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
+| `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
+| `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
+| `AI`               | Workers AI (BGE-M3 embeddings)               |
+| `BROWSER`          | Cloudflare Browser Rendering (reserved)      |
+
+Secrets (via `wrangler secret put`):
+
+| Variable                       | Required | Description                              |
+| ------------------------------ | -------- | ---------------------------------------- |
+| `OPENROUTER_API_KEY`           | Yes      | OpenRouter (Gemini) for AI analysis      |
+| `CORE_WORKER_INTERNAL_TOKEN`   | No       | Bearer token for `/submit` endpoint      |
+| `KAITO_API_KEY`                | No       | Enables Twitter monitoring               |
+| `YOUTUBE_API_KEY`              | No       | Enables YouTube channel monitoring       |
+| `SUBMIT_RATE_LIMIT_MAX`        | No       | Requests allowed per window (default 20) |
+| `SUBMIT_RATE_LIMIT_WINDOW_SEC` | No       | Window in seconds (default 60)           |
+
+## Adding a Platform
+
+Platforms today follow a loose convention rather than a formal interface — each platform folder contains some combination of `monitor.ts` (cron ingestion), `scraper.ts` (URL-triggered fetch), `metadata.ts` (typed platform metadata + builders), and optionally `processor.ts` (custom AI analysis). Not every platform has all four; pick the closest existing one and copy its shape.
+
+Minimum to add a new source:
+
+1. **Scraper** (`platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
+2. **Metadata** (`platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `models/platform-metadata.ts`.
+3. **Detection** — add the URL pattern to `domain/scrapers.ts:detectPlatformType` so `/submit` can route to your scraper.
+4. **Monitor** (optional, `platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts:scheduled`.
+5. **Processor** (optional, `platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `domain/processors.ts`.
+
+The new article goes through the same Queue → Workflow pipeline as every other platform — you don't touch the AI steps.
 
 ## License
 
