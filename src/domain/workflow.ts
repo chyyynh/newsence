@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { ARTICLES_TABLE, createDbClient } from '../infra/db';
+import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
 import { logError, logInfo, logWarn } from '../infra/log';
 import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
@@ -14,8 +14,17 @@ import {
 } from './processors';
 import { fetchOgImage } from './scrapers';
 
-const ARTICLE_FIELDS =
+const ARTICLE_FIELDS_FOR_ARTICLES =
 	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
+
+// user_files carries the same editorial payload under different column names.
+// Aliased so the in-memory `Article` shape stays consistent between tables.
+const ARTICLE_FIELDS_FOR_USER_FILES =
+	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities';
+
+function articleFieldsFor(table: string): string {
+	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
+}
 
 type WorkflowParams = {
 	article_id: string;
@@ -98,9 +107,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, source_type, target_table } = event.payload;
 		const table = target_table ?? ARTICLES_TABLE;
-		const isUserArticle = table !== ARTICLES_TABLE;
+		const isUserFile = table === USER_FILES_TABLE;
+		const fields = articleFieldsFor(table);
 
-		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
+		logInfo('WORKFLOW', 'Starting', { article_id, source_type, table });
 
 		// Step 1: Fetch article from DB
 		const article = (await step.do(
@@ -109,7 +119,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const db = await createDbClient(this.env);
 				try {
-					const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [article_id]);
+					const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [article_id]);
 					if (result.rows.length === 0) throw new Error(`Failed to fetch article ${article_id}: not found`);
 					return result.rows[0] as Article;
 				} finally {
@@ -187,8 +197,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		});
 
-		// Step 5b: Sync entities to normalized tables
-		if (processorResult.updateData.entities?.length) {
+		// Step 5b: Sync entities to normalized tables (article_entities FKs point at
+		// public `articles` only — user_files rows skip this step).
+		if (!isUserFile && processorResult.updateData.entities?.length) {
 			await step.do(
 				'sync-entities',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
@@ -244,7 +255,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		}
 
 		// Step 8: Generate and save embedding
-		const hasEmbedding = (await step.do(
+		const _hasEmbedding = (await step.do(
 			'generate-and-save-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {

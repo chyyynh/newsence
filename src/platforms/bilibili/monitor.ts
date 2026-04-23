@@ -2,7 +2,6 @@
 // Bilibili User Dynamic Monitor
 // ─────────────────────────────────────────────────────────────
 
-import { distributeNonDefaultArticles } from '../../domain/distribute';
 import type { DbClient } from '../../infra/db';
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
@@ -100,7 +99,6 @@ export async function handleBilibiliCron(env: Env, _ctx: ExecutionContext): Prom
 			}
 		}
 
-		await distributeNonDefaultArticles(db, 'bilibili_user');
 		logInfo('BILIBILI-CRON', 'end', { inserted: totalInserted, users: users.length });
 	} finally {
 		await db.end();

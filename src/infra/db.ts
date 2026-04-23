@@ -10,7 +10,7 @@ export async function createDbClient(env: Env): Promise<Client> {
 }
 
 export const ARTICLES_TABLE = 'articles';
-export const USER_ARTICLES_TABLE = 'user_articles';
+export const USER_FILES_TABLE = 'user_files';
 
 // ─────────────────────────────────────────────────────────────
 // Article insert helpers
@@ -68,34 +68,46 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
 }
 
 /**
- * Insert into the per-user `user_articles` table. Same shape as
- * `insertArticle` plus the user_id / visibility columns. No `tokens` column.
+ * Insert URL-sourced content into the per-user `user_files` table. For blob
+ * uploads (PDF/image) the frontend writes `user_files` directly — this helper
+ * is only for the scraped-URL path that goes through the Worker scraper.
+ *
+ * URL rows have:
+ *   - file_type / source_type = detected platform (`webpage` | `youtube` | ...)
+ *   - storage_key / file_size = NULL (no blob)
+ *   - source_url = the scraped URL
+ *   - extracted_text = scraped markdown content
+ *
+ * There is no ON CONFLICT clause — no unique index on (user_id, source_url)
+ * exists yet, so callers must dedup before calling this (see processUrl).
  */
-export async function insertUserArticle(
+export async function insertUserFile(
 	db: DbClient,
 	data: InsertArticleData & { userId: string; visibility?: 'public' | 'private' },
 ): Promise<string | null> {
 	const result = await db.query(
-		`INSERT INTO ${USER_ARTICLES_TABLE}
-			(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT DO NOTHING
+		`INSERT INTO ${USER_FILES_TABLE}
+			(file_name, file_type, source_type, source_url, title, site_name, published_date,
+			 summary, extracted_text, og_image_url, keywords, tags, metadata,
+			 user_id, visibility)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id`,
 		[
+			data.title,
+			data.sourceType,
+			data.sourceType,
 			data.url,
 			data.title,
 			data.source,
 			data.publishedDate,
-			new Date(),
 			data.summary,
-			data.sourceType,
 			data.content,
 			data.ogImageUrl,
 			data.keywords ?? [],
 			data.tags ?? [],
 			serializeMetadata(data.platformMetadata),
 			data.userId,
-			data.visibility ?? 'public',
+			data.visibility ?? 'private',
 		],
 	);
 	return (result.rows[0]?.id as string | undefined) ?? null;

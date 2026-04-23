@@ -1,13 +1,6 @@
 import { detectPlatformType, type ScrapedContent, scrapeUrl } from '../../domain/scrapers';
-import {
-	ARTICLES_TABLE,
-	createDbClient,
-	insertArticle,
-	insertUserArticle,
-	USER_ARTICLES_TABLE,
-	upsertYoutubeTranscript,
-} from '../../infra/db';
-import { logError, logInfo, logWarn } from '../../infra/log';
+import { createDbClient, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '../../infra/db';
+import { logError, logInfo } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import type { Env } from '../../models/types';
@@ -22,15 +15,15 @@ import {
 const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
 
 type SubmitBody = {
-	url?: string; // Legacy single URL (backward compatible)
+	url?: string; // Legacy single URL
 	urls?: string[]; // Batch URLs
 	userId?: string;
-	visibility?: 'public' | 'private'; // For user_articles; defaults to 'public'
+	visibility?: 'public' | 'private';
 };
 
-type SubmitResult = {
+export type SubmitResult = {
 	url: string;
-	articleId?: string;
+	userFileId?: string;
 	instanceId?: string;
 	title?: string;
 	titleCn?: string;
@@ -39,22 +32,21 @@ type SubmitResult = {
 	ogImageUrl?: string | null;
 	sourceType?: string;
 	alreadyExists?: boolean;
-	isUserArticle?: boolean;
 	error?: string;
 };
 
-async function createWorkflow(env: Env, articleId: string, sourceType: string, targetTable?: string): Promise<string | undefined> {
+async function createWorkflow(env: Env, userFileId: string, sourceType: string): Promise<string | undefined> {
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
 			params: {
-				article_id: articleId,
+				article_id: userFileId,
 				source_type: sourceType,
-				...(targetTable ? { target_table: targetTable } : {}),
+				target_table: USER_FILES_TABLE,
 			},
 		});
 		return instance.id;
 	} catch (err) {
-		logError('SUBMIT', 'Workflow create failed', { articleId, error: String(err) });
+		logError('SUBMIT', 'Workflow create failed', { userFileId, error: String(err) });
 		return undefined;
 	}
 }
@@ -62,10 +54,9 @@ async function createWorkflow(env: Env, articleId: string, sourceType: string, t
 async function scrapeAndInsert(
 	url: string,
 	env: Env,
-	userId?: string,
-	targetTable?: string,
-	visibility = 'public',
-): Promise<{ articleId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
+	userId: string,
+	visibility: 'public' | 'private',
+): Promise<{ userFileId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
 		youtubeApiKey: env.YOUTUBE_API_KEY,
@@ -79,8 +70,6 @@ async function scrapeAndInsert(
 
 	const db = await createDbClient(env);
 	try {
-		const table = targetTable ?? ARTICLES_TABLE;
-		const isUserArticle = table === USER_ARTICLES_TABLE;
 		const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
 		const platformMetadataToStore = normalizedPlatformMetadata
 			? {
@@ -90,7 +79,7 @@ async function scrapeAndInsert(
 				}
 			: null;
 
-		const baseData = {
+		const userFileId = await insertUserFile(db, {
 			url,
 			title: scraped.title,
 			source: scraped.siteName || 'External',
@@ -100,18 +89,15 @@ async function scrapeAndInsert(
 			content: scraped.content || null,
 			ogImageUrl: scraped.ogImageUrl || null,
 			platformMetadata: platformMetadataToStore,
-		};
+			userId,
+			visibility,
+		});
 
-		const articleId = isUserArticle
-			? await insertUserArticle(db, { ...baseData, userId: userId as string, visibility: visibility as 'public' | 'private' })
-			: await insertArticle(db, baseData);
-
-		if (!articleId) {
-			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned (duplicate?)' });
+		if (!userFileId) {
+			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned' });
 			return { error: 'DB insert failed' };
 		}
 
-		// Save YouTube transcript to dedicated table (after article insert so no orphans)
 		if (scraped.youtubeTranscript) {
 			try {
 				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
@@ -123,8 +109,8 @@ async function scrapeAndInsert(
 			}
 		}
 
-		logInfo('SUBMIT', 'Saved raw article', { title: scraped.title.slice(0, 50), table });
-		return { articleId, scraped, platformType };
+		logInfo('SUBMIT', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId });
+		return { userFileId, scraped, platformType };
 	} catch (err) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
 		return { error: 'DB insert failed' };
@@ -133,21 +119,12 @@ async function scrapeAndInsert(
 	}
 }
 
-/**
- * If the row is already processed (has title_cn), skip workflow. Otherwise create one.
- * Returns the existing-article SubmitResult.
- */
-async function returnExisting(
-	url: string,
-	row: Record<string, string>,
-	env: Env,
-	isUserArticle: boolean,
-	targetTable?: string,
-): Promise<SubmitResult> {
-	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, row.source_type || 'article', targetTable);
+async function returnExisting(url: string, row: Record<string, string>, env: Env): Promise<SubmitResult> {
+	// Row already exists for this user — if unprocessed, kick off the workflow.
+	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, row.source_type || 'webpage');
 	return {
 		url,
-		articleId: row.id,
+		userFileId: row.id,
 		instanceId,
 		title: row.title,
 		titleCn: row.title_cn || undefined,
@@ -156,120 +133,64 @@ async function returnExisting(
 		ogImageUrl: row.og_image_url,
 		sourceType: row.source_type,
 		alreadyExists: true,
-		isUserArticle,
 	};
 }
 
 /**
- * Copy a public article row into user_articles so it appears in all user-scoped queries (export, profile saves, etc.).
- * Returns the new user_articles row (with EXIST_COLS) on success, or null if the copy failed / already existed.
+ * URL ingest: scrape + insert into user_files + kick off AI enrichment workflow.
+ * Returns immediately; AI processing happens in background via the Workflow.
+ *
+ * Requires `userId`. There is no anonymous path — all scraped URLs land in a
+ * per-user `user_files` row. The frontend is responsible for citation
+ * creation (workspace/document/collection link) after receiving userFileId.
  */
-async function copyArticleToUserTable(
-	db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
-	articleId: string,
+export async function processUrl(
+	rawUrl: string,
+	env: Env,
 	userId: string,
-	visibility = 'public',
-): Promise<Record<string, string> | null> {
-	const COPY_COLS =
-		'url, title, title_cn, source, published_date, scraped_date, keywords, tags, summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, embedding';
-	try {
-		const result = await db.query(
-			`INSERT INTO ${USER_ARTICLES_TABLE} (${COPY_COLS}, source_article_id, user_id, visibility)
-			SELECT ${COPY_COLS}, id, $2, $3
-			FROM ${ARTICLES_TABLE} WHERE id = $1
-			ON CONFLICT DO NOTHING
-			RETURNING ${EXIST_COLS}`,
-			[articleId, userId, visibility],
-		);
-		if (result.rows[0]) return result.rows[0] as Record<string, string>;
-		const lookup = await db.query(
-			`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = (SELECT url FROM ${ARTICLES_TABLE} WHERE id = $2) LIMIT 1`,
-			[userId, articleId],
-		);
-		return (lookup.rows[0] as Record<string, string>) ?? null;
-	} catch (err) {
-		logWarn('SUBMIT', 'Failed to copy article to user_articles', { articleId, error: String(err) });
-		return null;
-	}
-}
-
-/**
- * URL processing: scrape + DB insert + create Workflow (no waiting for AI)
- * Returns immediately with articleId + instanceId, AI processing happens in background via Workflow
- */
-export async function processUrl(rawUrl: string, env: Env, userId?: string, visibility = 'public'): Promise<SubmitResult> {
+	visibility: 'public' | 'private' = 'private',
+): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 
-	let existingRow: Record<string, string> | null = null;
-	let existingIsUserArticle = false;
+	// Dedup per user: reuse the existing user_file row if the user already has
+	// this URL saved.
 	const db = await createDbClient(env);
 	try {
-		if (userId) {
-			const ua = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_ARTICLES_TABLE} WHERE user_id = $1 AND url = $2 LIMIT 1`, [userId, url]);
-			if (ua.rows.length > 0) {
-				existingRow = ua.rows[0];
-				existingIsUserArticle = true;
-			} else {
-				const pub = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
-				if (pub.rows.length > 0) {
-					const copied = await copyArticleToUserTable(db, pub.rows[0].id, userId, visibility);
-					existingRow = copied ?? pub.rows[0];
-					existingIsUserArticle = !!copied;
-				}
-			}
-		} else {
-			const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${ARTICLES_TABLE} WHERE url = $1`, [url]);
-			if (existing.rows.length > 0) return returnExisting(url, existing.rows[0], env, false);
+		const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE} WHERE user_id = $1 AND source_url = $2 LIMIT 1`, [
+			userId,
+			url,
+		]);
+		if (existing.rows.length > 0) {
+			return returnExisting(url, existing.rows[0], env);
 		}
 	} finally {
 		await db.end();
 	}
 
-	if (existingRow && userId) {
-		await addToProfileSaves(env, userId, existingRow.id, existingIsUserArticle ? 'user_article' : 'article').catch((err) =>
-			logWarn('SUBMIT', 'Failed to add existing to profile saves', { error: String(err) }),
-		);
-		return returnExisting(url, existingRow, env, existingIsUserArticle, existingIsUserArticle ? USER_ARTICLES_TABLE : undefined);
-	}
-	if (existingRow) {
-		return returnExisting(url, existingRow, env, false);
-	}
-
-	const targetTable = userId ? USER_ARTICLES_TABLE : undefined;
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, userId, targetTable, visibility);
+		result = await scrapeAndInsert(url, env, userId, visibility);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
 
-	if (userId) {
-		try {
-			await addToProfileSaves(env, userId, result.articleId, 'user_article');
-		} catch (err) {
-			logWarn('SUBMIT', 'Failed to add to profile saves', { error: String(err) });
-		}
-	}
-
-	// 4. Create workflow for background AI processing
-	const instanceId = await createWorkflow(env, result.articleId, result.platformType, targetTable);
+	const instanceId = await createWorkflow(env, result.userFileId, result.platformType);
 	return {
 		url,
-		articleId: result.articleId,
+		userFileId: result.userFileId,
 		instanceId,
 		title: result.scraped.title,
 		ogImageUrl: result.scraped.ogImageUrl || null,
 		sourceType: result.platformType,
 		alreadyExists: false,
-		isUserArticle: !!userId,
 	};
 }
 
 // ── Pure submitUrls action (RPC + HTTP entry points share this) ──
 
-export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST';
+export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type SubmitOutcome =
 	| { ok: true; results: SubmitResult[] }
 	| { ok: false; code: SubmitErrorCode; message: string; retryAfterSec?: number };
@@ -284,6 +205,9 @@ export type SubmitArgs = {
 const SUBMIT_MAX_BATCH_SIZE = 20;
 
 export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutcome> {
+	if (!args.userId) {
+		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
+	}
 	if (args.urls.length === 0) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Missing url or urls field' };
 	}
@@ -307,9 +231,10 @@ export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutc
 		};
 	}
 
-	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length });
-	const articleVisibility = args.visibility ?? 'public';
-	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, args.userId, articleVisibility)));
+	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length, userId: args.userId });
+	const visibility = args.visibility ?? 'private';
+	const userId = args.userId;
+	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, visibility)));
 	return { ok: true, results };
 }
 
@@ -343,19 +268,6 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 			{ status: 429, headers: { 'Retry-After': String(outcome.retryAfterSec ?? 1) } },
 		);
 	}
-	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status: 400 });
-}
-
-async function addToProfileSaves(env: Env, userId: string, articleId: string, toType: 'article' | 'user_article'): Promise<void> {
-	const db = await createDbClient(env);
-	try {
-		await db.query(
-			`INSERT INTO citations (from_type, from_id, to_type, to_id, user_id)
-			VALUES ('user', $1, $2, $3, $1)
-			ON CONFLICT DO NOTHING`,
-			[userId, toType, articleId],
-		);
-	} finally {
-		await db.end();
-	}
+	const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
+	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
 }

@@ -1,5 +1,4 @@
 import { XMLParser } from 'fast-xml-parser';
-import { distributeNonDefaultArticles } from '../../domain/distribute';
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '../../infra/db';
 import { fetchWithTimeout } from '../../infra/fetch';
 import { logError, logInfo, logWarn } from '../../infra/log';
@@ -153,9 +152,6 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 				logError('YOUTUBE-CRON', 'Channel failed', { channel: channel.name, error: String(err) });
 			}
 		}
-
-		// Distribute non-default YouTube articles to subscribers
-		await distributeNonDefaultArticles(db, 'youtube_channel');
 
 		logInfo('YOUTUBE-CRON', 'end', { inserted: totalInserted, channels: channels.length });
 	} finally {
