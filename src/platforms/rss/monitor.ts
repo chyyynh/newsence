@@ -62,7 +62,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	let ogImageWidth: number | null = null;
 	let ogImageHeight: number | null = null;
 	// Determine source type from the RSS item's comments URL
-	const commentsUrl = item.comments as string | undefined;
+	const commentsUrl = toPlainText(item.comments) || undefined;
 	if (commentsUrl) {
 		try {
 			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
@@ -120,11 +120,11 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 		ogImageUrl = extractImageFromItem(item);
 	}
 
-	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
+	const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
 	const content = crawledContent || null;
 
 	const publishedDate = pubDate ? new Date(pubDate) : new Date();
-	const title = item.title ?? item.text ?? 'No Title';
+	const title = toPlainText(item.title) || toPlainText(item.text) || 'No Title';
 	const source = feed.name ?? 'Unknown';
 	const summary = sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
 
@@ -227,7 +227,7 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 
 			// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
 			const rssItem = urlToItem.get(normalized);
-			const commentsUrl = rssItem?.comments as string | undefined;
+			const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
 			if (commentsUrl) {
 				try {
 					const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
@@ -317,8 +317,8 @@ async function processSubscribedFeeds(db: Client, env: Env, parser: XMLParser, s
 				if (!rawUrl) continue;
 				const url = normalizeUrl(rawUrl);
 
-				const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
-				const title = item.title ?? item.text ?? 'No Title';
+				const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
+				const title = toPlainText(item.title) || toPlainText(item.text) || 'No Title';
 				const summary = config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
 				let content = '';
 				if (config.contentSource === 'content_encoded') content = extractRssFullContent(item) || '';

@@ -2,7 +2,30 @@
 // RSS Parsing Utilities
 // ─────────────────────────────────────────────────────────────
 
-export type RSSItem = Record<string, any>;
+export type RSSItem = Record<string, unknown>;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function getPath(value: unknown, path: string[]): unknown {
+	let current: unknown = value;
+	for (const key of path) {
+		const record = asRecord(current);
+		if (!record) return undefined;
+		current = record[key];
+	}
+	return current;
+}
+
+function normalizeItems(value: unknown): RSSItem[] {
+	const values = Array.isArray(value) ? value : value ? [value] : [];
+	return values.filter((item): item is RSSItem => asRecord(item) !== undefined);
+}
 
 export function toPlainText(value: unknown): string {
 	if (value === null || value === undefined) return '';
@@ -91,7 +114,52 @@ export function extractRssFullContent(item: RSSItem): string {
 
 export function extractUrlFromItem(item: RSSItem): string | null {
 	if (typeof item.link === 'string') return item.link;
-	return item.link?.['@_href'] ?? item.link?.href ?? item.url ?? null;
+	const link = asRecord(item.link);
+	return asString(link?.['@_href']) ?? asString(link?.href) ?? asString(item.url) ?? null;
+}
+
+function extractEnclosureImage(item: RSSItem): string | null {
+	const enclosure = asRecord(item.enclosure);
+	if (!enclosure) return null;
+	const url = asString(enclosure['@_url']) ?? asString(enclosure.url);
+	const type = asString(enclosure['@_type']) ?? asString(enclosure.type) ?? '';
+	return url && (!type || type.startsWith('image/')) ? url : null;
+}
+
+function extractImageFromMediaEntry(entryValue: unknown): string | null {
+	const entry = asRecord(entryValue);
+	if (!entry) return null;
+	const url = asString(entry['@_url']) ?? asString(entry.url);
+	if (url) return url;
+	const nested = entry['media:content'] ?? entry['media:thumbnail'];
+	for (const nestedValue of normalizeItems(nested)) {
+		const nestedUrl = asString(nestedValue['@_url']) ?? asString(nestedValue.url);
+		if (nestedUrl) return nestedUrl;
+	}
+	return null;
+}
+
+function extractMediaImage(item: RSSItem): string | null {
+	for (const key of ['media:content', 'media:thumbnail', 'media:group']) {
+		for (const entry of normalizeItems(item[key])) {
+			const url = extractImageFromMediaEntry(entry);
+			if (url) return url;
+		}
+	}
+	return null;
+}
+
+function extractItunesImage(item: RSSItem): string | null {
+	if (typeof item['itunes:image'] === 'string') return item['itunes:image'];
+	const itunes = asRecord(item['itunes:image']);
+	if (!itunes) return null;
+	return asString(itunes['@_href']) ?? asString(itunes.href) ?? null;
+}
+
+function extractEmbeddedImage(item: RSSItem): string | null {
+	const html = toPlainText(item.description) || toPlainText(item['content:encoded']);
+	if (!html) return null;
+	return html.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] ?? null;
 }
 
 /**
@@ -100,47 +168,14 @@ export function extractUrlFromItem(item: RSSItem): string | null {
  * first <img> in description/content.
  */
 export function extractImageFromItem(item: RSSItem): string | null {
-	// enclosure (podcasts, some blogs)
-	const enclosure = item.enclosure;
-	if (enclosure) {
-		const url = enclosure['@_url'] ?? enclosure.url;
-		const type = enclosure['@_type'] ?? enclosure.type ?? '';
-		if (typeof url === 'string' && (!type || type.startsWith('image/'))) return url;
-	}
-
-	// media:content / media:thumbnail (Media RSS)
-	for (const key of ['media:content', 'media:thumbnail', 'media:group']) {
-		const media = item[key];
-		if (!media) continue;
-		const entries = Array.isArray(media) ? media : [media];
-		for (const entry of entries) {
-			const url = entry?.['@_url'] ?? entry?.url;
-			if (typeof url === 'string') return url;
-			// media:group wraps media:content
-			const nested = entry?.['media:content'] ?? entry?.['media:thumbnail'];
-			const nestedUrl = nested?.['@_url'] ?? nested?.url;
-			if (typeof nestedUrl === 'string') return nestedUrl;
-		}
-	}
-
-	// itunes:image
-	const itunes = item['itunes:image'];
-	if (itunes) {
-		const url = itunes['@_href'] ?? itunes.href ?? (typeof itunes === 'string' ? itunes : null);
-		if (typeof url === 'string') return url;
-	}
-
-	// First <img src> in description or content
-	const html = toPlainText(item.description) || toPlainText(item['content:encoded']);
-	if (html) {
-		const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-		if (match?.[1]) return match[1];
-	}
-
-	return null;
+	return extractEnclosureImage(item) ?? extractMediaImage(item) ?? extractItunesImage(item) ?? extractEmbeddedImage(item);
 }
 
-export function extractItemsFromFeed(data: any): RSSItem[] {
-	const source = data?.rss?.channel?.item ?? data?.feed?.entry ?? data?.channel?.item ?? data?.['rdf:RDF']?.item;
-	return source ? (Array.isArray(source) ? source : [source]) : [];
+export function extractItemsFromFeed(data: unknown): RSSItem[] {
+	const source =
+		getPath(data, ['rss', 'channel', 'item']) ??
+		getPath(data, ['feed', 'entry']) ??
+		getPath(data, ['channel', 'item']) ??
+		getPath(data, ['rdf:RDF', 'item']);
+	return normalizeItems(source);
 }

@@ -9,15 +9,7 @@ import {
 } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
-import type { PlatformMetadata } from '../../models/platform-metadata';
-import {
-	buildDefault,
-	buildHackerNews,
-	buildTwitterArticle,
-	buildTwitterShared,
-	buildTwitterStandard,
-	buildYouTube,
-} from '../../models/platform-metadata';
+import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import type { Env } from '../../models/types';
 import { isSubmitAuthorized } from '../middleware/auth';
 import {
@@ -89,7 +81,7 @@ async function scrapeAndInsert(
 	try {
 		const table = targetTable ?? ARTICLES_TABLE;
 		const isUserArticle = table === USER_ARTICLES_TABLE;
-		const normalizedPlatformMetadata = normalizePlatformMetadata(scraped.metadata, platformType);
+		const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
 		const platformMetadataToStore = normalizedPlatformMetadata
 			? {
 					...normalizedPlatformMetadata,
@@ -365,65 +357,5 @@ async function addToProfileSaves(env: Env, userId: string, articleId: string, to
 		);
 	} finally {
 		await db.end();
-	}
-}
-
-function normalizePlatformMetadata(metadata: Record<string, unknown> | undefined, fallbackType: string): PlatformMetadata | null {
-	if (!metadata) return null;
-	const rawType = metadata.type;
-	const type = typeof rawType === 'string' && rawType.trim().length > 0 ? rawType : fallbackType;
-
-	switch (type) {
-		case 'youtube':
-			return buildYouTube({
-				videoId: (metadata.videoId as string) || '',
-				channelName: (metadata.channelName as string) || '',
-				channelId: metadata.channelId as string | undefined,
-				channelAvatar: metadata.channelAvatar as string | undefined,
-				duration: metadata.duration as string | undefined,
-				thumbnailUrl: metadata.thumbnailUrl as string | undefined,
-				viewCount: metadata.viewCount as number | undefined,
-				likeCount: metadata.likeCount as number | undefined,
-				commentCount: metadata.commentCount as number | undefined,
-				publishedAt: metadata.publishedAt as string | undefined,
-				description: metadata.description as string | undefined,
-				tags: metadata.tags as string[] | undefined,
-			});
-		case 'hackernews':
-			return buildHackerNews({
-				itemId: (metadata.itemId as string) || '',
-				author: (metadata.author as string) || '',
-				points: (metadata.points as number) || 0,
-				commentCount: (metadata.commentCount as number) || 0,
-				itemType: metadata.itemType as 'story' | 'ask' | 'show' | 'job' | undefined,
-				storyUrl: metadata.storyUrl as string | null | undefined,
-			});
-		case 'twitter': {
-			const author = {
-				authorName: (metadata.authorName as string) || '',
-				authorUserName: (metadata.authorUserName as string) || '',
-				authorProfilePicture: metadata.authorProfilePicture as string | undefined,
-			};
-			const variant = metadata.variant as string | undefined;
-			if (variant === 'shared') {
-				return buildTwitterShared(author, {
-					media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
-					createdAt: metadata.createdAt as string | undefined,
-					tweetText: metadata.tweetText as string | undefined,
-					externalUrl: (metadata.externalUrl as string) || '',
-					externalOgImage: metadata.externalOgImage as string | null | undefined,
-					externalTitle: metadata.externalTitle as string | null | undefined,
-				});
-			}
-			if (variant === 'article') {
-				return buildTwitterArticle(author);
-			}
-			return buildTwitterStandard(author, {
-				media: (metadata.media as Array<{ url: string; type: 'photo' | 'video' | 'animated_gif' }>) || [],
-				createdAt: metadata.createdAt as string | undefined,
-			});
-		}
-		default:
-			return buildDefault();
 	}
 }
