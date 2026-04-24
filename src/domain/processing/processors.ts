@@ -1,7 +1,7 @@
-import { USER_FILES_TABLE } from '../infra/db';
-import { prepareArticleTextForEmbedding } from '../infra/embedding';
-import type { PlatformEnrichments, PlatformMetadata } from '../models/platform-metadata';
-import type { Article } from '../models/types';
+import { USER_FILES_TABLE } from '../../infra/db';
+import { prepareArticleTextForEmbedding } from '../../infra/embedding';
+import type { PlatformEnrichments, PlatformMetadata } from '../../models/platform-metadata';
+import type { Article } from '../../models/types';
 import {
 	type ArticleProcessor,
 	callGeminiForAnalysis,
@@ -11,9 +11,9 @@ import {
 	type ProcessorResult,
 } from './ai-utils';
 
-export { collectAllComments } from '../platforms/hackernews/processor';
-export { translateTweet } from '../platforms/twitter/processor';
-export { generateYouTubeHighlights, type YouTubeHighlight, type YouTubeHighlightsResult } from '../platforms/youtube/highlights';
+export { collectAllComments } from '../../platforms/hackernews/processor';
+export { translateTweet } from '../../platforms/twitter/processor';
+export { generateYouTubeHighlights, type YouTubeHighlight, type YouTubeHighlightsResult } from '../../platforms/youtube/highlights';
 export type { ArticleProcessor, ProcessingDeps, ProcessorContext, ProcessorResult } from './ai-utils';
 // Re-exports
 export { callGeminiForAnalysis, callOpenRouterChat, createFallbackResult, isEmpty, translateContent } from './ai-utils';
@@ -47,8 +47,8 @@ class DefaultProcessor implements ArticleProcessor {
 // Factory
 // ─────────────────────────────────────────────────────────────
 
-import { HackerNewsProcessor } from '../platforms/hackernews/processor';
-import { TwitterProcessor } from '../platforms/twitter/processor';
+import { HackerNewsProcessor } from '../../platforms/hackernews/processor';
+import { TwitterProcessor } from '../../platforms/twitter/processor';
 
 const processors: Record<string, ArticleProcessor> = {
 	hackernews: new HackerNewsProcessor(),

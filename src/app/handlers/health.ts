@@ -1,5 +1,5 @@
-import { scrapeWebPage } from '../../domain/scrapers';
 import type { Env } from '../../models/types';
+import { scrapeWebPage } from '../../platforms/web/scraper';
 import { requireAuth } from '../middleware/auth';
 
 export function handleHealth(_env: Env): Response {

@@ -1,8 +1,8 @@
-import { createUserFileWorkflow } from '../../domain/workflow';
 import { createDbClient, USER_FILES_TABLE } from '../../infra/db';
 import { logInfo } from '../../infra/log';
 import type { Env } from '../../models/types';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
+import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
 /**
  * Kick off the AI enrichment workflow for an existing `user_files` blob row

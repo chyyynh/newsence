@@ -1,13 +1,15 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
-import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API, scrapeWebPage } from '../../domain/scrapers';
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
 import { fetchWithTimeout } from '../../infra/fetch';
 import { logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { PlatformMetadata } from '../../models/platform-metadata';
 import { buildHackerNews } from '../../models/platform-metadata';
+import { detectPlatformType, extractHackerNewsId } from '../../models/scraped-content';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
+import { HN_ALGOLIA_API } from '../hackernews/scraper';
+import { scrapeWebPage } from '../web/scraper';
 import { type FeedConfig, getFeedConfig } from './feed-config';
 import {
 	extractImageFromItem,

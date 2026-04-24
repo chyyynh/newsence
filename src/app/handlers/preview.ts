@@ -1,8 +1,9 @@
-import { detectPlatformType, scrapeUrl } from '../../domain/scrapers';
 import { logError } from '../../infra/log';
 import { callOpenRouter, extractJson } from '../../infra/openrouter';
 import { normalizeUrl } from '../../infra/web';
+import { detectPlatformType } from '../../models/scraped-content';
 import type { Env } from '../../models/types';
+import { scrapeUrl } from '../../platforms/registry';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
 
 /** Extract the first URL from a string (handles messages like "@bot https://example.com check this") */
