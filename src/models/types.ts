@@ -36,6 +36,10 @@ export interface Article {
 	source_type?: string;
 	og_image_url?: string | null;
 	platform_metadata?: PlatformMetadata;
+	// user_files-only raw columns (undefined for articles path).
+	storage_key?: string | null;
+	file_type?: string;
+	origin_type?: string;
 }
 
 // AI Analysis result

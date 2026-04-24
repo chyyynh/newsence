@@ -1,10 +1,11 @@
 import { detectPlatformType, type ScrapedContent, scrapeUrl } from '../../domain/scrapers';
+import { createUserFileWorkflow } from '../../domain/workflow';
 import { createDbClient, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import type { Env } from '../../models/types';
-import { isSubmitAuthorized } from '../middleware/auth';
+import { parseJsonBody, requireAuth } from '../middleware/auth';
 import {
 	DEFAULT_SUBMIT_RATE_LIMIT_MAX,
 	DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC,
@@ -36,22 +37,6 @@ export type SubmitResult = {
 	alreadyExists?: boolean;
 	error?: string;
 };
-
-async function createWorkflow(env: Env, userFileId: string, platformType: string): Promise<string | undefined> {
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			params: {
-				article_id: userFileId,
-				source_type: platformType,
-				target_table: USER_FILES_TABLE,
-			},
-		});
-		return instance.id;
-	} catch (err) {
-		logError('SUBMIT', 'Workflow create failed', { userFileId, error: String(err) });
-		return undefined;
-	}
-}
 
 async function scrapeAndInsert(
 	url: string,
@@ -124,7 +109,7 @@ async function scrapeAndInsert(
 async function returnExisting(url: string, row: Record<string, string>, env: Env): Promise<SubmitResult> {
 	// Row already exists for this user — if unprocessed, kick off the workflow.
 	const platformType = row.platform_type || 'web';
-	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, platformType);
+	const instanceId = row.title_cn ? undefined : await createUserFileWorkflow(env, row.id, platformType);
 	return {
 		url,
 		userFileId: row.id,
@@ -181,7 +166,7 @@ export async function processUrl(
 	}
 	if ('error' in result) return { url, error: result.error };
 
-	const instanceId = await createWorkflow(env, result.userFileId, result.platformType);
+	const instanceId = await createUserFileWorkflow(env, result.userFileId, result.platformType);
 	return {
 		url,
 		userFileId: result.userFileId,
@@ -246,19 +231,11 @@ export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutc
 }
 
 export async function handleSubmitUrl(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
-		return Response.json(
-			{ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' } },
-			{ status: 401 },
-		);
-	}
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
 
-	let body: SubmitBody;
-	try {
-		body = (await request.json()) as SubmitBody;
-	} catch {
-		return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
-	}
+	const body = await parseJsonBody<SubmitBody>(request);
+	if (body instanceof Response) return body;
 
 	const urls = body.urls ?? (body.url ? [body.url] : []);
 	const outcome = await submitUrls(env, {

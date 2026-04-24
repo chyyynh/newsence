@@ -77,6 +77,17 @@
 		}
 	],
 	/**
+	 * R2 — user_file blob storage (PDF/image uploads + AI-generated images).
+	 * Bucket is also written by the Next.js frontend via S3 API; the worker
+	 * reads uploaded PDFs here for env.AI.toMarkdown extraction.
+	 */
+	"r2_buckets": [
+		{
+			"binding": "R2",
+			"bucket_name": "newsence"
+		}
+	],
+	/**
 	 * Smart Placement — run close to database
 	 */
 	"placement": {

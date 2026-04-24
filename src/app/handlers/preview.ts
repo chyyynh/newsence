@@ -3,7 +3,7 @@ import { logError } from '../../infra/log';
 import { callOpenRouter, extractJson } from '../../infra/openrouter';
 import { normalizeUrl } from '../../infra/web';
 import type { Env } from '../../models/types';
-import { isSubmitAuthorized } from '../middleware/auth';
+import { parseJsonBody, requireAuth } from '../middleware/auth';
 
 /** Extract the first URL from a string (handles messages like "@bot https://example.com check this") */
 function extractUrl(text: string): string | null {
@@ -55,9 +55,8 @@ type PreviewBody = {
  * Persistence is the frontend's responsibility (POST /api/upload → /submit).
  */
 export async function handlePreview(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
-		return Response.json({ error: 'Unauthorized' }, { status: 401 });
-	}
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
 
 	let url: string | null = null;
 	let model = PREVIEW_DEFAULT_MODEL;
@@ -67,12 +66,8 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
 		url = params.get('url');
 		model = params.get('model') || model;
 	} else {
-		let body: PreviewBody;
-		try {
-			body = (await request.json()) as PreviewBody;
-		} catch {
-			return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
-		}
+		const body = await parseJsonBody<PreviewBody>(request);
+		if (body instanceof Response) return body;
 		url = body.url ?? (body.message ? extractUrl(body.message) : null);
 		model = body.model || model;
 	}

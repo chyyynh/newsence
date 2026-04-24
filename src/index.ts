@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { handleEmbed } from './app/handlers/embed';
+import { handleEnqueueUserFile } from './app/handlers/enqueue-user-file';
 import { handleHealth, handleTestScrape } from './app/handlers/health';
 import { handlePreview } from './app/handlers/preview';
 import { handleSubmitUrl, type SubmitOutcome, submitUrls } from './app/handlers/submit';
@@ -21,6 +22,7 @@ type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': handleEmbed,
 	'/submit': handleSubmitUrl,
+	'/enqueue-user-file': handleEnqueueUserFile,
 };
 
 function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
@@ -61,6 +63,7 @@ const HELP_TEXT =
 	'*    /preview                    - Scrape-only\n' +
 	'POST /submit                     - Submit URL\n' +
 	'POST /embed                      - Generate embeddings\n' +
+	'POST /enqueue-user-file          - Kick off workflow for an uploaded user_file (PDF)\n' +
 	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n';
 

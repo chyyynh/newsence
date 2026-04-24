@@ -20,10 +20,51 @@ const ARTICLE_FIELDS_FOR_ARTICLES =
 // user_files carries the same editorial payload under different column names.
 // Aliased so the in-memory `Article` shape stays consistent between tables.
 const ARTICLE_FIELDS_FOR_USER_FILES =
-	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities';
+	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
 
 function articleFieldsFor(table: string): string {
 	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
+}
+
+/**
+ * Create a workflow instance targeting `user_files` (vs the shared `articles`
+ * pool). Both URL scrape and PDF upload paths funnel through here so the
+ * `target_table` + id convention stays in one place.
+ */
+export async function createUserFileWorkflow(env: Env, userFileId: string, sourceType: string): Promise<string | undefined> {
+	try {
+		const instance = await env.MONITOR_WORKFLOW.create({
+			params: { article_id: userFileId, source_type: sourceType, target_table: USER_FILES_TABLE },
+		});
+		return instance.id;
+	} catch (err) {
+		logError('WORKFLOW', 'create failed', { userFileId, sourceType, error: String(err) });
+		return undefined;
+	}
+}
+
+function isUploadedPdf(article: Article): boolean {
+	return article.origin_type === 'upload' && article.file_type === 'application/pdf' && !!article.storage_key;
+}
+
+async function extractAndPersistPdf(env: Env, articleId: string, storageKey: string): Promise<string> {
+	const obj = await env.R2.get(storageKey);
+	if (!obj) throw new Error(`R2 object missing: ${storageKey}`);
+	const md = await env.AI.toMarkdown({
+		name: storageKey.split('/').pop() ?? storageKey,
+		blob: new Blob([await obj.arrayBuffer()], { type: 'application/pdf' }),
+	});
+	if (md.format === 'error') throw new Error(md.error);
+	if (!md.data) throw new Error('PDF extraction returned empty markdown');
+
+	const db = await createDbClient(env);
+	try {
+		await db.query(`UPDATE ${USER_FILES_TABLE} SET extracted_text = $1 WHERE id = $2`, [md.data, articleId]);
+	} finally {
+		await db.end();
+	}
+	logInfo('WORKFLOW', 'PDF extracted', { article_id: articleId, tokens: md.tokens, chars: md.data.length });
+	return md.data;
 }
 
 type WorkflowParams = {
@@ -131,6 +172,16 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		if (!article) {
 			logWarn('WORKFLOW', 'Article not found', { article_id });
 			return { success: false, article_id, reason: 'not_found' };
+		}
+
+		if (isUserFile && !article.content && isUploadedPdf(article)) {
+			const storageKey = article.storage_key as string;
+			const extracted = (await step.do(
+				'extract-pdf-text',
+				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+				() => extractAndPersistPdf(this.env, article_id, storageKey),
+			)) as string;
+			article.content = extracted;
 		}
 
 		// Step 2: AI analysis (translate / tags / summary)
