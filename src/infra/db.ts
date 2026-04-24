@@ -31,6 +31,12 @@ export interface InsertArticleData {
 	tags?: string[];
 }
 
+export interface InsertUserFileData extends Omit<InsertArticleData, 'sourceType'> {
+	platformType: 'web' | 'youtube' | 'twitter' | 'hackernews';
+	userId: string;
+	visibility?: 'public' | 'private';
+}
+
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
 	return JSON.stringify(metadata);
@@ -73,7 +79,10 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
  * is only for the scraped-URL path that goes through the Worker scraper.
  *
  * URL rows have:
- *   - file_type / source_type = detected platform (`webpage` | `youtube` | ...)
+ *   - resource_kind = url
+ *   - origin_type = saved_url
+ *   - platform_type = detected platform (`web` | `youtube` | `twitter` | `hackernews`)
+ *   - file_type = detected platform for display compatibility
  *   - storage_key / file_size = NULL (no blob)
  *   - source_url = the scraped URL
  *   - extracted_text = scraped markdown content
@@ -83,19 +92,21 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
  */
 export async function insertUserFile(
 	db: DbClient,
-	data: InsertArticleData & { userId: string; visibility?: 'public' | 'private' },
+	data: InsertUserFileData,
 ): Promise<string | null> {
 	const result = await db.query(
 		`INSERT INTO ${USER_FILES_TABLE}
-			(file_name, file_type, source_type, source_url, title, site_name, published_date,
+			(file_name, file_type, resource_kind, origin_type, platform_type, source_url, title, site_name, published_date,
 			 summary, extracted_text, og_image_url, keywords, tags, metadata,
 			 user_id, visibility)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING id`,
 		[
 			data.title,
-			data.sourceType,
-			data.sourceType,
+			data.platformType,
+			'url',
+			'saved_url',
+			data.platformType,
 			data.url,
 			data.title,
 			data.source,

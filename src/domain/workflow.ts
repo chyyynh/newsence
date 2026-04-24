@@ -20,7 +20,7 @@ const ARTICLE_FIELDS_FOR_ARTICLES =
 // user_files carries the same editorial payload under different column names.
 // Aliased so the in-memory `Article` shape stays consistent between tables.
 const ARTICLE_FIELDS_FOR_USER_FILES =
-	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities';
+	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities';
 
 function articleFieldsFor(table: string): string {
 	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;

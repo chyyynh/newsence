@@ -12,7 +12,7 @@ import {
 	hitSubmitRateLimit,
 } from '../middleware/rate-limit';
 
-const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, source_type, og_image_url';
+const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url';
 
 type SubmitBody = {
 	url?: string; // Legacy single URL
@@ -30,17 +30,19 @@ export type SubmitResult = {
 	summaryCn?: string;
 	tags?: string[];
 	ogImageUrl?: string | null;
-	sourceType?: string;
+	resourceKind?: 'url';
+	originType?: 'saved_url';
+	platformType?: string;
 	alreadyExists?: boolean;
 	error?: string;
 };
 
-async function createWorkflow(env: Env, userFileId: string, sourceType: string): Promise<string | undefined> {
+async function createWorkflow(env: Env, userFileId: string, platformType: string): Promise<string | undefined> {
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
 			params: {
 				article_id: userFileId,
-				source_type: sourceType,
+				source_type: platformType,
 				target_table: USER_FILES_TABLE,
 			},
 		});
@@ -85,7 +87,7 @@ async function scrapeAndInsert(
 			source: scraped.siteName || 'External',
 			publishedDate: scraped.publishedDate || new Date().toISOString(),
 			summary: scraped.summary || '',
-			sourceType: platformType,
+			platformType,
 			content: scraped.content || null,
 			ogImageUrl: scraped.ogImageUrl || null,
 			platformMetadata: platformMetadataToStore,
@@ -121,17 +123,20 @@ async function scrapeAndInsert(
 
 async function returnExisting(url: string, row: Record<string, string>, env: Env): Promise<SubmitResult> {
 	// Row already exists for this user — if unprocessed, kick off the workflow.
-	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, row.source_type || 'webpage');
+	const platformType = row.platform_type || 'web';
+	const instanceId = row.title_cn ? undefined : await createWorkflow(env, row.id, platformType);
 	return {
 		url,
 		userFileId: row.id,
 		instanceId,
+		resourceKind: 'url',
+		originType: 'saved_url',
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
 		ogImageUrl: row.og_image_url,
-		sourceType: row.source_type,
+		platformType,
 		alreadyExists: true,
 	};
 }
@@ -181,9 +186,11 @@ export async function processUrl(
 		url,
 		userFileId: result.userFileId,
 		instanceId,
+		resourceKind: 'url',
+		originType: 'saved_url',
 		title: result.scraped.title,
 		ogImageUrl: result.scraped.ogImageUrl || null,
-		sourceType: result.platformType,
+		platformType: result.platformType,
 		alreadyExists: false,
 	};
 }
