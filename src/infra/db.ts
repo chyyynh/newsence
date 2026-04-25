@@ -35,7 +35,19 @@ export interface InsertUserFileData extends Omit<InsertArticleData, 'sourceType'
 	platformType: 'web' | 'youtube' | 'twitter' | 'hackernews';
 	userId: string;
 	visibility?: 'public' | 'private';
+	normalizedUrl?: string;
 }
+
+export type InsertUserFileResult = {
+	id: string;
+	created: boolean;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[];
+	platform_type: string | null;
+	og_image_url: string | null;
+};
 
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
@@ -87,20 +99,33 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
  *   - source_url = the scraped URL
  *   - extracted_text = scraped markdown content
  *
- * There is no ON CONFLICT clause — no unique index on (user_id, source_url)
- * exists yet, so callers must dedup before calling this (see processUrl).
+ * The DB owns URL identity through the partial unique index on
+ * (user_id, normalized_source_url) for resource_kind='url'. Callers may dedup
+ * for efficiency, but correctness comes from this conflict-safe insert.
  */
-export async function insertUserFile(
-	db: DbClient,
-	data: InsertUserFileData,
-): Promise<string | null> {
+export async function insertUserFile(db: DbClient, data: InsertUserFileData): Promise<InsertUserFileResult | null> {
+	const normalizedUrl = data.normalizedUrl ?? normalizeUrl(data.url);
 	const result = await db.query(
-		`INSERT INTO ${USER_FILES_TABLE}
-			(file_name, file_type, resource_kind, origin_type, platform_type, source_url, title, site_name, published_date,
+		`WITH inserted AS (
+			INSERT INTO ${USER_FILES_TABLE}
+			(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
 			 summary, extracted_text, og_image_url, keywords, tags, metadata,
 			 user_id, visibility)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		RETURNING id`,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			ON CONFLICT (user_id, normalized_source_url)
+			WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
+			DO NOTHING
+			RETURNING id, title, title_cn, summary_cn, tags, platform_type, og_image_url, TRUE AS created
+		)
+		SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, created FROM inserted
+		UNION ALL
+		SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, FALSE AS created
+		FROM ${USER_FILES_TABLE}
+		WHERE user_id = $17
+		  AND normalized_source_url = $7
+		  AND resource_kind = 'url'
+		  AND NOT EXISTS (SELECT 1 FROM inserted)
+		LIMIT 1`,
 		[
 			data.title,
 			data.platformType,
@@ -108,6 +133,7 @@ export async function insertUserFile(
 			'saved_url',
 			data.platformType,
 			data.url,
+			normalizedUrl,
 			data.title,
 			data.source,
 			data.publishedDate,
@@ -121,7 +147,8 @@ export async function insertUserFile(
 			data.visibility ?? 'private',
 		],
 	);
-	return (result.rows[0]?.id as string | undefined) ?? null;
+	const row = result.rows[0] as InsertUserFileResult | undefined;
+	return row ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────

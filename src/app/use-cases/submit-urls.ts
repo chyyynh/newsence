@@ -10,6 +10,15 @@ import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
 const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url';
 const SUBMIT_MAX_BATCH_SIZE = 20;
+type ExistingUserFileRow = {
+	id: string;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[] | null;
+	platform_type: string | null;
+	og_image_url: string | null;
+};
 
 export type SubmitResult = {
 	url: string;
@@ -44,7 +53,11 @@ async function scrapeAndInsert(
 	env: Env,
 	userId: string,
 	visibility: 'public' | 'private',
-): Promise<{ userFileId: string; scraped: ScrapedContent; platformType: string } | { error: string }> {
+): Promise<
+	| { userFileId: string; scraped: ScrapedContent; platformType: string; created: true }
+	| { userFileId: string; existing: ExistingUserFileRow; platformType: string; created: false }
+	| { error: string }
+> {
 	const platformType = detectPlatformType(url);
 	const scraped = await scrapeUrl(url, {
 		youtubeApiKey: env.YOUTUBE_API_KEY,
@@ -67,8 +80,9 @@ async function scrapeAndInsert(
 				}
 			: null;
 
-		const userFileId = await insertUserFile(db, {
+		const userFile = await insertUserFile(db, {
 			url,
+			normalizedUrl: url,
 			title: scraped.title,
 			source: scraped.siteName || 'External',
 			publishedDate: scraped.publishedDate || new Date().toISOString(),
@@ -81,9 +95,13 @@ async function scrapeAndInsert(
 			visibility,
 		});
 
-		if (!userFileId) {
+		if (!userFile) {
 			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned' });
 			return { error: 'DB insert failed' };
+		}
+
+		if (!userFile.created) {
+			return { userFileId: userFile.id, existing: userFile, platformType: userFile.platform_type || platformType, created: false };
 		}
 
 		if (scraped.youtubeTranscript) {
@@ -97,8 +115,8 @@ async function scrapeAndInsert(
 			}
 		}
 
-		logInfo('SUBMIT', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId });
-		return { userFileId, scraped, platformType };
+		logInfo('SUBMIT', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId: userFile.id });
+		return { userFileId: userFile.id, scraped, platformType, created: true };
 	} catch (err) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
 		return { error: 'DB insert failed' };
@@ -107,13 +125,30 @@ async function scrapeAndInsert(
 	}
 }
 
-async function returnExisting(url: string, row: Record<string, string>, env: Env): Promise<SubmitResult> {
+async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<SubmitResult> {
 	const platformType = row.platform_type || 'web';
 	const instanceId = row.title_cn ? undefined : await createUserFileWorkflow(env, row.id, platformType);
 	return {
 		url,
 		userFileId: row.id,
 		instanceId,
+		resourceKind: 'url',
+		originType: 'saved_url',
+		title: row.title,
+		titleCn: row.title_cn || undefined,
+		summaryCn: row.summary_cn || undefined,
+		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
+		ogImageUrl: row.og_image_url,
+		platformType,
+		alreadyExists: true,
+	};
+}
+
+function returnExistingWithoutWorkflow(url: string, row: ExistingUserFileRow): SubmitResult {
+	const platformType = row.platform_type || 'web';
+	return {
+		url,
+		userFileId: row.id,
 		resourceKind: 'url',
 		originType: 'saved_url',
 		title: row.title,
@@ -136,10 +171,14 @@ export async function processUrl(
 
 	const db = await createDbClient(env);
 	try {
-		const existing = await db.query(`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE} WHERE user_id = $1 AND source_url = $2 LIMIT 1`, [
-			userId,
-			url,
-		]);
+		const existing = await db.query<ExistingUserFileRow>(
+			`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE}
+			 WHERE user_id = $1
+			   AND resource_kind = 'url'
+			   AND normalized_source_url = $2
+			 LIMIT 1`,
+			[userId, url],
+		);
 		if (existing.rows.length > 0) {
 			return returnExisting(url, existing.rows[0], env);
 		}
@@ -155,6 +194,7 @@ export async function processUrl(
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
+	if (!result.created) return returnExistingWithoutWorkflow(url, result.existing);
 
 	const instanceId = await createUserFileWorkflow(env, result.userFileId, result.platformType);
 	return {
@@ -197,9 +237,14 @@ export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutc
 		};
 	}
 
-	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length, userId: args.userId });
+	const normalizedUrls = args.urls.map(normalizeUrl);
+	const uniqueUrls = [...new Set(normalizedUrls)];
+
+	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
 	const visibility = args.visibility ?? 'private';
 	const userId = args.userId;
-	const results = await Promise.all(args.urls.map((url) => processUrl(url, env, userId, visibility)));
+	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId, visibility)));
+	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
+	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'URL processing failed' });
 	return { ok: true, results };
 }
