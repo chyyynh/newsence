@@ -91,7 +91,7 @@ The one-click Deploy button above handles Worker + Queue + Workflow, but **Hyper
 
 ### 1. Database
 
-You need a PostgreSQL instance with pgvector. Tested with Supabase; any Postgres ≥ 15 with the `vector` extension works.
+You need a PostgreSQL instance with pgvector. Currently runs on PlanetScale Postgres (via Cloudflare Hyperdrive); any Postgres ≥ 15 with the `vector` extension works.
 
 Required tables: `articles`, `user_articles`, `RssList`, `youtube_transcripts`, plus entity/citation tables. The canonical schema is defined in `frontend/prisma/schema.prisma` in the parent monorepo — a standalone `schema.sql` is on the roadmap. For now, inspect the Prisma models or reach out via Issues if you want to run just the worker.
 

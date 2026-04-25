@@ -1,3 +1,4 @@
+import type { Article } from '../models/types';
 import { logError, logInfo } from './log';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
@@ -7,39 +8,24 @@ interface AiEmbeddingResult {
 	data: number[][];
 }
 
-export function prepareArticleTextForEmbedding(article: {
-	title: string;
-	title_cn?: string | null;
-	summary?: string | null;
-	summary_cn?: string | null;
-	content?: string | null;
-	content_cn?: string | null;
-	tags?: string[] | null;
-	keywords?: string[] | null;
-}): string {
-	// Priority: title + summary (high signal density), then metadata, then content (fills remaining budget)
-	const priorityParts = [article.title, article.title_cn, article.summary, article.summary_cn].filter(Boolean) as string[];
+// Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
+// translations dilutes the budget without adding recall.
+type EmbeddingInput = Pick<Article, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
 
-	const metaParts: string[] = [];
-	if (article.tags?.length) metaParts.push(article.tags.join(' '));
-	if (article.keywords?.length) metaParts.push(article.keywords.join(' '));
+export function prepareArticleTextForEmbedding(article: EmbeddingInput): string {
+	const headerParts = [article.title];
+	if (article.summary) headerParts.push(article.summary);
+	if (article.tags.length) headerParts.push(article.tags.join(' '));
+	if (article.keywords.length) headerParts.push(article.keywords.join(' '));
 
-	const headerText = [...priorityParts, ...metaParts].join(' ');
+	const headerText = headerParts.join(' ');
 	const contentBudget = MAX_TEXT_LENGTH - headerText.length - 1;
 
-	if (contentBudget <= 200) return headerText.slice(0, MAX_TEXT_LENGTH);
-
-	const contentParts: string[] = [];
-	if (article.content && article.content_cn) {
-		const half = Math.floor(contentBudget / 2);
-		contentParts.push(article.content.slice(0, half));
-		contentParts.push(article.content_cn.slice(0, half));
-	} else {
-		const src = article.content || article.content_cn;
-		if (src) contentParts.push(src.slice(0, contentBudget));
+	if (contentBudget <= 200 || !article.content) {
+		return headerText.slice(0, MAX_TEXT_LENGTH);
 	}
 
-	return [headerText, ...contentParts].join(' ').slice(0, MAX_TEXT_LENGTH);
+	return `${headerText} ${article.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
 }
 
 export function normalizeVector(values: number[]): number[] {
