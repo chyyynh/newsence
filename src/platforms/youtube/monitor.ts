@@ -1,11 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
-import { distributeNonDefaultArticles } from '../../domain/distribute';
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '../../infra/db';
 import { fetchWithTimeout } from '../../infra/fetch';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
+import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
-import { buildYouTube } from './metadata';
 import { scrapeYouTube } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
@@ -89,30 +88,27 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 					const videoId = entry['yt:videoId'];
 					try {
 						const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '');
+						const platformMetadata = parsePlatformMetadata(
+							{
+								...scraped.metadata,
+								type: 'youtube',
+								videoId,
+								channelName: scraped.author || channel.name,
+								thumbnailUrl: scraped.ogImageUrl ?? scraped.metadata?.thumbnailUrl,
+								publishedAt: scraped.publishedDate ?? scraped.metadata?.publishedAt,
+							},
+							'youtube',
+						);
+						const youtubeMetadata = platformMetadata?.type === 'youtube' ? platformMetadata.data : null;
 
 						// Skip Shorts (< 3 minutes — YouTube Shorts max is 3 min)
-						const duration = scraped.metadata?.duration as string | undefined;
+						const duration = youtubeMetadata?.duration;
 						if (duration && parseDurationSeconds(duration) < 180) {
 							logInfo('YOUTUBE-CRON', 'Skipping short', { videoId, duration });
 							continue;
 						}
 
 						const url = normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
-
-						const platformMetadata = buildYouTube({
-							videoId,
-							channelName: scraped.author || channel.name,
-							channelId: (scraped.metadata?.channelId as string) || undefined,
-							channelAvatar: (scraped.metadata?.channelAvatar as string) || undefined,
-							duration: (scraped.metadata?.duration as string) || undefined,
-							thumbnailUrl: scraped.ogImageUrl || undefined,
-							viewCount: scraped.metadata?.viewCount as number | undefined,
-							likeCount: scraped.metadata?.likeCount as number | undefined,
-							commentCount: scraped.metadata?.commentCount as number | undefined,
-							publishedAt: scraped.publishedDate || undefined,
-							description: (scraped.metadata?.description as string) || undefined,
-							tags: (scraped.metadata?.tags as string[]) || undefined,
-						});
 
 						const articleId = await insertArticle(db, {
 							url,
@@ -140,7 +136,7 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 						logInfo('YOUTUBE-CRON', 'Inserted video', { channel: channel.name, title: scraped.title.slice(0, 60) });
 
 						// Backfill channel avatar on RssList if missing
-						const avatar = scraped.metadata?.channelAvatar as string | undefined;
+						const avatar = youtubeMetadata?.channelAvatar;
 						if (avatar && !channel.avatar_url) {
 							await db.query(`UPDATE "RssList" SET avatar_url = $1 WHERE id = $2`, [avatar, channel.id]);
 							channel.avatar_url = avatar;
@@ -156,9 +152,6 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 				logError('YOUTUBE-CRON', 'Channel failed', { channel: channel.name, error: String(err) });
 			}
 		}
-
-		// Distribute non-default YouTube articles to subscribers
-		await distributeNonDefaultArticles(db, 'youtube_channel');
 
 		logInfo('YOUTUBE-CRON', 'end', { inserted: totalInserted, channels: channels.length });
 	} finally {

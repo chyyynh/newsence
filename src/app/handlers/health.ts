@@ -1,6 +1,6 @@
-import { scrapeWebPage } from '../../domain/scrapers';
 import type { Env } from '../../models/types';
-import { isSubmitAuthorized } from '../middleware/auth';
+import { scrapeWebPage } from '../../platforms/web/scraper';
+import { requireAuth } from '../middleware/auth';
 
 export function handleHealth(_env: Env): Response {
 	return Response.json({
@@ -11,9 +11,8 @@ export function handleHealth(_env: Env): Response {
 }
 
 export async function handleTestScrape(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
-		return Response.json({ error: 'Unauthorized' }, { status: 401 });
-	}
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
 
 	const reqUrl = new URL(request.url);
 	const url = reqUrl.searchParams.get('url');

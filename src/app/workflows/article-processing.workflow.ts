@@ -1,21 +1,31 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { ARTICLES_TABLE, createDbClient } from '../infra/db';
-import { generateArticleEmbedding, saveArticleEmbedding } from '../infra/embedding';
-import { logError, logInfo, logWarn } from '../infra/log';
-import type { Article, Env, MessageBatch, QueueMessage } from '../models/types';
-import { syncArticleEntities } from './entities';
+import { syncArticleEntities } from '../../domain/entities';
 import {
 	buildEmbeddingTextForArticle,
-	generateYouTubeHighlights,
 	type ProcessorResult,
 	persistProcessorResult,
 	runArticleProcessor,
 	translateContent,
-} from './processors';
-import { fetchOgImage } from './scrapers';
+} from '../../domain/processing/processors';
+import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../../infra/db';
+import { generateArticleEmbedding, saveArticleEmbedding } from '../../infra/embedding';
+import { logInfo, logWarn } from '../../infra/log';
+import type { Article, Env } from '../../models/types';
+import { fetchOgImage } from '../../platforms/web/scraper';
+import { extractAndPersistPdf, isUploadedPdf } from './steps/pdf-extraction';
+import { generateAndSaveYouTubeHighlights } from './steps/youtube-highlights';
 
-const ARTICLE_FIELDS =
+const ARTICLE_FIELDS_FOR_ARTICLES =
 	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
+
+// user_files carries the same editorial payload under different column names.
+// Aliased so the in-memory `Article` shape stays consistent between tables.
+const ARTICLE_FIELDS_FOR_USER_FILES =
+	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
+
+function articleFieldsFor(table: string): string {
+	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
+}
 
 type WorkflowParams = {
 	article_id: string;
@@ -23,84 +33,14 @@ type WorkflowParams = {
 	target_table?: string;
 };
 
-const SOURCE_TYPE_BATCH_SIZE = 200;
-const SOURCE_TYPE_FALLBACK = 'default';
-
-async function fetchSourceTypeMap(articleIds: string[], env: Env): Promise<Map<string, string>> {
-	if (articleIds.length === 0) return new Map();
-
-	const table = ARTICLES_TABLE;
-	const sourceTypes = new Map<string, string>();
-	const db = await createDbClient(env);
-
-	try {
-		for (let i = 0; i < articleIds.length; i += SOURCE_TYPE_BATCH_SIZE) {
-			const batchIds = articleIds.slice(i, i + SOURCE_TYPE_BATCH_SIZE);
-			try {
-				const result = await db.query(`SELECT id, source_type FROM ${table} WHERE id = ANY($1)`, [batchIds]);
-				for (const row of result.rows) {
-					if (row.id && row.source_type) sourceTypes.set(row.id, row.source_type);
-				}
-			} catch (error) {
-				logWarn('ARTICLE-QUEUE', 'Failed to fetch source types', { error: String(error) });
-			}
-		}
-	} finally {
-		await db.end();
-	}
-
-	return sourceTypes;
-}
-
-export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
-	logInfo('ARTICLE-QUEUE', 'Received batch', { count: batch.messages.length });
-
-	for (const message of batch.messages) {
-		const body = message.body;
-
-		try {
-			if (body.type === 'article_process') {
-				await env.MONITOR_WORKFLOW.create({
-					params: {
-						article_id: body.article_id,
-						source_type: body.source_type,
-						...(body.target_table ? { target_table: body.target_table } : {}),
-					},
-				});
-				logInfo('ARTICLE-QUEUE', 'Created workflow for article', { article_id: body.article_id });
-				message.ack();
-			} else if (body.type === 'batch_process') {
-				const sourceTypeMap = await fetchSourceTypeMap(body.article_ids, env);
-				for (const id of body.article_ids) {
-					const sourceType = sourceTypeMap.get(id) ?? SOURCE_TYPE_FALLBACK;
-					await env.MONITOR_WORKFLOW.create({
-						params: {
-							article_id: id,
-							source_type: sourceType,
-							...(body.target_table ? { target_table: body.target_table } : {}),
-						},
-					});
-				}
-				logInfo('ARTICLE-QUEUE', 'Created workflows (batch)', { count: body.article_ids.length, triggered_by: body.triggered_by });
-				message.ack();
-			} else {
-				logWarn('ARTICLE-QUEUE', 'Unknown message type, acking');
-				message.ack();
-			}
-		} catch (err) {
-			logError('ARTICLE-QUEUE', 'Error handling message, retrying', { error: String(err) });
-			message.retry();
-		}
-	}
-}
-
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, source_type, target_table } = event.payload;
 		const table = target_table ?? ARTICLES_TABLE;
-		const isUserArticle = table !== ARTICLES_TABLE;
+		const isUserFile = table === USER_FILES_TABLE;
+		const fields = articleFieldsFor(table);
 
-		logInfo('WORKFLOW', 'Starting', { article_id, source_type });
+		logInfo('WORKFLOW', 'Starting', { article_id, source_type, table });
 
 		// Step 1: Fetch article from DB
 		const article = (await step.do(
@@ -109,7 +49,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const db = await createDbClient(this.env);
 				try {
-					const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [article_id]);
+					const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [article_id]);
 					if (result.rows.length === 0) throw new Error(`Failed to fetch article ${article_id}: not found`);
 					return result.rows[0] as Article;
 				} finally {
@@ -121,6 +61,16 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		if (!article) {
 			logWarn('WORKFLOW', 'Article not found', { article_id });
 			return { success: false, article_id, reason: 'not_found' };
+		}
+
+		if (isUserFile && !article.content && isUploadedPdf(article)) {
+			const storageKey = article.storage_key as string;
+			const extracted = (await step.do(
+				'extract-pdf-text',
+				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+				() => extractAndPersistPdf(this.env, article_id, storageKey),
+			)) as string;
+			article.content = extracted;
 		}
 
 		// Step 2: AI analysis (translate / tags / summary)
@@ -187,8 +137,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		});
 
-		// Step 5b: Sync entities to normalized tables
-		if (processorResult.updateData.entities?.length) {
+		// Step 5b: Sync entities to normalized tables (article_entities FKs point at
+		// public `articles` only — user_files rows skip this step).
+		if (!isUserFile && processorResult.updateData.entities?.length) {
 			await step.do(
 				'sync-entities',
 				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
@@ -208,43 +159,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			await step.do(
 				'generate-youtube-highlights',
 				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-				async () => {
-					const videoId = article.platform_metadata?.type === 'youtube' ? article.platform_metadata.data.videoId : null;
-					if (!videoId) return;
-
-					const db = await createDbClient(this.env);
-					try {
-						const result = await db.query<{
-							transcript: Array<{ startTime: number; endTime: number; text: string }> | null;
-							ai_highlights: unknown;
-						}>('SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1', [videoId]);
-						const row = result.rows[0];
-						if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return;
-
-						const highlights = await generateYouTubeHighlights(videoId, row.transcript, this.env.OPENROUTER_API_KEY);
-						if (!highlights) return;
-
-						const aiHighlights = {
-							version: '1.0',
-							model: 'google/gemini-3-flash-preview',
-							highlights: highlights.highlights,
-							generatedAt: new Date().toISOString(),
-						};
-						await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
-							JSON.stringify(aiHighlights),
-							new Date().toISOString(),
-							videoId,
-						]);
-						logInfo('WORKFLOW', 'YouTube highlights saved', { videoId, count: highlights.highlights.length });
-					} finally {
-						await db.end();
-					}
-				},
+				() => generateAndSaveYouTubeHighlights(this.env, article_id, article),
 			);
 		}
 
 		// Step 8: Generate and save embedding
-		const hasEmbedding = (await step.do(
+		const _hasEmbedding = (await step.do(
 			'generate-and-save-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {

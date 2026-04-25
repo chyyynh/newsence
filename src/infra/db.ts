@@ -10,7 +10,7 @@ export async function createDbClient(env: Env): Promise<Client> {
 }
 
 export const ARTICLES_TABLE = 'articles';
-export const USER_ARTICLES_TABLE = 'user_articles';
+export const USER_FILES_TABLE = 'user_files';
 
 // ─────────────────────────────────────────────────────────────
 // Article insert helpers
@@ -30,6 +30,24 @@ export interface InsertArticleData {
 	keywords?: string[];
 	tags?: string[];
 }
+
+export interface InsertUserFileData extends Omit<InsertArticleData, 'sourceType'> {
+	platformType: 'web' | 'youtube' | 'twitter' | 'hackernews';
+	userId: string;
+	visibility?: 'public' | 'private';
+	normalizedUrl?: string;
+}
+
+export type InsertUserFileResult = {
+	id: string;
+	created: boolean;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[];
+	platform_type: string | null;
+	og_image_url: string | null;
+};
 
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
@@ -68,37 +86,69 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
 }
 
 /**
- * Insert into the per-user `user_articles` table. Same shape as
- * `insertArticle` plus the user_id / visibility columns. No `tokens` column.
+ * Insert URL-sourced content into the per-user `user_files` table. For blob
+ * uploads (PDF/image) the frontend writes `user_files` directly — this helper
+ * is only for the scraped-URL path that goes through the Worker scraper.
+ *
+ * URL rows have:
+ *   - resource_kind = url
+ *   - origin_type = saved_url
+ *   - platform_type = detected platform (`web` | `youtube` | `twitter` | `hackernews`)
+ *   - file_type = detected platform for display compatibility
+ *   - storage_key / file_size = NULL (no blob)
+ *   - source_url = the scraped URL
+ *   - extracted_text = scraped markdown content
+ *
+ * The DB owns URL identity through the partial unique index on
+ * (user_id, normalized_source_url) for resource_kind='url'. Callers may dedup
+ * for efficiency, but correctness comes from this conflict-safe insert.
  */
-export async function insertUserArticle(
-	db: DbClient,
-	data: InsertArticleData & { userId: string; visibility?: 'public' | 'private' },
-): Promise<string | null> {
+export async function insertUserFile(db: DbClient, data: InsertUserFileData): Promise<InsertUserFileResult | null> {
+	const normalizedUrl = data.normalizedUrl ?? normalizeUrl(data.url);
 	const result = await db.query(
-		`INSERT INTO ${USER_ARTICLES_TABLE}
-			(url, title, source, published_date, scraped_date, summary, source_type, content, og_image_url, keywords, tags, platform_metadata, user_id, visibility)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT DO NOTHING
-		RETURNING id`,
+		`WITH inserted AS (
+			INSERT INTO ${USER_FILES_TABLE}
+			(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
+			 summary, extracted_text, og_image_url, keywords, tags, metadata,
+			 user_id, visibility)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			ON CONFLICT (user_id, normalized_source_url)
+			WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
+			DO NOTHING
+			RETURNING id, title, title_cn, summary_cn, tags, platform_type, og_image_url, TRUE AS created
+		)
+		SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, created FROM inserted
+		UNION ALL
+		SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, FALSE AS created
+		FROM ${USER_FILES_TABLE}
+		WHERE user_id = $17
+		  AND normalized_source_url = $7
+		  AND resource_kind = 'url'
+		  AND NOT EXISTS (SELECT 1 FROM inserted)
+		LIMIT 1`,
 		[
+			data.title,
+			data.platformType,
+			'url',
+			'saved_url',
+			data.platformType,
 			data.url,
+			normalizedUrl,
 			data.title,
 			data.source,
 			data.publishedDate,
-			new Date(),
 			data.summary,
-			data.sourceType,
 			data.content,
 			data.ogImageUrl,
 			data.keywords ?? [],
 			data.tags ?? [],
 			serializeMetadata(data.platformMetadata),
 			data.userId,
-			data.visibility ?? 'public',
+			data.visibility ?? 'private',
 		],
 	);
-	return (result.rows[0]?.id as string | undefined) ?? null;
+	const row = result.rows[0] as InsertUserFileResult | undefined;
+	return row ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────

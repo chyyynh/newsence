@@ -9,8 +9,13 @@
 	"compatibility_date": "2026-02-16",
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
-		"enabled": true,
-		"head_sampling_rate": 1
+		"logs": {
+			"enabled": true,
+			"invocation_logs": true
+		},
+		"traces": {
+			"enabled": false
+		}
 	},
 	/**
 	 * Schedule Triggers
@@ -74,6 +79,17 @@
 		{
 			"binding": "HYPERDRIVE",
 			"id": "5d7b16cf287e4dcc8b36d43461ccbf5c"
+		}
+	],
+	/**
+	 * R2 — user_file blob storage (PDF/image uploads + AI-generated images).
+	 * Bucket is also written by the Next.js frontend via S3 API; the worker
+	 * reads uploaded PDFs here for env.AI.toMarkdown extraction.
+	 */
+	"r2_buckets": [
+		{
+			"binding": "R2",
+			"bucket_name": "newsence"
 		}
 	],
 	/**
