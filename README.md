@@ -191,8 +191,15 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 
 ```
 src/
-├── index.ts              # Entry — routes HTTP, Cron, Queue, Workflow
+├── index.ts              # Cloudflare WorkerEntrypoint class only
+├── entrypoints/          # HTTP, scheduled, queue, and RPC adapters
+├── app/
+│   ├── handlers/         # Thin HTTP route handlers (/submit, /preview, /embed, /health)
+│   ├── use-cases/        # Application actions shared by HTTP + RPC
+│   ├── monitors/         # Cross-platform scheduled maintenance
+│   └── workflows/        # Queue consumer, Workflow class, and workflow steps
 ├── platforms/            # Each platform lives in its own folder
+│   ├── registry.ts       # URL detection dispatch → platform scraper
 │   ├── twitter/          # monitor + scraper + processor + metadata
 │   ├── youtube/          # monitor + scraper + highlights + metadata
 │   ├── hackernews/       # scraper + processor + metadata (no monitor — fed by RSS)
@@ -201,18 +208,15 @@ src/
 │   ├── rss/              # monitor + parser + feed-config
 │   └── web/              # shared scraper (Readability + Cheerio + OG extraction)
 ├── domain/
-│   ├── workflow.ts       # Queue consumer + NewsenceMonitorWorkflow orchestration
-│   ├── processors.ts     # AI processor registry + DefaultProcessor
-│   ├── ai-utils.ts       # Shared AI helpers (Gemini, translation)
-│   ├── entities.ts       # Entity sync to normalized tables
-│   └── distribute.ts     # Subscription fan-out for non-default sources
+│   ├── content/          # Shared content cleanup and editorial domain helpers
+│   ├── processing/       # AI processor registry, DefaultProcessor, AI helpers
+│   └── entities.ts       # Entity sync to normalized tables
 ├── infra/
 │   ├── db.ts             # Hyperdrive client + insertArticle / dedup / transcript helpers
 │   ├── fetch.ts          # fetchWithTimeout
 │   ├── log.ts            # Structured JSON logging
 │   └── openrouter.ts     # OpenRouter + embedding wrappers
-├── models/               # Types + PlatformMetadata discriminated union
-└── app/handlers/         # HTTP route handlers (/submit, /preview, /embed, /health)
+└── models/               # Types + PlatformMetadata discriminated union
 ```
 
 ## Environment Variables & Bindings
@@ -246,9 +250,9 @@ Minimum to add a new source:
 
 1. **Scraper** (`platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
 2. **Metadata** (`platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `models/platform-metadata.ts`.
-3. **Detection** — add the URL pattern to `domain/scrapers.ts:detectPlatformType` so `/submit` can route to your scraper.
-4. **Monitor** (optional, `platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts:scheduled`.
-5. **Processor** (optional, `platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `domain/processors.ts`.
+3. **Detection + dispatch** — add the URL pattern to `models/scraped-content.ts:detectPlatformType` and route it in `platforms/registry.ts`.
+4. **Monitor** (optional, `platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `entrypoints/scheduled.ts`.
+5. **Processor** (optional, `platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `domain/processing/processors.ts`.
 
 The new article goes through the same Queue → Workflow pipeline as every other platform — you don't touch the AI steps.
 

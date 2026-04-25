@@ -1,6 +1,7 @@
-import { prepareArticleTextForEmbedding } from '../infra/embedding';
-import type { PlatformEnrichments, PlatformMetadata } from '../models/platform-metadata';
-import type { Article } from '../models/types';
+import { USER_FILES_TABLE } from '../../infra/db';
+import { prepareArticleTextForEmbedding } from '../../infra/embedding';
+import type { PlatformEnrichments, PlatformMetadata } from '../../models/platform-metadata';
+import type { Article } from '../../models/types';
 import {
 	type ArticleProcessor,
 	callGeminiForAnalysis,
@@ -10,9 +11,9 @@ import {
 	type ProcessorResult,
 } from './ai-utils';
 
-export { collectAllComments } from '../platforms/hackernews/processor';
-export { translateTweet } from '../platforms/twitter/processor';
-export { generateYouTubeHighlights, type YouTubeHighlight, type YouTubeHighlightsResult } from '../platforms/youtube/highlights';
+export { collectAllComments } from '../../platforms/hackernews/processor';
+export { translateTweet } from '../../platforms/twitter/processor';
+export { generateYouTubeHighlights, type YouTubeHighlight, type YouTubeHighlightsResult } from '../../platforms/youtube/highlights';
 export type { ArticleProcessor, ProcessingDeps, ProcessorContext, ProcessorResult } from './ai-utils';
 // Re-exports
 export { callGeminiForAnalysis, callOpenRouterChat, createFallbackResult, isEmpty, translateContent } from './ai-utils';
@@ -46,8 +47,8 @@ class DefaultProcessor implements ArticleProcessor {
 // Factory
 // ─────────────────────────────────────────────────────────────
 
-import { HackerNewsProcessor } from '../platforms/hackernews/processor';
-import { TwitterProcessor } from '../platforms/twitter/processor';
+import { HackerNewsProcessor } from '../../platforms/hackernews/processor';
+import { TwitterProcessor } from '../../platforms/twitter/processor';
 
 const processors: Record<string, ArticleProcessor> = {
 	hackernews: new HackerNewsProcessor(),
@@ -85,6 +86,23 @@ export async function runArticleProcessor(
 	return getProcessor(sourceType).process(article, deps);
 }
 
+// `user_files` carries the same editorial fields as `articles` but with a few
+// different column names (content/extracted_text, url/source_url, etc.). The
+// processor emits keys that match `articles` column names; remap them when
+// the target table is user_files.
+const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
+	content: 'extracted_text',
+	url: 'source_url',
+	source: 'site_name',
+	platform_metadata: 'metadata',
+	scraped_date: 'created_at',
+};
+
+function mapColumnForTable(column: string, table: string): string {
+	if (table !== USER_FILES_TABLE) return column;
+	return ARTICLES_TO_USER_FILES_COLUMN_MAP[column] ?? column;
+}
+
 export async function persistProcessorResult(
 	articleId: string,
 	article: Article,
@@ -98,7 +116,7 @@ export async function persistProcessorResult(
 	if (Object.keys(updatePayload).length === 0) return;
 
 	const columns = Object.keys(updatePayload);
-	const setClauses = columns.map((col, i) => `${col} = $${i + 1}`).join(', ');
+	const setClauses = columns.map((col, i) => `${mapColumnForTable(col, deps.table)} = $${i + 1}`).join(', ');
 	const values = columns.map((col) => {
 		const val = updatePayload[col];
 		// JSON columns (objects/arrays that aren't native pg arrays for tags/keywords)

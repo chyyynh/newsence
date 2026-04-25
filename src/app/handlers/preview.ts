@@ -1,11 +1,10 @@
-import { detectPlatformType, scrapeUrl } from '../../domain/scrapers';
-import { ARTICLES_TABLE, createDbClient, USER_ARTICLES_TABLE } from '../../infra/db';
-import { logError, logWarn } from '../../infra/log';
+import { logError } from '../../infra/log';
 import { callOpenRouter, extractJson } from '../../infra/openrouter';
 import { normalizeUrl } from '../../infra/web';
+import { detectPlatformType } from '../../models/scraped-content';
 import type { Env } from '../../models/types';
-import { isSubmitAuthorized } from '../middleware/auth';
-import { processUrl } from './submit';
+import { scrapeUrl } from '../../platforms/registry';
+import { parseJsonBody, requireAuth } from '../middleware/auth';
 
 /** Extract the first URL from a string (handles messages like "@bot https://example.com check this") */
 function extractUrl(text: string): string | null {
@@ -49,33 +48,28 @@ async function quickTranslate(
 type PreviewBody = {
 	url?: string;
 	message?: string;
-	save?: boolean;
 	model?: string;
 };
 
+/**
+ * Preview-only endpoint: scrape + quick AI translate, no DB writes.
+ * Persistence is the frontend's responsibility (POST /api/upload → /submit).
+ */
 export async function handlePreview(request: Request, env: Env): Promise<Response> {
-	if (!(await isSubmitAuthorized(request, env))) {
-		return Response.json({ error: 'Unauthorized' }, { status: 401 });
-	}
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
 
 	let url: string | null = null;
-	let save = false;
 	let model = PREVIEW_DEFAULT_MODEL;
 
 	if (request.method === 'GET') {
 		const params = new URL(request.url).searchParams;
 		url = params.get('url');
-		save = params.get('save') === 'true';
 		model = params.get('model') || model;
 	} else {
-		let body: PreviewBody;
-		try {
-			body = (await request.json()) as PreviewBody;
-		} catch {
-			return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
-		}
+		const body = await parseJsonBody<PreviewBody>(request);
+		if (body instanceof Response) return body;
 		url = body.url ?? (body.message ? extractUrl(body.message) : null);
-		save = body.save ?? false;
 		model = body.model || model;
 	}
 
@@ -86,33 +80,6 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
 	const normalized = normalizeUrl(url);
 	const platformType = detectPlatformType(normalized);
 
-	if (save) {
-		// Save mode: full submit flow (scrape + DB + workflow) then quick AI preview
-		const submitResult = await processUrl(url, env);
-		if (submitResult.error) return Response.json(submitResult, { status: 500 });
-		if (submitResult.titleCn && submitResult.summaryCn) return Response.json(submitResult);
-
-		// Read content from DB (avoid double-scrape) for quick translate
-		if (env.OPENROUTER_API_KEY && submitResult.articleId) {
-			const db = await createDbClient(env);
-			try {
-				const table = submitResult.isUserArticle ? USER_ARTICLES_TABLE : ARTICLES_TABLE;
-				const r = await db.query(`SELECT title, content FROM ${table} WHERE id = $1`, [submitResult.articleId]);
-				const row = r.rows[0] as { title: string; content: string } | undefined;
-				if (row?.content) {
-					const ai = await quickTranslate(row.title, row.content, env.OPENROUTER_API_KEY, model);
-					return Response.json({ ...submitResult, ...ai });
-				}
-			} catch (e) {
-				logWarn('PREVIEW', 'Quick translate failed', { error: String(e) });
-			} finally {
-				await db.end();
-			}
-		}
-		return Response.json(submitResult);
-	}
-
-	// Preview-only mode: scrape + AI, no DB
 	try {
 		const scraped = await scrapeUrl(normalized, {
 			youtubeApiKey: env.YOUTUBE_API_KEY,

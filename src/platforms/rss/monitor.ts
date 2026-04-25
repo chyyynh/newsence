@@ -1,14 +1,15 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
-import { fanOutToSubscribers, getSourceSubscribers, getSubscribedSources } from '../../domain/distribute';
-import { detectPlatformType, extractHackerNewsId, HN_ALGOLIA_API, scrapeWebPage } from '../../domain/scrapers';
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
 import { fetchWithTimeout } from '../../infra/fetch';
 import { logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { PlatformMetadata } from '../../models/platform-metadata';
 import { buildHackerNews } from '../../models/platform-metadata';
+import { detectPlatformType, extractHackerNewsId } from '../../models/scraped-content';
 import type { Env, ExecutionContext, RSSFeed } from '../../models/types';
+import { HN_ALGOLIA_API } from '../hackernews/scraper';
+import { scrapeWebPage } from '../web/scraper';
 import { type FeedConfig, getFeedConfig } from './feed-config';
 import {
 	extractImageFromItem,
@@ -62,7 +63,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	let ogImageWidth: number | null = null;
 	let ogImageHeight: number | null = null;
 	// Determine source type from the RSS item's comments URL
-	const commentsUrl = item.comments as string | undefined;
+	const commentsUrl = toPlainText(item.comments) || undefined;
 	if (commentsUrl) {
 		try {
 			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
@@ -120,11 +121,11 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 		ogImageUrl = extractImageFromItem(item);
 	}
 
-	const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
+	const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
 	const content = crawledContent || null;
 
 	const publishedDate = pubDate ? new Date(pubDate) : new Date();
-	const title = item.title ?? item.text ?? 'No Title';
+	const title = toPlainText(item.title) || toPlainText(item.text) || 'No Title';
 	const source = feed.name ?? 'Unknown';
 	const summary = sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
 
@@ -227,7 +228,7 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 
 			// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
 			const rssItem = urlToItem.get(normalized);
-			const commentsUrl = rssItem?.comments as string | undefined;
+			const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
 			if (commentsUrl) {
 				try {
 					const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
@@ -283,75 +284,6 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 }
 
-// ─────────────────────────────────────────────────────────────
-// Subscription Pass — processes non-default sources with subscribers
-// Fetches each feed once, then fans out articles to each subscriber's user_articles
-// ─────────────────────────────────────────────────────────────
-
-async function processSubscribedFeeds(db: Client, env: Env, parser: XMLParser, sourceType: string): Promise<void> {
-	const feeds = await getSubscribedSources(db, sourceType);
-	if (!feeds.length) return;
-
-	logInfo('RSS-SUB', 'Processing subscribed feeds', { count: feeds.length });
-	for (const feed of feeds) {
-		if (!feed.RSSLink || feed.type !== 'rss') continue;
-		try {
-			const res = await fetchWithTimeout(feed.RSSLink, {
-				headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/xml, text/xml, */*' },
-			});
-			if (!res.ok) {
-				logWarn('RSS-SUB', 'Feed fetch failed', { feed: feed.name, status: res.status });
-				continue;
-			}
-
-			const items = extractItemsFromFeed(parser.parse(await res.text())).slice(0, 30);
-			if (!items.length) continue;
-
-			const subscribers = await getSourceSubscribers(db, feed.id);
-			if (!subscribers.length) continue;
-
-			const config = getFeedConfig(feed.name);
-			let inserted = 0;
-			for (const item of items) {
-				const rawUrl = extractUrlFromItem(item);
-				if (!rawUrl) continue;
-				const url = normalizeUrl(rawUrl);
-
-				const pubDate = item.pubDate ?? item.isoDate ?? item.published ?? item.updated;
-				const title = item.title ?? item.text ?? 'No Title';
-				const summary = config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
-				let content = '';
-				if (config.contentSource === 'content_encoded') content = extractRssFullContent(item) || '';
-				else if (config.contentSource === 'description') content = htmlToMarkdown(toPlainText(item.description) || '');
-				const ogImageUrl = extractImageFromItem(item) || null;
-
-				await fanOutToSubscribers(
-					db,
-					env,
-					{
-						url,
-						title,
-						source: feed.name,
-						publishedDate: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
-						summary,
-						sourceType: 'rss',
-						content: content || null,
-						ogImageUrl,
-						platformMetadata: null,
-					},
-					subscribers,
-					feed.id,
-				);
-				inserted++;
-			}
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
-			logInfo('RSS-SUB', 'Feed done', { feed: feed.name, items: inserted, subscribers: subscribers.length });
-		} catch (err) {
-			logWarn('RSS-SUB', 'Feed failed', { feed: feed.name, error: String(err) });
-		}
-	}
-}
-
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	logInfo('RSS', 'start');
 	const db = await createDbClient(env);
@@ -374,9 +306,6 @@ export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<v
 				}
 			}
 		}
-
-		// Pass 2: subscribed non-default sources → user_articles (fan-out per subscriber)
-		await processSubscribedFeeds(db, env, parser, 'rss');
 
 		logInfo('RSS', 'end');
 	} finally {

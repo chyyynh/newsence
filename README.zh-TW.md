@@ -191,8 +191,15 @@ claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 
 ```
 src/
-├── index.ts              # 入口 — 路由 HTTP、Cron、Queue、Workflow
+├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
+├── entrypoints/          # HTTP、scheduled、queue、RPC adapters
+├── app/
+│   ├── handlers/         # 薄 HTTP route handlers（/submit、/preview、/embed、/health）
+│   ├── use-cases/        # HTTP + RPC 共用的 application actions
+│   ├── monitors/         # 跨平台排程維護
+│   └── workflows/        # Queue consumer、Workflow class、workflow steps
 ├── platforms/            # 每個平台一個資料夾
+│   ├── registry.ts       # URL 偵測 dispatch → platform scraper
 │   ├── twitter/          # monitor + scraper + processor + metadata
 │   ├── youtube/          # monitor + scraper + highlights + metadata
 │   ├── hackernews/       # scraper + processor + metadata（沒有 monitor — 由 RSS 觸發）
@@ -201,18 +208,15 @@ src/
 │   ├── rss/              # monitor + parser + feed-config
 │   └── web/              # 共用爬蟲（Readability + Cheerio + OG 擷取）
 ├── domain/
-│   ├── workflow.ts       # Queue consumer + NewsenceMonitorWorkflow 編排
-│   ├── processors.ts     # AI processor registry + DefaultProcessor
-│   ├── ai-utils.ts       # 共用 AI 函式（Gemini、翻譯）
-│   ├── entities.ts       # 實體同步至正規化表格
-│   └── distribute.ts     # 非預設來源的訂閱分發
+│   ├── content/          # 共用內容清理與 editorial domain helpers
+│   ├── processing/       # AI processor registry、DefaultProcessor、AI helpers
+│   └── entities.ts       # 實體同步至正規化表格
 ├── infra/
 │   ├── db.ts             # Hyperdrive client + insertArticle / dedup / transcript helpers
 │   ├── fetch.ts          # fetchWithTimeout
 │   ├── log.ts            # 結構化 JSON 日誌
 │   └── openrouter.ts     # OpenRouter + embedding wrappers
-├── models/               # 型別 + PlatformMetadata 聯合型別
-└── app/handlers/         # HTTP route handlers（/submit、/preview、/embed、/health）
+└── models/               # 型別 + PlatformMetadata 聯合型別
 ```
 
 ## 環境變數與 Bindings
@@ -246,9 +250,9 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 1. **Scraper**（`platforms/foo/scraper.ts`）— export 一個回傳 `ScrapedContent` 的函式。
 2. **Metadata**（`platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `models/platform-metadata.ts` 註冊。
-3. **URL 偵測** — 把 URL pattern 加到 `domain/scrapers.ts:detectPlatformType`，讓 `/submit` 能路由到你的 scraper。
-4. **Monitor**（可選，`platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts:scheduled` 裡接上。
-5. **Processor**（可選，`platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `domain/processors.ts` 註冊。
+3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `models/scraped-content.ts:detectPlatformType`，並在 `platforms/registry.ts` 路由到 scraper。
+4. **Monitor**（可選，`platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `entrypoints/scheduled.ts` 裡接上。
+5. **Processor**（可選，`platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `domain/processing/processors.ts` 註冊。
 
 新文章一樣走 Queue → Workflow pipeline，AI 步驟你不用動。
 

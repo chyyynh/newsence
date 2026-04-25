@@ -1,17 +1,14 @@
 // ─────────────────────────────────────────────────────────────
-// Web Scraper (cheerio + Readability hybrid) + Unified Scraper
+// Web Scraper (cheerio + Readability hybrid)
 // ─────────────────────────────────────────────────────────────
 
 import { Readability } from '@mozilla/readability';
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
+import { cleanExtractedContent } from '../../domain/content/content-cleanup';
 import { logInfo, logWarn } from '../../infra/log';
-import { cleanExtractedContent } from '../../domain/content-cleanup';
-import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '../../models/scraped-content';
-import { scrapeHackerNews } from '../hackernews/scraper';
-import { scrapeTweet } from '../twitter/scraper';
-import { scrapeYouTube } from '../youtube/scraper';
+import type { ScrapedContent } from '../../models/scraped-content';
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -313,44 +310,6 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 	logInfo('WEB', 'Scraped', { url, chars: result.content.length });
 
 	return result;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Unified Scraper
-// ─────────────────────────────────────────────────────────────
-
-export interface ScrapeOptions {
-	youtubeApiKey?: string;
-	kaitoApiKey?: string;
-}
-
-export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapedContent> {
-	const platformType = detectPlatformType(url);
-
-	switch (platformType) {
-		case 'youtube': {
-			const videoId = extractYouTubeId(url);
-			if (!videoId) throw new Error('Invalid YouTube URL');
-			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-			return scrapeYouTube(videoId, options.youtubeApiKey);
-		}
-
-		case 'twitter': {
-			const tweetId = extractTweetId(url);
-			if (!tweetId) throw new Error('Invalid Twitter URL');
-			if (!options.kaitoApiKey) throw new Error('Kaito API key required');
-			return scrapeTweet(tweetId, options.kaitoApiKey);
-		}
-
-		case 'hackernews': {
-			const itemId = extractHackerNewsId(url);
-			if (!itemId) throw new Error('Invalid HackerNews URL');
-			return scrapeHackerNews(itemId);
-		}
-
-		default:
-			return scrapeWebPage(url);
-	}
 }
 
 // ─────────────────────────────────────────────────────────────

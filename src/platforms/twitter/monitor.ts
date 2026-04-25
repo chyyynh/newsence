@@ -1,5 +1,4 @@
 import type { Client } from 'pg';
-import { distributeNonDefaultArticles } from '../../domain/distribute';
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
 import { fetchWithTimeout } from '../../infra/fetch';
 import { logError, logInfo, logWarn } from '../../infra/log';
@@ -482,7 +481,6 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), users.map((u) => u.id)]);
 		}
 
-		await distributeNonDefaultArticles(db, 'twitter_user');
 		logInfo('TWITTER', 'end', { inserted: total, users: users.length, batches: batches.length });
 	} finally {
 		await db.end();

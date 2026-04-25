@@ -5,11 +5,10 @@
 import {
 	type ArticleProcessor,
 	callGeminiForAnalysis,
-	callOpenRouterChat,
 	isEmpty,
 	type ProcessorContext,
 	type ProcessorResult,
-} from '../../domain/ai-utils';
+} from '../../domain/processing/ai-utils';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { callOpenRouter, extractJson } from '../../infra/openrouter';
 import type { Article } from '../../models/types';

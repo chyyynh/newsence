@@ -9,7 +9,7 @@ import {
 	isEmpty,
 	type ProcessorContext,
 	type ProcessorResult,
-} from '../../domain/ai-utils';
+} from '../../domain/processing/ai-utils';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import type { PlatformEnrichments } from '../../models/platform-metadata';
 import type { Article, Env } from '../../models/types';
