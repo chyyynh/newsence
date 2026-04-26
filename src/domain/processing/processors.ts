@@ -135,16 +135,13 @@ export async function persistProcessorResult(
 }
 
 export function buildEmbeddingTextForArticle(
-	article: Pick<Article, 'title' | 'title_cn' | 'summary' | 'summary_cn' | 'content' | 'content_cn' | 'tags' | 'keywords'>,
+	article: Pick<Article, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>,
 	result: ProcessorResult,
 ): string {
 	return prepareArticleTextForEmbedding({
 		title: article.title,
-		title_cn: result.updateData.title_cn ?? article.title_cn,
 		summary: result.updateData.summary ?? article.summary,
-		summary_cn: result.updateData.summary_cn ?? article.summary_cn,
 		content: result.updateData.content ?? article.content,
-		content_cn: result.updateData.content_cn ?? article.content_cn,
 		tags: result.updateData.tags ?? article.tags,
 		keywords: result.updateData.keywords ?? article.keywords,
 	});
