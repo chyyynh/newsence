@@ -91,7 +91,7 @@ URL 進入（RSS 排程 / Twitter 排程 / YouTube 排程 / /submit）
 
 ### 1. 資料庫
 
-需要一個裝了 pgvector 的 PostgreSQL。測試過 Supabase；任何 Postgres ≥ 15 + `vector` extension 都行。
+需要一個裝了 pgvector 的 PostgreSQL。目前跑在 PlanetScale Postgres（透過 Cloudflare Hyperdrive）；任何 Postgres ≥ 15 + `vector` extension 都行。
 
 需要的表：`articles`、`user_articles`、`RssList`、`youtube_transcripts`，以及 entity / citation 相關表格。完整 schema 定義在上層 monorepo 的 `frontend/prisma/schema.prisma` — 獨立的 `schema.sql` 還在 roadmap。目前可以參考 Prisma models，或在 Issues 聯絡我。
 

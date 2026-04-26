@@ -8,9 +8,9 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
-import { describe, expect, it } from 'vitest';
+import { Pool } from 'pg';
+import { afterAll, describe, expect, it } from 'vitest';
 import { callGeminiForAnalysis, translateContent } from '../src/domain/processors';
 import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, stripHtml } from '../src/domain/rss';
 import { scrapeWebPage } from '../src/domain/scrapers';
@@ -54,7 +54,11 @@ function readWranglerVars(): Record<string, string> {
 }
 
 const vars = readWranglerVars();
-const supabase = createClient(vars.SUPABASE_URL, vars.SUPABASE_SERVICE_ROLE_KEY);
+const databaseUrl = process.env.DATABASE_URL || vars.DATABASE_URL;
+if (!databaseUrl) {
+	throw new Error('DATABASE_URL not set — provide via env or wrangler.jsonc vars (PlanetScale Postgres connection string).');
+}
+const pgPool = new Pool({ connectionString: databaseUrl });
 const apiKey = vars.OPENROUTER_API_KEY;
 const parser = new XMLParser({ ignoreAttributes: false });
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
@@ -122,14 +126,18 @@ function preview(text: string | undefined | null, maxLen: number): string {
 // ─────────────────────────────────────────────────────────────
 
 describe('RSS Pipeline E2E', () => {
+	afterAll(async () => {
+		await pgPool.end();
+	});
+
 	it(
 		'full pipeline: fetch → extract → AI analysis → translate',
 		async () => {
-			// 1. Fetch real feeds from DB
-			const { data: feeds, error } = await supabase.from('RssList').select('id, name, RSSLink, url, type');
-			expect(error).toBeNull();
-
-			const rssFeeds = (feeds ?? []).filter((f: { type: string }) => f.type === 'rss');
+			// 1. Fetch real feeds from DB (PlanetScale Postgres via pg)
+			const { rows: feeds } = await pgPool.query<{ id: string; name: string; RSSLink: string; url: string; type: string }>(
+				'SELECT id, name, "RSSLink", url, type FROM "RssList"',
+			);
+			const rssFeeds = feeds.filter((f) => f.type === 'rss');
 			console.log(`\nFound ${rssFeeds.length} RSS feeds\n`);
 			expect(rssFeeds.length).toBeGreaterThan(0);
 
