@@ -5,7 +5,6 @@ export type SubmitUrlRpcArgs = {
 	url?: string;
 	urls?: string[];
 	userId?: string;
-	visibility?: 'public' | 'private';
 };
 
 export function submitUrlRpc(env: Env, args: SubmitUrlRpcArgs): Promise<SubmitOutcome> {
@@ -13,7 +12,6 @@ export function submitUrlRpc(env: Env, args: SubmitUrlRpcArgs): Promise<SubmitOu
 	return submitUrls(env, {
 		urls,
 		userId: args.userId,
-		visibility: args.visibility,
 		rateKey: args.userId ? `user:${args.userId}` : 'rpc:anon',
 	});
 }

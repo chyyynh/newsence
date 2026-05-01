@@ -34,7 +34,6 @@ export interface InsertArticleData {
 export interface InsertUserFileData extends Omit<InsertArticleData, 'sourceType'> {
 	platformType: 'web' | 'youtube' | 'twitter' | 'hackernews';
 	userId: string;
-	visibility?: 'public' | 'private';
 	normalizedUrl?: string;
 }
 
@@ -110,8 +109,8 @@ export async function insertUserFile(db: DbClient, data: InsertUserFileData): Pr
 			INSERT INTO ${USER_FILES_TABLE}
 			(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
 			 summary, extracted_text, og_image_url, keywords, tags, metadata,
-			 user_id, visibility)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			 user_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			ON CONFLICT (user_id, normalized_source_url)
 			WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
 			DO NOTHING
@@ -144,7 +143,6 @@ export async function insertUserFile(db: DbClient, data: InsertUserFileData): Pr
 			data.tags ?? [],
 			serializeMetadata(data.platformMetadata),
 			data.userId,
-			data.visibility ?? 'private',
 		],
 	);
 	const row = result.rows[0] as InsertUserFileResult | undefined;

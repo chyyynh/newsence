@@ -7,7 +7,6 @@ type SubmitBody = {
 	url?: string; // Legacy single URL
 	urls?: string[]; // Batch URLs
 	userId?: string;
-	visibility?: 'public' | 'private';
 };
 
 export async function handleSubmitUrl(request: Request, env: Env): Promise<Response> {
@@ -21,7 +20,6 @@ export async function handleSubmitUrl(request: Request, env: Env): Promise<Respo
 	const outcome = await submitUrls(env, {
 		urls,
 		userId: body.userId,
-		visibility: body.visibility,
 		rateKey: getSubmitRateKey(request, body.userId),
 	});
 	if (outcome.ok) return Response.json({ success: true, results: outcome.results });

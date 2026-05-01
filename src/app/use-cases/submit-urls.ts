@@ -44,7 +44,6 @@ export type SubmitOutcome =
 export type SubmitArgs = {
 	urls: string[];
 	userId?: string;
-	visibility?: 'public' | 'private';
 	rateKey: string;
 };
 
@@ -52,7 +51,6 @@ async function scrapeAndInsert(
 	url: string,
 	env: Env,
 	userId: string,
-	visibility: 'public' | 'private',
 ): Promise<
 	| { userFileId: string; scraped: ScrapedContent; platformType: string; created: true }
 	| { userFileId: string; existing: ExistingUserFileRow; platformType: string; created: false }
@@ -92,7 +90,6 @@ async function scrapeAndInsert(
 			ogImageUrl: scraped.ogImageUrl || null,
 			platformMetadata: platformMetadataToStore,
 			userId,
-			visibility,
 		});
 
 		if (!userFile) {
@@ -161,12 +158,7 @@ function returnExistingWithoutWorkflow(url: string, row: ExistingUserFileRow): S
 	};
 }
 
-export async function processUrl(
-	rawUrl: string,
-	env: Env,
-	userId: string,
-	visibility: 'public' | 'private' = 'private',
-): Promise<SubmitResult> {
+export async function processUrl(rawUrl: string, env: Env, userId: string): Promise<SubmitResult> {
 	const url = normalizeUrl(rawUrl);
 
 	const db = await createDbClient(env);
@@ -188,7 +180,7 @@ export async function processUrl(
 
 	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
 	try {
-		result = await scrapeAndInsert(url, env, userId, visibility);
+		result = await scrapeAndInsert(url, env, userId);
 	} catch (err) {
 		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -241,9 +233,8 @@ export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutc
 	const uniqueUrls = [...new Set(normalizedUrls)];
 
 	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
-	const visibility = args.visibility ?? 'private';
 	const userId = args.userId;
-	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId, visibility)));
+	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId)));
 	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
 	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'URL processing failed' });
 	return { ok: true, results };
