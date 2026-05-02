@@ -107,5 +107,16 @@
 	"placement": {
 		"mode": "smart"
 	},
-	"vars": {}
+	/**
+	 * `CORE_WORKER_PUBLIC_URL` — origin baked into signed `/proxy/` URLs at ingest.
+	 * Override per environment (workers.dev for staging, custom domain for prod).
+	 *
+	 * Secret (set via `wrangler secret put`):
+	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for `/proxy/` URL signing.
+	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
+	 *     When unset, the proxy handler falls back to its legacy host allowlist.
+	 */
+	"vars": {
+		"CORE_WORKER_PUBLIC_URL": "https://core.newsence.app"
+	}
 }

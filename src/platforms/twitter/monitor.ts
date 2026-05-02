@@ -90,7 +90,7 @@ async function insertTwitterArticle(
 		hashTags?: string[];
 	},
 ): Promise<string | null> {
-	const articleId = await insertArticle(db, {
+	const articleId = await insertArticle(db, env, {
 		url: data.url,
 		title: data.title,
 		source: data.source,
