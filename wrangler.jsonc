@@ -72,6 +72,15 @@
 		"binding": "BROWSER"
 	},
 	/**
+	 * Images Binding — account-level image transformations.
+	 * Required because cf.image fetch options are silently ignored on
+	 * workers.dev domains; the binding works regardless of zone.
+	 * https://developers.cloudflare.com/images/transform-images/bindings/
+	 */
+	"images": {
+		"binding": "IMAGES"
+	},
+	/**
 	 * Hyperdrive — PlanetScale PostgreSQL connection pooling
 	 * https://developers.cloudflare.com/hyperdrive/
 	 */

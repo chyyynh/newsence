@@ -10,7 +10,7 @@ export { NewsenceMonitorWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<Env> {
 	override async fetch(request: Request): Promise<Response> {
-		return routeRequest(request, this.env);
+		return routeRequest(request, this.env, this.ctx);
 	}
 
 	async scheduled(event: ScheduledEvent): Promise<void> {

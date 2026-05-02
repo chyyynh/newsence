@@ -6,7 +6,7 @@ import { handleProxy } from '../app/handlers/proxy';
 import { handleRehostImage } from '../app/handlers/rehost-image';
 import { handleSubmitUrl } from '../app/handlers/submit';
 import { handleWorkflowStatus, handleWorkflowStream } from '../app/handlers/workflow-status';
-import type { Env } from '../models/types';
+import type { Env, ExecutionContext } from '../models/types';
 
 type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>;
 
@@ -43,14 +43,14 @@ function routePrefixGet(pathname: string, env: Env): Response | Promise<Response
 	return null;
 }
 
-export function routeRequest(request: Request, env: Env): Response | Promise<Response> {
+export function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
 	const { pathname } = new URL(request.url);
 
 	if (pathname === '/health') return handleHealth(env);
 	if (pathname === '/preview') return handlePreview(request, env);
 	if (pathname === '/scrape') return handleTestScrape(request, env);
 	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && pathname.startsWith('/proxy'))) {
-		return handleProxy(request, env);
+		return handleProxy(request, env, ctx);
 	}
 
 	if (request.method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
