@@ -135,7 +135,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 			? { type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
 			: null;
 
-	const articleId = await insertArticle(db, {
+	const articleId = await insertArticle(db, env, {
 		url,
 		title,
 		source,

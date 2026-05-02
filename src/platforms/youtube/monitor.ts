@@ -110,7 +110,7 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 
 						const url = normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
 
-						const articleId = await insertArticle(db, {
+						const articleId = await insertArticle(db, env, {
 							url,
 							title: scraped.title,
 							source: channel.name,

@@ -78,7 +78,7 @@ async function scrapeAndInsert(
 				}
 			: null;
 
-		const userFile = await insertUserFile(db, {
+		const userFile = await insertUserFile(db, env, {
 			url,
 			normalizedUrl: url,
 			title: scraped.title,

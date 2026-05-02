@@ -1,3 +1,4 @@
+import { handleBackfillSignedUrls } from '../app/handlers/backfill-signed-urls';
 import { handleEmbed } from '../app/handlers/embed';
 import { handleEnqueueUserFile } from '../app/handlers/enqueue-user-file';
 import { handleHealth, handleTestScrape } from '../app/handlers/health';
@@ -29,7 +30,9 @@ const HELP_TEXT =
 	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
 	'\nPublic media proxy:\n' +
-	'GET  /proxy/{options}/{mediaUrl} - Image/video passthrough with edge cache\n';
+	'GET  /proxy/{options}/{mediaUrl} - Image/video passthrough with edge cache\n' +
+	'\nAdmin (X-Internal-Token):\n' +
+	'GET  /admin/backfill-signed-urls?table=articles&limit=500 - Re-sign og_image_url rows\n';
 
 function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/status/')) {
@@ -49,6 +52,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	if (pathname === '/health') return handleHealth(env);
 	if (pathname === '/preview') return handlePreview(request, env);
 	if (pathname === '/scrape') return handleTestScrape(request, env);
+	if (pathname === '/admin/backfill-signed-urls') return handleBackfillSignedUrls(request, env);
 	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && pathname.startsWith('/proxy'))) {
 		return handleProxy(request, env, ctx);
 	}

@@ -1,30 +1,23 @@
 /**
  * Public media passthrough proxy with edge cache + Cloudflare Images binding.
  *
- * Read-only, no auth — the URL itself is the capability. Hosts are restricted
- * to an allowlist so the worker can't be turned into a generic image
- * transformer that drains the `env.IMAGES` 5k/mo free-tier quota: every
- * `transform()` call is billed (the binding does not dedupe like URL-based
- * cf.image), and the Cache API only dedupes repeat (URL, format) hits — an
- * attacker generating unique paths trivially bypasses the cache.
+ * Auth model: HMAC-signed URLs (?sig=&exp=) minted server-side at ingest.
+ * Falls back to a small host allowlist when the signing secret isn't set or
+ * the request is unsigned — covers legacy rows + platform-metadata URLs and
+ * lets a half-deployed rollout keep rendering. Drop the allowlist once
+ * everything is signed.
  *
- * The allowlist is the right shape *while* our legal source set stays
- * bounded (RSS / Twitter / YouTube / R2). When we ship arbitrary-URL
- * crawling, switch to HMAC-signed URLs — see #112.
+ * `env.IMAGES` is used over `cf.image` fetch options because the latter is
+ * silently ignored on workers.dev domains.
  *
- * Image transforms go through `env.IMAGES` (account-level binding) instead
- * of `cf.image` fetch options because the latter is silently ignored on
- * workers.dev domains.
- *
- * Usage: GET /proxy/{options}/{mediaUrl}
+ * Usage: GET /proxy/{options}/{mediaUrl}?sig={hex}&exp={unix}
  *   options — comma-separated key=value (w, h, q). Pass `passthrough` for defaults.
- *
- * Video hosts skip transforms and propagate Range headers for seeking.
  */
 
+import { getProxySigningConfig, verifyProxySignature } from '../../lib/sign-url';
 import type { Env, ExecutionContext } from '../../models/types';
 
-const ALLOWED_HOSTS = new Set([
+const LEGACY_ALLOWED_HOSTS = new Set([
 	'pbs.twimg.com',
 	'video.twimg.com',
 	'abs.twimg.com',
@@ -36,9 +29,9 @@ const ALLOWED_HOSTS = new Set([
 
 const VIDEO_HOSTS = new Set(['video.twimg.com']);
 
-function isAllowedUrl(url: URL): boolean {
+function isLegacyAllowed(url: URL): boolean {
 	if (url.protocol !== 'https:') return false;
-	return ALLOWED_HOSTS.has(url.hostname);
+	return LEGACY_ALLOWED_HOSTS.has(url.hostname);
 }
 
 function parseOptions(optionsStr: string): Record<string, string> {
@@ -92,8 +85,8 @@ function videoPassthrough(upstream: Response): Response {
 export async function handleProxy(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	if (request.method === 'OPTIONS') return corsPreflight();
 
-	const { pathname } = new URL(request.url);
-	const match = pathname.match(/^\/proxy\/([^/]+)\/(.+)$/);
+	const requestUrl = new URL(request.url);
+	const match = requestUrl.pathname.match(/^\/proxy\/([^/]+)\/(.+)$/);
 	if (!match) return new Response('Expected: /proxy/{options}/{mediaUrl}', { status: 400 });
 
 	const [, optionsStr, encodedUrl] = match;
@@ -103,7 +96,17 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 	} catch {
 		return new Response('Invalid media URL', { status: 400 });
 	}
-	if (!isAllowedUrl(parsed)) return new Response('URL not allowed', { status: 403 });
+	if (parsed.protocol !== 'https:') return new Response('Only https upstreams allowed', { status: 403 });
+
+	const sig = requestUrl.searchParams.get('sig');
+	const exp = requestUrl.searchParams.get('exp');
+	const signing = getProxySigningConfig(env);
+	if (signing && sig && exp) {
+		const ok = await verifyProxySignature(encodedUrl, sig, exp, signing.secret);
+		if (!ok) return new Response('Invalid or expired signature', { status: 403 });
+	} else if (!isLegacyAllowed(parsed)) {
+		return new Response('URL not allowed', { status: 403 });
+	}
 
 	try {
 		if (VIDEO_HOSTS.has(parsed.hostname)) {
