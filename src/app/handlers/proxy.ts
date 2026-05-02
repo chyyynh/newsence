@@ -1,17 +1,20 @@
 /**
  * Public media passthrough proxy with edge cache + Cloudflare Images binding.
  *
- * Read-only, no auth — the URL itself is the capability. Accepts any https URL:
- * Workers' fetch() natively blocks private/loopback/cloud-metadata IPs, so the
- * SSRF blast radius is "the public internet only." Image transforms go through
- * `env.IMAGES` (account-level binding) instead of `cf.image` fetch options
- * because the latter is silently ignored on workers.dev domains.
+ * Read-only, no auth — the URL itself is the capability. Hosts are restricted
+ * to an allowlist so the worker can't be turned into a generic image
+ * transformer that drains the `env.IMAGES` 5k/mo free-tier quota: every
+ * `transform()` call is billed (the binding does not dedupe like URL-based
+ * cf.image), and the Cache API only dedupes repeat (URL, format) hits — an
+ * attacker generating unique paths trivially bypasses the cache.
  *
- * Quota note: every `env.IMAGES.transform()` call counts toward the 5k/mo free
- * tier (URL-based cf.image dedupes by image+params, the binding does not). We
- * front the binding with the Workers Cache API keyed on
- * (request URL, negotiated format), so a transformed image is only billed
- * once per edge POP per cache lifetime.
+ * The allowlist is the right shape *while* our legal source set stays
+ * bounded (RSS / Twitter / YouTube / R2). When we ship arbitrary-URL
+ * crawling, switch to HMAC-signed URLs — see #112.
+ *
+ * Image transforms go through `env.IMAGES` (account-level binding) instead
+ * of `cf.image` fetch options because the latter is silently ignored on
+ * workers.dev domains.
  *
  * Usage: GET /proxy/{options}/{mediaUrl}
  *   options — comma-separated key=value (w, h, q). Pass `passthrough` for defaults.
@@ -21,10 +24,21 @@
 
 import type { Env, ExecutionContext } from '../../models/types';
 
+const ALLOWED_HOSTS = new Set([
+	'pbs.twimg.com',
+	'video.twimg.com',
+	'abs.twimg.com',
+	'i.ytimg.com',
+	'yt3.ggpht.com',
+	'cdn.openai.com',
+	'substackcdn.com',
+]);
+
 const VIDEO_HOSTS = new Set(['video.twimg.com']);
 
 function isAllowedUrl(url: URL): boolean {
-	return url.protocol === 'https:';
+	if (url.protocol !== 'https:') return false;
+	return ALLOWED_HOSTS.has(url.hostname);
 }
 
 function parseOptions(optionsStr: string): Record<string, string> {
