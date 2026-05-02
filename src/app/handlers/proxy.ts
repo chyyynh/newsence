@@ -1,8 +1,13 @@
 /**
  * Public media passthrough proxy with edge cache + Cloudflare Image Resizing.
  *
- * Read-only, no auth — the URL itself is the capability. Hosts are restricted
- * to a small allowlist so the worker can't be turned into an open relay.
+ * Read-only, no auth — the URL itself is the capability. Accepts any https URL:
+ * Workers' fetch() natively blocks private/loopback/cloud-metadata IPs (see
+ * rehost-image.ts), so the SSRF blast radius is "the public internet only."
+ * cf.image will reject non-image responses for non-video paths. Remaining abuse
+ * vector is bandwidth + cf.image transform quota; harden with HMAC signing
+ * (frontend signs URL via server route, worker validates) if it becomes a
+ * problem.
  *
  * Usage: GET /proxy/{options}/{mediaUrl}
  *   options — comma-separated key=value (w, h, q). Pass `passthrough` for defaults.
@@ -12,21 +17,10 @@
 
 import type { Env } from '../../models/types';
 
-const ALLOWED_HOSTS = new Set([
-	'pbs.twimg.com',
-	'video.twimg.com',
-	'abs.twimg.com',
-	'i.ytimg.com',
-	'yt3.ggpht.com',
-	'cdn.openai.com',
-	'substackcdn.com',
-]);
-
 const VIDEO_HOSTS = new Set(['video.twimg.com']);
 
 function isAllowedUrl(url: URL): boolean {
-	if (url.protocol !== 'https:') return false;
-	return ALLOWED_HOSTS.has(url.hostname);
+	return url.protocol === 'https:';
 }
 
 function parseOptions(optionsStr: string): Record<string, string> {
