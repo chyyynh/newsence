@@ -331,7 +331,12 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 // ─────────────────────────────────────────────────────────────
 
 const OG_FETCH_TIMEOUT_MS = 6_000;
-const OG_MAX_BYTES = 32_768; // 32 KB — enough for <head>
+// 128 KB. 32 KB was enough for the average <head>, but heavy news sites stuff
+// JSON-LD, inline <style>, and analytics shims into the head and push og:image
+// past that boundary. Facebook's own crawler uses Range 0-524288 (512 KB);
+// 128 KB is the cheap middle ground that catches the long tail without paying
+// for full-page downloads.
+const OG_MAX_BYTES = 131_072;
 
 export interface OgImageResult {
 	ogImageUrl: string | null;
