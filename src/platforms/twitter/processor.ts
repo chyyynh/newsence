@@ -11,8 +11,33 @@ import {
 } from '../../domain/processing/ai-utils';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { callOpenRouter, extractJson } from '../../infra/openrouter';
-import type { Article } from '../../models/types';
+import type { AIAnalysisResult, Article } from '../../models/types';
 import { scrapeWebPage } from '../web/scraper';
+
+type UpdateData = ProcessorResult['updateData'];
+
+/** Map a Gemini analysis result onto an article's pending update, only overwriting empty fields. */
+function applyGeminiAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): void {
+	if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
+	if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
+	if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
+	if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
+	if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+	if (analysis.entities?.length) updateData.entities = analysis.entities;
+}
+
+function extractTweetText(article: Article): string {
+	const fromSummary = article.summary?.trim();
+	if (fromSummary) return fromSummary;
+	const raw = article.content ?? '';
+	try {
+		const parsed = JSON.parse(raw);
+		if (parsed?.text) return parsed.text;
+	} catch {
+		// Not JSON, use raw as-is
+	}
+	return raw;
+}
 
 // ─────────────────────────────────────────────────────────────
 // TwitterProcessor class
@@ -22,74 +47,58 @@ export class TwitterProcessor implements ArticleProcessor {
 	readonly sourceType = 'twitter';
 
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const updateData: ProcessorResult['updateData'] = {};
+		const updateData: UpdateData = {};
 		const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
-		// 1. Twitter Article — content is already full text from scrapeTwitterArticle
 		if (hasFullContent) {
 			logInfo('TWITTER-PROCESSOR', 'Processing Twitter Article', { title: article.title.slice(0, 50) });
 			const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
-
-			if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-			if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
-			if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
-			if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
-			if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-			if (analysis.entities?.length) updateData.entities = analysis.entities;
-
+			applyGeminiAnalysis(article, analysis, updateData);
 			return { updateData };
 		}
 
-		// 2. Extract actual tweet text (prefer summary over full markdown content)
-		let tweetText = article.summary?.trim() || '';
-		if (!tweetText) {
-			tweetText = article.content ?? '';
-			try {
-				const parsed = JSON.parse(tweetText);
-				if (parsed.text) tweetText = parsed.text;
-			} catch {
-				// Not JSON, use as-is
-			}
-		}
-
+		const tweetText = extractTweetText(article);
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
-		// 3. Tweet with external link — scrape linked article for analysis
 		const linkedUrl = this.extractLinkedUrl(tweetText);
-		if (linkedUrl) {
-			try {
-				const linked = await scrapeWebPage(linkedUrl);
-				if (linked.content && linked.content.length > 100) {
-					logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
-					updateData.content = linked.content;
-
-					const analysis = await callGeminiForAnalysis(
-						{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-						ctx.env.OPENROUTER_API_KEY,
-					);
-					if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-					if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
-					if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
-					if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
-					if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-					if (analysis.entities?.length) updateData.entities = analysis.entities;
-
-					return { updateData };
-				}
-			} catch (e) {
-				logWarn('TWITTER-PROCESSOR', 'Failed to scrape linked URL', { url: linkedUrl, error: String(e) });
-			}
+		if (linkedUrl && (await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData))) {
+			return { updateData };
 		}
 
-		// 4. Regular tweet — translate tweet text
-		const analysis = await translateTweet(tweetText, ctx.env.OPENROUTER_API_KEY);
+		await this.applyPlainTweetAnalysis(tweetText, article, ctx, updateData);
+		return { updateData };
+	}
 
+	/** Returns true if the linked article was usable and analysis was applied. */
+	private async applyLinkedArticleAnalysis(
+		article: Article,
+		ctx: ProcessorContext,
+		linkedUrl: string,
+		updateData: UpdateData,
+	): Promise<boolean> {
+		try {
+			const linked = await scrapeWebPage(linkedUrl);
+			if (!linked.content || linked.content.length <= 100) return false;
+			logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
+			updateData.content = linked.content;
+			const analysis = await callGeminiForAnalysis(
+				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
+				ctx.env.OPENROUTER_API_KEY,
+			);
+			applyGeminiAnalysis(article, analysis, updateData);
+			return true;
+		} catch (e) {
+			logWarn('TWITTER-PROCESSOR', 'Failed to scrape linked URL', { url: linkedUrl, error: String(e) });
+			return false;
+		}
+	}
+
+	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
+		const analysis = await translateTweet(tweetText, ctx.env.OPENROUTER_API_KEY);
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (!article.tags?.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
-
-		return { updateData };
 	}
 
 	private extractLinkedUrl(tweetText: string): string | null {

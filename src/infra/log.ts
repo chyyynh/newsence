@@ -1,4 +1,5 @@
 export function logInfo(tag: string, msg: string, data?: Record<string, unknown>): void {
+	// biome-ignore lint/suspicious/noConsole: structured logger entry point
 	console.log(JSON.stringify({ tag, msg, ...data }));
 }
 

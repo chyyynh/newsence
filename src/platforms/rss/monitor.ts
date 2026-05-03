@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
-import { fetchWithTimeout } from '../../infra/fetch';
+import { FEED_UA, fetchWithTimeout } from '../../infra/fetch';
 import { logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { PlatformMetadata } from '../../models/platform-metadata';
@@ -49,77 +49,69 @@ async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMe
 	});
 }
 
-const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
+interface FetchedRssContent {
+	content: string;
+	ogImageUrl: string | null;
+	ogImageWidth: number | null;
+	ogImageHeight: number | null;
+}
+
+const EMPTY_CONTENT: FetchedRssContent = { content: '', ogImageUrl: null, ogImageWidth: null, ogImageHeight: null };
+
+async function fetchContentForRssItem(item: RSSItem, config: FeedConfig, url: string): Promise<FetchedRssContent> {
+	switch (config.contentSource) {
+		case 'content_encoded':
+			return { ...EMPTY_CONTENT, content: extractRssFullContent(item) ?? '' };
+		case 'description': {
+			const raw = toPlainText(item.description);
+			return { ...EMPTY_CONTENT, content: raw && raw.length > 100 ? htmlToMarkdown(raw) : '' };
+		}
+		case 'scrape': {
+			const rssContent = extractRssFullContent(item);
+			if (rssContent) return { ...EMPTY_CONTENT, content: rssContent };
+			try {
+				const scraped = await scrapeWebPage(url);
+				return {
+					content: scraped.content,
+					ogImageUrl: scraped.ogImageUrl,
+					ogImageWidth: scraped.ogImageWidth ?? null,
+					ogImageHeight: scraped.ogImageHeight ?? null,
+				};
+			} catch (e) {
+				logWarn('RSS', 'Scrape fallback failed', { url, error: String(e) });
+				return EMPTY_CONTENT;
+			}
+		}
+		case 'skip':
+			return EMPTY_CONTENT;
+	}
+}
+
+async function detectHnSource(
+	commentsUrl: string | undefined,
+	feedName: string,
+): Promise<{ sourceType: string; platformMetadata: PlatformMetadata | null }> {
+	if (!commentsUrl) return { sourceType: 'rss', platformMetadata: null };
+	try {
+		const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
+		if (hnMeta) return { sourceType: 'hackernews', platformMetadata: hnMeta };
+	} catch (err) {
+		logWarn('RSS', 'Failed to fetch HN metadata', { feed: feedName, error: String(err) });
+	}
+	return { sourceType: 'rss', platformMetadata: null };
+}
 
 async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const rawUrl = extractUrlFromItem(item);
 	const url = rawUrl ? normalizeUrl(rawUrl) : null;
 	if (!url) return;
 
-	let platformMetadata: PlatformMetadata | null = null;
-	let sourceType = 'rss';
-	let crawledContent = '';
-	let ogImageUrl: string | null = null;
-	let ogImageWidth: number | null = null;
-	let ogImageHeight: number | null = null;
-	// Determine source type from the RSS item's comments URL
-	const commentsUrl = toPlainText(item.comments) || undefined;
-	if (commentsUrl) {
-		try {
-			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
-			if (hnMeta) {
-				sourceType = 'hackernews';
-				platformMetadata = hnMeta;
-			}
-		} catch (err) {
-			logWarn('RSS', 'Failed to fetch HN metadata', {
-				feed: feed.name,
-				error: String(err),
-			});
-		}
-	}
+	const { sourceType, platformMetadata } = await detectHnSource(toPlainText(item.comments) || undefined, feed.name);
 
-	// Fetch content based on feed config
-	if (sourceType === 'rss') {
-		switch (config.contentSource) {
-			case 'content_encoded': {
-				const rssContent = extractRssFullContent(item);
-				if (rssContent) crawledContent = rssContent;
-				break;
-			}
-			case 'description': {
-				const raw = toPlainText(item.description);
-				if (raw && raw.length > 100) crawledContent = htmlToMarkdown(raw);
-				break;
-			}
-			case 'scrape': {
-				const rssContent = extractRssFullContent(item);
-				if (rssContent) {
-					crawledContent = rssContent;
-				} else {
-					try {
-						const scraped = await scrapeWebPage(url);
-						crawledContent = scraped.content;
-						if (!ogImageUrl) {
-							ogImageUrl = scraped.ogImageUrl;
-							ogImageWidth = scraped.ogImageWidth ?? null;
-							ogImageHeight = scraped.ogImageHeight ?? null;
-						}
-					} catch (e) {
-						logWarn('RSS', 'Scrape fallback failed', { url, error: String(e) });
-					}
-				}
-				break;
-			}
-			case 'skip':
-				break;
-		}
-	}
-
-	// Extract image from RSS item metadata (zero-cost, no HTTP request)
-	if (!ogImageUrl) {
-		ogImageUrl = extractImageFromItem(item);
-	}
+	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
+	const crawledContent = fetched.content;
+	const ogImageUrl = fetched.ogImageUrl ?? extractImageFromItem(item);
+	const { ogImageWidth, ogImageHeight } = fetched;
 
 	const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
 	const content = crawledContent || null;
@@ -154,6 +146,61 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 	await enqueueArticleProcess(env, articleId, sourceType);
 }
 
+// Source priorities for the upgrade-on-duplicate flow: RSS feeds default to 10
+// and overwrite anything below them. Lower number = lower priority.
+const SOURCE_PRIORITY: Record<string, number> = { Unknown: 0, Telegram: 1 };
+const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
+const DEFAULT_FEED_PRIORITY = 10;
+
+type ExistingRecord = { url: string; source: string; source_type: string };
+
+async function fetchExistingRecords(db: Client, urls: string[]): Promise<ExistingRecord[]> {
+	const dedupBatchSize = 50;
+	const out: ExistingRecord[] = [];
+	for (let i = 0; i < urls.length; i += dedupBatchSize) {
+		const batch = urls.slice(i, i + dedupBatchSize);
+		const result = await db.query(`SELECT url, source, source_type FROM ${ARTICLES_TABLE} WHERE url = ANY($1)`, [batch]);
+		out.push(...(result.rows as ExistingRecord[]));
+	}
+	return out;
+}
+
+/** Upgrade a single existing article's source/metadata when this feed outranks it. */
+async function upgradeExistingArticleSource(
+	db: Client,
+	feed: RSSFeed,
+	feedPriority: number,
+	existing: ExistingRecord,
+	rssItem: RSSItem | undefined,
+): Promise<void> {
+	const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
+	if (feedPriority <= existingPriority) return;
+
+	const normalized = normalizeUrl(existing.url);
+	const updateFields: string[] = ['source = $1'];
+	const updateValues: unknown[] = [feed.name];
+	let paramIndex = 2;
+
+	const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
+	if (commentsUrl) {
+		try {
+			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
+			if (hnMeta) {
+				updateFields.push(`source_type = $${paramIndex++}`);
+				updateValues.push('hackernews');
+				updateFields.push(`platform_metadata = $${paramIndex++}`);
+				updateValues.push(JSON.stringify(hnMeta));
+			}
+		} catch (err) {
+			logWarn('RSS', 'Failed to fetch HN metadata for upgrade', { url: normalized, error: String(err) });
+		}
+	}
+
+	updateValues.push(normalized);
+	await db.query(`UPDATE ${ARTICLES_TABLE} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
+	logInfo('RSS', 'Upgraded article source', { url: normalized, from: existing.source, to: feed.name });
+}
+
 async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
@@ -161,101 +208,41 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	try {
 		res = await fetchWithTimeout(feed.RSSLink, {
 			headers: {
-				'User-Agent': USER_AGENT,
+				'User-Agent': FEED_UA,
 				Accept: 'application/rss+xml, application/xml, text/xml, */*',
 			},
 		});
 	} catch (err) {
 		return logWarn('RSS', 'Feed fetch failed', { feed: feed.name, error: String(err) });
 	}
-	if (!res.ok)
-		return logWarn('RSS', 'Feed fetch failed', {
-			feed: feed.name,
-			status: res.status,
-		});
+	if (!res.ok) return logWarn('RSS', 'Feed fetch failed', { feed: feed.name, status: res.status });
 
 	let items = extractItemsFromFeed(parser.parse(await res.text()));
 	if (!items.length) return;
 
 	const config = getFeedConfig(feed.name);
-
 	if (items.length > 30) items = items.slice(0, 30);
 
-	// Filter existing URLs
 	const urls = items
 		.map((item) => extractUrlFromItem(item))
 		.filter(Boolean)
 		.map((u) => normalizeUrl(u!));
-	const table = ARTICLES_TABLE;
-	const dedupBatchSize = 50;
-	const existingRecords: Array<{ url: string; source: string; source_type: string }> = [];
-
-	for (let i = 0; i < urls.length; i += dedupBatchSize) {
-		const batch = urls.slice(i, i + dedupBatchSize);
-		const result = await db.query(`SELECT url, source, source_type FROM ${table} WHERE url = ANY($1)`, [batch]);
-		existingRecords.push(...(result.rows as Array<{ url: string; source: string; source_type: string }>));
-	}
-
+	const existingRecords = await fetchExistingRecords(db, urls);
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = items.filter((item) => {
 		const url = extractUrlFromItem(item);
 		return url && !existingSet.has(normalizeUrl(url));
 	});
 
-	// Upgrade source to this feed when a duplicate exists from a lower-priority source
-	// e.g., a tweet already saved by Twitter cron gets upgraded to "Hacker News" when HN links to it
-	const SOURCE_PRIORITY: Record<string, number> = {
-		Unknown: 0,
-		Telegram: 1,
-	};
-	const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
-	const feedPriority = SOURCE_PRIORITY[feed.name] ?? 10; // RSS feeds default to high priority
-
-	// Build URL→item map for fetching comments URL during upgrade
 	const urlToItem = new Map<string, RSSItem>();
 	for (const item of items) {
 		const url = extractUrlFromItem(item);
 		if (url) urlToItem.set(normalizeUrl(url), item);
 	}
 
+	const feedPriority = SOURCE_PRIORITY[feed.name] ?? DEFAULT_FEED_PRIORITY;
 	for (const existing of existingRecords) {
-		const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? 10;
-		if (feedPriority > existingPriority) {
-			const normalized = normalizeUrl(existing.url);
-			const updateFields: string[] = ['source = $1'];
-			const updateValues: unknown[] = [feed.name];
-			let paramIndex = 2;
-
-			// Fetch platform metadata from the RSS item's comments URL (e.g., HN discussion)
-			const rssItem = urlToItem.get(normalized);
-			const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
-			if (commentsUrl) {
-				try {
-					const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
-					if (hnMeta) {
-						updateFields.push(`source_type = $${paramIndex}`);
-						updateValues.push('hackernews');
-						paramIndex++;
-						updateFields.push(`platform_metadata = $${paramIndex}`);
-						updateValues.push(JSON.stringify(hnMeta));
-						paramIndex++;
-					}
-				} catch (err) {
-					logWarn('RSS', 'Failed to fetch HN metadata for upgrade', {
-						url: normalized,
-						error: String(err),
-					});
-				}
-			}
-
-			updateValues.push(normalized);
-			await db.query(`UPDATE ${table} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
-			logInfo('RSS', 'Upgraded article source', {
-				url: normalized,
-				from: existing.source,
-				to: feed.name,
-			});
-		}
+		await upgradeExistingArticleSource(db, feed, feedPriority, existing, urlToItem.get(normalizeUrl(existing.url)));
 	}
 
 	logInfo('RSS', 'Feed processed', {

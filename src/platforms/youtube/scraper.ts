@@ -36,7 +36,8 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 	const chapterRegex = /(?:^|\n)(\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.+?)(?=\n|$)/g;
 	const chapters: YouTubeChapter[] = [];
 
-	let match;
+	let match: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: idiomatic regex.exec loop
 	while ((match = chapterRegex.exec(description)) !== null) {
 		const hours = match[1] ? parseInt(match[1].replace(':', ''), 10) : 0;
 		const minutes = parseInt(match[2], 10);
@@ -151,9 +152,9 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 			channelAvatar,
 			duration: video.contentDetails.duration,
 			thumbnailUrl,
-			viewCount: stats.viewCount ? parseInt(stats.viewCount) : undefined,
-			likeCount: stats.likeCount ? parseInt(stats.likeCount) : undefined,
-			commentCount: stats.commentCount ? parseInt(stats.commentCount) : undefined,
+			viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,
+			likeCount: stats.likeCount ? Number.parseInt(stats.likeCount, 10) : undefined,
+			commentCount: stats.commentCount ? Number.parseInt(stats.commentCount, 10) : undefined,
 			tags: snippet.tags || [],
 			publishedAt: snippet.publishedAt,
 			description: snippet.description || '',

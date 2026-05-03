@@ -3,8 +3,9 @@
  *
  * Sign input: `encodedUrl + ":" + exp`. The `{options}` segment (w/q) is
  * intentionally NOT signed so Next.js can request multiple widths from one
- * stored URL without per-render re-signing. Changing options doesn't widen
- * the attack surface beyond what edge cache already dedupes.
+ * stored URL without per-render re-signing. The proxy handler must keep a
+ * strict allowlist for supported widths/qualities because these options are
+ * public input.
  */
 
 export const PROXY_PATH_PASSTHROUGH = 'passthrough';
