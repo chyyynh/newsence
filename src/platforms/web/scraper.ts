@@ -7,6 +7,7 @@ import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import { cleanExtractedContent } from '../../domain/content/content-cleanup';
+import { BROWSER_UA } from '../../infra/fetch';
 import { logInfo, logWarn } from '../../infra/log';
 import type { ScrapedContent } from '../../models/scraped-content';
 
@@ -193,7 +194,7 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 
 	const response = await fetch(url, {
 		headers: {
-			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'User-Agent': BROWSER_UA,
 			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 		},
@@ -350,8 +351,7 @@ export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 	try {
 		const response = await fetch(url, {
 			headers: {
-				'User-Agent':
-					'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+				'User-Agent': BROWSER_UA,
 				Accept: 'text/html,application/xhtml+xml',
 			},
 			signal: controller.signal,

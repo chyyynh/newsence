@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '../../infra/db';
-import { fetchWithTimeout } from '../../infra/fetch';
+import { FEED_UA, fetchWithTimeout } from '../../infra/fetch';
 import { logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import type { PlatformMetadata } from '../../models/platform-metadata';
@@ -48,8 +48,6 @@ async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMe
 		storyUrl: commentsUrl,
 	});
 }
-
-const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
 interface FetchedRssContent {
 	content: string;
@@ -210,7 +208,7 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	try {
 		res = await fetchWithTimeout(feed.RSSLink, {
 			headers: {
-				'User-Agent': USER_AGENT,
+				'User-Agent': FEED_UA,
 				Accept: 'application/rss+xml, application/xml, text/xml, */*',
 			},
 		});

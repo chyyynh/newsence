@@ -1,6 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '../../infra/db';
-import { fetchWithTimeout } from '../../infra/fetch';
+import { FEED_UA, fetchWithTimeout } from '../../infra/fetch';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
@@ -31,8 +31,6 @@ interface YouTubeAtomEntry {
 	link?: { '@_href'?: string } | string;
 }
 
-const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
-
 const SHORTS_MAX_SECONDS = 180;
 
 function buildVideoUrl(videoId: string): string {
@@ -40,7 +38,7 @@ function buildVideoUrl(videoId: string): string {
 }
 
 async function fetchChannelEntries(channel: RSSFeed, parser: XMLParser): Promise<YouTubeAtomEntry[] | null> {
-	const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': USER_AGENT } });
+	const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
 	if (!res.ok) {
 		logWarn('YOUTUBE-CRON', 'Feed fetch failed', { channel: channel.name, status: res.status });
 		return null;
