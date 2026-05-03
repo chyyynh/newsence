@@ -67,6 +67,35 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 	return { title: title.trim(), ogImageUrl, ogImageWidth, ogImageHeight, description, siteName, author, publishedDate };
 }
 
+type CheerioEl = ReturnType<cheerio.CheerioAPI>;
+
+function renderImageMarkdown($img: CheerioEl, baseUrl: string): string | null {
+	if ($img.hasClass('social-image') || $img.hasClass('navbar-logo') || $img.hasClass('avatar')) return null;
+	let src = $img.attr('src') || $img.attr('data-src');
+	if (!src) return null;
+	if (!src.startsWith('http')) {
+		try {
+			src = new URL(src, baseUrl).href;
+		} catch {
+			return null;
+		}
+	}
+	if (isJunkImage(src, $img.attr('alt') ?? undefined)) return null;
+	return `![${$img.attr('alt') || 'Image'}](${src})\n\n`;
+}
+
+const TAG_HANDLERS: Record<string, ($el: CheerioEl, baseUrl: string) => string | null> = {
+	p: ($el) => {
+		const text = $el.text().trim();
+		return text ? `${text}\n\n` : null;
+	},
+	h1: ($el) => `## ${$el.text().trim()}\n\n`,
+	h2: ($el) => `### ${$el.text().trim()}\n\n`,
+	h3: ($el) => `#### ${$el.text().trim()}\n\n`,
+	h4: ($el) => `#### ${$el.text().trim()}\n\n`,
+	img: renderImageMarkdown,
+};
+
 /** Extract article content using cheerio selectors (fallback method) */
 function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string): string {
 	$('script, style, nav, footer, header, aside, .ad, .advertisement, .social-share').remove();
@@ -78,30 +107,14 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 	const elements = mainContent.find('p, h1, h2, h3, h4, img');
 
 	for (const el of elements) {
+		const $el = $(el);
+		const tag = ($el.prop('tagName') as string | undefined)?.toLowerCase();
+		if (!tag) continue;
+		const handler = TAG_HANDLERS[tag];
+		if (!handler) continue;
 		try {
-			const element = $(el);
-			if (element.is('p')) {
-				const text = element.text().trim();
-				if (text.length > 0) content += `${text}\n\n`;
-			} else if (element.is('h1')) {
-				content += `## ${element.text().trim()}\n\n`;
-			} else if (element.is('h2')) {
-				content += `### ${element.text().trim()}\n\n`;
-			} else if (element.is('h3') || element.is('h4')) {
-				content += `#### ${element.text().trim()}\n\n`;
-			} else if (element.is('img')) {
-				if (element.hasClass('social-image') || element.hasClass('navbar-logo') || element.hasClass('avatar')) continue;
-				let imgSrc = element.attr('src') || element.attr('data-src');
-				if (imgSrc && !imgSrc.startsWith('http')) {
-					try {
-						imgSrc = new URL(imgSrc, url).href;
-					} catch {
-						continue;
-					}
-				}
-				if (!imgSrc || isJunkImage(imgSrc, element.attr('alt') ?? undefined)) continue;
-				content += `![${element.attr('alt') || 'Image'}](${imgSrc})\n\n`;
-			}
+			const fragment = handler($el, url);
+			if (fragment) content += fragment;
 		} catch (error) {
 			logWarn('WEB', 'Error processing element', { error: String(error) });
 		}
