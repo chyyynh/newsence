@@ -1,7 +1,23 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
-	"extends": ["../../biome.jsonc"],
+	"extends": ["../biome.jsonc"],
 	"files": {
-		"includes": ["**", "!worker-configuration.d.ts"]
-	}
+		"includes": ["**", "!worker-configuration.d.ts", "!src/platforms/bilibili/gen"]
+	},
+	"overrides": [
+		{
+			"includes": ["test/**"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noConsole": "off",
+						"noExplicitAny": "off"
+					},
+					"complexity": {
+						"noExcessiveCognitiveComplexity": "off"
+					}
+				}
+			}
+		}
+	]
 }

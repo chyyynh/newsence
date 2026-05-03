@@ -9,10 +9,10 @@
  * `signOgImageForStorage` skips don't block forward progress.
  */
 
+import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../../infra/db';
 import { getProxySigningConfig, signOgImageForStorage } from '../../lib/sign-url';
 import type { Env } from '../../models/types';
 import { requireAuth } from '../middleware/auth';
-import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../../infra/db';
 
 const TABLES = new Set<string>([ARTICLES_TABLE, USER_FILES_TABLE]);
 
@@ -45,9 +45,7 @@ export async function handleBackfillSignedUrls(request: Request, env: Env): Prom
 			[after, limit],
 		);
 
-		const signed = await Promise.all(
-			rows.rows.map(async (row) => ({ row, signed: await signOgImageForStorage(env, row.og_image_url) })),
-		);
+		const signed = await Promise.all(rows.rows.map(async (row) => ({ row, signed: await signOgImageForStorage(env, row.og_image_url) })));
 		const updates = signed.filter((r) => r.signed && r.signed !== r.row.og_image_url);
 
 		if (updates.length > 0) {
