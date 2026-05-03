@@ -10,6 +10,11 @@
  * `env.IMAGES` is used over `cf.image` fetch options because the latter is
  * silently ignored on workers.dev domains.
  *
+ * Output format is hardcoded to WebP. Every IMAGES binding call bills as a
+ * unique transform regardless of dedup, so collapsing AVIF/WebP/JPEG into a
+ * single format ~3x's the cache hit rate (one entry per (URL, w, q) instead
+ * of three) and proportionally reduces transform billing.
+ *
  * Usage: GET /proxy/{options}/{mediaUrl}?sig={hex}&exp={unix}
  *   options — comma-separated key=value (w, h, q). Pass `passthrough` for defaults.
  */
@@ -53,12 +58,6 @@ function corsPreflight(): Response {
 			'Access-Control-Max-Age': '86400',
 		},
 	});
-}
-
-function negotiateFormat(accept: string): 'image/avif' | 'image/webp' | 'image/jpeg' {
-	if (accept.includes('image/avif')) return 'image/avif';
-	if (accept.includes('image/webp')) return 'image/webp';
-	return 'image/jpeg';
 }
 
 async function fetchUpstream(parsed: URL, range: string | null): Promise<Response> {
@@ -120,11 +119,8 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 			return videoPassthrough(upstream);
 		}
 
-		const format = negotiateFormat(request.headers.get('Accept') || '');
 		const cache = caches.default;
-		const cacheUrl = new URL(request.url);
-		cacheUrl.searchParams.set('_fmt', format.replace('image/', ''));
-		const cacheKey = new Request(cacheUrl.toString(), { method: 'GET' });
+		const cacheKey = new Request(request.url, { method: 'GET' });
 		const hit = await cache.match(cacheKey);
 		if (hit) return hit;
 
@@ -142,12 +138,11 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 		if (opts.h) transform.height = Number.parseInt(opts.h, 10);
 		const quality = opts.q ? Number.parseInt(opts.q, 10) : 75;
 
-		const result = await env.IMAGES.input(upstream.body).transform(transform).output({ format, quality });
+		const result = await env.IMAGES.input(upstream.body).transform(transform).output({ format: 'image/webp', quality });
 		const base = result.response();
 		const headers = new Headers(base.headers);
 		headers.set('Access-Control-Allow-Origin', '*');
 		headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-		headers.set('Vary', 'Accept');
 		const response = new Response(base.body, { status: 200, headers });
 		ctx.waitUntil(cache.put(cacheKey, response.clone()));
 		return response;
