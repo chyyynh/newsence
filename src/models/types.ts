@@ -15,8 +15,6 @@ export interface Env extends Cloudflare.Env {
 	YOUTUBE_API_KEY?: string;
 	/** HMAC secret for signing /proxy/ URLs. When unset, proxy falls back to legacy allowlist. */
 	IMAGE_PROXY_SECRET?: string;
-	/** Public origin baked into signed proxy URLs (e.g. https://core.newsence.app). */
-	CORE_WORKER_PUBLIC_URL?: string;
 
 	CF_ACCOUNT_ID: string;
 	CF_API_TOKEN: string;
