@@ -1,10 +1,12 @@
 /**
  * Public media passthrough proxy with edge cache + Cloudflare Images binding.
  *
- * Auth: HMAC-signed URLs (?sig=&exp=) minted server-side at ingest. Falls
- * back to a small host allowlist when unsigned — covers legacy rows and
- * lets half-deployed rollouts render. Drop the allowlist once everything
- * is signed.
+ * Auth: every request must carry an HMAC-signed `(encodedUrl, exp)` pair via
+ * `?sig=&exp=`. The frontend signs at the API boundary (see
+ * frontend/src/lib/r2/sign-article-media.ts), so the worker doesn't need a
+ * trusted-host allowlist. Unsigned requests are rejected with 403 — there is
+ * no fallback. The signature is intentionally options-independent so Next.js
+ * can request multiple widths from one stored URL.
  *
  * `env.IMAGES` is used over `cf.image` fetch options because the latter is
  * silently ignored on workers.dev domains. Every IMAGES call bills as a
@@ -29,16 +31,9 @@
 import { getProxySigningConfig, verifyProxySignature } from '../../lib/sign-url';
 import type { Env, ExecutionContext } from '../../models/types';
 
-const LEGACY_ALLOWED_HOSTS = new Set([
-	'pbs.twimg.com',
-	'video.twimg.com',
-	'abs.twimg.com',
-	'i.ytimg.com',
-	'yt3.ggpht.com',
-	'cdn.openai.com',
-	'substackcdn.com',
-]);
-
+// Routing-only — these hosts serve byte-range video streams, so we always
+// passthrough with Range forwarding regardless of request options. Not an
+// auth check; the signature gate above already enforced access.
 const VIDEO_HOSTS = new Set(['video.twimg.com']);
 // Must stay in sync with frontend/next.config.ts images.deviceSizes/imageSizes.
 // The options segment is intentionally unsigned so Next can choose a width at
@@ -57,11 +52,6 @@ type ParsedProxyOptions =
 			width: number;
 			quality: number;
 	  };
-
-function isLegacyAllowed(url: URL): boolean {
-	if (url.protocol !== 'https:') return false;
-	return LEGACY_ALLOWED_HOSTS.has(url.hostname);
-}
 
 function parseRawOptions(optionsStr: string): Record<string, string> {
 	const opts: Record<string, string> = {};
@@ -193,15 +183,15 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 	}
 	if (parsed.protocol !== 'https:') return new Response('Only https upstreams allowed', { status: 403 });
 
+	const signing = getProxySigningConfig(env);
+	if (!signing) return new Response('Proxy signing not configured', { status: 503 });
+
 	const sig = requestUrl.searchParams.get('sig');
 	const exp = requestUrl.searchParams.get('exp');
-	const signing = getProxySigningConfig(env);
-	if (signing && sig && exp) {
-		const ok = await verifyProxySignature(encodedUrl, sig, exp, signing.secret);
-		if (!ok) return new Response('Invalid or expired signature', { status: 403 });
-	} else if (!isLegacyAllowed(parsed)) {
-		return new Response('URL not allowed', { status: 403 });
-	}
+	if (!sig || !exp) return new Response('Signature required', { status: 403 });
+
+	const ok = await verifyProxySignature(encodedUrl, sig, exp, signing.secret);
+	if (!ok) return new Response('Invalid or expired signature', { status: 403 });
 
 	try {
 		const options = parseProxyOptions(optionsStr);
