@@ -91,14 +91,24 @@
 		}
 	],
 	/**
-	 * R2 — user_file blob storage (PDF/image uploads + AI-generated images).
-	 * Bucket is also written by the Next.js frontend via S3 API; the worker
-	 * reads uploaded PDFs here for env.AI.toMarkdown extraction.
+	 * R2 buckets.
+	 *
+	 * `R2` — user_file blob storage (PDF/image uploads + AI-generated images).
+	 *   Also written by the Next.js frontend via S3 API; the worker reads
+	 *   uploaded PDFs here for env.AI.toMarkdown extraction.
+	 *
+	 * `IMAGE_CACHE` — durable L2 cache for env.IMAGES transforms. Dedicated
+	 *   bucket (not `R2`) so its metrics, lifecycle rules, and blast radius
+	 *   stay isolated from user uploads. See proxy.ts for the L1/L2 flow.
 	 */
 	"r2_buckets": [
 		{
 			"binding": "R2",
 			"bucket_name": "newsence"
+		},
+		{
+			"binding": "IMAGE_CACHE",
+			"bucket_name": "newsence-image-cache"
 		}
 	],
 	/**
