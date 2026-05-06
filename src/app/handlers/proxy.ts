@@ -1,20 +1,29 @@
 /**
  * Public media passthrough proxy with edge cache + Cloudflare Images binding.
  *
- * Auth model: HMAC-signed URLs (?sig=&exp=) minted server-side at ingest.
- * Falls back to a small host allowlist when the signing secret isn't set or
- * the request is unsigned — covers legacy rows + platform-metadata URLs and
- * lets a half-deployed rollout keep rendering. Drop the allowlist once
- * everything is signed.
+ * Auth: HMAC-signed URLs (?sig=&exp=) minted server-side at ingest. Falls
+ * back to a small host allowlist when unsigned — covers legacy rows and
+ * lets half-deployed rollouts render. Drop the allowlist once everything
+ * is signed.
  *
  * `env.IMAGES` is used over `cf.image` fetch options because the latter is
- * silently ignored on workers.dev domains. Every IMAGES binding call bills as
- * a transform, so transformed responses are persisted in R2 and then mirrored
- * into caches.default. This keeps misses in different colos from repeatedly
- * burning transformations for the same source/options pair.
+ * silently ignored on workers.dev domains. Every IMAGES call bills as a
+ * transform, so transforms run through a two-tier cache:
+ *   L1 — caches.default     (per-colo,  ~1-5ms,  ephemeral)
+ *   L2 — env.IMAGE_CACHE R2 (global,    ~10-50ms, durable)
+ * Only an L2 miss bills a transform. IMAGE_CACHE is a dedicated bucket so
+ * its metrics and lifecycle rules stay isolated from env.R2 user uploads.
+ *
+ * URL fully determines the cached variant (width/quality in path, sha256
+ * of upstream URL as key) — do not add Accept negotiation or a Vary
+ * header, both will silently shard the cache.
+ *
+ * Concurrent cold requests in different colos can each bill one transform
+ * before either R2 write completes. Worst case is bounded by colo count
+ * and accepted; a KV/DO single-flight lock isn't worth its own cost.
  *
  * Usage: GET /proxy/{options}/{mediaUrl}?sig={hex}&exp={unix}
- *   options — comma-separated key=value (w, q). Pass `passthrough` for raw proxying.
+ *   options — comma-separated key=value (w, q). Pass `passthrough` for raw.
  */
 
 import { getProxySigningConfig, verifyProxySignature } from '../../lib/sign-url';
@@ -37,7 +46,9 @@ const VIDEO_HOSTS = new Set(['video.twimg.com']);
 // mint arbitrary width/quality combinations and burn transformation quota.
 const ALLOWED_TRANSFORM_WIDTHS = new Set([256, 1280, 1920]);
 const ALLOWED_QUALITY = 75;
-const TRANSFORM_CACHE_PREFIX = 'image-transform-cache/v1';
+// Bumped when key derivation changes; old entries become orphaned and can
+// be cleaned up via R2 lifecycle or `wrangler r2 object delete`.
+const TRANSFORM_KEY_VERSION = 'v1';
 
 type ParsedProxyOptions =
 	| { kind: 'passthrough' }
@@ -136,7 +147,7 @@ async function transformCacheKey(sourceUrl: URL, options: Extract<ParsedProxyOpt
 	const hash = await sha256Hex(
 		JSON.stringify({ source: sourceUrl.toString(), width: options.width, quality: options.quality, format: 'webp' }),
 	);
-	return `${TRANSFORM_CACHE_PREFIX}/${hash}.webp`;
+	return `${TRANSFORM_KEY_VERSION}/${hash}.webp`;
 }
 
 function transformedResponse(body: BodyInit | null, headersSource?: Headers): Response {
@@ -148,7 +159,7 @@ function transformedResponse(body: BodyInit | null, headersSource?: Headers): Re
 }
 
 async function readR2CachedTransform(env: Env, key: string): Promise<Response | null> {
-	const object = await env.R2.get(key);
+	const object = await env.IMAGE_CACHE.get(key);
 	if (!object) return null;
 
 	const headers = new Headers();
@@ -158,7 +169,7 @@ async function readR2CachedTransform(env: Env, key: string): Promise<Response | 
 }
 
 async function writeR2CachedTransform(env: Env, key: string, body: ArrayBuffer): Promise<void> {
-	await env.R2.put(key, body, {
+	await env.IMAGE_CACHE.put(key, body, {
 		httpMetadata: {
 			contentType: 'image/webp',
 			cacheControl: 'public, max-age=31536000, immutable',
@@ -245,8 +256,10 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 		const base = result.response();
 		const body = await base.arrayBuffer();
 		const response = transformedResponse(body, base.headers);
+		// Cold path only writes L2; the next same-colo request hits L2 and
+		// promotes to L1 in the R2-hit branch. Skipping L1 here avoids paying
+		// for two waitUntil tasks when the second eats the first ~5ms anyway.
 		if (r2CacheKey) ctx.waitUntil(writeR2CachedTransform(env, r2CacheKey, body.slice(0)));
-		ctx.waitUntil(cache.put(cacheKey, response.clone()));
 		return response;
 	} catch (err) {
 		console.error('Proxy error:', err);
