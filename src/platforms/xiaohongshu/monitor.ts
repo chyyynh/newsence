@@ -31,7 +31,7 @@ async function insertNote(db: DbClient, env: Env, note: XhsNote, feed: RSSFeed, 
 		likeCount: note.likeCount,
 	});
 
-	const articleId = await insertArticle(db, env, {
+	const articleId = await insertArticle(db, {
 		url,
 		title: note.displayTitle || `Xiaohongshu Note ${note.noteId}`,
 		source: feed.name,
