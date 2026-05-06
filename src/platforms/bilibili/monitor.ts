@@ -26,7 +26,7 @@ async function insertVideo(db: DbClient, env: Env, video: ParsedDynamic, feed: R
 		coverUrl: video.imageUrl || undefined,
 	});
 
-	const articleId = await insertArticle(db, env, {
+	const articleId = await insertArticle(db, {
 		url,
 		title: video.title,
 		source: feed.name,
