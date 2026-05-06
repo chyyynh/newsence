@@ -1,5 +1,4 @@
 import { Client } from 'pg';
-import { signOgImageForStorage } from '../lib/sign-url';
 import type { Env } from '../models/types';
 import { normalizeUrl } from './web';
 export type DbClient = Client;
@@ -59,12 +58,12 @@ function serializeMetadata(metadata: unknown | null): string | null {
  * so concurrent monitors can't race on the same URL. Returns null when the
  * row already existed.
  *
- * `og_image_url` is wrapped through the signed `/proxy/` URL when the worker
- * has `IMAGE_PROXY_SECRET` set, so the frontend can transform arbitrary hosts
- * via `env.IMAGES` without exposing the quota to abuse.
+ * `og_image_url` is stored as the raw upstream URL — the frontend wraps it
+ * through the signed `/proxy/` URL at the API boundary
+ * (frontend/src/lib/r2/sign-article-media.ts), so secret rotation doesn't
+ * require a DB backfill.
  */
-export async function insertArticle(db: DbClient, env: Env, data: InsertArticleData): Promise<string | null> {
-	const ogImageUrl = await signOgImageForStorage(env, data.ogImageUrl);
+export async function insertArticle(db: DbClient, data: InsertArticleData): Promise<string | null> {
 	const result = await db.query(
 		`INSERT INTO ${ARTICLES_TABLE}
 			(url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
@@ -83,7 +82,7 @@ export async function insertArticle(db: DbClient, env: Env, data: InsertArticleD
 			data.summary,
 			data.sourceType,
 			data.content,
-			ogImageUrl,
+			data.ogImageUrl,
 			serializeMetadata(data.platformMetadata),
 		],
 	);
@@ -108,9 +107,8 @@ export async function insertArticle(db: DbClient, env: Env, data: InsertArticleD
  * (user_id, normalized_source_url) for resource_kind='url'. Callers may dedup
  * for efficiency, but correctness comes from this conflict-safe insert.
  */
-export async function insertUserFile(db: DbClient, env: Env, data: InsertUserFileData): Promise<InsertUserFileResult | null> {
+export async function insertUserFile(db: DbClient, data: InsertUserFileData): Promise<InsertUserFileResult | null> {
 	const normalizedUrl = data.normalizedUrl ?? normalizeUrl(data.url);
-	const ogImageUrl = await signOgImageForStorage(env, data.ogImageUrl);
 	const result = await db.query(
 		`WITH inserted AS (
 			INSERT INTO ${USER_FILES_TABLE}
@@ -145,7 +143,7 @@ export async function insertUserFile(db: DbClient, env: Env, data: InsertUserFil
 			data.publishedDate,
 			data.summary,
 			data.content,
-			ogImageUrl,
+			data.ogImageUrl,
 			data.keywords ?? [],
 			data.tags ?? [],
 			serializeMetadata(data.platformMetadata),

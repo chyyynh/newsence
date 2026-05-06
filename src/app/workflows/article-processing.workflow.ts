@@ -10,7 +10,6 @@ import {
 import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../../infra/embedding';
 import { logInfo, logWarn } from '../../infra/log';
-import { signOgImageForStorage } from '../../lib/sign-url';
 import type { Article, Env } from '../../models/types';
 import { fetchOgImage } from '../../platforms/web/scraper';
 import { extractAndPersistPdf, isUploadedPdf } from './steps/pdf-extraction';
@@ -98,8 +97,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				fetchOgImage(article.url),
 			);
 			if (ogResult?.ogImageUrl) {
-				const signed = await signOgImageForStorage(this.env, ogResult.ogImageUrl);
-				if (signed) processorResult.updateData.og_image_url = signed;
+				processorResult.updateData.og_image_url = ogResult.ogImageUrl;
 			}
 		}
 

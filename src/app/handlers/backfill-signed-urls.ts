@@ -1,31 +1,45 @@
 /**
- * One-shot backfill: rewrite legacy `og_image_url` rows to signed proxy URLs.
+ * One-shot backfill: rewrite legacy signed `og_image_url` rows back to raw
+ * upstream URLs. After this PR the worker no longer signs at storage time —
+ * the frontend signs at the API boundary instead — so existing rows that
+ * were stored signed (`/proxy/passthrough/{encodedUrl}?sig=&exp=`) need to be
+ * unwrapped to their original upstream URL. The frontend will sign them on
+ * each response, so secret rotation no longer requires a DB backfill.
  *
  * Run repeatedly (or in a loop) until `processed: 0`:
  *   curl -H 'X-Internal-Token: $TOKEN' \
  *        '$WORKER/admin/backfill-signed-urls?table=articles&limit=500'
  *
- * Cursor-paginated (ORDER BY id, ?after=<lastId>) so non-http rows that
- * `signOgImageForStorage` skips don't block forward progress.
+ * Cursor-paginated (ORDER BY id, ?after=<lastId>). Idempotent — rows that are
+ * already raw (or non-http) are counted as scanned but not updated.
  */
 
 import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../../infra/db';
-import { getProxySigningConfig, signOgImageForStorage } from '../../lib/sign-url';
 import type { Env } from '../../models/types';
 import { requireAuth } from '../middleware/auth';
 
 const TABLES = new Set<string>([ARTICLES_TABLE, USER_FILES_TABLE]);
 
+// Match `<origin>/proxy/passthrough/<encodedUrl>?…`. The origin is allowed to
+// be any host because we may have rotated CORE_WORKER_PUBLIC_URL over time and
+// old rows could carry either value; we only need the encoded upstream segment.
+const SIGNED_URL_RE = /^https?:\/\/[^/]+\/proxy\/passthrough\/([^?/]+)\?/;
+
+function unwrapSignedUrl(url: string | null): string | null {
+	if (!url) return null;
+	const m = url.match(SIGNED_URL_RE);
+	if (!m) return null;
+	try {
+		const decoded = decodeURIComponent(m[1]);
+		return /^https?:\/\//i.test(decoded) ? decoded : null;
+	} catch {
+		return null;
+	}
+}
+
 export async function handleBackfillSignedUrls(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env);
 	if (unauth) return unauth;
-
-	if (!getProxySigningConfig(env)) {
-		return Response.json(
-			{ success: false, error: { code: 'NOT_CONFIGURED', message: 'IMAGE_PROXY_SECRET / CORE_WORKER_PUBLIC_URL must be set' } },
-			{ status: 503 },
-		);
-	}
 
 	const url = new URL(request.url);
 	const table = url.searchParams.get('table') ?? ARTICLES_TABLE;
@@ -45,15 +59,16 @@ export async function handleBackfillSignedUrls(request: Request, env: Env): Prom
 			[after, limit],
 		);
 
-		const signed = await Promise.all(rows.rows.map(async (row) => ({ row, signed: await signOgImageForStorage(env, row.og_image_url) })));
-		const updates = signed.filter((r) => r.signed && r.signed !== r.row.og_image_url);
+		const updates = rows.rows
+			.map((row) => ({ row, raw: unwrapSignedUrl(row.og_image_url) }))
+			.filter((r): r is { row: { id: string; og_image_url: string }; raw: string } => r.raw !== null);
 
 		if (updates.length > 0) {
 			await db.query(
 				`UPDATE ${table} AS t SET og_image_url = v.url
 				 FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS url) v
 				 WHERE t.id = v.id`,
-				[updates.map((u) => u.row.id), updates.map((u) => u.signed)],
+				[updates.map((u) => u.row.id), updates.map((u) => u.raw)],
 			);
 		}
 

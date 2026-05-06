@@ -76,7 +76,7 @@ async function processYouTubeVideo(
 		return false;
 	}
 
-	const articleId = await insertArticle(db, env, {
+	const articleId = await insertArticle(db, {
 		url: buildVideoUrl(videoId),
 		title: scraped.title,
 		source: channel.name,

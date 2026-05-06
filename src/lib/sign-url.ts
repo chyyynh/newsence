@@ -1,7 +1,9 @@
 /**
- * HMAC-SHA256 sign / verify for /proxy/ URLs.
+ * HMAC-SHA256 verify for /proxy/ URLs.
  *
- * Sign input: `encodedUrl + ":" + exp`. The `{options}` segment (w/q) is
+ * Signing happens in the frontend at the API boundary (see
+ * frontend/src/lib/r2/sign-proxy-url.ts). The worker only verifies. Sign
+ * input is `encodedUrl + ":" + exp`; the `{options}` segment (w/q) is
  * intentionally NOT signed so Next.js can request multiple widths from one
  * stored URL without per-render re-signing. The proxy handler must keep a
  * strict allowlist for supported widths/qualities because these options are
@@ -19,13 +21,6 @@ async function importKey(secret: string): Promise<CryptoKey> {
 	const key = await crypto.subtle.importKey('raw', ENCODER.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 	cachedKey = { secret, key };
 	return key;
-}
-
-function bytesToHex(bytes: ArrayBuffer): string {
-	const view = new Uint8Array(bytes);
-	let out = '';
-	for (let i = 0; i < view.length; i++) out += view[i].toString(16).padStart(2, '0');
-	return out;
 }
 
 function hexToBytes(hex: string): Uint8Array | null {
@@ -55,15 +50,6 @@ export function getProxySigningConfig(env: ProxySigningEnv): ProxySigningConfig 
 	return { secret: env.IMAGE_PROXY_SECRET, origin: env.CORE_WORKER_PUBLIC_URL.replace(/\/$/, '') };
 }
 
-/** Default 1-year exp: long enough that articles don't go dark, short enough that leaked URLs eventually stop working. */
-export async function signProxyUrl(origin: string, upstreamUrl: string, secret: string, ttlSec = 60 * 60 * 24 * 365): Promise<string> {
-	const encodedUrl = encodeURIComponent(upstreamUrl);
-	const exp = Math.floor(Date.now() / 1000) + ttlSec;
-	const key = await importKey(secret);
-	const sig = await crypto.subtle.sign('HMAC', key, ENCODER.encode(`${encodedUrl}:${exp}`));
-	return `${origin}/proxy/${PROXY_PATH_PASSTHROUGH}/${encodedUrl}?sig=${bytesToHex(sig)}&exp=${exp}`;
-}
-
 export async function verifyProxySignature(encodedUrl: string, sig: string, exp: string, secret: string): Promise<boolean> {
 	const expNum = Number.parseInt(exp, 10);
 	if (!Number.isFinite(expNum) || expNum <= Math.floor(Date.now() / 1000)) return false;
@@ -71,14 +57,4 @@ export async function verifyProxySignature(encodedUrl: string, sig: string, exp:
 	if (!sigBytes) return false;
 	const key = await importKey(secret);
 	return crypto.subtle.verify('HMAC', key, sigBytes, ENCODER.encode(`${encodedUrl}:${expNum}`));
-}
-
-/** No-op fallback in dev (no secret) and idempotent over already-signed / non-http inputs. */
-export async function signOgImageForStorage(env: ProxySigningEnv, rawUrl: string | null | undefined): Promise<string | null> {
-	if (!rawUrl) return null;
-	const config = getProxySigningConfig(env);
-	if (!config) return rawUrl;
-	if (!/^https?:\/\//i.test(rawUrl)) return rawUrl;
-	if (rawUrl.startsWith(`${config.origin}/proxy/`)) return rawUrl;
-	return signProxyUrl(config.origin, rawUrl, config.secret);
 }
