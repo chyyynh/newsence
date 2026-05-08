@@ -54,6 +54,9 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 			ogImageUrl = null;
 		}
 	}
+	if (ogImageUrl && /^http:\/\//i.test(ogImageUrl)) {
+		ogImageUrl = ogImageUrl.replace(/^http:/i, 'https:');
+	}
 
 	const rawW = $('meta[property="og:image:width"]').attr('content');
 	const rawH = $('meta[property="og:image:height"]').attr('content');
@@ -389,6 +392,9 @@ export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 			} catch {
 				return null;
 			}
+		}
+		if (/^http:\/\//i.test(ogImageUrl)) {
+			ogImageUrl = ogImageUrl.replace(/^http:/i, 'https:');
 		}
 
 		const rawW = extractMeta(html, 'og:image:width');
