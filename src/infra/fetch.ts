@@ -26,3 +26,41 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
 		clearTimeout(timer);
 	}
 }
+
+/**
+ * Liveness check for a scraped image URL — returns the trimmed URL if the
+ * origin responds 2xx with an image content-type, else null. Used at ingest
+ * to drop og:image URLs that 404 / point at non-images, so the frontend
+ * never has to flicker an empty placeholder.
+ *
+ * HEAD first; falls back to ranged GET on 405/501 since some CDNs reject
+ * HEAD. Network/abort errors all collapse to null — we'd rather lose a real
+ * image once than ship a broken one.
+ */
+export async function validateImageUrl(url: string | null | undefined, timeoutMs = 5_000): Promise<string | null> {
+	if (!url) return null;
+	const trimmed = url.trim();
+	if (!trimmed) return null;
+
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const init: RequestInit = {
+		signal: controller.signal,
+		redirect: 'follow',
+		headers: { 'User-Agent': BROWSER_UA },
+	};
+	try {
+		let res = await fetch(trimmed, { ...init, method: 'HEAD' });
+		if (res.status === 405 || res.status === 501) {
+			res = await fetch(trimmed, { ...init, method: 'GET', headers: { ...init.headers, Range: 'bytes=0-0' } });
+		}
+		if (!res.ok) return null;
+		const ct = res.headers.get('content-type') ?? '';
+		if (ct && !ct.toLowerCase().startsWith('image/')) return null;
+		return trimmed;
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+}
