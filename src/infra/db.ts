@@ -1,5 +1,6 @@
 import { Client } from 'pg';
 import type { Env } from '../models/types';
+import { validateImageUrl } from './fetch';
 import { normalizeUrl } from './web';
 export type DbClient = Client;
 
@@ -64,6 +65,7 @@ function serializeMetadata(metadata: unknown | null): string | null {
  * require a DB backfill.
  */
 export async function insertArticle(db: DbClient, data: InsertArticleData): Promise<string | null> {
+	const ogImageUrl = await validateImageUrl(data.ogImageUrl);
 	const result = await db.query(
 		`INSERT INTO ${ARTICLES_TABLE}
 			(url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
@@ -82,7 +84,7 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
 			data.summary,
 			data.sourceType,
 			data.content,
-			data.ogImageUrl,
+			ogImageUrl,
 			serializeMetadata(data.platformMetadata),
 		],
 	);
@@ -109,6 +111,7 @@ export async function insertArticle(db: DbClient, data: InsertArticleData): Prom
  */
 export async function insertUserFile(db: DbClient, data: InsertUserFileData): Promise<InsertUserFileResult | null> {
 	const normalizedUrl = data.normalizedUrl ?? normalizeUrl(data.url);
+	const ogImageUrl = await validateImageUrl(data.ogImageUrl);
 	const result = await db.query(
 		`WITH inserted AS (
 			INSERT INTO ${USER_FILES_TABLE}
@@ -143,7 +146,7 @@ export async function insertUserFile(db: DbClient, data: InsertUserFileData): Pr
 			data.publishedDate,
 			data.summary,
 			data.content,
-			data.ogImageUrl,
+			ogImageUrl,
 			data.keywords ?? [],
 			data.tags ?? [],
 			serializeMetadata(data.platformMetadata),
