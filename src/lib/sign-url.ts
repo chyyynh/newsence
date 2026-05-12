@@ -50,11 +50,23 @@ export function getProxySigningConfig(env: ProxySigningEnv): ProxySigningConfig 
 	return { secret: env.IMAGE_PROXY_SECRET, origin: env.CORE_WORKER_PUBLIC_URL.replace(/\/$/, '') };
 }
 
-export async function verifyProxySignature(encodedUrl: string, sig: string, exp: string, secret: string): Promise<boolean> {
+async function verifyHmacSig(buildSignInput: (expNum: number) => string, sig: string, exp: string, secret: string): Promise<boolean> {
 	const expNum = Number.parseInt(exp, 10);
 	if (!Number.isFinite(expNum) || expNum <= Math.floor(Date.now() / 1000)) return false;
 	const sigBytes = hexToBytes(sig);
 	if (!sigBytes) return false;
 	const key = await importKey(secret);
-	return crypto.subtle.verify('HMAC', key, sigBytes, ENCODER.encode(`${encodedUrl}:${expNum}`));
+	return crypto.subtle.verify('HMAC', key, sigBytes, ENCODER.encode(buildSignInput(expNum)));
+}
+
+export function verifyProxySignature(encodedUrl: string, sig: string, exp: string, secret: string): Promise<boolean> {
+	return verifyHmacSig((n) => `${encodedUrl}:${n}`, sig, exp, secret);
+}
+
+/**
+ * Sign input is `r2:${storageKey}:${exp}` — distinct prefix from /proxy/
+ * prevents a leaked /proxy/ sig from being replayed here.
+ */
+export function verifyR2KeySignature(storageKey: string, sig: string, exp: string, secret: string): Promise<boolean> {
+	return verifyHmacSig((n) => `r2:${storageKey}:${n}`, sig, exp, secret);
 }
