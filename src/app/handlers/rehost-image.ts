@@ -8,9 +8,12 @@
  * need on a Node/Vercel host.
  *
  * Auth: internal token (same as /submit).
- * Body: { imageUrl: string, filename: string }
- *   - filename is the R2 object name suffix (frontend generates it for naming
- *     consistency with the /api/upload PDF + base64 paths).
+ * Body: { imageUrl: string, keyPrefix?: string, filename?: string }
+ *   - keyPrefix (preferred): caller-supplied path prefix, e.g. `users/{userId}/uploads/`.
+ *     Worker appends `{uuid}.{ext}` derived from the response content-type.
+ *   - filename (legacy): used only when keyPrefix is absent. Object lands at
+ *     `images/{timestamp}-{filename}`. Kept for backward compat until all callers
+ *     pass keyPrefix.
  */
 
 import type { Env } from '../../models/types';
@@ -21,7 +24,13 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 type RehostBody = {
 	imageUrl?: string;
 	filename?: string;
+	keyPrefix?: string;
 };
+
+function extensionFromContentType(contentType: string): string {
+	const subtype = contentType.split('/')[1]?.split(';')[0]?.split('+')[0]?.trim() ?? 'bin';
+	return subtype === 'jpeg' ? 'jpg' : subtype;
+}
 
 function badRequest(message: string): Response {
 	return Response.json({ success: false, error: { code: 'BAD_REQUEST', message } }, { status: 400 });
@@ -41,8 +50,12 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 
 	const imageUrl = body.imageUrl?.trim();
 	const filename = body.filename?.trim();
+	const keyPrefix = body.keyPrefix?.trim();
 	if (!imageUrl) return badRequest('Missing imageUrl');
-	if (!filename) return badRequest('Missing filename');
+	if (!keyPrefix && !filename) return badRequest('Missing keyPrefix or filename');
+	if (keyPrefix && (!keyPrefix.endsWith('/') || keyPrefix.includes('..'))) {
+		return badRequest('Invalid keyPrefix');
+	}
 
 	let parsed: URL;
 	try {
@@ -77,7 +90,9 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 	const buffer = await upstream.arrayBuffer();
 	if (buffer.byteLength > MAX_IMAGE_BYTES) return badRequest('Image exceeds 10MB');
 
-	const key = `images/${Date.now()}-${filename}`;
+	const key = keyPrefix
+		? `${keyPrefix}${crypto.randomUUID()}.${extensionFromContentType(contentType)}`
+		: `images/${Date.now()}-${filename}`;
 	await env.R2.put(key, buffer, {
 		httpMetadata: { contentType, cacheControl: 'private, max-age=31536000' },
 	});

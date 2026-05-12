@@ -4,6 +4,7 @@ import { handleEnqueueUserFile } from '../app/handlers/enqueue-user-file';
 import { handleHealth, handleTestScrape } from '../app/handlers/health';
 import { handlePreview } from '../app/handlers/preview';
 import { handleProxy } from '../app/handlers/proxy';
+import { handleR2Asset } from '../app/handlers/r2-asset';
 import { handleRehostImage } from '../app/handlers/rehost-image';
 import { handleSubmitUrl } from '../app/handlers/submit';
 import { handleWorkflowStatus, handleWorkflowStream } from '../app/handlers/workflow-status';
@@ -31,6 +32,7 @@ const HELP_TEXT =
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
 	'\nPublic media proxy:\n' +
 	'GET  /proxy/{options}/{mediaUrl} - Image/video passthrough with edge cache\n' +
+	'GET  /r2/{key}?sig=&exp=         - Authenticated R2 asset (signed, edge cached)\n' +
 	'\nAdmin (X-Internal-Token):\n' +
 	'GET  /admin/backfill-signed-urls?table=articles&limit=500 - Re-sign og_image_url rows\n';
 
@@ -55,6 +57,9 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	if (pathname === '/admin/backfill-signed-urls') return handleBackfillSignedUrls(request, env);
 	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && pathname.startsWith('/proxy'))) {
 		return handleProxy(request, env, ctx);
+	}
+	if (pathname.startsWith('/r2/') || (request.method === 'OPTIONS' && pathname.startsWith('/r2'))) {
+		return handleR2Asset(request, env, ctx);
 	}
 
 	if (request.method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
