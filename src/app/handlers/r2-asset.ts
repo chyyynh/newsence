@@ -86,7 +86,11 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null):
 	headers.set('Accept-Ranges', 'bytes');
 	headers.set('Access-Control-Allow-Origin', '*');
 	headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-	headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+	// `private` keeps user-scoped assets out of shared intermediaries
+	// (corporate proxies, ISP caches). `caches.default` at the worker still
+	// caches under our control because the Cache API treats max-age as the
+	// authoritative TTL regardless of `private`.
+	headers.set('Cache-Control', 'private, max-age=31536000, immutable');
 	headers.set('ETag', object.httpEtag);
 
 	// Force download for SVG to prevent stored XSS via embedded scripts.
