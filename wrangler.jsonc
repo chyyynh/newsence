@@ -133,6 +133,6 @@
 	 */
 	"vars": {
 		"CORE_WORKER_PUBLIC_URL": "https://core.newsence.app",
-		"APP_ORIGINS": "https://newsence.app,http://localhost:3000"
+		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000"
 	}
 }
