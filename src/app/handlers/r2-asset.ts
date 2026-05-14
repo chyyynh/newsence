@@ -15,6 +15,7 @@
  * when only PDF.js byte-range streaming benefits.
  */
 
+import { getCorsHeaders } from '../../lib/cors';
 import { getProxySigningConfig, verifyR2KeySignature } from '../../lib/sign-url';
 import type { Env, ExecutionContext } from '../../models/types';
 
@@ -38,11 +39,11 @@ function inferContentType(key: string): string {
 	return CONTENT_TYPE_FALLBACKS[ext] ?? 'application/octet-stream';
 }
 
-function corsPreflight(): Response {
+function corsPreflight(request: Request, env: Env): Response {
 	return new Response(null, {
 		status: 204,
 		headers: {
-			'Access-Control-Allow-Origin': '*',
+			...getCorsHeaders(request, env),
 			'Access-Control-Allow-Methods': 'GET, OPTIONS',
 			'Access-Control-Allow-Headers': 'Range',
 			'Access-Control-Max-Age': '86400',
@@ -79,12 +80,14 @@ function resolveRange(range: R2Range, size: number): { start: number; end: numbe
 	return { start, end: start + length - 1 };
 }
 
-function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null): Headers {
+function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, cors: Record<string, string>): Headers {
 	const headers = new Headers();
 	const contentType = object.httpMetadata?.contentType ?? inferContentType(key);
 	headers.set('Content-Type', contentType);
 	headers.set('Accept-Ranges', 'bytes');
-	headers.set('Access-Control-Allow-Origin', '*');
+	for (const [k, v] of Object.entries(cors)) {
+		headers.set(k, v);
+	}
 	headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
 	// `private` keeps user-scoped assets out of shared intermediaries
 	// (corporate proxies, ISP caches). `caches.default` at the worker still
@@ -110,7 +113,7 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null):
 }
 
 export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-	if (request.method === 'OPTIONS') return corsPreflight();
+	if (request.method === 'OPTIONS') return corsPreflight(request, env);
 	if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
 
 	const requestUrl = new URL(request.url);
@@ -170,7 +173,7 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 
 	if (!object) return new Response('Not found', { status: 404 });
 
-	const headers = buildHeaders(object, storageKey, range);
+	const headers = buildHeaders(object, storageKey, range, getCorsHeaders(request, env));
 	const status = range ? 206 : 200;
 	const response = new Response(object.body, { status, headers });
 
