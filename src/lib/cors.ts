@@ -15,16 +15,23 @@ import type { Env } from '../models/types';
 
 let unsetWarningLogged = false;
 
-export function getCorsHeaders(request: Request, env: Env): Record<string, string> {
-	const allowlist = env.APP_ORIGINS?.split(',')
+function parseAllowlist(env: Env): string[] | null {
+	const list = env.APP_ORIGINS?.split(',')
 		.map((s) => s.trim())
 		.filter(Boolean);
+	return list?.length ? list : null;
+}
 
-	if (!allowlist?.length) {
-		if (!unsetWarningLogged) {
-			console.warn(JSON.stringify({ message: 'APP_ORIGINS unset, /r2 CORS falls back to *' }));
-			unsetWarningLogged = true;
-		}
+function warnAllowlistUnset(): void {
+	if (unsetWarningLogged) return;
+	console.warn(JSON.stringify({ message: 'APP_ORIGINS unset, /r2 CORS falls back to *' }));
+	unsetWarningLogged = true;
+}
+
+export function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+	const allowlist = parseAllowlist(env);
+	if (!allowlist) {
+		warnAllowlistUnset();
 		return { 'Access-Control-Allow-Origin': '*' };
 	}
 
@@ -38,6 +45,29 @@ export function getCorsHeaders(request: Request, env: Env): Record<string, strin
 
 	// Cross-origin from a non-allowlisted origin, or no Origin header at all
 	// (same-origin / non-browser). Omit ACAO so cross-origin JS gets a CORS
-	// error when reading the response. Vary still keeps the edge cache honest.
+	// error when reading the response. Vary is a hint to downstream/browser
+	// caches; `caches.default` ignores it (only Vary: Accept-Encoding is honored
+	// per Cloudflare docs), which is why callers must also bucket the cache key
+	// via `getOriginCacheBucket` below.
 	return { Vary: 'Origin' };
+}
+
+/**
+ * Cache-key dimension for `caches.default`. Because Workers' Cache API does not
+ * honor `Vary: Origin`, two callers from different Origins would otherwise
+ * share one entry — and a no-Origin populator (curl, SSR fetch, some <img>
+ * requests) could poison the cache with an ACAO-less response that breaks
+ * subsequent allowlisted-origin `fetch()` calls.
+ *
+ * Bucket scheme keeps cardinality bounded at N+2 (one per allowlisted origin,
+ * plus 'none' for no-ACAO responses, plus 'fallback' when APP_ORIGINS is unset
+ * and we serve `ACAO: *` to everyone).
+ */
+export function getOriginCacheBucket(request: Request, env: Env): string {
+	const allowlist = parseAllowlist(env);
+	if (!allowlist) return 'fallback';
+	const origin = request.headers.get('Origin') ?? '';
+	// 'none' covers both no-Origin and non-allowlisted Origin: in both cases
+	// we emit no ACAO, so the cached body+headers are byte-identical.
+	return allowlist.includes(origin) ? `allow:${origin}` : 'none';
 }
