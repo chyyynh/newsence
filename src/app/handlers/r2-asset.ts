@@ -15,7 +15,7 @@
  * when only PDF.js byte-range streaming benefits.
  */
 
-import { getCorsHeaders } from '../../lib/cors';
+import { getCorsHeaders, getOriginCacheBucket } from '../../lib/cors';
 import { getProxySigningConfig, verifyR2KeySignature } from '../../lib/sign-url';
 import type { Env, ExecutionContext } from '../../models/types';
 
@@ -143,8 +143,15 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 	// Strip sig/exp from the cache key — they rotate every 15min (quantize
 	// bucket) on the same underlying object, and would otherwise force a miss
 	// every bucket roll. Range requests skip cache entirely.
+	//
+	// `__o` buckets the cache key by Origin because `caches.default` ignores
+	// `Vary: Origin` (only Vary: Accept-Encoding is honored — see Cloudflare
+	// Cache API docs). Without this, a no-Origin populator (curl, SSR fetch)
+	// can fill the cache with an ACAO-less response that subsequently breaks
+	// allowlisted-origin `fetch()` calls for a year (immutable max-age).
 	const cacheUrl = new URL(request.url);
 	cacheUrl.search = '';
+	cacheUrl.searchParams.set('__o', getOriginCacheBucket(request, env));
 	const cacheKey = new Request(cacheUrl.toString(), { method: 'GET' });
 
 	if (!range) {
