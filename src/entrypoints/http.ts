@@ -4,7 +4,7 @@ import { handleIngest } from '../app/handlers/ingest';
 import { handleProxy } from '../app/handlers/proxy';
 import { handleR2Asset } from '../app/handlers/r2-asset';
 import { handleRehostImage } from '../app/handlers/rehost-image';
-import { handleWorkflowStatus, handleWorkflowStream } from '../app/handlers/workflow-status';
+import { handleWorkflowStream } from '../app/handlers/workflow-status';
 import type { Env, ExecutionContext } from '../models/types';
 
 type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>;
@@ -22,17 +22,12 @@ const HELP_TEXT =
 	'POST /ingest                     - Ingest URL (JSON) or blob (multipart)\n' +
 	'POST /embed                      - Generate embeddings\n' +
 	'POST /rehost-image               - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
-	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
 	'\nPublic media proxy:\n' +
 	'GET  /proxy/{options}/{mediaUrl} - Image/video passthrough with edge cache\n' +
 	'GET  /r2/{key}?sig=&exp=         - Authenticated R2 asset (signed, edge cached)\n';
 
 function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
-	if (pathname.startsWith('/status/')) {
-		const id = pathname.slice('/status/'.length);
-		if (id) return handleWorkflowStatus(id, env);
-	}
 	if (pathname.startsWith('/stream/')) {
 		const id = pathname.slice('/stream/'.length);
 		if (id) return handleWorkflowStream(id, env);
