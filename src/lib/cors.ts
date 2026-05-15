@@ -1,7 +1,7 @@
 /**
- * CORS allowlist for /r2/* responses.
+ * CORS allowlist for /media/asset/* responses.
  *
- * The HMAC signature on each /r2 URL is the real access control. This helper
+ * The HMAC signature on each asset URL is the real access control. This helper
  * adds defense-in-depth so that if a signed URL leaks (extension, screenshot
  * OCR, etc.), a third-party origin's JS can't `fetch()` the bytes and read the
  * response body. <img src> rendering is unaffected — CORS doesn't gate it.
@@ -24,7 +24,7 @@ function parseAllowlist(env: Env): string[] | null {
 
 function warnAllowlistUnset(): void {
 	if (unsetWarningLogged) return;
-	console.warn(JSON.stringify({ message: 'APP_ORIGINS unset, /r2 CORS falls back to *' }));
+	console.warn(JSON.stringify({ message: 'APP_ORIGINS unset, media asset CORS falls back to *' }));
 	unsetWarningLogged = true;
 }
 

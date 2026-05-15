@@ -24,11 +24,8 @@ const HELP_TEXT =
 	'POST /rehost-image                        - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
 	'\nSigned media:\n' +
-	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache (was /proxy/)\n' +
-	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset (was /r2/)\n' +
-	'\nLegacy aliases (grace window, slated for removal in follow-up):\n' +
-	'GET  /proxy/...                           - alias of /media/external/\n' +
-	'GET  /r2/...                              - alias of /media/asset/\n';
+	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
+	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset\n';
 
 function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/stream/')) {
@@ -53,13 +50,10 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	const { method } = request;
 
 	if (pathname === '/health') return handleHealth(env);
-	// `/proxy/` and `/r2/` are grace-window aliases. Removed in a follow-up
-	// once cached HTML signed under the old paths has expired (15-min sig
-	// quantize for /r2, 24h for /proxy — see frontend signers).
-	if (matchesEndpoint(pathname, method, '/media/external', '/proxy')) {
+	if (matchesEndpoint(pathname, method, '/media/external')) {
 		return handleProxy(request, env, ctx);
 	}
-	if (matchesEndpoint(pathname, method, '/media/asset', '/r2')) {
+	if (matchesEndpoint(pathname, method, '/media/asset')) {
 		return handleR2Asset(request, env, ctx);
 	}
 

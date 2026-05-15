@@ -1,4 +1,5 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
+import type { ProcessableTable } from '../infra/db';
 import type { PlatformMetadata } from './platform-metadata';
 
 /**
@@ -12,7 +13,7 @@ export interface Env extends Cloudflare.Env {
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	/** HMAC secret for signing /proxy/ URLs. When unset, proxy falls back to legacy allowlist. */
+	/** HMAC secret for signing /media/external/ and /media/asset URLs. */
 	IMAGE_PROXY_SECRET?: string;
 }
 
@@ -120,8 +121,8 @@ export interface Tweet {
 
 // Queue message types
 export type QueueMessage =
-	| { type: 'article_process'; article_id: string; source_type: string; target_table?: string }
-	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: string };
+	| { type: 'article_process'; article_id: string; source_type: string; target_table?: ProcessableTable }
+	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };

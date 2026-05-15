@@ -12,6 +12,13 @@ export async function createDbClient(env: Env): Promise<Client> {
 
 export const ARTICLES_TABLE = 'articles';
 export const USER_FILES_TABLE = 'user_files';
+export type ProcessableTable = typeof ARTICLES_TABLE | typeof USER_FILES_TABLE;
+
+export function resolveProcessableTable(table?: string | null): ProcessableTable {
+	if (!table) return ARTICLES_TABLE;
+	if (table === ARTICLES_TABLE || table === USER_FILES_TABLE) return table;
+	throw new Error(`Unsupported workflow target table: ${table}`);
+}
 
 // ─────────────────────────────────────────────────────────────
 // Article insert helpers
@@ -268,7 +275,12 @@ export async function upsertYoutubeTranscript(db: DbClient, transcript: YoutubeT
 // ─────────────────────────────────────────────────────────────
 
 /** Enqueue an article for the AI-processing workflow. */
-export async function enqueueArticleProcess(env: Env, articleId: string, sourceType: string, targetTable?: string): Promise<void> {
+export async function enqueueArticleProcess(
+	env: Env,
+	articleId: string,
+	sourceType: string,
+	targetTable?: ProcessableTable,
+): Promise<void> {
 	await env.ARTICLE_QUEUE.send({
 		type: 'article_process',
 		article_id: articleId,

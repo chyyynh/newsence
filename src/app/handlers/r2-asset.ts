@@ -1,16 +1,13 @@
 /**
  * Authenticated R2 asset handler with edge cache.
  *
- * Replaces the streaming code path in frontend's /api/r2/[...key] route. The
+ * Replaces the streaming code path in frontend's /api/media/asset/[...key] route. The
  * Next route stays as the auth gate (checks userFile ownership / citation
  * sharing) and 302s here with a short-TTL HMAC. We verify the signature, then
  * read the R2 binding directly and serve with caches.default.
  *
  * Sig input shape: `r2:${storageKey}:${exp}` (verifyR2KeySignature). Distinct
  * prefix from /media/external/ so a leaked external-media sig can't be replayed here.
- *
- * Canonical route: /media/asset/{key}. Legacy alias /r2/{key} accepted during
- * grace window; cache key is normalized so both paths share entries.
  *
  * Range support: parsed from the Range header into R2's R2Range shape and
  * forwarded to env.R2.get. Range requests bypass caches.default — caching 206
@@ -120,7 +117,7 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 	if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
 
 	const requestUrl = new URL(request.url);
-	const match = requestUrl.pathname.match(/^\/(?:media\/asset|r2)\/(.+)$/);
+	const match = requestUrl.pathname.match(/^\/media\/asset\/(.+)$/);
 	if (!match) return new Response('Expected: /media/asset/{key}', { status: 400 });
 
 	let storageKey: string;
@@ -152,12 +149,8 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 	// Cache API docs). Without this, a no-Origin populator (curl, SSR fetch)
 	// can fill the cache with an ACAO-less response that subsequently breaks
 	// allowlisted-origin `fetch()` calls for a year (immutable max-age).
-	//
-	// Normalize legacy /r2/ → /media/asset/ in the cache key so both paths
-	// hit the same entry during the grace window.
 	const cacheUrl = new URL(request.url);
 	cacheUrl.search = '';
-	cacheUrl.pathname = cacheUrl.pathname.replace(/^\/r2\//, '/media/asset/');
 	cacheUrl.searchParams.set('__o', getOriginCacheBucket(request, env));
 	const cacheKey = new Request(cacheUrl.toString(), { method: 'GET' });
 

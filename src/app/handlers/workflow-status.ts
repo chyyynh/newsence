@@ -1,8 +1,4 @@
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
 import type { Env } from '../../models/types';
-
-const ARTICLE_FIELDS =
-	'id, title, title_cn, summary, summary_cn, content_cn, source, source_type, og_image_url, published_date, tags, keywords, url';
 
 export async function handleWorkflowStream(instanceId: string, env: Env): Promise<Response> {
 	const { readable, writable } = new TransformStream();
@@ -17,24 +13,11 @@ export async function handleWorkflowStream(instanceId: string, env: Env): Promis
 				await new Promise((r) => setTimeout(r, 3000));
 
 				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
-				const { status, output, error } = await instance.status();
+				const { status, error } = await instance.status();
 				const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
 
 				if (status === 'complete') {
-					const articleId = (output as Record<string, unknown> | undefined)?.article_id as string | undefined;
-					if (articleId) {
-						const db = await createDbClient(env);
-						try {
-							const table = ARTICLES_TABLE;
-							const result = await db.query(`SELECT ${ARTICLE_FIELDS} FROM ${table} WHERE id = $1`, [articleId]);
-							const article = result.rows[0];
-							await writeEvent({ status: 'complete', article });
-						} finally {
-							await db.end();
-						}
-					} else {
-						await writeEvent({ status: 'complete' });
-					}
+					await writeEvent({ status: 'complete' });
 					return;
 				}
 

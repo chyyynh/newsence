@@ -23,6 +23,13 @@ type RehostBody = {
 	keyPrefix?: string;
 };
 
+class PayloadTooLargeError extends Error {
+	constructor() {
+		super('Image exceeds 10MB');
+		this.name = 'PayloadTooLargeError';
+	}
+}
+
 function extensionFromContentType(contentType: string): string {
 	const subtype = contentType.split('/')[1]?.split(';')[0]?.split('+')[0]?.trim() ?? 'bin';
 	return subtype === 'jpeg' ? 'jpg' : subtype;
@@ -37,6 +44,30 @@ function isRasterImage(contentType: string): boolean {
 	return lower.startsWith('image/') && !lower.startsWith('image/svg');
 }
 
+function streamWithByteLimit(
+	body: ReadableStream<Uint8Array>,
+	maxBytes: number,
+): { stream: ReadableStream<Uint8Array>; getBytesSeen: () => number } {
+	let bytesSeen = 0;
+	const stream = body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				bytesSeen += chunk.byteLength;
+				if (bytesSeen > maxBytes) {
+					controller.error(new PayloadTooLargeError());
+					return;
+				}
+				controller.enqueue(chunk);
+			},
+		}),
+	);
+	return { stream, getBytesSeen: () => bytesSeen };
+}
+
+function isValidUploadPrefix(keyPrefix: string): boolean {
+	return /^users\/[^/]+\/uploads\/$/.test(keyPrefix);
+}
+
 export async function handleRehostImage(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env);
 	if (unauth) return unauth;
@@ -48,7 +79,7 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 	const keyPrefix = body.keyPrefix?.trim();
 	if (!imageUrl) return badRequest('Missing imageUrl');
 	if (!keyPrefix) return badRequest('Missing keyPrefix');
-	if (!keyPrefix.endsWith('/') || keyPrefix.includes('..')) {
+	if (!isValidUploadPrefix(keyPrefix)) {
 		return badRequest('Invalid keyPrefix');
 	}
 
@@ -73,6 +104,9 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 			{ status: 502 },
 		);
 	}
+	if (!upstream.body) {
+		return Response.json({ success: false, error: { code: 'UPSTREAM_ERROR', message: 'Upstream body is empty' } }, { status: 502 });
+	}
 
 	const contentType = upstream.headers.get('content-type')?.split(';')[0].trim() || 'image/png';
 	if (!isRasterImage(contentType)) return badRequest('URL must point to a raster image');
@@ -82,20 +116,25 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 		return badRequest('Image exceeds 10MB');
 	}
 
-	const buffer = await upstream.arrayBuffer();
-	if (buffer.byteLength > MAX_IMAGE_BYTES) return badRequest('Image exceeds 10MB');
-
 	const key = `${keyPrefix}${crypto.randomUUID()}.${extensionFromContentType(contentType)}`;
-	await env.R2.put(key, buffer, {
-		httpMetadata: { contentType, cacheControl: 'private, max-age=31536000' },
-	});
+	const limited = streamWithByteLimit(upstream.body, MAX_IMAGE_BYTES);
+	try {
+		await env.R2.put(key, limited.stream, {
+			httpMetadata: { contentType, cacheControl: 'private, max-age=31536000' },
+		});
+	} catch (err) {
+		if (err instanceof PayloadTooLargeError || (err instanceof Error && err.name === 'PayloadTooLargeError')) {
+			return badRequest('Image exceeds 10MB');
+		}
+		return Response.json({ success: false, error: { code: 'R2_PUT_FAILED', message: `R2 put failed: ${err}` } }, { status: 502 });
+	}
 
 	return Response.json({
 		success: true,
 		data: {
 			key,
 			contentType,
-			fileSize: buffer.byteLength,
+			fileSize: limited.getBytesSeen(),
 		},
 	});
 }

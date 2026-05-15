@@ -1,4 +1,5 @@
 import type { Article } from '../models/types';
+import { ARTICLES_TABLE, type ProcessableTable } from './db';
 import { logError, logInfo } from './log';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
@@ -58,7 +59,7 @@ export async function saveArticleEmbedding(
 	db: import('pg').Client,
 	articleId: string,
 	embedding: number[],
-	table: string = 'articles',
+	table: ProcessableTable = ARTICLES_TABLE,
 ): Promise<boolean> {
 	const vectorStr = `[${embedding.join(',')}]`;
 

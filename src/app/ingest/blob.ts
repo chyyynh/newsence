@@ -47,7 +47,7 @@ function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey
 		data: {
 			fileName: args.fileName,
 			fileSize: args.fileSize,
-			pdfUrl: `/api/r2/${args.storageKey}`,
+			pdfUrl: `/api/media/asset/${args.storageKey}`,
 		},
 	};
 }

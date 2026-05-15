@@ -16,6 +16,7 @@ import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
 const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind';
 const INGEST_MAX_BATCH_SIZE = 20;
+const INGEST_URL_CONCURRENCY = 4;
 const PDF_MIME = 'application/pdf';
 
 type ExistingUserFileRow = {
@@ -68,7 +69,7 @@ function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey
 		data: {
 			fileName: args.fileName,
 			fileSize: args.fileSize,
-			pdfUrl: `/api/r2/${args.storageKey}`,
+			pdfUrl: `/api/media/asset/${args.storageKey}`,
 		},
 	};
 }
@@ -344,7 +345,11 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 
 	logInfo('INGEST', 'Processing URLs', { count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
 	const userId = args.userId;
-	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId)));
+	const uniqueResults: IngestResult[] = [];
+	for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {
+		const batch = uniqueUrls.slice(i, i + INGEST_URL_CONCURRENCY);
+		uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(url, env, userId)))));
+	}
 	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
 	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
 	return { ok: true, results };
