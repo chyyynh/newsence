@@ -112,7 +112,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 		});
 
 		if (!userFile) {
-			logError('SUBMIT', 'DB insert failed', { url, error: 'No id returned' });
+			logError('INGEST', 'DB insert failed', { url, error: 'No id returned' });
 			return { error: 'DB insert failed' };
 		}
 
@@ -132,10 +132,10 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 			}
 		}
 
-		logInfo('SUBMIT', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId: userFile.id });
+		logInfo('INGEST', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId: userFile.id });
 		return { kind: 'page', row: userFile };
 	} catch (err) {
-		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
+		logError('INGEST', 'DB insert failed', { url, error: String(err) });
 		return { error: 'DB insert failed' };
 	} finally {
 		await db.end();
@@ -178,7 +178,7 @@ async function insertScrapedBlob(
 			httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
 		});
 	} catch (err) {
-		logError('SUBMIT', 'R2 put failed', { url, storageKey, error: String(err) });
+		logError('INGEST', 'R2 put failed', { url, storageKey, error: String(err) });
 		return { error: 'R2 put failed' };
 	}
 
@@ -200,14 +200,14 @@ async function insertScrapedBlob(
 			normalizedSourceUrl: url,
 			metadata,
 		});
-		logInfo('SUBMIT', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
+		logInfo('INGEST', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
 		return { kind: 'blob', userFileId: row.id, fileType: blob.contentType };
 	} catch (err) {
-		logError('SUBMIT', 'Blob row insert failed', { url, error: String(err) });
+		logError('INGEST', 'Blob row insert failed', { url, error: String(err) });
 		// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
 		// + idempotent — best-effort, log if it also fails.
 		await env.R2.delete(storageKey).catch((delErr) =>
-			logError('SUBMIT', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
+			logError('INGEST', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
 		);
 		return { error: 'DB insert failed' };
 	} finally {
@@ -274,7 +274,7 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 	try {
 		result = await scrapeAndInsert(url, env, userId);
 	} catch (err) {
-		logError('SUBMIT', 'Scrape failed', { url, error: String(err) });
+		logError('INGEST', 'Scrape failed', { url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
@@ -338,7 +338,7 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 	const normalizedUrls = args.urls.map(normalizeUrl);
 	const uniqueUrls = [...new Set(normalizedUrls)];
 
-	logInfo('SUBMIT', 'Processing URLs', { count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
+	logInfo('INGEST', 'Processing URLs', { count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
 	const userId = args.userId;
 	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId)));
 	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));

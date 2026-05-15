@@ -122,7 +122,7 @@
 	 * for abuse defense (in-memory Map was per-isolate, effectively N× the cap).
 	 * `namespace_id` is worker-local; bump only if reusing this slot for a
 	 * different limiter. Each `limit()` call counts as 1 — batch size cap stays
-	 * separate (SUBMIT_MAX_BATCH_SIZE in submit-urls.ts).
+	 * separate (INGEST_MAX_BATCH_SIZE in app/ingest/urls.ts).
 	 */
 	"ratelimits": [
 		{

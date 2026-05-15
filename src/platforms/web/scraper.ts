@@ -227,7 +227,7 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 		}
 		totalBytes += value.byteLength;
 		if (totalBytes > MAX_HTML_BYTES) {
-			reader.cancel();
+			await reader.cancel();
 			throw new Error(`Response body exceeded ${MAX_HTML_BYTES} bytes`);
 		}
 		html += decoder.decode(value, { stream: true });
