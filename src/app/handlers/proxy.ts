@@ -24,8 +24,11 @@
  * before either R2 write completes. Worst case is bounded by colo count
  * and accepted; a KV/DO single-flight lock isn't worth its own cost.
  *
- * Usage: GET /proxy/{options}/{mediaUrl}?sig={hex}&exp={unix}
+ * Usage: GET /media/external/{options}/{mediaUrl}?sig={hex}&exp={unix}
  *   options — comma-separated key=value (w, q). Pass `passthrough` for raw.
+ *
+ * Legacy alias: `/proxy/...` accepted during grace window. Removed in a
+ * follow-up once cached HTML signed under the old path has expired.
  */
 
 import { getProxySigningConfig, verifyProxySignature } from '../../lib/sign-url';
@@ -171,8 +174,8 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 	if (request.method === 'OPTIONS') return corsPreflight();
 
 	const requestUrl = new URL(request.url);
-	const match = requestUrl.pathname.match(/^\/proxy\/([^/]+)\/(.+)$/);
-	if (!match) return new Response('Expected: /proxy/{options}/{mediaUrl}', { status: 400 });
+	const match = requestUrl.pathname.match(/^\/(?:media\/external|proxy)\/([^/]+)\/(.+)$/);
+	if (!match) return new Response('Expected: /media/external/{options}/{mediaUrl}', { status: 400 });
 
 	const [, optionsStr, encodedUrl] = match;
 	let parsed: URL;

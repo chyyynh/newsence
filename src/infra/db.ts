@@ -60,7 +60,7 @@ function serializeMetadata(metadata: unknown | null): string | null {
  * row already existed.
  *
  * `og_image_url` is stored as the raw upstream URL — the frontend wraps it
- * through the signed `/proxy/` URL at the API boundary
+ * through the signed `/media/external/` URL at the API boundary
  * (frontend/src/lib/r2/sign-article-media.ts), so secret rotation doesn't
  * require a DB backfill.
  */

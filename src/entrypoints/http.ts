@@ -19,13 +19,16 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'POST /ingest                     - Ingest URL (JSON) or blob (multipart)\n' +
-	'POST /embed                      - Generate embeddings\n' +
-	'POST /rehost-image               - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
-	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
-	'\nPublic media proxy:\n' +
-	'GET  /proxy/{options}/{mediaUrl} - Image/video passthrough with edge cache\n' +
-	'GET  /r2/{key}?sig=&exp=         - Authenticated R2 asset (signed, edge cached)\n';
+	'POST /ingest                              - Ingest URL (JSON) or blob (multipart)\n' +
+	'POST /embed                               - Generate embeddings\n' +
+	'POST /rehost-image                        - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
+	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
+	'\nSigned media:\n' +
+	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache (was /proxy/)\n' +
+	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset (was /r2/)\n' +
+	'\nLegacy aliases (grace window, slated for removal in follow-up):\n' +
+	'GET  /proxy/...                           - alias of /media/external/\n' +
+	'GET  /r2/...                              - alias of /media/asset/\n';
 
 function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/stream/')) {
@@ -43,10 +46,21 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	const { pathname } = new URL(request.url);
 
 	if (pathname === '/health') return handleHealth(env);
-	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && routeRootOrChild(pathname, '/proxy'))) {
+	// `/proxy/` is a grace-window alias of `/media/external/`. Removed in a
+	// follow-up once cached HTML signed under the old path has expired
+	// (15-min sig quantize for /r2, 24h for /proxy — see frontend signers).
+	if (
+		pathname.startsWith('/media/external/') ||
+		pathname.startsWith('/proxy/') ||
+		(request.method === 'OPTIONS' && (routeRootOrChild(pathname, '/media/external') || routeRootOrChild(pathname, '/proxy')))
+	) {
 		return handleProxy(request, env, ctx);
 	}
-	if (pathname.startsWith('/r2/') || (request.method === 'OPTIONS' && routeRootOrChild(pathname, '/r2'))) {
+	if (
+		pathname.startsWith('/media/asset/') ||
+		pathname.startsWith('/r2/') ||
+		(request.method === 'OPTIONS' && (routeRootOrChild(pathname, '/media/asset') || routeRootOrChild(pathname, '/r2')))
+	) {
 		return handleR2Asset(request, env, ctx);
 	}
 
