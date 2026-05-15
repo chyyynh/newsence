@@ -5,7 +5,6 @@ import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '../../models/scraped-content';
 import type { Env } from '../../models/types';
 import { type ScrapeResult, scrapeUrl } from '../../platforms/registry';
-import { DEFAULT_SUBMIT_RATE_LIMIT_MAX, DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC, hitSubmitRateLimit } from '../middleware/rate-limit';
 import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
 const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, origin_type';
@@ -42,9 +41,7 @@ type SubmitResult = {
 };
 
 type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
-export type SubmitOutcome =
-	| { ok: true; results: SubmitResult[] }
-	| { ok: false; code: SubmitErrorCode; message: string; retryAfterSec?: number };
+export type SubmitOutcome = { ok: true; results: SubmitResult[] } | { ok: false; code: SubmitErrorCode; message: string };
 
 function extensionFromMime(contentType: string, fileName: string): string {
 	const fromName = fileName.split('.').pop()?.toLowerCase();
@@ -187,6 +184,11 @@ async function insertScrapedBlob(
 		return { kind: 'blob', userFileId: row.id, fileType: blob.contentType, sourceUrl: blob.sourceUrl, created: true };
 	} catch (err) {
 		logError('SUBMIT', 'Blob row insert failed', { url, error: String(err) });
+		// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
+		// + idempotent — best-effort, log if it also fails.
+		await env.R2.delete(storageKey).catch((delErr) =>
+			logError('SUBMIT', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
+		);
 		return { error: 'DB insert failed' };
 	} finally {
 		await db.end();
@@ -289,7 +291,7 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 	};
 }
 
-export async function submitUrls(env: Env, args: { urls: string[]; userId?: string; rateKey: string }): Promise<SubmitOutcome> {
+export async function submitUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<SubmitOutcome> {
 	if (!args.userId) {
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
 	}
@@ -304,16 +306,9 @@ export async function submitUrls(env: Env, args: { urls: string[]; userId?: stri
 		};
 	}
 
-	const max = Number.parseInt(env.SUBMIT_RATE_LIMIT_MAX || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_MAX;
-	const windowSec = Number.parseInt(env.SUBMIT_RATE_LIMIT_WINDOW_SEC || '', 10) || DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC;
-	const rateResult = hitSubmitRateLimit(args.rateKey, Math.max(max, 1), Math.max(windowSec, 1), args.urls.length);
-	if (rateResult.limited) {
-		return {
-			ok: false,
-			code: 'RATE_LIMITED',
-			message: `Too many submit requests. Retry in ${rateResult.retryAfterSec}s`,
-			retryAfterSec: rateResult.retryAfterSec,
-		};
+	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${args.userId}` });
+	if (!success) {
+		return { ok: false, code: 'RATE_LIMITED', message: 'Too many ingest requests; retry shortly.' };
 	}
 
 	const normalizedUrls = args.urls.map(normalizeUrl);

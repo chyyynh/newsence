@@ -118,6 +118,20 @@
 		"mode": "smart"
 	},
 	/**
+	 * Per-user ingest throttle. Eventually consistent across the zone — fine
+	 * for abuse defense (in-memory Map was per-isolate, effectively N× the cap).
+	 * `namespace_id` is worker-local; bump only if reusing this slot for a
+	 * different limiter. Each `limit()` call counts as 1 — batch size cap stays
+	 * separate (SUBMIT_MAX_BATCH_SIZE in submit-urls.ts).
+	 */
+	"ratelimits": [
+		{
+			"name": "USER_INGEST_LIMITER",
+			"namespace_id": "1",
+			"simple": { "limit": 20, "period": 60 }
+		}
+	],
+	/**
 	 * `CORE_WORKER_PUBLIC_URL` — origin baked into signed `/proxy/` URLs at ingest.
 	 * Override per environment (workers.dev for staging, custom domain for prod).
 	 *

@@ -9,10 +9,10 @@ import type { PlatformMetadata } from './platform-metadata';
 export interface Env extends Cloudflare.Env {
 	OPENROUTER_API_KEY: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
-	SUBMIT_RATE_LIMIT_MAX?: string;
-	SUBMIT_RATE_LIMIT_WINDOW_SEC?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
+	/** Per-user ingest throttle. Configured in `wrangler.jsonc` `ratelimits`. */
+	USER_INGEST_LIMITER: RateLimit;
 	/** HMAC secret for signing /proxy/ URLs. When unset, proxy falls back to legacy allowlist. */
 	IMAGE_PROXY_SECRET?: string;
 	/** Comma-separated allowlist for /r2/* CORS (e.g. `https://newsence.app,http://localhost:3000`). When unset, falls back to `*`. */

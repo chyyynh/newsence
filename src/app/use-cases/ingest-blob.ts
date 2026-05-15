@@ -113,6 +113,11 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 		userFileId = row.id;
 	} catch (err) {
 		logError('INGEST_BLOB', 'DB insert failed', { storageKey, error: String(err) });
+		// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
+		// + idempotent — best-effort, log if it also fails.
+		await env.R2.delete(storageKey).catch((delErr) =>
+			logError('INGEST_BLOB', 'R2 cleanup after DB failure also failed', { storageKey, error: String(delErr) }),
+		);
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'DB insert failed' };
 	} finally {
 		await db.end();

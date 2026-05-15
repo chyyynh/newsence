@@ -1,3 +1,4 @@
+import { assertExternalFetchable } from '../infra/web';
 import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '../models/scraped-content';
 import { fetchBlob } from './blob/fetcher';
 import { scrapeHackerNews } from './hackernews/scraper';
@@ -48,6 +49,7 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 		}
 
 		default: {
+			assertExternalFetchable(url);
 			const peek = await peekContentType(url);
 			if (isHtmlLike(peek.contentType)) {
 				return { kind: 'page', scraped: await scrapeWebPage(url) };

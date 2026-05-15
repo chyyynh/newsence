@@ -1,8 +1,12 @@
 import type { Env } from '../../models/types';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
-import { getSubmitRateKey } from '../middleware/rate-limit';
 import { ingestBlob } from '../use-cases/ingest-blob';
 import { submitUrls } from '../use-cases/submit-urls';
+
+// Matches `simple.period` in `wrangler.jsonc` `ratelimits[USER_INGEST_LIMITER]`.
+// Sent as `Retry-After` on 429; the binding doesn't expose remaining time so
+// we send the window length as a conservative upper bound.
+const RATE_LIMIT_PERIOD_SEC = 60;
 
 type IngestJsonBody = {
 	url?: string;
@@ -33,17 +37,13 @@ async function ingestJson(request: Request, env: Env): Promise<Response> {
 	if (body instanceof Response) return body;
 
 	const urls = body.urls ?? (body.url ? [body.url] : []);
-	const outcome = await submitUrls(env, {
-		urls,
-		userId: body.userId,
-		rateKey: getSubmitRateKey(request, body.userId),
-	});
+	const outcome = await submitUrls(env, { urls, userId: body.userId });
 	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
 
 	if (outcome.code === 'RATE_LIMITED') {
 		return Response.json(
 			{ success: false, error: { code: outcome.code, message: outcome.message } },
-			{ status: 429, headers: { 'Retry-After': String(outcome.retryAfterSec ?? 1) } },
+			{ status: 429, headers: { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) } },
 		);
 	}
 	const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
