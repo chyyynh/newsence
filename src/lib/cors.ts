@@ -59,15 +59,21 @@ export function getCorsHeaders(request: Request, env: Env): Record<string, strin
  * requests) could poison the cache with an ACAO-less response that breaks
  * subsequent allowlisted-origin `fetch()` calls.
  *
- * Bucket scheme keeps cardinality bounded at N+2 (one per allowlisted origin,
- * plus 'none' for no-ACAO responses, plus 'fallback' when APP_ORIGINS is unset
- * and we serve `ACAO: *` to everyone).
+ * Bucket scheme keeps cardinality bounded at N+3 (one per allowlisted origin,
+ * 'no-origin' for same-origin / non-browser, 'denied' for non-allowlisted
+ * cross-origin, 'fallback' when APP_ORIGINS is unset and we serve `ACAO: *`).
+ *
+ * 'no-origin' and 'denied' are kept distinct even though `getCorsHeaders`
+ * currently produces byte-identical responses for both: if a future change ever
+ * varies the response (e.g. echoing extra headers only for denied requests),
+ * the buckets enforce the invariant rather than rely on it. 'denied' does not
+ * include the actual Origin value — that'd let any caller blow up cache
+ * cardinality by sending arbitrary Origin headers.
  */
 export function getOriginCacheBucket(request: Request, env: Env): string {
 	const allowlist = parseAllowlist(env);
 	if (!allowlist) return 'fallback';
-	const origin = request.headers.get('Origin') ?? '';
-	// 'none' covers both no-Origin and non-allowlisted Origin: in both cases
-	// we emit no ACAO, so the cached body+headers are byte-identical.
-	return allowlist.includes(origin) ? `allow:${origin}` : 'none';
+	const origin = request.headers.get('Origin');
+	if (!origin) return 'no-origin';
+	return allowlist.includes(origin) ? `allow:${origin}` : 'denied';
 }
