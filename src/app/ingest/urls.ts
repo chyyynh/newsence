@@ -150,68 +150,72 @@ async function insertScrapedBlob(
 	env: Env,
 	userId: string,
 ): Promise<InsertOutcome> {
-	// Reject before piping if upstream is honest about being oversized.
-	if (blob.contentLength !== null && blob.contentLength > MAX_BLOB_BYTES) {
-		await blob.body.cancel();
-		return { error: `Resource exceeds ${MAX_BLOB_BYTES} bytes (declared ${blob.contentLength})` };
-	}
-
-	const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
-	const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${ext}`;
-
-	// On overrun the transform errors, `env.R2.put` rejects, and R2 doesn't
-	// commit a partial object.
-	let bytesSeen = 0;
-	const limiter = new TransformStream<Uint8Array, Uint8Array>({
-		transform(chunk, controller) {
-			bytesSeen += chunk.byteLength;
-			if (bytesSeen > MAX_BLOB_BYTES) {
-				controller.error(new Error(`Response body exceeded ${MAX_BLOB_BYTES} bytes`));
-				return;
-			}
-			controller.enqueue(chunk);
-		},
-	});
-
 	try {
-		await env.R2.put(storageKey, blob.body.pipeThrough(limiter), {
-			httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
-		});
-	} catch (err) {
-		logError('INGEST', 'R2 put failed', { url, storageKey, error: String(err) });
-		return { error: 'R2 put failed' };
-	}
+		// Reject before piping if upstream is honest about being oversized.
+		if (blob.contentLength !== null && blob.contentLength > MAX_BLOB_BYTES) {
+			await blob.body.cancel();
+			return { error: `Resource exceeds ${MAX_BLOB_BYTES} bytes (declared ${blob.contentLength})` };
+		}
 
-	const fileSize = bytesSeen;
-	const title = deriveTitle(blob.suggestedFilename, blob.contentType);
-	const metadata = blob.contentType === PDF_MIME ? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize, storageKey }) : null;
+		const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
+		const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${ext}`;
 
-	const db = await createDbClient(env);
-	try {
-		const row = await insertBlobUserFile(db, {
-			userId,
-			storageKey,
-			fileSize,
-			fileType: blob.contentType,
-			fileName: blob.suggestedFilename,
-			originType: 'saved_url',
-			title,
-			sourceUrl: blob.sourceUrl,
-			normalizedSourceUrl: url,
-			metadata,
+		// On overrun the transform errors, `env.R2.put` rejects, and R2 doesn't
+		// commit a partial object.
+		let bytesSeen = 0;
+		const limiter = new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				bytesSeen += chunk.byteLength;
+				if (bytesSeen > MAX_BLOB_BYTES) {
+					controller.error(new Error(`Response body exceeded ${MAX_BLOB_BYTES} bytes`));
+					return;
+				}
+				controller.enqueue(chunk);
+			},
 		});
-		logInfo('INGEST', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
-		return { kind: 'blob', userFileId: row.id, fileType: blob.contentType };
-	} catch (err) {
-		logError('INGEST', 'Blob row insert failed', { url, error: String(err) });
-		// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
-		// + idempotent — best-effort, log if it also fails.
-		await env.R2.delete(storageKey).catch((delErr) =>
-			logError('INGEST', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
-		);
-		return { error: 'DB insert failed' };
+
+		try {
+			await env.R2.put(storageKey, blob.body.pipeThrough(limiter), {
+				httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
+			});
+		} catch (err) {
+			logError('INGEST', 'R2 put failed', { url, storageKey, error: String(err) });
+			return { error: 'R2 put failed' };
+		}
+
+		const fileSize = bytesSeen;
+		const title = deriveTitle(blob.suggestedFilename, blob.contentType);
+		const metadata = blob.contentType === PDF_MIME ? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize, storageKey }) : null;
+
+		const db = await createDbClient(env);
+		try {
+			const row = await insertBlobUserFile(db, {
+				userId,
+				storageKey,
+				fileSize,
+				fileType: blob.contentType,
+				fileName: blob.suggestedFilename,
+				originType: 'saved_url',
+				title,
+				sourceUrl: blob.sourceUrl,
+				normalizedSourceUrl: url,
+				metadata,
+			});
+			logInfo('INGEST', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
+			return { kind: 'blob', userFileId: row.id, fileType: blob.contentType };
+		} catch (err) {
+			logError('INGEST', 'Blob row insert failed', { url, error: String(err) });
+			// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
+			// + idempotent — best-effort, log if it also fails.
+			await env.R2.delete(storageKey).catch((delErr) =>
+				logError('INGEST', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
+			);
+			return { error: 'DB insert failed' };
+		} finally {
+			await db.end();
+		}
 	} finally {
-		await db.end();
+		blob.dispose();
 	}
 }
 
@@ -342,7 +346,6 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 	const userId = args.userId;
 	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId)));
 	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
-	// Every entry of `normalizedUrls` is in `uniqueUrls`, so every Map lookup hits.
-	const results = normalizedUrls.map((url) => resultByUrl.get(url)!);
+	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
 	return { ok: true, results };
 }

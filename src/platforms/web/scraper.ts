@@ -215,7 +215,8 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 	// Stream-decode with a hard byte cap. `decoder.decode(chunk, { stream: true })`
 	// avoids buffering the entire body in a merged Uint8Array before decoding
 	// (the previous pattern held ~3× the body in memory at peak).
-	const reader = response.body!.getReader();
+	if (!response.body) throw new Error('Response body is empty');
+	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let html = '';
 	let totalBytes = 0;

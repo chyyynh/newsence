@@ -12,7 +12,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 		return routeRequest(request, this.env, this.ctx);
 	}
 
-	async scheduled(event: ScheduledEvent): Promise<void> {
+	scheduled(event: ScheduledEvent): void {
 		handleScheduled(event, this.env, this.ctx);
 	}
 
