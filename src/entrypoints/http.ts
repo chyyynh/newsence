@@ -1,7 +1,6 @@
 import { handleEmbed } from '../app/handlers/embed';
 import { handleHealth } from '../app/handlers/health';
 import { handleIngest } from '../app/handlers/ingest';
-import { handlePreview } from '../app/handlers/preview';
 import { handleProxy } from '../app/handlers/proxy';
 import { handleR2Asset } from '../app/handlers/r2-asset';
 import { handleRehostImage } from '../app/handlers/rehost-image';
@@ -20,7 +19,6 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'*    /preview                    - Scrape-only\n' +
 	'POST /ingest                     - Ingest URL (JSON) or blob (multipart)\n' +
 	'POST /embed                      - Generate embeddings\n' +
 	'POST /rehost-image               - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
@@ -42,15 +40,18 @@ function routePrefixGet(pathname: string, env: Env): Response | Promise<Response
 	return null;
 }
 
+function routeRootOrChild(pathname: string, root: string): boolean {
+	return pathname === root || pathname.startsWith(`${root}/`);
+}
+
 export function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
 	const { pathname } = new URL(request.url);
 
 	if (pathname === '/health') return handleHealth(env);
-	if (pathname === '/preview') return handlePreview(request, env);
-	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && pathname.startsWith('/proxy'))) {
+	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && routeRootOrChild(pathname, '/proxy'))) {
 		return handleProxy(request, env, ctx);
 	}
-	if (pathname.startsWith('/r2/') || (request.method === 'OPTIONS' && pathname.startsWith('/r2'))) {
+	if (pathname.startsWith('/r2/') || (request.method === 'OPTIONS' && routeRootOrChild(pathname, '/r2'))) {
 		return handleR2Asset(request, env, ctx);
 	}
 
