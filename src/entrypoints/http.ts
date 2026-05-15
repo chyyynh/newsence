@@ -38,40 +38,39 @@ function routePrefixGet(pathname: string, env: Env): Response | Promise<Response
 	return null;
 }
 
-function routeRootOrChild(pathname: string, root: string): boolean {
-	return pathname === root || pathname.startsWith(`${root}/`);
+// Match `/prefix/...` for any method; also match exact `/prefix` for OPTIONS
+// so CORS preflights to the root URL still hit the handler.
+function matchesEndpoint(pathname: string, method: string, ...prefixes: string[]): boolean {
+	for (const p of prefixes) {
+		if (pathname.startsWith(`${p}/`)) return true;
+		if (method === 'OPTIONS' && pathname === p) return true;
+	}
+	return false;
 }
 
 export function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
 	const { pathname } = new URL(request.url);
+	const { method } = request;
 
 	if (pathname === '/health') return handleHealth(env);
-	// `/proxy/` is a grace-window alias of `/media/external/`. Removed in a
-	// follow-up once cached HTML signed under the old path has expired
-	// (15-min sig quantize for /r2, 24h for /proxy — see frontend signers).
-	if (
-		pathname.startsWith('/media/external/') ||
-		pathname.startsWith('/proxy/') ||
-		(request.method === 'OPTIONS' && (routeRootOrChild(pathname, '/media/external') || routeRootOrChild(pathname, '/proxy')))
-	) {
+	// `/proxy/` and `/r2/` are grace-window aliases. Removed in a follow-up
+	// once cached HTML signed under the old paths has expired (15-min sig
+	// quantize for /r2, 24h for /proxy — see frontend signers).
+	if (matchesEndpoint(pathname, method, '/media/external', '/proxy')) {
 		return handleProxy(request, env, ctx);
 	}
-	if (
-		pathname.startsWith('/media/asset/') ||
-		pathname.startsWith('/r2/') ||
-		(request.method === 'OPTIONS' && (routeRootOrChild(pathname, '/media/asset') || routeRootOrChild(pathname, '/r2')))
-	) {
+	if (matchesEndpoint(pathname, method, '/media/asset', '/r2')) {
 		return handleR2Asset(request, env, ctx);
 	}
 
-	if (request.method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
+	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
 
-	if (request.method === 'POST') {
+	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
 		if (handler) return handler(request, env);
 	}
 
-	if (request.method === 'GET') {
+	if (method === 'GET') {
 		const response = routePrefixGet(pathname, env);
 		if (response) return response;
 	}
