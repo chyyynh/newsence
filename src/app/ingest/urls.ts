@@ -15,7 +15,7 @@ import { type ScrapeResult, scrapeUrl } from '../../platforms/registry';
 import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
 const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind';
-const SUBMIT_MAX_BATCH_SIZE = 20;
+const INGEST_MAX_BATCH_SIZE = 20;
 const PDF_MIME = 'application/pdf';
 
 type ExistingUserFileRow = {
@@ -29,7 +29,7 @@ type ExistingUserFileRow = {
 	resource_kind: string;
 };
 
-type SubmitResult = {
+type IngestResult = {
 	url: string;
 	userFileId?: string;
 	instanceId?: string;
@@ -46,8 +46,8 @@ type SubmitResult = {
 	error?: string;
 };
 
-type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
-export type SubmitOutcome = { ok: true; results: SubmitResult[] } | { ok: false; code: SubmitErrorCode; message: string };
+type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
+export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
 
 function extensionFromMime(contentType: string, fileName: string): string {
 	const fromName = fileName.split('.').pop()?.toLowerCase();
@@ -227,7 +227,7 @@ async function scrapeAndInsert(url: string, env: Env, userId: string): Promise<I
 	return insertScrapedBlob(result, url, env, userId);
 }
 
-function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: string | undefined): SubmitResult {
+function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: string | undefined): IngestResult {
 	const isBlob = row.resource_kind === 'blob';
 	return {
 		url,
@@ -245,13 +245,13 @@ function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: 
 	};
 }
 
-async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<SubmitResult> {
+async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<IngestResult> {
 	const sourceTypeForWorkflow = row.resource_kind === 'blob' ? 'pdf' : row.platform_type || 'web';
 	const instanceId = row.title_cn ? undefined : await createUserFileWorkflow(env, row.id, sourceTypeForWorkflow);
 	return buildExistingResult(url, row, instanceId);
 }
 
-export async function processUrl(rawUrl: string, env: Env, userId: string): Promise<SubmitResult> {
+export async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
 	const db = await createDbClient(env);
@@ -315,18 +315,18 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 	};
 }
 
-export async function submitUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<SubmitOutcome> {
+export async function ingestUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<IngestUrlsOutcome> {
 	if (!args.userId) {
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
 	}
 	if (args.urls.length === 0) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Missing url or urls field' };
 	}
-	if (args.urls.length > SUBMIT_MAX_BATCH_SIZE) {
+	if (args.urls.length > INGEST_MAX_BATCH_SIZE) {
 		return {
 			ok: false,
 			code: 'BATCH_TOO_LARGE',
-			message: `Maximum ${SUBMIT_MAX_BATCH_SIZE} URLs per request, got ${args.urls.length}`,
+			message: `Maximum ${INGEST_MAX_BATCH_SIZE} URLs per request, got ${args.urls.length}`,
 		};
 	}
 

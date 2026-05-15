@@ -1,7 +1,7 @@
 import type { Env } from '../../models/types';
+import { ingestBlob } from '../ingest/blob';
+import { ingestUrls } from '../ingest/urls';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
-import { ingestBlob } from '../use-cases/ingest-blob';
-import { submitUrls } from '../use-cases/submit-urls';
 
 // Matches `simple.period` in `wrangler.jsonc` `ratelimits[USER_INGEST_LIMITER]`.
 // Sent as `Retry-After` on 429; the binding doesn't expose remaining time so
@@ -37,7 +37,7 @@ async function ingestJson(request: Request, env: Env): Promise<Response> {
 	if (body instanceof Response) return body;
 
 	const urls = body.urls ?? (body.url ? [body.url] : []);
-	const outcome = await submitUrls(env, { urls, userId: body.userId });
+	const outcome = await ingestUrls(env, { urls, userId: body.userId });
 	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
 
 	if (outcome.code === 'RATE_LIMITED') {
