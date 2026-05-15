@@ -1,4 +1,11 @@
-import { createDbClient, insertBlobUserFile, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '../../infra/db';
+import {
+	createDbClient,
+	type InsertUserFileResult,
+	insertBlobUserFile,
+	insertUserFile,
+	USER_FILES_TABLE,
+	upsertYoutubeTranscript,
+} from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
@@ -7,7 +14,7 @@ import type { Env } from '../../models/types';
 import { type ScrapeResult, scrapeUrl } from '../../platforms/registry';
 import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
-const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, origin_type';
+const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind';
 const SUBMIT_MAX_BATCH_SIZE = 20;
 const PDF_MIME = 'application/pdf';
 
@@ -20,7 +27,6 @@ type ExistingUserFileRow = {
 	platform_type: string | null;
 	og_image_url: string | null;
 	resource_kind: string;
-	origin_type: string;
 };
 
 type SubmitResult = {
@@ -68,9 +74,8 @@ function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey
 }
 
 type InsertOutcome =
-	| { kind: 'page'; userFileId: string; scraped: ScrapedContent; platformType: string; created: true }
-	| { kind: 'page-existing'; userFileId: string; existing: ExistingUserFileRow; platformType: string; created: false }
-	| { kind: 'blob'; userFileId: string; fileType: string; sourceUrl: string; created: true }
+	| { kind: 'page'; row: InsertUserFileResult }
+	| { kind: 'blob'; userFileId: string; fileType: string }
 	| { error: string };
 
 async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env, userId: string): Promise<InsertOutcome> {
@@ -111,14 +116,9 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 			return { error: 'DB insert failed' };
 		}
 
+		// ON CONFLICT path: row pre-existed, skip post-insert side effects.
 		if (!userFile.created) {
-			return {
-				kind: 'page-existing',
-				userFileId: userFile.id,
-				existing: { ...userFile, resource_kind: 'url', origin_type: 'saved_url' },
-				platformType: userFile.platform_type || platformType,
-				created: false,
-			};
+			return { kind: 'page', row: userFile };
 		}
 
 		if (scraped.youtubeTranscript) {
@@ -133,7 +133,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 		}
 
 		logInfo('SUBMIT', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId: userFile.id });
-		return { kind: 'page', userFileId: userFile.id, scraped, platformType, created: true };
+		return { kind: 'page', row: userFile };
 	} catch (err) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
 		return { error: 'DB insert failed' };
@@ -201,7 +201,7 @@ async function insertScrapedBlob(
 			metadata,
 		});
 		logInfo('SUBMIT', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
-		return { kind: 'blob', userFileId: row.id, fileType: blob.contentType, sourceUrl: blob.sourceUrl, created: true };
+		return { kind: 'blob', userFileId: row.id, fileType: blob.contentType };
 	} catch (err) {
 		logError('SUBMIT', 'Blob row insert failed', { url, error: String(err) });
 		// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
@@ -278,9 +278,6 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
-	if (result.kind === 'page-existing') {
-		return buildExistingResult(url, result.existing, undefined);
-	}
 
 	if (result.kind === 'blob') {
 		// PDFs run through the AI workflow for text extraction + analysis;
@@ -297,17 +294,24 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 		};
 	}
 
-	const instanceId = await createUserFileWorkflow(env, result.userFileId, result.platformType);
+	const { row } = result;
+	// `created=true`: fresh insert, always trigger workflow for AI enrichment.
+	// `created=false`: ON CONFLICT race — a concurrent submit already triggered
+	//   the workflow on the existing row, skip.
+	const instanceId = row.created ? await createUserFileWorkflow(env, row.id, row.platform_type || 'web') : undefined;
 	return {
 		url,
-		userFileId: result.userFileId,
+		userFileId: row.id,
 		instanceId,
 		resourceKind: 'url',
 		originType: 'saved_url',
-		title: result.scraped.title,
-		ogImageUrl: result.scraped.ogImageUrl || null,
-		platformType: result.platformType,
-		alreadyExists: false,
+		title: row.title,
+		titleCn: row.title_cn || undefined,
+		summaryCn: row.summary_cn || undefined,
+		tags: row.tags?.length ? row.tags : undefined,
+		ogImageUrl: row.og_image_url,
+		platformType: row.platform_type || 'web',
+		alreadyExists: !row.created,
 	};
 }
 
@@ -338,6 +342,7 @@ export async function submitUrls(env: Env, args: { urls: string[]; userId?: stri
 	const userId = args.userId;
 	const uniqueResults = await Promise.all(uniqueUrls.map((url) => processUrl(url, env, userId)));
 	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
-	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'URL processing failed' });
+	// Every entry of `normalizedUrls` is in `uniqueUrls`, so every Map lookup hits.
+	const results = normalizedUrls.map((url) => resultByUrl.get(url)!);
 	return { ok: true, results };
 }
