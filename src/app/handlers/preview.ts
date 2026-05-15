@@ -87,6 +87,8 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
 		});
 
 		if (result.kind === 'blob') {
+			// Free the upstream connection — we're not consuming the bytes here.
+			await result.body.cancel();
 			return Response.json(
 				{
 					url: normalized,

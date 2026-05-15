@@ -1,10 +1,8 @@
 import { assertExternalFetchable } from '../infra/web';
 import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '../models/scraped-content';
-import { fetchBlob } from './blob/fetcher';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
-import { isHtmlLike, isRasterImage, peekContentType } from './web/peek';
-import { scrapeWebPage } from './web/scraper';
+import { HTML_FETCH_HEADERS, scrapeHtmlFromResponse } from './web/scraper';
 import { scrapeYouTube } from './youtube/scraper';
 
 export interface ScrapeOptions {
@@ -16,13 +14,90 @@ export type ScrapeResult =
 	| { kind: 'page'; scraped: ScrapedContent }
 	| {
 			kind: 'blob';
-			bytes: ArrayBuffer;
+			body: ReadableStream<Uint8Array>;
 			contentType: string;
 			sourceUrl: string;
 			suggestedFilename: string;
+			/** From upstream `Content-Length` — null if absent or unparseable. */
+			contentLength: number | null;
 	  };
 
 const PDF_MIME = 'application/pdf';
+const DISPATCH_TIMEOUT_MS = 8_000;
+
+function isHtmlLike(ct: string): boolean {
+	return ct.includes('text/html') || ct.includes('text/xml') || ct.includes('application/xhtml');
+}
+
+function isRasterImage(ct: string): boolean {
+	return ct.startsWith('image/') && !ct.startsWith('image/svg');
+}
+
+function parseContentDisposition(header: string | null): string | null {
+	if (!header) return null;
+	const match = header.match(/filename\*=UTF-8''([^;]+)|filename=("([^"]+)"|([^;]+))/i);
+	const raw = match?.[1] ?? match?.[3] ?? match?.[4];
+	if (!raw) return null;
+	try {
+		return decodeURIComponent(raw.trim());
+	} catch {
+		return raw.trim();
+	}
+}
+
+function filenameFromUrl(url: string, fallback: string): string {
+	try {
+		const tail = new URL(url).pathname.split('/').filter(Boolean).pop();
+		return tail || fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+/**
+ * Single-fetch dispatch for arbitrary external URLs. The Response's headers
+ * tell us whether to parse as HTML or stream as a blob; non-supported types
+ * cancel the body and throw. Saves a subrequest vs HEAD-probe, and lets blob
+ * paths stream directly to R2 without buffering.
+ *
+ * Timer scope: the AbortController stays armed through HTML body parsing so
+ * a stalled origin can't hang the read. The blob branch returns the stream
+ * to the caller — once we return, the timer is cleared and the caller's R2
+ * pipe has no upstream abort guard beyond the Worker's wall-clock budget.
+ */
+async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS);
+	try {
+		const res = await fetch(url, { redirect: 'follow', signal: controller.signal, headers: HTML_FETCH_HEADERS });
+		if (!res.ok) {
+			await res.body?.cancel();
+			throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+		}
+
+		const ct = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
+
+		if (isHtmlLike(ct)) {
+			const scraped = await scrapeHtmlFromResponse(res, url);
+			return { kind: 'page', scraped };
+		}
+
+		if (ct === PDF_MIME || isRasterImage(ct)) {
+			const lenRaw = res.headers.get('content-length');
+			const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
+			const finalUrl = res.url || url;
+			const cdName = parseContentDisposition(res.headers.get('content-disposition'));
+			const suggestedFilename = cdName ?? filenameFromUrl(finalUrl, ct === PDF_MIME ? 'document.pdf' : 'image');
+			// res.body is non-null when fetch resolves with a successful Response.
+			return { kind: 'blob', body: res.body!, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength };
+		}
+
+		await res.body?.cancel();
+		throw new Error(`Unsupported content-type: ${ct}`);
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
 	const platformType = detectPlatformType(url);
@@ -48,24 +123,8 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 			return { kind: 'page', scraped: await scrapeHackerNews(itemId) };
 		}
 
-		default: {
+		default:
 			assertExternalFetchable(url);
-			const peek = await peekContentType(url);
-			if (isHtmlLike(peek.contentType)) {
-				return { kind: 'page', scraped: await scrapeWebPage(url) };
-			}
-			if (peek.contentType === PDF_MIME || isRasterImage(peek.contentType)) {
-				const fallback = peek.contentType === PDF_MIME ? 'document.pdf' : 'image';
-				const blob = await fetchBlob(url, peek.contentType, fallback);
-				return {
-					kind: 'blob',
-					bytes: blob.bytes,
-					contentType: blob.contentType,
-					sourceUrl: blob.finalUrl,
-					suggestedFilename: blob.suggestedFilename,
-				};
-			}
-			throw new Error(`Unsupported content-type: ${peek.contentType}`);
-		}
+			return fetchAndDispatch(url);
 	}
 }

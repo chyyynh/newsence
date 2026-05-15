@@ -142,17 +142,39 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 	}
 }
 
+const MAX_BLOB_BYTES = 10 * 1024 * 1024;
+
 async function insertScrapedBlob(
 	blob: Extract<ScrapeResult, { kind: 'blob' }>,
 	url: string,
 	env: Env,
 	userId: string,
 ): Promise<InsertOutcome> {
+	// Reject before piping if upstream is honest about being oversized.
+	if (blob.contentLength !== null && blob.contentLength > MAX_BLOB_BYTES) {
+		await blob.body.cancel();
+		return { error: `Resource exceeds ${MAX_BLOB_BYTES} bytes (declared ${blob.contentLength})` };
+	}
+
 	const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
 	const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${ext}`;
 
+	// On overrun the transform errors, `env.R2.put` rejects, and R2 doesn't
+	// commit a partial object.
+	let bytesSeen = 0;
+	const limiter = new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			bytesSeen += chunk.byteLength;
+			if (bytesSeen > MAX_BLOB_BYTES) {
+				controller.error(new Error(`Response body exceeded ${MAX_BLOB_BYTES} bytes`));
+				return;
+			}
+			controller.enqueue(chunk);
+		},
+	});
+
 	try {
-		await env.R2.put(storageKey, blob.bytes, {
+		await env.R2.put(storageKey, blob.body.pipeThrough(limiter), {
 			httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
 		});
 	} catch (err) {
@@ -160,18 +182,16 @@ async function insertScrapedBlob(
 		return { error: 'R2 put failed' };
 	}
 
+	const fileSize = bytesSeen;
 	const title = deriveTitle(blob.suggestedFilename, blob.contentType);
-	const metadata =
-		blob.contentType === PDF_MIME
-			? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize: blob.bytes.byteLength, storageKey })
-			: null;
+	const metadata = blob.contentType === PDF_MIME ? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize, storageKey }) : null;
 
 	const db = await createDbClient(env);
 	try {
 		const row = await insertBlobUserFile(db, {
 			userId,
 			storageKey,
-			fileSize: blob.bytes.byteLength,
+			fileSize,
 			fileType: blob.contentType,
 			fileName: blob.suggestedFilename,
 			originType: 'saved_url',
