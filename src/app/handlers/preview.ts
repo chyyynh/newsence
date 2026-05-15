@@ -81,11 +81,23 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
 	const platformType = detectPlatformType(normalized);
 
 	try {
-		const scraped = await scrapeUrl(normalized, {
+		const result = await scrapeUrl(normalized, {
 			youtubeApiKey: env.YOUTUBE_API_KEY,
 			kaitoApiKey: env.KAITO_API_KEY,
 		});
 
+		if (result.kind === 'blob') {
+			return Response.json(
+				{
+					url: normalized,
+					error: `Preview unavailable for ${result.contentType}; ingest the URL to store it.`,
+					contentType: result.contentType,
+				},
+				{ status: 415 },
+			);
+		}
+
+		const scraped = result.scraped;
 		let titleCn = '';
 		let summaryCn = '';
 		if (env.OPENROUTER_API_KEY) {

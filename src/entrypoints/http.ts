@@ -1,12 +1,10 @@
-import { handleBackfillSignedUrls } from '../app/handlers/backfill-signed-urls';
 import { handleEmbed } from '../app/handlers/embed';
-import { handleEnqueueUserFile } from '../app/handlers/enqueue-user-file';
-import { handleHealth, handleTestScrape } from '../app/handlers/health';
+import { handleHealth } from '../app/handlers/health';
+import { handleIngest } from '../app/handlers/ingest';
 import { handlePreview } from '../app/handlers/preview';
 import { handleProxy } from '../app/handlers/proxy';
 import { handleR2Asset } from '../app/handlers/r2-asset';
 import { handleRehostImage } from '../app/handlers/rehost-image';
-import { handleSubmitUrl } from '../app/handlers/submit';
 import { handleWorkflowStatus, handleWorkflowStream } from '../app/handlers/workflow-status';
 import type { Env, ExecutionContext } from '../models/types';
 
@@ -14,8 +12,7 @@ type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': handleEmbed,
-	'/submit': handleSubmitUrl,
-	'/enqueue-user-file': handleEnqueueUserFile,
+	'/ingest': handleIngest,
 	'/rehost-image': handleRehostImage,
 };
 
@@ -24,17 +21,14 @@ const HELP_TEXT =
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
 	'*    /preview                    - Scrape-only\n' +
-	'POST /submit                     - Submit URL\n' +
+	'POST /ingest                     - Ingest URL (JSON) or blob (multipart)\n' +
 	'POST /embed                      - Generate embeddings\n' +
-	'POST /enqueue-user-file          - Kick off workflow for an uploaded user_file (PDF)\n' +
 	'POST /rehost-image               - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
 	'GET  /status/:instanceId         - Workflow status (JSON)\n' +
 	'GET  /stream/:instanceId         - Workflow status (SSE)\n' +
 	'\nPublic media proxy:\n' +
 	'GET  /proxy/{options}/{mediaUrl} - Image/video passthrough with edge cache\n' +
-	'GET  /r2/{key}?sig=&exp=         - Authenticated R2 asset (signed, edge cached)\n' +
-	'\nAdmin (X-Internal-Token):\n' +
-	'GET  /admin/backfill-signed-urls?table=articles&limit=500 - Re-sign og_image_url rows\n';
+	'GET  /r2/{key}?sig=&exp=         - Authenticated R2 asset (signed, edge cached)\n';
 
 function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/status/')) {
@@ -53,8 +47,6 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 	if (pathname === '/health') return handleHealth(env);
 	if (pathname === '/preview') return handlePreview(request, env);
-	if (pathname === '/scrape') return handleTestScrape(request, env);
-	if (pathname === '/admin/backfill-signed-urls') return handleBackfillSignedUrls(request, env);
 	if (pathname.startsWith('/proxy/') || (request.method === 'OPTIONS' && pathname.startsWith('/proxy'))) {
 		return handleProxy(request, env, ctx);
 	}

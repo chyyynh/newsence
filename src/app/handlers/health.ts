@@ -1,6 +1,4 @@
 import type { Env } from '../../models/types';
-import { scrapeWebPage } from '../../platforms/web/scraper';
-import { requireAuth } from '../middleware/auth';
 
 export function handleHealth(_env: Env): Response {
 	return Response.json({
@@ -8,24 +6,4 @@ export function handleHealth(_env: Env): Response {
 		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
-}
-
-export async function handleTestScrape(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env);
-	if (unauth) return unauth;
-
-	const reqUrl = new URL(request.url);
-	const url = reqUrl.searchParams.get('url');
-	if (!url) return Response.json({ error: 'Missing ?url= parameter' }, { status: 400 });
-
-	const start = Date.now();
-	try {
-		const r = await scrapeWebPage(url);
-		return Response.json({
-			url,
-			results: { crawl: { chars: r.content.length, title: r.title, content: r.content, ms: Date.now() - start } },
-		});
-	} catch (e) {
-		return Response.json({ url, results: { crawl: { error: String(e) } } });
-	}
 }

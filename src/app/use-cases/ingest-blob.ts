@@ -1,0 +1,133 @@
+import { createDbClient, insertBlobUserFile } from '../../infra/db';
+import { logError, logInfo } from '../../infra/log';
+import type { Env } from '../../models/types';
+import { createUserFileWorkflow } from '../workflows/article-workflow-client';
+
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const PDF_MIME = 'application/pdf';
+
+export type IngestBlobErrorCode = 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
+
+export type IngestBlobOutcome =
+	| {
+			ok: true;
+			result: {
+				userFileId: string;
+				storageKey: string;
+				fileType: string;
+				fileSize: number;
+				title: string | null;
+				originType: 'upload';
+				instanceId?: string;
+			};
+	  }
+	| { ok: false; code: IngestBlobErrorCode; message: string };
+
+function isRasterImage(contentType: string): boolean {
+	const lower = contentType.toLowerCase();
+	return lower.startsWith('image/') && !lower.startsWith('image/svg');
+}
+
+function extensionFromMime(contentType: string, fileName: string): string {
+	const fromName = fileName.split('.').pop()?.toLowerCase();
+	if (fromName && /^[a-z0-9]{1,8}$/.test(fromName)) return fromName;
+	const subtype = contentType.split('/')[1]?.split(';')[0]?.split('+')[0]?.trim() ?? 'bin';
+	return subtype === 'jpeg' ? 'jpg' : subtype;
+}
+
+function sanitizeTitle(fileName: string, fileType: string): string {
+	const stripped = fileType === PDF_MIME ? fileName.replace(/\.pdf$/i, '') : fileName;
+	return stripped || fileName;
+}
+
+function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey: string }) {
+	return {
+		type: 'pdf' as const,
+		fetchedAt: new Date().toISOString(),
+		data: {
+			fileName: args.fileName,
+			fileSize: args.fileSize,
+			pdfUrl: `/api/r2/${args.storageKey}`,
+		},
+	};
+}
+
+export async function ingestBlob(request: Request, env: Env): Promise<IngestBlobOutcome> {
+	let form: FormData;
+	try {
+		form = await request.formData();
+	} catch (err) {
+		return { ok: false, code: 'BAD_REQUEST', message: `Invalid multipart body: ${err}` };
+	}
+
+	const file = form.get('file');
+	const userId = (form.get('userId') as string | null)?.trim() || '';
+	const titleOverride = (form.get('title') as string | null)?.trim() || null;
+
+	if (!(file instanceof File)) {
+		return { ok: false, code: 'BAD_REQUEST', message: 'Missing file part' };
+	}
+	if (!userId) {
+		return { ok: false, code: 'BAD_REQUEST', message: 'Missing userId form field' };
+	}
+	if (file.size === 0) {
+		return { ok: false, code: 'BAD_REQUEST', message: 'Empty file' };
+	}
+	if (file.size > MAX_FILE_BYTES) {
+		return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'File exceeds 10MB' };
+	}
+
+	const fileType = file.type || 'application/octet-stream';
+	if (fileType !== PDF_MIME && !isRasterImage(fileType)) {
+		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported file type: ${fileType}` };
+	}
+
+	const extension = extensionFromMime(fileType, file.name);
+	const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${extension}`;
+
+	try {
+		await env.R2.put(storageKey, file.stream(), {
+			httpMetadata: { contentType: fileType, cacheControl: 'private, max-age=31536000' },
+		});
+	} catch (err) {
+		logError('INGEST_BLOB', 'R2 put failed', { storageKey, error: String(err) });
+		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
+	}
+
+	const title = titleOverride ?? sanitizeTitle(file.name, fileType);
+	const metadata = fileType === PDF_MIME ? buildPdfMetadata({ fileName: file.name, fileSize: file.size, storageKey }) : null;
+
+	const db = await createDbClient(env);
+	let userFileId: string;
+	try {
+		const row = await insertBlobUserFile(db, {
+			userId,
+			storageKey,
+			fileSize: file.size,
+			fileType,
+			fileName: file.name,
+			originType: 'upload',
+			title,
+			metadata,
+		});
+		userFileId = row.id;
+	} catch (err) {
+		logError('INGEST_BLOB', 'DB insert failed', { storageKey, error: String(err) });
+		return { ok: false, code: 'INTERNAL_ERROR', message: 'DB insert failed' };
+	} finally {
+		await db.end();
+	}
+
+	// Only PDFs trigger the AI workflow today — images have no text to analyze.
+	let instanceId: string | undefined;
+	if (fileType === PDF_MIME) {
+		instanceId = await createUserFileWorkflow(env, userFileId, 'pdf');
+	}
+
+	logInfo('INGEST_BLOB', 'Stored blob', { userFileId, storageKey, fileType, fileSize: file.size });
+
+	return {
+		ok: true,
+		result: { userFileId, storageKey, fileType, fileSize: file.size, title, originType: 'upload', instanceId },
+	};
+}

@@ -1,15 +1,17 @@
-import { createDbClient, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '../../infra/db';
+import { createDbClient, insertBlobUserFile, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '../../models/scraped-content';
 import type { Env } from '../../models/types';
-import { scrapeUrl } from '../../platforms/registry';
+import { type ScrapeResult, scrapeUrl } from '../../platforms/registry';
 import { DEFAULT_SUBMIT_RATE_LIMIT_MAX, DEFAULT_SUBMIT_RATE_LIMIT_WINDOW_SEC, hitSubmitRateLimit } from '../middleware/rate-limit';
 import { createUserFileWorkflow } from '../workflows/article-workflow-client';
 
-const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url';
+const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, origin_type';
 const SUBMIT_MAX_BATCH_SIZE = 20;
+const PDF_MIME = 'application/pdf';
+
 type ExistingUserFileRow = {
 	id: string;
 	title: string;
@@ -18,9 +20,11 @@ type ExistingUserFileRow = {
 	tags: string[] | null;
 	platform_type: string | null;
 	og_image_url: string | null;
+	resource_kind: string;
+	origin_type: string;
 };
 
-export type SubmitResult = {
+type SubmitResult = {
 	url: string;
 	userFileId?: string;
 	instanceId?: string;
@@ -29,38 +33,51 @@ export type SubmitResult = {
 	summaryCn?: string;
 	tags?: string[];
 	ogImageUrl?: string | null;
-	resourceKind?: 'url';
+	resourceKind?: 'url' | 'blob';
 	originType?: 'saved_url';
 	platformType?: string;
+	fileType?: string;
 	alreadyExists?: boolean;
 	error?: string;
 };
 
-export type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
+type SubmitErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type SubmitOutcome =
 	| { ok: true; results: SubmitResult[] }
 	| { ok: false; code: SubmitErrorCode; message: string; retryAfterSec?: number };
 
-export type SubmitArgs = {
-	urls: string[];
-	userId?: string;
-	rateKey: string;
-};
+function extensionFromMime(contentType: string, fileName: string): string {
+	const fromName = fileName.split('.').pop()?.toLowerCase();
+	if (fromName && /^[a-z0-9]{1,8}$/.test(fromName)) return fromName;
+	const subtype = contentType.split('/')[1]?.split(';')[0]?.split('+')[0]?.trim() ?? 'bin';
+	return subtype === 'jpeg' ? 'jpg' : subtype;
+}
 
-async function scrapeAndInsert(
-	url: string,
-	env: Env,
-	userId: string,
-): Promise<
-	| { userFileId: string; scraped: ScrapedContent; platformType: string; created: true }
-	| { userFileId: string; existing: ExistingUserFileRow; platformType: string; created: false }
-	| { error: string }
-> {
+function deriveTitle(fileName: string, fileType: string): string {
+	if (fileType === PDF_MIME) return fileName.replace(/\.pdf$/i, '');
+	return fileName.replace(/\.[a-z0-9]{1,8}$/i, '');
+}
+
+function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey: string }) {
+	return {
+		type: 'pdf' as const,
+		fetchedAt: new Date().toISOString(),
+		data: {
+			fileName: args.fileName,
+			fileSize: args.fileSize,
+			pdfUrl: `/api/r2/${args.storageKey}`,
+		},
+	};
+}
+
+type InsertOutcome =
+	| { kind: 'page'; userFileId: string; scraped: ScrapedContent; platformType: string; created: true }
+	| { kind: 'page-existing'; userFileId: string; existing: ExistingUserFileRow; platformType: string; created: false }
+	| { kind: 'blob'; userFileId: string; fileType: string; sourceUrl: string; created: true }
+	| { error: string };
+
+async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env, userId: string): Promise<InsertOutcome> {
 	const platformType = detectPlatformType(url);
-	const scraped = await scrapeUrl(url, {
-		youtubeApiKey: env.YOUTUBE_API_KEY,
-		kaitoApiKey: env.KAITO_API_KEY,
-	});
 
 	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
 	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
@@ -98,7 +115,13 @@ async function scrapeAndInsert(
 		}
 
 		if (!userFile.created) {
-			return { userFileId: userFile.id, existing: userFile, platformType: userFile.platform_type || platformType, created: false };
+			return {
+				kind: 'page-existing',
+				userFileId: userFile.id,
+				existing: { ...userFile, resource_kind: 'url', origin_type: 'saved_url' },
+				platformType: userFile.platform_type || platformType,
+				created: false,
+			};
 		}
 
 		if (scraped.youtubeTranscript) {
@@ -113,7 +136,7 @@ async function scrapeAndInsert(
 		}
 
 		logInfo('SUBMIT', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId: userFile.id });
-		return { userFileId: userFile.id, scraped, platformType, created: true };
+		return { kind: 'page', userFileId: userFile.id, scraped, platformType, created: true };
 	} catch (err) {
 		logError('SUBMIT', 'DB insert failed', { url, error: String(err) });
 		return { error: 'DB insert failed' };
@@ -122,40 +145,88 @@ async function scrapeAndInsert(
 	}
 }
 
-async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<SubmitResult> {
-	const platformType = row.platform_type || 'web';
-	const instanceId = row.title_cn ? undefined : await createUserFileWorkflow(env, row.id, platformType);
+async function insertScrapedBlob(
+	blob: Extract<ScrapeResult, { kind: 'blob' }>,
+	url: string,
+	env: Env,
+	userId: string,
+): Promise<InsertOutcome> {
+	const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
+	const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${ext}`;
+
+	try {
+		await env.R2.put(storageKey, blob.bytes, {
+			httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
+		});
+	} catch (err) {
+		logError('SUBMIT', 'R2 put failed', { url, storageKey, error: String(err) });
+		return { error: 'R2 put failed' };
+	}
+
+	const title = deriveTitle(blob.suggestedFilename, blob.contentType);
+	const metadata =
+		blob.contentType === PDF_MIME
+			? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize: blob.bytes.byteLength, storageKey })
+			: null;
+
+	const db = await createDbClient(env);
+	try {
+		const row = await insertBlobUserFile(db, {
+			userId,
+			storageKey,
+			fileSize: blob.bytes.byteLength,
+			fileType: blob.contentType,
+			fileName: blob.suggestedFilename,
+			originType: 'saved_url',
+			title,
+			sourceUrl: blob.sourceUrl,
+			normalizedSourceUrl: url,
+			metadata,
+		});
+		logInfo('SUBMIT', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
+		return { kind: 'blob', userFileId: row.id, fileType: blob.contentType, sourceUrl: blob.sourceUrl, created: true };
+	} catch (err) {
+		logError('SUBMIT', 'Blob row insert failed', { url, error: String(err) });
+		return { error: 'DB insert failed' };
+	} finally {
+		await db.end();
+	}
+}
+
+async function scrapeAndInsert(url: string, env: Env, userId: string): Promise<InsertOutcome> {
+	const result = await scrapeUrl(url, {
+		youtubeApiKey: env.YOUTUBE_API_KEY,
+		kaitoApiKey: env.KAITO_API_KEY,
+	});
+
+	if (result.kind === 'page') {
+		return insertScrapedPage(result.scraped, url, env, userId);
+	}
+	return insertScrapedBlob(result, url, env, userId);
+}
+
+function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: string | undefined): SubmitResult {
+	const isBlob = row.resource_kind === 'blob';
 	return {
 		url,
 		userFileId: row.id,
 		instanceId,
-		resourceKind: 'url',
+		resourceKind: isBlob ? 'blob' : 'url',
 		originType: 'saved_url',
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
 		ogImageUrl: row.og_image_url,
-		platformType,
+		platformType: isBlob ? undefined : row.platform_type || 'web',
 		alreadyExists: true,
 	};
 }
 
-function returnExistingWithoutWorkflow(url: string, row: ExistingUserFileRow): SubmitResult {
-	const platformType = row.platform_type || 'web';
-	return {
-		url,
-		userFileId: row.id,
-		resourceKind: 'url',
-		originType: 'saved_url',
-		title: row.title,
-		titleCn: row.title_cn || undefined,
-		summaryCn: row.summary_cn || undefined,
-		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
-		ogImageUrl: row.og_image_url,
-		platformType,
-		alreadyExists: true,
-	};
+async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<SubmitResult> {
+	const sourceTypeForWorkflow = row.resource_kind === 'blob' ? 'pdf' : row.platform_type || 'web';
+	const instanceId = row.title_cn ? undefined : await createUserFileWorkflow(env, row.id, sourceTypeForWorkflow);
+	return buildExistingResult(url, row, instanceId);
 }
 
 export async function processUrl(rawUrl: string, env: Env, userId: string): Promise<SubmitResult> {
@@ -166,7 +237,6 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 		const existing = await db.query<ExistingUserFileRow>(
 			`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE}
 			 WHERE user_id = $1
-			   AND resource_kind = 'url'
 			   AND normalized_source_url = $2
 			 LIMIT 1`,
 			[userId, url],
@@ -178,7 +248,7 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 		await db.end();
 	}
 
-	let result: Awaited<ReturnType<typeof scrapeAndInsert>>;
+	let result: InsertOutcome;
 	try {
 		result = await scrapeAndInsert(url, env, userId);
 	} catch (err) {
@@ -186,7 +256,24 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
-	if (!result.created) return returnExistingWithoutWorkflow(url, result.existing);
+	if (result.kind === 'page-existing') {
+		return buildExistingResult(url, result.existing, undefined);
+	}
+
+	if (result.kind === 'blob') {
+		// PDFs run through the AI workflow for text extraction + analysis;
+		// images are stored without further processing (no vision pipeline yet).
+		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId, 'pdf') : undefined;
+		return {
+			url,
+			userFileId: result.userFileId,
+			instanceId,
+			resourceKind: 'blob',
+			originType: 'saved_url',
+			fileType: result.fileType,
+			alreadyExists: false,
+		};
+	}
 
 	const instanceId = await createUserFileWorkflow(env, result.userFileId, result.platformType);
 	return {
@@ -202,7 +289,7 @@ export async function processUrl(rawUrl: string, env: Env, userId: string): Prom
 	};
 }
 
-export async function submitUrls(env: Env, args: SubmitArgs): Promise<SubmitOutcome> {
+export async function submitUrls(env: Env, args: { urls: string[]; userId?: string; rateKey: string }): Promise<SubmitOutcome> {
 	if (!args.userId) {
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
 	}
