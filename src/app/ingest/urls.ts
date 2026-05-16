@@ -10,6 +10,7 @@ import {
 import { logError, logInfo } from '../../infra/log';
 import { extensionFromMime } from '../../infra/mime';
 import { streamWithByteLimit } from '../../infra/streams';
+import { assertBlobUploadQuotaTx, UploadQuotaExceededError } from '../../infra/upload-quota';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '../../models/scraped-content';
@@ -175,6 +176,8 @@ async function insertScrapedBlob(
 
 		const db = await createDbClient(env);
 		try {
+			await db.query('BEGIN');
+			await assertBlobUploadQuotaTx(db, userId, fileSize);
 			const row = await insertBlobUserFile(db, {
 				userId,
 				storageKey,
@@ -187,15 +190,22 @@ async function insertScrapedBlob(
 				normalizedSourceUrl: url,
 				metadata,
 			});
+			await db.query('COMMIT');
 			logInfo('INGEST', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
 			return { kind: 'blob', userFileId: row.id, fileType: blob.contentType };
 		} catch (err) {
+			await db
+				.query('ROLLBACK')
+				.catch((rollbackErr) => logError('INGEST', 'Blob insert rollback failed', { url, storageKey, error: String(rollbackErr) }));
 			logError('INGEST', 'Blob row insert failed', { url, error: String(err) });
 			// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
 			// + idempotent — best-effort, log if it also fails.
 			await env.R2.delete(storageKey).catch((delErr) =>
 				logError('INGEST', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
 			);
+			if (err instanceof UploadQuotaExceededError) {
+				return { error: err.message };
+			}
 			return { error: 'DB insert failed' };
 		} finally {
 			await db.end();
