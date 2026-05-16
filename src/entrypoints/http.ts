@@ -4,7 +4,6 @@ import { handleHealth } from '../app/handlers/health';
 import { handleIngest } from '../app/handlers/ingest';
 import { handleProxy } from '../app/handlers/proxy';
 import { handleR2Asset } from '../app/handlers/r2-asset';
-import { handleRehostImage } from '../app/handlers/rehost-image';
 import { handleWorkflowStream } from '../app/handlers/workflow-status';
 import type { Env, ExecutionContext } from '../models/types';
 
@@ -14,17 +13,15 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': handleEmbed,
 	'/generate-image': handleGenerateImage,
 	'/ingest': handleIngest,
-	'/rehost-image': handleRehostImage,
 };
 
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'POST /ingest                              - Ingest URL (JSON) or user-uploaded blob (multipart)\n' +
+	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
-	'POST /rehost-image                        - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +

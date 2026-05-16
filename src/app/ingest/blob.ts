@@ -10,21 +10,18 @@ const PDF_MIME = 'application/pdf';
 
 export type IngestBlobErrorCode = 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
 
-export type IngestBlobOutcome =
-	| {
-			ok: true;
-			result: {
-				userFileId: string;
-				storageKey: string;
-				assetUrl: string;
-				fileType: string;
-				fileSize: number;
-				title: string | null;
-				originType: 'upload';
-				instanceId?: string;
-			};
-	  }
-	| { ok: false; code: IngestBlobErrorCode; message: string };
+export interface BlobIngestResult {
+	userFileId: string;
+	storageKey: string;
+	assetUrl: string;
+	fileType: string;
+	fileSize: number;
+	title: string | null;
+	originType: 'upload';
+	instanceId?: string;
+}
+
+export type IngestBlobOutcome = { ok: true; result: BlobIngestResult } | { ok: false; code: IngestBlobErrorCode; message: string };
 
 function sanitizeTitle(fileName: string, fileType: string): string {
 	const stripped = fileType === PDF_MIME ? fileName.replace(/\.pdf$/i, '') : fileName;

@@ -1,5 +1,6 @@
 import type { Env } from '../../models/types';
 import { ingestBlob } from '../ingest/blob';
+import { type IngestImageUrlErrorCode, ingestImageUrl } from '../ingest/image-url';
 import { ingestUrls } from '../ingest/urls';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
 
@@ -11,7 +12,9 @@ const RATE_LIMIT_PERIOD_SEC = 60;
 type IngestJsonBody = {
 	url?: string;
 	urls?: string[];
+	imageUrl?: string;
 	userId?: string;
+	title?: string;
 };
 
 export async function handleIngest(request: Request, env: Env): Promise<Response> {
@@ -36,6 +39,54 @@ async function ingestJson(request: Request, env: Env): Promise<Response> {
 	const body = await parseJsonBody<IngestJsonBody>(request);
 	if (body instanceof Response) return body;
 
+	const hasImageUrl = typeof body.imageUrl === 'string' && body.imageUrl.trim().length > 0;
+	const hasUrlField = (typeof body.url === 'string' && body.url.trim().length > 0) || (Array.isArray(body.urls) && body.urls.length > 0);
+	if (hasImageUrl && hasUrlField) {
+		return Response.json(
+			{ success: false, error: { code: 'BAD_REQUEST', message: 'Provide imageUrl OR url/urls, not both' } },
+			{ status: 400 },
+		);
+	}
+
+	if (hasImageUrl) {
+		return ingestImageUrlJson(body, env);
+	}
+	return ingestUrlsJson(body, env);
+}
+
+async function ingestImageUrlJson(body: IngestJsonBody, env: Env): Promise<Response> {
+	const outcome = await ingestImageUrl(env, {
+		imageUrl: body.imageUrl as string,
+		userId: body.userId,
+		title: body.title ?? null,
+	});
+	if (outcome.ok) return Response.json({ success: true, result: outcome.result });
+
+	const status = imageUrlStatusFor(outcome.code);
+	const headers = outcome.code === 'RATE_LIMITED' ? { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) } : undefined;
+	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status, headers });
+}
+
+function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
+	switch (code) {
+		case 'UNAUTHORIZED':
+			return 401;
+		case 'RATE_LIMITED':
+			return 429;
+		case 'PAYLOAD_TOO_LARGE':
+			return 413;
+		case 'UNSUPPORTED_MEDIA_TYPE':
+			return 415;
+		case 'UPSTREAM_ERROR':
+			return 502;
+		case 'INTERNAL_ERROR':
+			return 500;
+		default:
+			return 400;
+	}
+}
+
+async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response> {
 	const urls = body.urls ?? (body.url ? [body.url] : []);
 	const outcome = await ingestUrls(env, { urls, userId: body.userId });
 	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
