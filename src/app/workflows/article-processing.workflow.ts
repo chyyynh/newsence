@@ -12,7 +12,7 @@ import { generateArticleEmbedding, saveArticleEmbedding } from '../../infra/embe
 import { logInfo, logWarn } from '../../infra/log';
 import type { Article, Env } from '../../models/types';
 import { fetchOgImage } from '../../platforms/web/scraper';
-import { extractAndPersistPdf, isUploadedPdf } from './steps/pdf-extraction';
+import { extractAndPersistPdf, isExtractablePdf } from './steps/pdf-extraction';
 import { generateAndSaveYouTubeHighlights } from './steps/youtube-highlights';
 
 const ARTICLE_FIELDS_FOR_ARTICLES =
@@ -63,7 +63,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			return { success: false, article_id, reason: 'not_found' };
 		}
 
-		if (isUserFile && !article.content && isUploadedPdf(article)) {
+		if (isUserFile && !article.content && isExtractablePdf(article)) {
 			const storageKey = article.storage_key as string;
 			const extracted = (await step.do(
 				'extract-pdf-text',
