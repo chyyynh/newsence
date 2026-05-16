@@ -1,9 +1,10 @@
+import { BROWSER_UA } from '../infra/fetch';
 import { isRasterImage } from '../infra/mime';
 import { assertExternalFetchable } from '../infra/web';
 import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '../models/scraped-content';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
-import { HTML_FETCH_HEADERS, scrapeHtmlFromResponse } from './web/scraper';
+import { scrapeHtmlFromResponse } from './web/scraper';
 import { scrapeYouTube } from './youtube/scraper';
 
 export interface ScrapeOptions {
@@ -26,6 +27,16 @@ export type ScrapeResult =
 
 const PDF_MIME = 'application/pdf';
 const DISPATCH_TIMEOUT_MS = 8_000;
+
+// Content-neutral headers for the dispatch fetch. Accept: */* avoids tripping
+// CDN content-negotiation that would otherwise serve an HTML interstitial when
+// the URL is actually a PDF or image. Routing is decided from the response's
+// Content-Type, not from what we asked for.
+const DISPATCH_HEADERS: HeadersInit = {
+	'User-Agent': BROWSER_UA,
+	Accept: '*/*',
+	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+};
 
 function isHtmlLike(ct: string): boolean {
 	return ct.includes('text/html') || ct.includes('text/xml') || ct.includes('application/xhtml');
@@ -74,7 +85,7 @@ async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
 		controller.abort();
 	};
 	try {
-		const res = await fetch(url, { redirect: 'follow', signal: controller.signal, headers: HTML_FETCH_HEADERS });
+		const res = await fetch(url, { redirect: 'follow', signal: controller.signal, headers: DISPATCH_HEADERS });
 		if (!res.ok) {
 			await res.body?.cancel();
 			throw new Error(`HTTP ${res.status}: ${res.statusText}`);
