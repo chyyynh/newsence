@@ -15,6 +15,7 @@
 
 import { storageKeyToAssetUrl } from '../../infra/asset-url';
 import { extensionFromMime, isRasterImage } from '../../infra/mime';
+import { PayloadTooLargeError, streamWithByteLimit } from '../../infra/streams';
 import type { Env } from '../../models/types';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
 
@@ -25,35 +26,8 @@ type RehostBody = {
 	keyPrefix?: string;
 };
 
-class PayloadTooLargeError extends Error {
-	constructor() {
-		super('Image exceeds 10MB');
-		this.name = 'PayloadTooLargeError';
-	}
-}
-
 function badRequest(message: string): Response {
 	return Response.json({ success: false, error: { code: 'BAD_REQUEST', message } }, { status: 400 });
-}
-
-function streamWithByteLimit(
-	body: ReadableStream<Uint8Array>,
-	maxBytes: number,
-): { stream: ReadableStream<Uint8Array>; getBytesSeen: () => number } {
-	let bytesSeen = 0;
-	const stream = body.pipeThrough(
-		new TransformStream<Uint8Array, Uint8Array>({
-			transform(chunk, controller) {
-				bytesSeen += chunk.byteLength;
-				if (bytesSeen > maxBytes) {
-					controller.error(new PayloadTooLargeError());
-					return;
-				}
-				controller.enqueue(chunk);
-			},
-		}),
-	);
-	return { stream, getBytesSeen: () => bytesSeen };
 }
 
 function isValidUploadPrefix(keyPrefix: string): boolean {
@@ -115,7 +89,7 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 			httpMetadata: { contentType, cacheControl: 'private, max-age=31536000' },
 		});
 	} catch (err) {
-		if (err instanceof PayloadTooLargeError || (err instanceof Error && err.name === 'PayloadTooLargeError')) {
+		if (err instanceof PayloadTooLargeError) {
 			return badRequest('Image exceeds 10MB');
 		}
 		return Response.json({ success: false, error: { code: 'R2_PUT_FAILED', message: `R2 put failed: ${err}` } }, { status: 502 });

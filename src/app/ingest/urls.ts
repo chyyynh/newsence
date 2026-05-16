@@ -9,6 +9,7 @@ import {
 } from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
 import { extensionFromMime } from '../../infra/mime';
+import { streamWithByteLimit } from '../../infra/streams';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '../../models/scraped-content';
@@ -158,20 +159,9 @@ async function insertScrapedBlob(
 
 		// On overrun the transform errors, `env.R2.put` rejects, and R2 doesn't
 		// commit a partial object.
-		let bytesSeen = 0;
-		const limiter = new TransformStream<Uint8Array, Uint8Array>({
-			transform(chunk, controller) {
-				bytesSeen += chunk.byteLength;
-				if (bytesSeen > MAX_BLOB_BYTES) {
-					controller.error(new Error(`Response body exceeded ${MAX_BLOB_BYTES} bytes`));
-					return;
-				}
-				controller.enqueue(chunk);
-			},
-		});
-
+		const limited = streamWithByteLimit(blob.body, MAX_BLOB_BYTES);
 		try {
-			await env.R2.put(storageKey, blob.body.pipeThrough(limiter), {
+			await env.R2.put(storageKey, limited.stream, {
 				httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
 			});
 		} catch (err) {
@@ -179,7 +169,7 @@ async function insertScrapedBlob(
 			return { error: 'R2 put failed' };
 		}
 
-		const fileSize = bytesSeen;
+		const fileSize = limited.getBytesSeen();
 		const title = deriveTitle(blob.suggestedFilename, blob.contentType);
 		const metadata = blob.contentType === PDF_MIME ? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize, storageKey }) : null;
 
