@@ -121,8 +121,9 @@
 	 * Per-user ingest throttle. Eventually consistent across the zone — fine
 	 * for abuse defense (in-memory Map was per-isolate, effectively N× the cap).
 	 * `namespace_id` is worker-local; bump only if reusing this slot for a
-	 * different limiter. Each `limit()` call counts as 1 — batch size cap stays
-	 * separate (INGEST_MAX_BATCH_SIZE in app/ingest/urls.ts).
+	 * different limiter. Bumping it silently resets all in-flight counters, so
+	 * keep it stable in prod. Each `limit()` call counts as 1 — batch size cap
+	 * stays separate (INGEST_MAX_BATCH_SIZE in app/ingest/urls.ts).
 	 */
 	"ratelimits": [
 		{

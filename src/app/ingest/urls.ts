@@ -1,3 +1,4 @@
+import { storageKeyToAssetUrl } from '../../infra/asset-url';
 import {
 	createDbClient,
 	type InsertUserFileResult,
@@ -63,7 +64,7 @@ function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey
 		data: {
 			fileName: args.fileName,
 			fileSize: args.fileSize,
-			pdfUrl: `/api/media/asset/${args.storageKey}`,
+			pdfUrl: storageKeyToAssetUrl(args.storageKey),
 		},
 	};
 }
