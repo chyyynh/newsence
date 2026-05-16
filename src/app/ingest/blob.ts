@@ -1,3 +1,4 @@
+import { storageKeyToAssetUrl } from '../../infra/asset-url';
 import { createDbClient, insertBlobUserFile } from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
 import { extensionFromMime, isRasterImage } from '../../infra/mime';
@@ -15,6 +16,7 @@ export type IngestBlobOutcome =
 			result: {
 				userFileId: string;
 				storageKey: string;
+				assetUrl: string;
 				fileType: string;
 				fileSize: number;
 				title: string | null;
@@ -36,7 +38,7 @@ function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey
 		data: {
 			fileName: args.fileName,
 			fileSize: args.fileSize,
-			pdfUrl: `/api/media/asset/${args.storageKey}`,
+			pdfUrl: storageKeyToAssetUrl(args.storageKey),
 		},
 	};
 }
@@ -122,6 +124,15 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 
 	return {
 		ok: true,
-		result: { userFileId, storageKey, fileType, fileSize: file.size, title, originType: 'upload', instanceId },
+		result: {
+			userFileId,
+			storageKey,
+			assetUrl: storageKeyToAssetUrl(storageKey),
+			fileType,
+			fileSize: file.size,
+			title,
+			originType: 'upload',
+			instanceId,
+		},
 	};
 }

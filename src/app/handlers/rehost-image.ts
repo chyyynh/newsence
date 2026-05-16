@@ -13,6 +13,7 @@
  *     Worker appends `{uuid}.{ext}` derived from the response content-type.
  */
 
+import { storageKeyToAssetUrl } from '../../infra/asset-url';
 import { extensionFromMime, isRasterImage } from '../../infra/mime';
 import type { Env } from '../../models/types';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
@@ -124,6 +125,7 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 		success: true,
 		data: {
 			key,
+			assetUrl: storageKeyToAssetUrl(key),
 			contentType,
 			fileSize: limited.getBytesSeen(),
 		},
