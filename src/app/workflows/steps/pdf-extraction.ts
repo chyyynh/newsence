@@ -2,8 +2,9 @@ import { createDbClient, USER_FILES_TABLE } from '../../../infra/db';
 import { logInfo } from '../../../infra/log';
 import type { Article, Env } from '../../../models/types';
 
-export function isUploadedPdf(article: Article): boolean {
-	return article.origin_type === 'upload' && article.file_type === 'application/pdf' && !!article.storage_key;
+export function isExtractablePdf(article: Article): boolean {
+	const originType = article.origin_type;
+	return (originType === 'upload' || originType === 'saved_url') && article.file_type === 'application/pdf' && !!article.storage_key;
 }
 
 export async function extractAndPersistPdf(env: Env, articleId: string, storageKey: string): Promise<string> {

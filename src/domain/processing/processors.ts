@@ -1,4 +1,4 @@
-import { USER_FILES_TABLE } from '../../infra/db';
+import { type ProcessableTable, USER_FILES_TABLE } from '../../infra/db';
 import { prepareArticleTextForEmbedding } from '../../infra/embedding';
 import type { PlatformEnrichments, PlatformMetadata } from '../../models/platform-metadata';
 import type { Article } from '../../models/types';
@@ -98,7 +98,7 @@ const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	scraped_date: 'created_at',
 };
 
-function mapColumnForTable(column: string, table: string): string {
+function mapColumnForTable(column: string, table: ProcessableTable): string {
 	if (table !== USER_FILES_TABLE) return column;
 	return ARTICLES_TO_USER_FILES_COLUMN_MAP[column] ?? column;
 }

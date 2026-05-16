@@ -7,12 +7,12 @@ import {
 	runArticleProcessor,
 	translateContent,
 } from '../../domain/processing/processors';
-import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '../../infra/db';
+import { createDbClient, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from '../../infra/db';
 import { generateArticleEmbedding, saveArticleEmbedding } from '../../infra/embedding';
 import { logInfo, logWarn } from '../../infra/log';
 import type { Article, Env } from '../../models/types';
 import { fetchOgImage } from '../../platforms/web/scraper';
-import { extractAndPersistPdf, isUploadedPdf } from './steps/pdf-extraction';
+import { extractAndPersistPdf, isExtractablePdf } from './steps/pdf-extraction';
 import { generateAndSaveYouTubeHighlights } from './steps/youtube-highlights';
 
 const ARTICLE_FIELDS_FOR_ARTICLES =
@@ -30,13 +30,13 @@ function articleFieldsFor(table: string): string {
 type WorkflowParams = {
 	article_id: string;
 	source_type: string;
-	target_table?: string;
+	target_table?: ProcessableTable;
 };
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, source_type, target_table } = event.payload;
-		const table = target_table ?? ARTICLES_TABLE;
+		const table = resolveProcessableTable(target_table);
 		const isUserFile = table === USER_FILES_TABLE;
 		const fields = articleFieldsFor(table);
 
@@ -63,7 +63,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			return { success: false, article_id, reason: 'not_found' };
 		}
 
-		if (isUserFile && !article.content && isUploadedPdf(article)) {
+		if (isUserFile && !article.content && isExtractablePdf(article)) {
 			const storageKey = article.storage_key as string;
 			const extracted = (await step.do(
 				'extract-pdf-text',

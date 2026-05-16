@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, createDbClient } from '../../infra/db';
+import { ARTICLES_TABLE, createDbClient, resolveProcessableTable } from '../../infra/db';
 import { logError, logInfo, logWarn } from '../../infra/log';
 import type { Env, MessageBatch, QueueMessage } from '../../models/types';
 
@@ -38,16 +38,18 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 
 		try {
 			if (body.type === 'article_process') {
+				const targetTable = resolveProcessableTable(body.target_table);
 				await env.MONITOR_WORKFLOW.create({
 					params: {
 						article_id: body.article_id,
 						source_type: body.source_type,
-						...(body.target_table ? { target_table: body.target_table } : {}),
+						target_table: targetTable,
 					},
 				});
 				logInfo('ARTICLE-QUEUE', 'Created workflow for article', { article_id: body.article_id });
 				message.ack();
 			} else if (body.type === 'batch_process') {
+				const targetTable = resolveProcessableTable(body.target_table);
 				const sourceTypeMap = await fetchSourceTypeMap(body.article_ids, env);
 				for (const id of body.article_ids) {
 					const sourceType = sourceTypeMap.get(id) ?? SOURCE_TYPE_FALLBACK;
@@ -55,7 +57,7 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 						params: {
 							article_id: id,
 							source_type: sourceType,
-							...(body.target_table ? { target_table: body.target_table } : {}),
+							target_table: targetTable,
 						},
 					});
 				}

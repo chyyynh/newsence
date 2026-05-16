@@ -190,65 +190,49 @@ function isLowQualityContent(content: string): boolean {
 }
 
 const FETCH_TIMEOUT_MS = 8_000;
+const MAX_HTML_BYTES = 5 * 1024 * 1024;
 
-async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl: string }> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+export const HTML_FETCH_HEADERS: HeadersInit = {
+	'User-Agent': BROWSER_UA,
+	Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+};
 
-	const response = await fetch(url, {
-		headers: {
-			'User-Agent': BROWSER_UA,
-			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-		},
-		signal: controller.signal,
-	});
-
-	if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-	const contentType = response.headers.get('content-type') || '';
-	if (!contentType.includes('text/html') && !contentType.includes('text/xml') && !contentType.includes('application/xhtml')) {
-		throw new Error(`Non-HTML response: ${contentType}`);
-	}
-
-	const MAX_BODY_BYTES = 5 * 1024 * 1024; // 5 MB
+/**
+ * Parse HTML from an already-fetched Response into ScrapedContent. Used both
+ * by `scrapeWebPage` (for the retry path) and by `registry.ts` (single-fetch
+ * dispatch). Caller is responsible for verifying status + content-type before
+ * handing over the response.
+ */
+export async function scrapeHtmlFromResponse(response: Response, url: string): Promise<ScrapedContent> {
 	const contentLength = Number(response.headers.get('content-length') || '0');
-	if (contentLength > MAX_BODY_BYTES) {
+	if (contentLength > MAX_HTML_BYTES) {
 		throw new Error(`Response too large: ${contentLength} bytes`);
 	}
 
 	const finalUrl = response.url || url;
 
-	// Stream the body with a hard byte cap to guard against chunked responses
-	// or origins that omit/lie about Content-Length.
-	// Keep the abort timer active until the body is fully read — a stalled
-	// origin that sends headers quickly but trickles the body would otherwise
-	// hang until the Worker's own timeout.
-	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-	const chunks: Uint8Array[] = [];
+	// Stream-decode with a hard byte cap. `decoder.decode(chunk, { stream: true })`
+	// avoids buffering the entire body in a merged Uint8Array before decoding
+	// (the previous pattern held ~3× the body in memory at peak).
+	if (!response.body) throw new Error('Response body is empty');
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let html = '';
 	let totalBytes = 0;
-	try {
-		reader = response.body!.getReader();
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			totalBytes += value.byteLength;
-			if (totalBytes > MAX_BODY_BYTES) {
-				reader.cancel();
-				throw new Error(`Response body exceeded ${MAX_BODY_BYTES} bytes`);
-			}
-			chunks.push(value);
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) {
+			html += decoder.decode();
+			break;
 		}
-	} finally {
-		clearTimeout(timer);
+		totalBytes += value.byteLength;
+		if (totalBytes > MAX_HTML_BYTES) {
+			await reader.cancel();
+			throw new Error(`Response body exceeded ${MAX_HTML_BYTES} bytes`);
+		}
+		html += decoder.decode(value, { stream: true });
 	}
-	const merged = new Uint8Array(totalBytes);
-	let offset = 0;
-	for (const chunk of chunks) {
-		merged.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	const html = new TextDecoder().decode(merged);
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 
@@ -265,8 +249,26 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 		siteName: metadata.siteName,
 		author: metadata.author,
 		publishedDate: metadata.publishedDate,
-		finalUrl,
 	};
+}
+
+async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl: string }> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+	try {
+		const response = await fetch(url, { headers: HTML_FETCH_HEADERS, signal: controller.signal });
+		if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+		const contentType = response.headers.get('content-type') || '';
+		if (!contentType.includes('text/html') && !contentType.includes('text/xml') && !contentType.includes('application/xhtml')) {
+			throw new Error(`Non-HTML response: ${contentType}`);
+		}
+
+		const scraped = await scrapeHtmlFromResponse(response, url);
+		return { ...scraped, finalUrl: response.url || url };
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /** Collect candidate retry URLs when content extraction fails */

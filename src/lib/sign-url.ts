@@ -1,5 +1,5 @@
 /**
- * HMAC-SHA256 verify for /proxy/ URLs.
+ * HMAC-SHA256 verify for /media/external/ URLs.
  *
  * Signing happens in the frontend at the API boundary (see
  * frontend/src/lib/r2/sign-proxy-url.ts). The worker only verifies. Sign
@@ -64,8 +64,8 @@ export function verifyProxySignature(encodedUrl: string, sig: string, exp: strin
 }
 
 /**
- * Sign input is `r2:${storageKey}:${exp}` — distinct prefix from /proxy/
- * prevents a leaked /proxy/ sig from being replayed here.
+ * Sign input is `r2:${storageKey}:${exp}` — distinct prefix from /media/external/
+ * prevents a leaked external-media sig from being replayed here.
  */
 export function verifyR2KeySignature(storageKey: string, sig: string, exp: string, secret: string): Promise<boolean> {
 	return verifyHmacSig((n) => `r2:${storageKey}:${n}`, sig, exp, secret);

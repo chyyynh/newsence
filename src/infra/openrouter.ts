@@ -5,7 +5,7 @@
 import type { OpenRouterResponse } from '../models/types';
 import { logError } from './log';
 
-const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
+export const OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const TIMEOUT_MS = 60_000;
 
 const OPENROUTER_HEADERS = {
@@ -13,6 +13,10 @@ const OPENROUTER_HEADERS = {
 	'HTTP-Referer': 'https://www.newsence.app',
 	'X-Title': 'newsence',
 };
+
+export function openRouterHeaders(apiKey: string): HeadersInit {
+	return { ...OPENROUTER_HEADERS, Authorization: `Bearer ${apiKey}` };
+}
 
 export const AI_MODELS = {
 	FLASH: 'google/gemini-3-flash-preview',
@@ -41,10 +45,10 @@ export async function callOpenRouter(prompt: string, options: CallOpenRouterOpti
 		: [{ role: 'user', content: [{ type: 'text', text: prompt }] }];
 
 	try {
-		const response = await fetch(OPENROUTER_API, {
+		const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
 			method: 'POST',
 			signal: controller.signal,
-			headers: { ...OPENROUTER_HEADERS, Authorization: `Bearer ${apiKey}` },
+			headers: openRouterHeaders(apiKey),
 			body: JSON.stringify({
 				model,
 				messages,

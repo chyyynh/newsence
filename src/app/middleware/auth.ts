@@ -4,12 +4,21 @@ function getInternalToken(request: Request): string | null {
 	return request.headers.get('x-internal-token') ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? null;
 }
 
+async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
+	const enc = new TextEncoder();
+	const [hashA, hashB] = await Promise.all([
+		crypto.subtle.digest('SHA-256', enc.encode(a)),
+		crypto.subtle.digest('SHA-256', enc.encode(b)),
+	]);
+	return crypto.subtle.timingSafeEqual(hashA, hashB);
+}
+
 export async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) return true;
 	const provided = getInternalToken(request)?.trim();
 	if (!provided) return false;
-	return provided === expected;
+	return timingSafeStringEqual(provided, expected);
 }
 
 /**
