@@ -6,7 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "newsence-core",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-02-16",
+	"compatibility_date": "2026-05-15",
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
 		"logs": {
@@ -118,18 +118,32 @@
 		"mode": "smart"
 	},
 	/**
-	 * `CORE_WORKER_PUBLIC_URL` — origin baked into signed `/proxy/` URLs at ingest.
+	 * Per-user ingest throttle. Eventually consistent across the zone — fine
+	 * for abuse defense (in-memory Map was per-isolate, effectively N× the cap).
+	 * `namespace_id` is worker-local; bump only if reusing this slot for a
+	 * different limiter. Bumping it silently resets all in-flight counters, so
+	 * keep it stable in prod. Each `limit()` call counts as 1 — batch size cap
+	 * stays separate (INGEST_MAX_BATCH_SIZE in app/ingest/urls.ts).
+	 */
+	"ratelimits": [
+		{
+			"name": "USER_INGEST_LIMITER",
+			"namespace_id": "1",
+			"simple": { "limit": 20, "period": 60 }
+		}
+	],
+	/**
+	 * `CORE_WORKER_PUBLIC_URL` — origin baked into signed media URLs.
 	 * Override per environment (workers.dev for staging, custom domain for prod).
 	 *
-	 * `APP_ORIGINS` — comma-separated CORS allowlist for `/r2/*` responses.
+	 * `APP_ORIGINS` — comma-separated CORS allowlist for `/media/asset/*` responses.
 	 *   The HMAC signature is the real access control; this just limits which
 	 *   origins can read response bytes from JS after a signed URL leaks.
 	 *   When unset, falls back to `*` (with a one-time console warning).
 	 *
 	 * Secret (set via `wrangler secret put`):
-	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for `/proxy/` URL signing.
+	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
 	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
-	 *     When unset, the proxy handler falls back to its legacy host allowlist.
 	 */
 	"vars": {
 		"CORE_WORKER_PUBLIC_URL": "https://core.newsence.app",

@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { Client } from 'pg';
+import type { ProcessableTable } from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
 import { AI_MODELS, callOpenRouter, extractJson } from '../../infra/openrouter';
 import type { PlatformEnrichments } from '../../models/platform-metadata';
@@ -31,7 +32,7 @@ export interface ProcessorResult {
 export interface ProcessorContext {
 	env: Env;
 	db: Client;
-	table: string;
+	table: ProcessableTable;
 }
 
 export type ProcessingDeps = ProcessorContext;

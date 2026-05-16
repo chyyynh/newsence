@@ -18,6 +18,25 @@ export async function resolveUrl(url: string): Promise<string> {
 }
 
 /**
+ * Gate for user-submitted URLs that the worker will fetch. CF runtime already
+ * blocks private/loopback IPs and DNS rebinding — this catches the input-shape
+ * issues the runtime doesn't: plaintext HTTP (token leakage via MITM) and
+ * embedded credentials (`https://user:pass@host`, which leak via logs and
+ * Referer). Throws on rejection so callers handle via existing try/catch.
+ */
+export function assertExternalFetchable(rawUrl: string): URL {
+	let parsed: URL;
+	try {
+		parsed = new URL(rawUrl);
+	} catch {
+		throw new Error('Invalid URL');
+	}
+	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
+	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+	return parsed;
+}
+
+/**
  * Checks if a URL is a social media link (should not follow)
  */
 export function isSocialMediaUrl(url: string): boolean {

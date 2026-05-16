@@ -1,13 +1,13 @@
 /**
  * Authenticated R2 asset handler with edge cache.
  *
- * Replaces the streaming code path in frontend's /api/r2/[...key] route. The
+ * Replaces the streaming code path in frontend's /api/media/asset/[...key] route. The
  * Next route stays as the auth gate (checks userFile ownership / citation
  * sharing) and 302s here with a short-TTL HMAC. We verify the signature, then
  * read the R2 binding directly and serve with caches.default.
  *
  * Sig input shape: `r2:${storageKey}:${exp}` (verifyR2KeySignature). Distinct
- * prefix from /proxy/ so a leaked /proxy/ sig can't be replayed here.
+ * prefix from /media/external/ so a leaked external-media sig can't be replayed here.
  *
  * Range support: parsed from the Range header into R2's R2Range shape and
  * forwarded to env.R2.get. Range requests bypass caches.default — caching 206
@@ -117,8 +117,8 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 	if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
 
 	const requestUrl = new URL(request.url);
-	const match = requestUrl.pathname.match(/^\/r2\/(.+)$/);
-	if (!match) return new Response('Expected: /r2/{key}', { status: 400 });
+	const match = requestUrl.pathname.match(/^\/media\/asset\/(.+)$/);
+	if (!match) return new Response('Expected: /media/asset/{key}', { status: 400 });
 
 	let storageKey: string;
 	try {

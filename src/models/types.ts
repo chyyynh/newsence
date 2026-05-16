@@ -1,25 +1,20 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
+import type { ProcessableTable } from '../infra/db';
 import type { PlatformMetadata } from './platform-metadata';
 
 /**
  * Environment bindings.
  * Extends wrangler-generated Cloudflare.Env (from worker-configuration.d.ts)
- * with secrets that are not in wrangler.jsonc.
+ * with secrets that are not in wrangler.jsonc. Re-run `pnpm cf-typegen` after
+ * editing wrangler.jsonc — bindings/vars come from the generated base.
  */
 export interface Env extends Cloudflare.Env {
 	OPENROUTER_API_KEY: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
-	SUBMIT_RATE_LIMIT_MAX?: string;
-	SUBMIT_RATE_LIMIT_WINDOW_SEC?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	/** HMAC secret for signing /proxy/ URLs. When unset, proxy falls back to legacy allowlist. */
+	/** HMAC secret for signing /media/external/ and /media/asset URLs. */
 	IMAGE_PROXY_SECRET?: string;
-	/** Comma-separated allowlist for /r2/* CORS (e.g. `https://newsence.app,http://localhost:3000`). When unset, falls back to `*`. */
-	APP_ORIGINS?: string;
-
-	CF_ACCOUNT_ID: string;
-	CF_API_TOKEN: string;
 }
 
 // Article related types
@@ -126,8 +121,8 @@ export interface Tweet {
 
 // Queue message types
 export type QueueMessage =
-	| { type: 'article_process'; article_id: string; source_type: string; target_table?: string }
-	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: string };
+	| { type: 'article_process'; article_id: string; source_type: string; target_table?: ProcessableTable }
+	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
