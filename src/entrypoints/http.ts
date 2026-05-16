@@ -1,6 +1,7 @@
 import { handleEmbed } from '../app/handlers/embed';
 import { handleHealth } from '../app/handlers/health';
 import { handleIngest } from '../app/handlers/ingest';
+import { handleIngestGenerated } from '../app/handlers/ingest-generated';
 import { handleProxy } from '../app/handlers/proxy';
 import { handleR2Asset } from '../app/handlers/r2-asset';
 import { handleRehostImage } from '../app/handlers/rehost-image';
@@ -12,6 +13,7 @@ type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': handleEmbed,
 	'/ingest': handleIngest,
+	'/ingest-generated': handleIngestGenerated,
 	'/rehost-image': handleRehostImage,
 };
 
@@ -19,7 +21,8 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'POST /ingest                              - Ingest URL (JSON) or blob (multipart)\n' +
+	'POST /ingest                              - Ingest URL (JSON) or user-uploaded blob (multipart)\n' +
+	'POST /ingest-generated                    - Store AI-generated image blob (multipart)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /rehost-image                        - Fetch user-supplied image URL → R2 (SSRF-safe)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +

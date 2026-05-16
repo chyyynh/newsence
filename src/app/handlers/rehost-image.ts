@@ -13,6 +13,7 @@
  *     Worker appends `{uuid}.{ext}` derived from the response content-type.
  */
 
+import { extensionFromMime, isRasterImage } from '../../infra/mime';
 import type { Env } from '../../models/types';
 import { parseJsonBody, requireAuth } from '../middleware/auth';
 
@@ -30,18 +31,8 @@ class PayloadTooLargeError extends Error {
 	}
 }
 
-function extensionFromContentType(contentType: string): string {
-	const subtype = contentType.split('/')[1]?.split(';')[0]?.split('+')[0]?.trim() ?? 'bin';
-	return subtype === 'jpeg' ? 'jpg' : subtype;
-}
-
 function badRequest(message: string): Response {
 	return Response.json({ success: false, error: { code: 'BAD_REQUEST', message } }, { status: 400 });
-}
-
-function isRasterImage(contentType: string): boolean {
-	const lower = contentType.toLowerCase();
-	return lower.startsWith('image/') && !lower.startsWith('image/svg');
 }
 
 function streamWithByteLimit(
@@ -116,7 +107,7 @@ export async function handleRehostImage(request: Request, env: Env): Promise<Res
 		return badRequest('Image exceeds 10MB');
 	}
 
-	const key = `${keyPrefix}${crypto.randomUUID()}.${extensionFromContentType(contentType)}`;
+	const key = `${keyPrefix}${crypto.randomUUID()}.${extensionFromMime(contentType)}`;
 	const limited = streamWithByteLimit(upstream.body, MAX_IMAGE_BYTES);
 	try {
 		await env.R2.put(key, limited.stream, {

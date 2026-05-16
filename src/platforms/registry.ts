@@ -1,3 +1,4 @@
+import { isRasterImage } from '../infra/mime';
 import { assertExternalFetchable } from '../infra/web';
 import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '../models/scraped-content';
 import { scrapeHackerNews } from './hackernews/scraper';
@@ -28,10 +29,6 @@ const DISPATCH_TIMEOUT_MS = 8_000;
 
 function isHtmlLike(ct: string): boolean {
 	return ct.includes('text/html') || ct.includes('text/xml') || ct.includes('application/xhtml');
-}
-
-function isRasterImage(ct: string): boolean {
-	return ct.startsWith('image/') && !ct.startsWith('image/svg');
 }
 
 function parseContentDisposition(header: string | null): string | null {

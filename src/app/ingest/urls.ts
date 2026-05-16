@@ -7,6 +7,7 @@ import {
 	upsertYoutubeTranscript,
 } from '../../infra/db';
 import { logError, logInfo } from '../../infra/log';
+import { extensionFromMime } from '../../infra/mime';
 import { normalizeUrl } from '../../infra/web';
 import { parsePlatformMetadata } from '../../models/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '../../models/scraped-content';
@@ -49,13 +50,6 @@ type IngestResult = {
 
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
-
-function extensionFromMime(contentType: string, fileName: string): string {
-	const fromName = fileName.split('.').pop()?.toLowerCase();
-	if (fromName && /^[a-z0-9]{1,8}$/.test(fromName)) return fromName;
-	const subtype = contentType.split('/')[1]?.split(';')[0]?.split('+')[0]?.trim() ?? 'bin';
-	return subtype === 'jpeg' ? 'jpg' : subtype;
-}
 
 function deriveTitle(fileName: string, fileType: string): string {
 	if (fileType === PDF_MIME) return fileName.replace(/\.pdf$/i, '');
