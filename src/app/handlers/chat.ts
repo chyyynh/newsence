@@ -67,6 +67,13 @@ function buildCorsHeaders(request: Request, env: Env): Record<string, string> {
 		...getCorsHeaders(request, env),
 		'Access-Control-Allow-Methods': 'POST, OPTIONS',
 		'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+		// Custom response headers the browser hides from JS by default. The
+		// frontend's `promoteFromResponse` reads X-Session-Id (new chats →
+		// onSessionCreated) and X-Model (server-side model resolution). Without
+		// this header, response.headers.get() returns null cross-origin, which
+		// breaks the worker-chat's track-usage path (sid in onFinish goes
+		// undefined → no POST to /api/ai/chat/track-usage).
+		'Access-Control-Expose-Headers': 'X-Session-Id, X-Model',
 		'Access-Control-Max-Age': '86400',
 	};
 }
