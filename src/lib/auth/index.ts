@@ -18,15 +18,22 @@
 
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { bearer } from 'better-auth/plugins';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Client } from 'pg';
 import type { Env } from '../../models/types';
 import { authSchema } from './schema';
 
+// Worker chat (#136) auths via `Authorization: Bearer <session.token>` issued
+// by Vercel `/api/auth/session-token`. The bearer plugin rewrites that header
+// into a synthetic cookie so the rest of better-auth's getSession works
+// unchanged. cookieCache is kept on for symmetry with Vercel even though
+// bearer requests skip it (cache lives in the cookie itself).
 const STATIC_AUTH_OPTIONS = {
 	session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
 	advanced: { cookiePrefix: 'better-auth' },
-} as const;
+	plugins: [bearer()],
+};
 
 export interface WorkerSession {
 	userId: string;

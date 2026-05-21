@@ -52,11 +52,14 @@ const DEFAULT_MAX_STEPS = 10;
 const TOOLS = { 'load-skill': createLoadSkillTool() };
 
 function buildCorsHeaders(request: Request, env: Env): Record<string, string> {
+	// Auth is `Authorization: Bearer <session.token>` (better-auth bearer plugin),
+	// not cookies — so no `Access-Control-Allow-Credentials` and the frontend
+	// fetches without `credentials: 'include'`. Cross-subdomain cookie config
+	// stays off, which also keeps a future WS upgrade path clean.
 	return {
 		...getCorsHeaders(request, env),
 		'Access-Control-Allow-Methods': 'POST, OPTIONS',
 		'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-		'Access-Control-Allow-Credentials': 'true',
 		'Access-Control-Max-Age': '86400',
 	};
 }
