@@ -3,15 +3,19 @@
  *
  * Phases landed so far:
  *   - 1: scaffold + CORS + request validation
- *   - 2-3: better-auth-cloudflare cookie validation (drizzle + Hyperdrive)
- *   - 4: real streamText via OpenRouter + `load-skill` tool (this commit)
+ *   - 2-3: better-auth bearer-token validation (drizzle + Hyperdrive)
+ *   - 4: real streamText via OpenRouter + `load-skill` tool
+ *   - 6a: chat session + message persistence (this commit)
  *
  * Still missing (tracked in #136):
- *   - billing.checkChat() quota gate (Phase 6)
- *   - chat session/message persistence (Phase 6)
+ *   - billing.checkChat() quota gate + trackText deduction (Phase 6b)
  *   - the other 7 tools (Phases 4-5)
- *   - ctx.waitUntil() flush for billing + PostHog (Phase 6)
+ *   - PostHog flush for ai_chat_completed (Phase 6b — bundled with billing)
  *   - Vercel feature-flag rollout (Phase 7)
+ *
+ * History reads still go to Vercel `GET /api/ai/chat/[sessionId]`; both
+ * writers hit the same Postgres rows so no migration of the reader is needed
+ * to land Phase 6a.
  */
 
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -29,8 +33,9 @@ import { z } from 'zod';
 import { createLoadSkillTool } from '../../agent/tools/load-skill';
 import { logError } from '../../infra/log';
 import { getSession } from '../../lib/auth';
+import { createSession, findSession, saveMessage, updateSessionStats } from '../../lib/chat/sessions';
 import { getCorsHeaders } from '../../lib/cors';
-import type { Env } from '../../models/types';
+import type { Env, ExecutionContext } from '../../models/types';
 import { parseJsonBody } from '../middleware/auth';
 
 const ChatRequestSchema = z.object({
@@ -64,7 +69,21 @@ function buildCorsHeaders(request: Request, env: Env): Record<string, string> {
 	};
 }
 
-export async function handleChat(request: Request, env: Env): Promise<Response> {
+interface AssistantPart {
+	type?: string;
+	text?: string;
+	[key: string]: unknown;
+}
+
+function extractTextFromParts(parts: ReadonlyArray<AssistantPart> | undefined): string {
+	if (!parts?.length) return '';
+	return parts
+		.filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof p.text === 'string')
+		.map((p) => p.text)
+		.join('');
+}
+
+export async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const cors = buildCorsHeaders(request, env);
 
 	if (request.method === 'OPTIONS') {
@@ -95,11 +114,53 @@ export async function handleChat(request: Request, env: Env): Promise<Response> 
 		);
 	}
 
-	const { messages, sessionId, model, maxSteps } = parsed.data;
-	const effectiveSessionId = sessionId ?? crypto.randomUUID();
+	const { messages, sessionId, model, maxSteps, workspaceId } = parsed.data;
 	const effectiveModel = model ?? DEFAULT_MODEL;
 
+	// Resolve session (lookup or create) before streaming. Vercel uses the
+	// same ordering — the user message row must exist by the time the
+	// response starts so a mid-stream reload sees it. A missing sessionId
+	// means "first turn" → create; an unknown sessionId for this user is
+	// treated as 404 to avoid leaking other users' IDs.
+	let chatSession = sessionId ? await findSession(env, sessionId, session.userId).catch(() => null) : null;
+	if (sessionId && !chatSession) {
+		return Response.json(
+			{ success: false, error: { code: 'NOT_FOUND', message: 'Chat session not found' } },
+			{ status: 404, headers: cors },
+		);
+	}
+	if (!chatSession) {
+		chatSession = await createSession(env, {
+			userId: session.userId,
+			model: effectiveModel,
+			workspaceId: workspaceId ?? null,
+		});
+	}
+	const effectiveSessionId = chatSession.id;
+
+	// Persist the user turn before opening the stream. The Vercel handler runs
+	// extra context/skill injection here; the worker doesn't yet (Phases 4-5),
+	// so we save the last user message verbatim. `metadata.displayContent`
+	// mirrors Vercel's shape so the existing Vercel GET reader stays happy.
+	const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+	const userContent = lastUserMessage ? extractTextFromParts(lastUserMessage.parts) : '';
+	if (userContent) {
+		await saveMessage(env, {
+			sessionId: effectiveSessionId,
+			role: 'user',
+			content: userContent,
+			metadata: { displayContent: userContent },
+		});
+	}
+
 	const openrouter = createOpenRouter({ apiKey: env.OPENROUTER_API_KEY });
+
+	interface FinishCapture {
+		text: string;
+		usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+		finishReason: string | null;
+	}
+	const finishCapture: FinishCapture = { text: '', usage: null, finishReason: null };
 
 	const stream = createUIMessageStream({
 		originalMessages: messages,
@@ -108,11 +169,21 @@ export async function handleChat(request: Request, env: Env): Promise<Response> 
 				model: openrouter.chat(effectiveModel),
 				messages: await convertToModelMessages(messages, { tools: TOOLS }),
 				tools: TOOLS,
+				// Forward client disconnect into the LLM call so OpenRouter usage
+				// stops billing the moment the user cancels / closes the tab /
+				// navigates away. Requires `enable_request_signal` +
+				// `request_signal_passthrough` compat flags (see wrangler.jsonc).
+				abortSignal: request.signal,
 				stopWhen: stepCountIs(maxSteps ?? DEFAULT_MAX_STEPS),
 				experimental_transform: smoothStream({ delayInMs: 2 }),
 				onError: ({ error }) => {
 					const msg = error instanceof Error ? error.message : String(error);
 					logError('CHAT', 'streamText error', { sessionId: effectiveSessionId, userId: session.userId, error: msg });
+				},
+				onFinish: (res) => {
+					finishCapture.text = res.text;
+					finishCapture.usage = res.usage ?? null;
+					finishCapture.finishReason = typeof res.finishReason === 'string' ? res.finishReason : null;
 				},
 			});
 			writer.merge(result.toUIMessageStream({ sendReasoning: true }));
@@ -123,6 +194,29 @@ export async function handleChat(request: Request, env: Env): Promise<Response> 
 			logError('CHAT', 'UI stream error', { sessionId: effectiveSessionId, userId: session.userId, error: msg });
 			return msg;
 		},
+		onFinish: ({ responseMessage, isAborted }) => {
+			// Persist the assistant turn off the response path so the user
+			// gets the connection closed promptly. waitUntil extends the
+			// worker lifetime up to 30s after the response ends, which is
+			// plenty for two short Postgres writes.
+			ctx.waitUntil(
+				persistAssistantTurn({
+					env,
+					session: chatSession,
+					userId: session.userId,
+					model: effectiveModel,
+					responseMessage,
+					finishCapture,
+					isAborted,
+				}).catch((err) => {
+					logError('CHAT', 'persist assistant turn failed', {
+						sessionId: effectiveSessionId,
+						userId: session.userId,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}),
+			);
+		},
 	});
 
 	return createUIMessageStreamResponse({
@@ -130,4 +224,56 @@ export async function handleChat(request: Request, env: Env): Promise<Response> 
 		consumeSseStream: consumeStream,
 		headers: { ...cors, 'X-Session-Id': effectiveSessionId, 'X-Model': effectiveModel },
 	});
+}
+
+/**
+ * Mirror the Vercel persist path: write the assistant row with `metadata.parts`
+ * so the existing GET reader can reconstruct UIMessageStream parts. Billing /
+ * credits deduction is Phase 6b — for now we update token totals (free since
+ * the AI SDK already gave them to us) but never charge.
+ */
+async function persistAssistantTurn(params: {
+	env: Env;
+	session: { id: string; totalTokens: number; totalCost: string };
+	userId: string;
+	model: string;
+	responseMessage: { parts?: ReadonlyArray<AssistantPart> };
+	finishCapture: {
+		text: string;
+		usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+		finishReason: string | null;
+	};
+	isAborted: boolean;
+}): Promise<void> {
+	const { env, session, userId, model, responseMessage, finishCapture, isAborted } = params;
+
+	const text = finishCapture.text || extractTextFromParts(responseMessage.parts);
+	const totalTokens = finishCapture.usage?.totalTokens ?? 0;
+	const finishReason = finishCapture.finishReason ?? (isAborted ? 'aborted' : 'unknown');
+
+	const metadata: Record<string, unknown> = {
+		finishReason,
+		model,
+		status: isAborted ? 'aborted' : 'completed',
+	};
+	if (responseMessage.parts?.length) {
+		metadata.parts = responseMessage.parts;
+	}
+
+	await saveMessage(env, {
+		sessionId: session.id,
+		role: 'assistant',
+		content: text,
+		tokens: totalTokens || undefined,
+		metadata,
+	});
+
+	if (totalTokens > 0) {
+		const prevTokens = Number(session.totalTokens) || 0;
+		const prevCost = Number.parseFloat(session.totalCost || '0') || 0;
+		await updateSessionStats(env, session.id, userId, {
+			totalTokens: prevTokens + totalTokens,
+			totalCost: prevCost, // Phase 6b will add real cost from billing.computeTextUsage.
+		});
+	}
 }

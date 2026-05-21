@@ -8,13 +8,13 @@ import { handleR2Asset } from '../app/handlers/r2-asset';
 import { handleWorkflowStream } from '../app/handlers/workflow-status';
 import type { Env, ExecutionContext } from '../models/types';
 
-type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>;
+type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/api/chat': handleChat,
-	'/embed': handleEmbed,
-	'/generate-image': handleGenerateImage,
-	'/ingest': handleIngest,
+	'/embed': (req, env) => handleEmbed(req, env),
+	'/generate-image': (req, env) => handleGenerateImage(req, env),
+	'/ingest': (req, env) => handleIngest(req, env),
 };
 
 const HELP_TEXT =
@@ -61,11 +61,11 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
-	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env);
+	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
 
 	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
-		if (handler) return handler(request, env);
+		if (handler) return handler(request, env, ctx);
 	}
 
 	if (method === 'GET') {
