@@ -38,23 +38,11 @@ export async function getSession(request: Request, env: Env): Promise<WorkerSess
 		throw new Error('BETTER_AUTH_SECRET is required for worker-side auth');
 	}
 
-	// Prod: Hyperdrive proxies — its connection string has no ssl* params and
-	// needs no client-side SSL config. Local dev (CLOUDFLARE_HYPERDRIVE_LOCAL_*
-	// → upstream URL such as PlanetScale) requires SSL; strip URL ssl params
-	// because `pg-connection-string` will try `fs.readFileSync(sslrootcert)`
-	// which crashes in Workers runtime, and pass `ssl` explicitly instead.
-	const rawString = env.HYPERDRIVE.connectionString;
-	const needsSsl = /[?&]sslmode=/.test(rawString);
-	const connectionString = needsSsl
-		? rawString
-				.replace(/[?&]ssl[a-z]+=[^&]*/g, '')
-				.replace(/\?&/, '?')
-				.replace(/\?$/, '')
-		: rawString;
-	const client = new Client({
-		connectionString,
-		ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
-	});
+	// Prod Hyperdrive proxies — pg with no ssl config works (matches `infra/db.ts`).
+	// Local dev (CLOUDFLARE_HYPERDRIVE_LOCAL_* → upstream URL such as PlanetScale)
+	// is currently unsupported here because wrangler dev's `cloudflare:sockets`
+	// shim doesn't implement starttls upgrade properly.
+	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
 	try {
 		const db = drizzle(client, { schema: authSchema });
