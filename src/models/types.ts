@@ -15,6 +15,11 @@ export interface Env extends Cloudflare.Env {
 	YOUTUBE_API_KEY?: string;
 	/** HMAC secret for signing /media/external/ and /media/asset URLs. */
 	IMAGE_PROXY_SECRET?: string;
+	/**
+	 * Shared with the Vercel app. Worker validates better-auth session cookies
+	 * minted by the Next.js route. Required for /api/chat (issue #136).
+	 */
+	BETTER_AUTH_SECRET?: string;
 }
 
 // Article related types

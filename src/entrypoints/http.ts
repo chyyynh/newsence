@@ -1,3 +1,4 @@
+import { handleChat } from '../app/handlers/chat';
 import { handleEmbed } from '../app/handlers/embed';
 import { handleGenerateImage } from '../app/handlers/generate-image';
 import { handleHealth } from '../app/handlers/health';
@@ -10,6 +11,7 @@ import type { Env, ExecutionContext } from '../models/types';
 type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
+	'/api/chat': handleChat,
 	'/embed': handleEmbed,
 	'/generate-image': handleGenerateImage,
 	'/ingest': handleIngest,
@@ -19,6 +21,7 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
+	'POST /api/chat                            - AI chat (Phase 1 scaffold, mock stream; issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
@@ -58,6 +61,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
+	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env);
 
 	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
