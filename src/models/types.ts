@@ -10,6 +10,7 @@ import type { PlatformMetadata } from './platform-metadata';
  */
 export interface Env extends Cloudflare.Env {
 	OPENROUTER_API_KEY: string;
+	/** Shared with Vercel for `X-Internal-Token` guard on the worker's /submit endpoint. */
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;

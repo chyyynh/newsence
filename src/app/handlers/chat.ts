@@ -5,17 +5,19 @@
  *   - 1: scaffold + CORS + request validation
  *   - 2-3: better-auth bearer-token validation (drizzle + Hyperdrive)
  *   - 4: real streamText via OpenRouter + `load-skill` tool
- *   - 6a: chat session + message persistence (this commit)
+ *   - 6a: chat session + message persistence
+ *   - 6b: surface usage as transient `data-usage` part so the frontend can
+ *         POST /api/ai/chat/track-usage. Billing pre-check and tracking are
+ *         orchestrated by the frontend against existing Vercel routes; this
+ *         handler stays billing-blind.
  *
  * Still missing (tracked in #136):
- *   - billing.checkChat() quota gate + trackText deduction (Phase 6b)
  *   - the other 7 tools (Phases 4-5)
- *   - PostHog flush for ai_chat_completed (Phase 6b — bundled with billing)
+ *   - PostHog flush for ai_chat_completed (Phase 7)
  *   - Vercel feature-flag rollout (Phase 7)
  *
  * History reads still go to Vercel `GET /api/ai/chat/[sessionId]`; both
- * writers hit the same Postgres rows so no migration of the reader is needed
- * to land Phase 6a.
+ * writers hit the same Postgres rows so no migration of the reader is needed.
  */
 
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -188,6 +190,22 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 			});
 			writer.merge(result.toUIMessageStream({ sendReasoning: true }));
 			await result.consumeStream();
+
+			// Surface usage to the frontend as a transient data part so it can
+			// fire-and-forget POST /api/ai/chat/track-usage from useChat's
+			// onFinish. `transient: true` keeps it out of `responseMessage.parts`
+			// per CLAUDE.md convention — we don't want token counts persisted
+			// into chat_messages.metadata.
+			if (finishCapture.usage?.inputTokens && finishCapture.usage?.outputTokens) {
+				writer.write({
+					type: 'data-usage',
+					data: {
+						inputTokens: finishCapture.usage.inputTokens,
+						outputTokens: finishCapture.usage.outputTokens,
+					},
+					transient: true,
+				});
+			}
 		},
 		onError: (error) => {
 			const msg = error instanceof Error ? error.message : 'Chat stream failed';
@@ -228,9 +246,15 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 
 /**
  * Mirror the Vercel persist path: write the assistant row with `metadata.parts`
- * so the existing GET reader can reconstruct UIMessageStream parts. Billing /
- * credits deduction is Phase 6b — for now we update token totals (free since
- * the AI SDK already gave them to us) but never charge.
+ * so the existing GET reader can reconstruct UIMessageStream parts, fire the
+ * billing usage event back to Vercel, and update session totals — all in
+ * parallel since they're independent writes.
+ *
+ * `total_cost` still isn't bumped here because the worker doesn't see the
+ * USD-cost number (Vercel-side `billing.trackText` computes it from token
+ * counts). For now `chat_sessions.total_cost` lags reality on the worker
+ * path; the sessions list UI doesn't depend on it. Wire it up later if
+ * needed by surfacing the cost in the trackText response.
  */
 async function persistAssistantTurn(params: {
 	env: Env;
@@ -260,20 +284,26 @@ async function persistAssistantTurn(params: {
 		metadata.parts = responseMessage.parts;
 	}
 
-	await saveMessage(env, {
-		sessionId: session.id,
-		role: 'assistant',
-		content: text,
-		tokens: totalTokens || undefined,
-		metadata,
-	});
+	const ops: Promise<unknown>[] = [
+		saveMessage(env, {
+			sessionId: session.id,
+			role: 'assistant',
+			content: text,
+			tokens: totalTokens || undefined,
+			metadata,
+		}),
+	];
 
 	if (totalTokens > 0) {
 		const prevTokens = Number(session.totalTokens) || 0;
 		const prevCost = Number.parseFloat(session.totalCost || '0') || 0;
-		await updateSessionStats(env, session.id, userId, {
-			totalTokens: prevTokens + totalTokens,
-			totalCost: prevCost, // Phase 6b will add real cost from billing.computeTextUsage.
-		});
+		ops.push(
+			updateSessionStats(env, session.id, userId, {
+				totalTokens: prevTokens + totalTokens,
+				totalCost: prevCost,
+			}),
+		);
 	}
+
+	await Promise.all(ops);
 }
