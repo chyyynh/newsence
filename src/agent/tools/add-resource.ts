@@ -95,10 +95,11 @@ export function createAddResourceTool(env: Env, userId: string) {
 					return { created: 0, duplicates: 0, missing, ingested: ingestedIds.length };
 				}
 
-				// Build a single multi-row INSERT with ON CONFLICT to match
-				// Prisma's createMany({ skipDuplicates: true }). The unique
-				// constraint that the conflict targets is the standard
-				// (user_id, from_type, from_id, to_type, to_id) tuple.
+				// Multi-row INSERT with ON CONFLICT to match Prisma's
+				// `createMany({ skipDuplicates: true })`. The unique constraint
+				// on citations is (from_type, from_id, to_type, to_id) — user_id
+				// is NOT part of it, so leave user_id out of the conflict target
+				// (per psql \d: citations_from_type_from_id_to_type_to_id_key).
 				const params: unknown[] = [userId, 'workspace', workspaceId];
 				const valueRows: string[] = [];
 				for (const t of targets) {
@@ -109,7 +110,7 @@ export function createAddResourceTool(env: Env, userId: string) {
 				const result = await client.query<{ id: string }>(
 					`INSERT INTO citations (user_id, from_type, from_id, to_type, to_id)
 					 VALUES ${valueRows.join(', ')}
-					 ON CONFLICT (user_id, from_type, from_id, to_type, to_id) DO NOTHING
+					 ON CONFLICT (from_type, from_id, to_type, to_id) DO NOTHING
 					 RETURNING id`,
 					params,
 				);
