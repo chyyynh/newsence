@@ -17,7 +17,9 @@ import { parseJsonBody, requireAuth } from '../middleware/auth';
 
 // Must stay in sync with `frontend/src/lib/ai/image-generation.ts` IMAGE_MODEL
 // — frontend pre-checks billing against the same model name before this runs.
-const IMAGE_MODEL = 'google/gemini-3-pro-image-preview';
+// Exported so the chat-tool emitter attributes /track-image rows to the
+// same model the Vercel path would have used.
+export const IMAGE_MODEL = 'google/gemini-3-pro-image-preview';
 const MAX_RETRIES = 3;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const OPENROUTER_TIMEOUT_MS = 60_000;
@@ -31,7 +33,7 @@ interface OpenRouterImageResponse {
 	error?: { message?: string };
 }
 
-class GenerationError extends Error {
+export class GenerationError extends Error {
 	constructor(
 		message: string,
 		public status: number,
@@ -39,6 +41,14 @@ class GenerationError extends Error {
 	) {
 		super(message);
 	}
+}
+
+export interface GenerateImageResult {
+	userFileId: string;
+	storageKey: string;
+	assetUrl: string;
+	fileType: string;
+	fileSize: number;
 }
 
 function errorResponse(status: number, code: string, message: string): Response {
@@ -127,36 +137,25 @@ async function generateAndDecode(prompt: string, apiKey: string): Promise<{ byte
 	return decoded;
 }
 
-export async function handleGenerateImage(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env);
-	if (unauth) return unauth;
+/**
+ * Inner generation primitive — usable from both the HTTP handler (Vercel
+ * `/api/ai/generate/image` proxy) and the worker's chat-tool path. Throws
+ * `GenerationError` on validated failures; callers translate to HTTP
+ * status / tool error as appropriate.
+ */
+export async function runGenerateImage(env: Env, userId: string, description: string): Promise<GenerateImageResult> {
+	if (!userId) throw new GenerationError('Missing userId', 400, 'BAD_REQUEST');
+	if (!description) throw new GenerationError('Missing description', 400, 'BAD_REQUEST');
+	if (!env.OPENROUTER_API_KEY) throw new GenerationError('OPENROUTER_API_KEY not configured', 500, 'CONFIG_ERROR');
 
-	const parsed = await parseJsonBody<{ userId?: string; description?: string }>(request);
-	if (parsed instanceof Response) return parsed;
-
-	const userId = parsed.userId?.trim() || '';
-	const description = parsed.description?.trim() || '';
-	if (!userId) return errorResponse(400, 'BAD_REQUEST', 'Missing userId');
-	if (!description) return errorResponse(400, 'BAD_REQUEST', 'Missing description');
-	if (!env.OPENROUTER_API_KEY) return errorResponse(500, 'CONFIG_ERROR', 'OPENROUTER_API_KEY not configured');
-
-	let decoded: { bytes: Uint8Array; contentType: string };
-	try {
-		decoded = await generateAndDecode(buildPrompt(description), env.OPENROUTER_API_KEY);
-	} catch (err) {
-		if (err instanceof GenerationError) {
-			logError('GENERATE_IMAGE', 'Generation failed', { status: err.status, code: err.code, message: err.message });
-			const httpStatus = err.status >= 400 && err.status < 600 ? err.status : 500;
-			return errorResponse(httpStatus, err.code || 'OPENROUTER_ERROR', err.message);
-		}
-		logError('GENERATE_IMAGE', 'Generation failed (unknown)', { error: String(err) });
-		return errorResponse(500, 'OPENROUTER_ERROR', 'Image generation failed');
-	}
+	const decoded = await generateAndDecode(buildPrompt(description), env.OPENROUTER_API_KEY);
 
 	const fileType = decoded.contentType;
 	const fileSize = decoded.bytes.byteLength;
-	if (fileSize > MAX_FILE_BYTES) return errorResponse(413, 'PAYLOAD_TOO_LARGE', 'Generated image exceeds 10MB');
-	if (!isRasterImage(fileType)) return errorResponse(415, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported image type: ${fileType}`);
+	if (fileSize > MAX_FILE_BYTES) throw new GenerationError('Generated image exceeds 10MB', 413, 'PAYLOAD_TOO_LARGE');
+	if (!isRasterImage(fileType)) {
+		throw new GenerationError(`Unsupported image type: ${fileType}`, 415, 'UNSUPPORTED_MEDIA_TYPE');
+	}
 
 	const extension = extensionFromMime(fileType);
 	const storageKey = `users/${userId}/illustrations/${crypto.randomUUID()}.${extension}`;
@@ -167,7 +166,7 @@ export async function handleGenerateImage(request: Request, env: Env): Promise<R
 		});
 	} catch (err) {
 		logError('GENERATE_IMAGE', 'R2 put failed', { storageKey, error: String(err) });
-		return errorResponse(500, 'INTERNAL_ERROR', 'R2 put failed');
+		throw new GenerationError('R2 put failed', 500, 'INTERNAL_ERROR');
 	}
 
 	const title = description.slice(0, 200);
@@ -189,15 +188,34 @@ export async function handleGenerateImage(request: Request, env: Env): Promise<R
 		await env.R2.delete(storageKey).catch((delErr) =>
 			logError('GENERATE_IMAGE', 'R2 cleanup after DB failure also failed', { storageKey, error: String(delErr) }),
 		);
-		return errorResponse(500, 'INTERNAL_ERROR', 'DB insert failed');
+		throw new GenerationError('DB insert failed', 500, 'INTERNAL_ERROR');
 	} finally {
 		await db.end();
 	}
 
 	logInfo('GENERATE_IMAGE', 'Generated image stored', { userFileId, storageKey, fileType, fileSize });
 
-	return Response.json({
-		success: true,
-		result: { userFileId, storageKey, assetUrl: storageKeyToAssetUrl(storageKey), fileType, fileSize },
-	});
+	return { userFileId, storageKey, assetUrl: storageKeyToAssetUrl(storageKey), fileType, fileSize };
+}
+
+export async function handleGenerateImage(request: Request, env: Env): Promise<Response> {
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
+
+	const parsed = await parseJsonBody<{ userId?: string; description?: string }>(request);
+	if (parsed instanceof Response) return parsed;
+
+	try {
+		const result = await runGenerateImage(env, parsed.userId?.trim() || '', parsed.description?.trim() || '');
+		return Response.json({ success: true, result });
+	} catch (err) {
+		if (err instanceof GenerationError) {
+			if (err.status >= 500) {
+				logError('GENERATE_IMAGE', 'Generation failed', { status: err.status, code: err.code, message: err.message });
+			}
+			return errorResponse(err.status, err.code || 'OPENROUTER_ERROR', err.message);
+		}
+		logError('GENERATE_IMAGE', 'Generation failed (unknown)', { error: String(err) });
+		return errorResponse(500, 'OPENROUTER_ERROR', 'Image generation failed');
+	}
 }

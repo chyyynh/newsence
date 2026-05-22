@@ -1,19 +1,13 @@
 /**
  * Worker chat session/message persistence (Phase 6a of #136).
  *
- * Raw `pg` queries (not Drizzle) — consistent with `infra/db.ts`. Mirrors the
- * Vercel helpers in `frontend/src/lib/chat/sessions.ts` so both sides write
- * the same shape into the same Postgres tables (`chat_sessions`,
- * `chat_messages`). The Vercel `GET /api/ai/chat/[sessionId]` reader keeps
- * working unchanged because the rows look identical.
- *
- * Per-write `pg.Client` (no module-level pool) — matches `lib/auth/index.ts`.
- * Hyperdrive already pools globally; a long-lived Client would leak across
- * request contexts.
+ * Raw `pg` queries — consistent with `infra/db.ts`. Mirrors the Vercel
+ * helpers in `frontend/src/lib/chat/sessions.ts` so both writers produce the
+ * same row shape and the existing Vercel GET reader stays unchanged.
  */
 
-import { Client } from 'pg';
 import type { Env } from '../../models/types';
+import { withClient } from '../db/client';
 
 interface ChatSessionRow {
 	id: string;
@@ -41,16 +35,6 @@ interface SaveMessageInput {
 	cost?: number;
 	/** Plain object — helper stringifies before insert. */
 	metadata?: Record<string, unknown> | null;
-}
-
-async function withClient<T>(env: Env, fn: (client: Client) => Promise<T>): Promise<T> {
-	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await client.connect();
-	try {
-		return await fn(client);
-	} finally {
-		await client.end().catch(() => {});
-	}
 }
 
 /**

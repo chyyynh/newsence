@@ -21,6 +21,8 @@ export interface Env extends Cloudflare.Env {
 	 * minted by the Next.js route. Required for /api/chat (issue #136).
 	 */
 	BETTER_AUTH_SECRET?: string;
+	/** Exa client key. Optional; the `search-web` tool refuses to run without it. */
+	EXA_API_KEY?: string;
 }
 
 // Article related types

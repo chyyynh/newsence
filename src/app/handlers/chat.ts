@@ -4,7 +4,7 @@
  * Phases landed so far:
  *   - 1: scaffold + CORS + request validation
  *   - 2-3: better-auth bearer-token validation (drizzle + Hyperdrive)
- *   - 4: real streamText via OpenRouter + `load-skill` tool
+ *   - 4-5: real streamText via OpenRouter + full tool registry (8 tools)
  *   - 6a: chat session + message persistence
  *   - 6b: surface usage as transient `data-usage` part so the frontend can
  *         POST /api/ai/chat/track-usage. Billing pre-check and tracking are
@@ -12,15 +12,16 @@
  *         handler stays billing-blind.
  *
  * Still missing (tracked in #136):
- *   - the other 7 tools (Phases 4-5)
  *   - PostHog flush for ai_chat_completed (Phase 7)
  *   - Vercel feature-flag rollout (Phase 7)
+ *   - System-prompt enrichment (workspace catalog, attached resources, tool
+ *     guidance) — Vercel inline route still does this; needed for scope-free
+ *     create-document to pick a valid workspaceId.
  *
  * History reads still go to Vercel `GET /api/ai/chat/[sessionId]`; both
  * writers hit the same Postgres rows so no migration of the reader is needed.
  */
 
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import {
 	consumeStream,
 	convertToModelMessages,
@@ -32,9 +33,11 @@ import {
 	type UIMessage,
 } from 'ai';
 import { z } from 'zod';
-import { createLoadSkillTool } from '../../agent/tools/load-skill';
+import { ALL_TOOL_NAMES, buildEnabledTools, type ToolContext } from '../../agent/tools/registry';
 import { logError } from '../../infra/log';
+import { getOpenRouter } from '../../lib/ai/models';
 import { getSession } from '../../lib/auth';
+import { getUserPlanId } from '../../lib/billing/balance';
 import { createSession, findSession, saveMessage, updateSessionStats } from '../../lib/chat/sessions';
 import { getCorsHeaders } from '../../lib/cors';
 import type { Env, ExecutionContext } from '../../models/types';
@@ -56,7 +59,6 @@ const DEFAULT_MODEL = 'google/gemini-2.5-flash';
 const DEFAULT_MAX_STEPS = 10;
 
 // TODO: zh-Hant Intl.Segmenter chunking — runtime supports it, types don't.
-const TOOLS = { 'load-skill': createLoadSkillTool() };
 
 function buildCorsHeaders(request: Request, env: Env): Record<string, string> {
 	// Auth is `Authorization: Bearer <session.token>` (better-auth bearer plugin),
@@ -123,28 +125,31 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 		);
 	}
 
-	const { messages, sessionId, model, maxSteps, workspaceId } = parsed.data;
+	const { messages, sessionId, model, maxSteps, workspaceId, language, tools: toolsRequested } = parsed.data;
 	const effectiveModel = model ?? DEFAULT_MODEL;
 
-	// Resolve session (lookup or create) before streaming. Vercel uses the
-	// same ordering — the user message row must exist by the time the
-	// response starts so a mid-stream reload sees it. A missing sessionId
-	// means "first turn" → create; an unknown sessionId for this user is
-	// treated as 404 to avoid leaking other users' IDs.
-	let chatSession = sessionId ? await findSession(env, sessionId, session.userId).catch(() => null) : null;
-	if (sessionId && !chatSession) {
+	// Both reads are independent of each other; run them in parallel so the
+	// pre-stream path costs one Hyperdrive RTT instead of two. planId drives
+	// per-plan tool gating; the session lookup decides "first turn" vs
+	// "continuation". Falling back to `free` on planId error surfaces missing
+	// rows as gated-tool denials rather than a 500.
+	const [planId, existingSession] = await Promise.all([
+		getUserPlanId(env, session.userId).catch(() => 'free'),
+		sessionId ? findSession(env, sessionId, session.userId).catch(() => null) : Promise.resolve(null),
+	]);
+	if (sessionId && !existingSession) {
 		return Response.json(
 			{ success: false, error: { code: 'NOT_FOUND', message: 'Chat session not found' } },
 			{ status: 404, headers: cors },
 		);
 	}
-	if (!chatSession) {
-		chatSession = await createSession(env, {
+	const chatSession =
+		existingSession ??
+		(await createSession(env, {
 			userId: session.userId,
 			model: effectiveModel,
 			workspaceId: workspaceId ?? null,
-		});
-	}
+		}));
 	const effectiveSessionId = chatSession.id;
 
 	// Persist the user turn before opening the stream. The Vercel handler runs
@@ -162,7 +167,7 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 		});
 	}
 
-	const openrouter = createOpenRouter({ apiKey: env.OPENROUTER_API_KEY });
+	const openrouter = getOpenRouter(env);
 
 	interface FinishCapture {
 		text: string;
@@ -174,10 +179,22 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 	const stream = createUIMessageStream({
 		originalMessages: messages,
 		execute: async ({ writer }) => {
+			const toolCtx: ToolContext = {
+				env,
+				userId: session.userId,
+				workspaceId: workspaceId ?? null,
+				planId,
+				streamWriter: writer,
+				language: language ?? 'zh',
+				requestSignal: request.signal,
+			};
+			const enabledNames = toolsRequested && toolsRequested.length > 0 ? toolsRequested : ALL_TOOL_NAMES;
+			const tools = buildEnabledTools(enabledNames, toolCtx);
+
 			const result = streamText({
 				model: openrouter.chat(effectiveModel),
-				messages: await convertToModelMessages(messages, { tools: TOOLS }),
-				tools: TOOLS,
+				messages: await convertToModelMessages(messages, tools ? { tools } : undefined),
+				tools,
 				// Forward client disconnect into the LLM call so OpenRouter usage
 				// stops billing the moment the user cancels / closes the tab /
 				// navigates away. Requires `enable_request_signal` +
