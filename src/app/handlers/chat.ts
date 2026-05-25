@@ -11,12 +11,10 @@
  *         orchestrated by the frontend against existing Vercel routes; this
  *         handler stays billing-blind.
  *
- * Still missing (tracked in #136):
- *   - PostHog flush for ai_chat_completed (Phase 7)
- *   - Vercel feature-flag rollout (Phase 7)
- *   - System-prompt enrichment (workspace catalog, attached resources, tool
- *     guidance) — Vercel inline route still does this; needed for scope-free
- *     create-document to pick a valid workspaceId.
+ *   - 7: PostHog ai_chat_started + ai_chat_completed/error events, USD cost
+ *        accumulation on chat_sessions.total_cost, and system-prompt
+ *        enrichment (workspace catalog, attached resources, tool guidance) so
+ *        scope-free create-document picks a real workspaceId.
  *
  * History reads still go to Vercel `GET /api/ai/chat/[sessionId]`; both
  * writers hit the same Postgres rows so no migration of the reader is needed.
@@ -33,14 +31,19 @@ import {
 	type UIMessage,
 } from 'ai';
 import { z } from 'zod';
-import { ALL_TOOL_NAMES, buildEnabledTools, type ToolContext } from '../../agent/tools/registry';
+import { ALL_TOOL_NAMES, buildEnabledTools, isValidToolName, type ToolContext, type ToolName } from '../../agent/tools/registry';
 import { logError } from '../../infra/log';
 import { getOpenRouter } from '../../lib/ai/models';
+import { buildMessages, buildUnifiedContext } from '../../lib/ai/prompts';
 import { getSession } from '../../lib/auth';
 import { getUserPlanId } from '../../lib/billing/balance';
+import { calculateTextCost } from '../../lib/billing/pricing';
 import { createSession, findSession, saveMessage, updateSessionStats } from '../../lib/chat/sessions';
 import { getCorsHeaders } from '../../lib/cors';
+import { capturePostHogEvent } from '../../lib/tracking/posthog';
+import { buildWorkspaceCatalogPrompt, listWorkspacesForAI } from '../../lib/workspace/aiCatalog';
 import type { Env, ExecutionContext } from '../../models/types';
+import { ContextItemSchema } from '../../types/context';
 import { parseJsonBody } from '../middleware/auth';
 
 const ChatRequestSchema = z.object({
@@ -53,6 +56,7 @@ const ChatRequestSchema = z.object({
 	tools: z.array(z.string()).optional(),
 	maxSteps: z.number().int().min(1).max(20).optional(),
 	workspaceId: z.string().uuid().optional(),
+	contextItems: z.array(ContextItemSchema).optional(),
 });
 
 const DEFAULT_MODEL = 'google/gemini-2.5-flash';
@@ -94,6 +98,109 @@ function extractTextFromParts(parts: ReadonlyArray<AssistantPart> | undefined): 
 		.join('');
 }
 
+async function persistUserTurn(params: {
+	env: Env;
+	sessionId: string;
+	content: string;
+	customInput?: string;
+	promptId?: string;
+	contextItems?: unknown[];
+}): Promise<void> {
+	const { env, sessionId, content, customInput, promptId, contextItems } = params;
+	const displayContent = customInput || content;
+	const metadata: Record<string, unknown> = {
+		displayContent,
+		chatRequest: {
+			...(promptId && { promptId }),
+			customInput: customInput ?? '',
+			...(contextItems?.length && { contextItems }),
+		},
+	};
+	if (contextItems?.length) metadata.contextItems = contextItems;
+	await saveMessage(env, { sessionId, role: 'user', content, metadata });
+}
+
+interface CompletionEventInput {
+	model: string;
+	tools: ToolName[];
+	sessionId: string;
+	isAborted: boolean;
+	errorInfo: { phase: 'streamText' | 'uiStream'; message: string } | null;
+	startTime: number;
+	usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+	finishReason: string | null;
+	partsCount: number;
+}
+
+/**
+ * Mirror of Vercel route's `after()` PostHog payload — keep status enum +
+ * conditional field set aligned with the Vercel side so dashboards work
+ * across both surfaces during the migration.
+ */
+function buildCompletionEvent(input: CompletionEventInput): {
+	event: 'ai_chat_completed' | 'ai_chat_error';
+	properties: Record<string, unknown>;
+} {
+	const { model, tools, sessionId, isAborted, errorInfo, startTime, usage, finishReason, partsCount } = input;
+	const completed = !isAborted && !errorInfo;
+	const status: 'completed' | 'aborted' | 'error' = errorInfo ? 'error' : isAborted ? 'aborted' : 'completed';
+	const inputTokens = usage?.inputTokens ?? 0;
+	const outputTokens = usage?.outputTokens ?? 0;
+	const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens;
+	let costUsd = 0;
+	try {
+		if (completed && totalTokens > 0) costUsd = calculateTextCost(model, inputTokens, outputTokens);
+	} catch {
+		// Already logged on the persist path; skip cost/credit fields here.
+	}
+	const properties: Record<string, unknown> = {
+		model,
+		tools,
+		session_id: sessionId,
+		status,
+		duration_ms: Date.now() - startTime,
+		parts_count: partsCount,
+	};
+	if (completed) {
+		properties.input_tokens = inputTokens;
+		properties.output_tokens = outputTokens;
+		properties.total_tokens = totalTokens;
+		properties.cost_usd = costUsd;
+		properties.credits_used = Math.ceil(costUsd * 1000);
+		properties.finish_reason = finishReason;
+	}
+	if (errorInfo) {
+		properties.error_phase = errorInfo.phase;
+		properties.error_message = errorInfo.message;
+	}
+	return { event: completed ? 'ai_chat_completed' : 'ai_chat_error', properties };
+}
+
+/**
+ * Mirror of Vercel `injectUserContent` (route.ts:525) — splice enriched user
+ * content onto the last non-assistant message so the model sees the attached
+ * resources block + customInput inline. Non-text parts (e.g. attachments) on
+ * the original message are preserved after the rewritten text part.
+ */
+function injectUserContent(rawMessages: UIMessage[], userContent: string): UIMessage[] {
+	let lastUserIdx = -1;
+	for (let i = rawMessages.length - 1; i >= 0; i--) {
+		const role = rawMessages[i].role;
+		if (role !== 'assistant' && role !== 'system') {
+			lastUserIdx = i;
+			break;
+		}
+	}
+	if (lastUserIdx < 0) {
+		return [...rawMessages, { id: `usr-${crypto.randomUUID()}`, role: 'user', parts: [{ type: 'text', text: userContent }] } as UIMessage];
+	}
+	return rawMessages.map((msg, i) => {
+		if (i !== lastUserIdx) return msg;
+		const nonText = (msg.parts ?? []).filter((p) => p.type !== 'text');
+		return { ...msg, parts: [{ type: 'text' as const, text: userContent }, ...nonText] as UIMessage['parts'] };
+	});
+}
+
 export async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const cors = buildCorsHeaders(request, env);
 
@@ -125,17 +232,38 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 		);
 	}
 
-	const { messages, sessionId, model, maxSteps, workspaceId, language, tools: toolsRequested } = parsed.data;
+	const {
+		messages,
+		sessionId,
+		model,
+		promptId,
+		customInput,
+		maxSteps,
+		workspaceId,
+		language,
+		tools: toolsRequested,
+		contextItems,
+	} = parsed.data;
 	const effectiveModel = model ?? DEFAULT_MODEL;
+	const effectiveLanguage = language ?? 'zh';
+	const enabledToolNames: ToolName[] =
+		toolsRequested && toolsRequested.length > 0 ? toolsRequested.filter(isValidToolName) : ALL_TOOL_NAMES;
 
-	// Both reads are independent of each other; run them in parallel so the
-	// pre-stream path costs one Hyperdrive RTT instead of two. planId drives
-	// per-plan tool gating; the session lookup decides "first turn" vs
-	// "continuation". Falling back to `free` on planId error surfaces missing
-	// rows as gated-tool denials rather than a 500.
-	const [planId, existingSession] = await Promise.all([
+	const startTime = Date.now();
+	let errorInfo: { phase: 'streamText' | 'uiStream'; message: string } | null = null;
+
+	// Catalog only needed when the chat isn't workspace-bound AND `create-document`
+	// is enabled this turn — otherwise we'd burn a Hyperdrive RTT and pollute
+	// the system prompt for nothing.
+	const needsWorkspaceCatalog = !workspaceId && enabledToolNames.includes('create-document');
+
+	// All three reads are independent — fold the catalog fetch into the same
+	// wave to keep the pre-stream path at one Hyperdrive RTT. `[]` catalog
+	// fallback so a transient DB blip never blocks the chat opening.
+	const [planId, existingSession, workspaceCatalogEntries] = await Promise.all([
 		getUserPlanId(env, session.userId).catch(() => 'free'),
 		sessionId ? findSession(env, sessionId, session.userId).catch(() => null) : Promise.resolve(null),
+		needsWorkspaceCatalog ? listWorkspacesForAI(env, session.userId).catch(() => []) : Promise.resolve([]),
 	]);
 	if (sessionId && !existingSession) {
 		return Response.json(
@@ -152,22 +280,61 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 		}));
 	const effectiveSessionId = chatSession.id;
 
-	// Persist the user turn before opening the stream. The Vercel handler runs
-	// extra context/skill injection here; the worker doesn't yet (Phases 4-5),
-	// so we save the last user message verbatim. `metadata.displayContent`
-	// mirrors Vercel's shape so the existing Vercel GET reader stays happy.
-	const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
-	const userContent = lastUserMessage ? extractTextFromParts(lastUserMessage.parts) : '';
-	if (userContent) {
-		await saveMessage(env, {
+	// Build the enriched system prompt + user content. Mirrors Vercel:
+	//   1. attached resources → `# Attached Resources` block in user content
+	//   2. workspace catalog (when scope-free + create-document) → system block
+	//   3. tool guidance + base prompt + language directive → system
+	// `userContent` is folded back onto the last user message via
+	// `injectUserContent` so the AI sees the enriched text in the conversation,
+	// not a separate orphan message.
+	const workspaceCatalog = needsWorkspaceCatalog ? buildWorkspaceCatalogPrompt({ entries: workspaceCatalogEntries, planId }) : undefined;
+	const articlesContext = contextItems?.length ? buildUnifiedContext(contextItems) : undefined;
+
+	const { system: systemPrompt, userContent: enrichedUserContent } = buildMessages({
+		preset: promptId,
+		extraContext: articlesContext,
+		customInput,
+		language: effectiveLanguage,
+		enabledToolNames,
+		workspaceCatalog,
+	});
+
+	const uiMessages = enrichedUserContent ? injectUserContent(messages, enrichedUserContent) : messages;
+
+	// Persist the user turn before opening the stream. Use the enriched content
+	// (what the model actually sees) for `content`, but keep the raw user-typed
+	// text in `metadata.displayContent` so the chat history UI doesn't render
+	// the synthetic `# Attached Resources` block back to the user.
+	const lastUserMessage = [...uiMessages].reverse().find((m) => m.role === 'user');
+	const persistedContent = lastUserMessage ? extractTextFromParts(lastUserMessage.parts) : '';
+	if (persistedContent) {
+		await persistUserTurn({
+			env,
 			sessionId: effectiveSessionId,
-			role: 'user',
-			content: userContent,
-			metadata: { displayContent: userContent },
+			content: persistedContent,
+			customInput,
+			promptId,
+			contextItems,
 		});
 	}
 
 	const openrouter = getOpenRouter(env);
+
+	// Fire ai_chat_started off the request path. Matches Vercel's event shape so
+	// the same PostHog dashboards work for both surfaces. waitUntil keeps it from
+	// blocking the stream open.
+	ctx.waitUntil(
+		capturePostHogEvent(env, {
+			distinctId: session.userId,
+			event: 'ai_chat_started',
+			properties: {
+				model: effectiveModel,
+				tools: enabledToolNames,
+				session_id: effectiveSessionId,
+				prompt_id: promptId,
+			},
+		}),
+	);
 
 	interface FinishCapture {
 		text: string;
@@ -177,7 +344,7 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 	const finishCapture: FinishCapture = { text: '', usage: null, finishReason: null };
 
 	const stream = createUIMessageStream({
-		originalMessages: messages,
+		originalMessages: uiMessages,
 		execute: async ({ writer }) => {
 			const toolCtx: ToolContext = {
 				env,
@@ -185,15 +352,15 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 				workspaceId: workspaceId ?? null,
 				planId,
 				streamWriter: writer,
-				language: language ?? 'zh',
+				language: effectiveLanguage,
 				requestSignal: request.signal,
 			};
-			const enabledNames = toolsRequested && toolsRequested.length > 0 ? toolsRequested : ALL_TOOL_NAMES;
-			const tools = buildEnabledTools(enabledNames, toolCtx);
+			const tools = buildEnabledTools(enabledToolNames, toolCtx);
 
 			const result = streamText({
 				model: openrouter.chat(effectiveModel),
-				messages: await convertToModelMessages(messages, tools ? { tools } : undefined),
+				system: systemPrompt,
+				messages: await convertToModelMessages(uiMessages, tools ? { tools } : undefined),
 				tools,
 				// Forward client disconnect into the LLM call so OpenRouter usage
 				// stops billing the moment the user cancels / closes the tab /
@@ -204,6 +371,7 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 				experimental_transform: smoothStream({ delayInMs: 2 }),
 				onError: ({ error }) => {
 					const msg = error instanceof Error ? error.message : String(error);
+					errorInfo = { phase: 'streamText', message: msg };
 					logError('CHAT', 'streamText error', { sessionId: effectiveSessionId, userId: session.userId, error: msg });
 				},
 				onFinish: (res) => {
@@ -233,6 +401,9 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 		},
 		onError: (error) => {
 			const msg = error instanceof Error ? error.message : 'Chat stream failed';
+			// Don't clobber an upstream streamText error — UI stream errors are
+			// usually a downstream consequence of the same underlying failure.
+			if (!errorInfo) errorInfo = { phase: 'uiStream', message: msg };
 			logError('CHAT', 'UI stream error', { sessionId: effectiveSessionId, userId: session.userId, error: msg });
 			return msg;
 		},
@@ -258,6 +429,20 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
 					});
 				}),
 			);
+
+			// Fire ai_chat_completed / ai_chat_error off the response path.
+			const { event, properties } = buildCompletionEvent({
+				model: effectiveModel,
+				tools: enabledToolNames,
+				sessionId: effectiveSessionId,
+				isAborted,
+				errorInfo,
+				startTime,
+				usage: finishCapture.usage,
+				finishReason: finishCapture.finishReason,
+				partsCount: responseMessage.parts?.length ?? 0,
+			});
+			ctx.waitUntil(capturePostHogEvent(env, { distinctId: session.userId, event, properties }));
 		},
 	});
 
@@ -274,11 +459,10 @@ export async function handleChat(request: Request, env: Env, ctx: ExecutionConte
  * billing usage event back to Vercel, and update session totals — all in
  * parallel since they're independent writes.
  *
- * `total_cost` still isn't bumped here because the worker doesn't see the
- * USD-cost number (Vercel-side `billing.trackText` computes it from token
- * counts). For now `chat_sessions.total_cost` lags reality on the worker
- * path; the sessions list UI doesn't depend on it. Wire it up later if
- * needed by surfacing the cost in the trackText response.
+ * `total_cost` is recomputed locally from the same per-model rate table Vercel
+ * uses (`lib/billing/pricing.ts`); we deliberately don't piggy-back on the
+ * Vercel `track-usage` response because that path is fire-and-forget from the
+ * frontend and we'd lose the cost on aborted streams.
  */
 async function persistAssistantTurn(params: {
 	env: Env;
@@ -321,10 +505,24 @@ async function persistAssistantTurn(params: {
 	if (totalTokens > 0) {
 		const prevTokens = Number(session.totalTokens) || 0;
 		const prevCost = Number.parseFloat(session.totalCost || '0') || 0;
+		const inputTokens = finishCapture.usage?.inputTokens ?? 0;
+		const outputTokens = finishCapture.usage?.outputTokens ?? 0;
+		// Unknown model id throws — swallow so persist still happens with token
+		// counts and the session row stays roughly consistent. Loud log surfaces
+		// the gap (most likely an unregistered model id) without breaking chat.
+		let costUsd = 0;
+		try {
+			costUsd = calculateTextCost(model, inputTokens, outputTokens);
+		} catch (err) {
+			logError('CHAT', 'cost calc failed; total_cost not accumulated', {
+				model,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 		ops.push(
 			updateSessionStats(env, session.id, userId, {
 				totalTokens: prevTokens + totalTokens,
-				totalCost: prevCost,
+				totalCost: prevCost + costUsd,
 			}),
 		);
 	}

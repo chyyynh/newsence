@@ -23,6 +23,10 @@ export interface Env extends Cloudflare.Env {
 	BETTER_AUTH_SECRET?: string;
 	/** Exa client key. Optional; the `search-web` tool refuses to run without it. */
 	EXA_API_KEY?: string;
+	/** PostHog project key (server). Set via `wrangler secret put POSTHOG_API_KEY`. */
+	POSTHOG_API_KEY?: string;
+	/** PostHog host; defaults to https://us.i.posthog.com if unset. */
+	POSTHOG_HOST?: string;
 }
 
 // Article related types
