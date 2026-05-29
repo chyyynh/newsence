@@ -192,31 +192,32 @@ claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 ```
 src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
-├── entrypoints/          # HTTP、scheduled、queue、RPC adapters
-├── app/
-│   ├── handlers/         # 薄 HTTP route handlers（/submit、/preview、/embed、/health）
-│   ├── use-cases/        # HTTP + RPC 共用的 application actions
+├── entrypoints/          # HTTP router + scheduled + queue dispatch、health
+├── shared/               # 跨子系統共用基礎 — 下面兩條 pipeline 都用
+│   ├── db/               # Hyperdrive clients — 文章 insert/dedup helpers + scoped withClient/withTx
+│   ├── auth/             # /submit internal-token middleware + bearer session
+│   ├── openrouter.ts     # OpenRouter + embedding wrappers
+│   ├── embedding.ts      # BGE-M3 wrapper（Workers AI）
+│   ├── platform-metadata.ts  # PlatformMetadata 聯合型別 + builders
+│   ├── scraped-content.ts    # 統一的 ScrapedContent 格式 + detectPlatformType
+│   └── …                 # fetch、web、mime、streams、log、cors、types
+├── ingest/               # ── 文章入庫 pipeline（開源核心）──
+│   ├── platforms/        # 每個平台一個資料夾
+│   │   ├── registry.ts   # URL 偵測 dispatch → platform scraper
+│   │   ├── twitter/      # monitor + scraper + processor + metadata
+│   │   ├── youtube/      # monitor + scraper + highlights + metadata
+│   │   ├── hackernews/   # scraper + processor + metadata（沒有 monitor — 由 RSS 觸發）
+│   │   ├── bilibili/     # monitor + scraper + metadata
+│   │   ├── xiaohongshu/  # monitor + scraper + metadata
+│   │   ├── rss/          # monitor + parser + feed-config
+│   │   └── web/          # 共用爬蟲（Readability + Cheerio + OG 擷取）
+│   ├── workflows/        # Queue consumer、Workflow class、workflow steps
+│   ├── domain/           # AI processor registry、內容清理、實體同步
+│   ├── handlers/         # ingest / embed / workflow-status HTTP handlers
 │   ├── monitors/         # 跨平台排程維護
-│   └── workflows/        # Queue consumer、Workflow class、workflow steps
-├── platforms/            # 每個平台一個資料夾
-│   ├── registry.ts       # URL 偵測 dispatch → platform scraper
-│   ├── twitter/          # monitor + scraper + processor + metadata
-│   ├── youtube/          # monitor + scraper + highlights + metadata
-│   ├── hackernews/       # scraper + processor + metadata（沒有 monitor — 由 RSS 觸發）
-│   ├── bilibili/         # monitor + scraper + metadata
-│   ├── xiaohongshu/      # monitor + scraper + metadata
-│   ├── rss/              # monitor + parser + feed-config
-│   └── web/              # 共用爬蟲（Readability + Cheerio + OG 擷取）
-├── domain/
-│   ├── content/          # 共用內容清理與 editorial domain helpers
-│   ├── processing/       # AI processor registry、DefaultProcessor、AI helpers
-│   └── entities.ts       # 實體同步至正規化表格
-├── infra/
-│   ├── db.ts             # Hyperdrive client + insertArticle / dedup / transcript helpers
-│   ├── fetch.ts          # fetchWithTimeout
-│   ├── log.ts            # 結構化 JSON 日誌
-│   └── openrouter.ts     # OpenRouter + embedding wrappers
-└── models/               # 型別 + PlatformMetadata 聯合型別
+│   └── urls.ts · blob.ts · image-url.ts   # 入庫進入點（URL / blob / 圖片）
+├── chat/                 # ── AI chat 介面 ── tools、billing、editor、workspace、sessions
+└── media/                # ── 媒體服務 ── 圖片 proxy、簽名 R2 asset、AI 生圖
 ```
 
 ## 環境變數與 Bindings
@@ -248,11 +249,11 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 新增一個來源最少要做：
 
-1. **Scraper**（`platforms/foo/scraper.ts`）— export 一個回傳 `ScrapedContent` 的函式。
-2. **Metadata**（`platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `models/platform-metadata.ts` 註冊。
-3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `models/scraped-content.ts:detectPlatformType`，並在 `platforms/registry.ts` 路由到 scraper。
-4. **Monitor**（可選，`platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `entrypoints/scheduled.ts` 裡接上。
-5. **Processor**（可選，`platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `domain/processing/processors.ts` 註冊。
+1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `ScrapedContent` 的函式。
+2. **Metadata**（`ingest/platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `shared/platform-metadata.ts` 註冊。
+3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/scraped-content.ts:detectPlatformType`，並在 `ingest/platforms/registry.ts` 路由到 scraper。
+4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `entrypoints/scheduled.ts` 裡接上。
+5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `ingest/domain/processors.ts` 註冊。
 
 新文章一樣走 Queue → Workflow pipeline，AI 步驟你不用動。
 
