@@ -105,6 +105,12 @@ async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	const outcome = await ingestBlob(request, env);
 	if (outcome.ok) return Response.json({ success: true, result: outcome.result });
 
+	if (outcome.code === 'RATE_LIMITED') {
+		return Response.json(
+			{ success: false, error: { code: outcome.code, message: outcome.message } },
+			{ status: 429, headers: { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) } },
+		);
+	}
 	const status =
 		outcome.code === 'PAYLOAD_TOO_LARGE'
 			? 413

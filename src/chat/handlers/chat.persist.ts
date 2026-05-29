@@ -126,7 +126,7 @@ export function buildCompletionEvent(input: CompletionEventInput): {
  */
 export async function persistAssistantTurn(params: {
 	env: Env;
-	session: { id: string; totalTokens: number; totalCost: string };
+	session: { id: string };
 	userId: string;
 	model: string;
 	responseMessage: { parts?: ReadonlyArray<AssistantPart> };
@@ -161,8 +161,6 @@ export async function persistAssistantTurn(params: {
 	];
 
 	if (totalTokens > 0) {
-		const prevTokens = Number(session.totalTokens) || 0;
-		const prevCost = Number.parseFloat(session.totalCost || '0') || 0;
 		const inputTokens = finishCapture.usage?.inputTokens ?? 0;
 		const outputTokens = finishCapture.usage?.outputTokens ?? 0;
 		// Unknown model id throws — swallow so persist still happens with token
@@ -177,12 +175,9 @@ export async function persistAssistantTurn(params: {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
-		ops.push(
-			updateSessionStats(env, session.id, userId, {
-				totalTokens: prevTokens + totalTokens,
-				totalCost: prevCost + costUsd,
-			}),
-		);
+		// Pass this turn's deltas — the accumulation is done atomically in SQL so
+		// overlapping turns can't clobber each other's totals.
+		ops.push(updateSessionStats(env, session.id, userId, { addTokens: totalTokens, addCost: costUsd }));
 
 		// Deduct credits + ingest Polar metering — only for a clean completion,
 		// matching the Vercel route (aborted/errored turns aren't user-billed even

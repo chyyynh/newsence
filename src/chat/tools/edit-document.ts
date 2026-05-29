@@ -55,7 +55,12 @@ export function createEditDocumentTool(env: Env, userId: string, writer?: DataPa
 
 			if (!snapshotted.has(doc.id)) {
 				snapshotted.add(doc.id);
-				createVersionSnapshot(env, {
+				// Await the pre-edit snapshot so it's durably written within the
+				// request lifetime — tools have no `ExecutionContext`, so a
+				// fire-and-forget INSERT can be lost if the isolate is torn down
+				// right after the stream closes. Best-effort: a snapshot failure is
+				// logged but doesn't block the edit (matches prior intent).
+				await createVersionSnapshot(env, {
 					documentId: doc.id,
 					content: doc.content,
 					title: doc.title,
@@ -68,12 +73,21 @@ export function createEditDocumentTool(env: Env, userId: string, writer?: DataPa
 			const newVersion = doc.version + 1;
 
 			await withClient(env, async (client) => {
-				await client.query(
+				// Scope by `user_id` (defense-in-depth on top of the ownership check
+				// in `fetchDocument`) and guard on the version we read, so a
+				// concurrent write (another tool call or Vercel auto-save) can't be
+				// silently clobbered. A 0-row result means the doc changed under us.
+				const res = await client.query(
 					`UPDATE user_documents
 					 SET content = $1::jsonb, version = $2, updated_at = NOW()
-					 WHERE id = $3`,
-					[JSON.stringify(lexicalJson), newVersion, input.documentId],
+					 WHERE id = $3 AND user_id = $4 AND version = $5`,
+					[JSON.stringify(lexicalJson), newVersion, input.documentId, userId, doc.version],
 				);
+				if (res.rowCount === 0) {
+					throw new Error(
+						'Document was modified since it was read (version conflict). Re-read it with read-context, then re-apply your edits.',
+					);
+				}
 			});
 
 			writer?.write({

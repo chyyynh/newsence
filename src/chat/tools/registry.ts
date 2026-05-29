@@ -1,8 +1,9 @@
 // Worker-side tool registry. Same shape as
 // frontend/src/lib/ai/tools/registry.ts so the chat handler can build tool
 // sets from the same string keys the frontend already sends; the difference
-// is the `ToolContext` carries `env` (for Hyperdrive / Workers AI / R2) and
-// `requestSignal` (so an aborted client cancels mid-tool work).
+// is the `ToolContext` carries `env` (for Hyperdrive / Workers AI / R2). The
+// top-level streamText call owns client-abort propagation via its own
+// `abortSignal`, so tools don't need to thread the signal themselves.
 
 import type { Env } from '@shared/types';
 import type { Tool, ToolExecutionOptions, ToolSet } from 'ai';
@@ -30,7 +31,6 @@ export interface ToolContext {
 	planId: string;
 	streamWriter?: DataPartWriter;
 	language?: 'zh' | 'en';
-	requestSignal?: AbortSignal;
 }
 
 // Same invariance trick the frontend registry uses: tool factories always

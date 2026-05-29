@@ -31,7 +31,7 @@ import {
 	type UIMessage,
 } from 'ai';
 import { z } from 'zod';
-import { getOpenRouter } from '../ai/models';
+import { DEFAULT_CHAT_MODEL, getOpenRouter } from '../ai/models';
 import { buildMessages, buildUnifiedContext } from '../ai/prompts';
 import { validateModel } from '../billing/config';
 import { billing, QuotaExceededError } from '../billing/server';
@@ -68,7 +68,6 @@ const ChatRequestSchema = z.object({
 
 type ChatRequestData = z.output<typeof ChatRequestSchema>;
 
-const DEFAULT_MODEL = 'google/gemini-2.5-flash';
 const DEFAULT_MAX_STEPS = 10;
 
 // TODO: zh-Hant Intl.Segmenter chunking — runtime supports it, types don't.
@@ -126,7 +125,7 @@ function resolveChatRequest(args: { planId: string; requestedModel?: string; req
 	finalToolNames: ToolName[];
 } {
 	const { planId, requestedModel, requestedToolNames, promptId } = args;
-	const effectiveModel = validateModel(planId, requestedModel ?? DEFAULT_MODEL);
+	const effectiveModel = validateModel(planId, requestedModel ?? DEFAULT_CHAT_MODEL);
 	const finalToolNames = applySkillTools(
 		promptId,
 		requestedToolNames.filter((n) => canUseTool(planId, n)),
@@ -428,7 +427,6 @@ export function streamChatTurn(args: {
 				planId,
 				streamWriter: writer,
 				language: effectiveLanguage,
-				requestSignal: request.signal,
 			};
 			const tools = buildEnabledTools(finalToolNames, toolCtx);
 

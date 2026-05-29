@@ -86,22 +86,24 @@ export async function saveMessage(env: Env, input: SaveMessageInput): Promise<vo
 }
 
 /**
- * Bump totals and `updated_at`. Vercel doesn't touch `total_messages` either
- * — it's effectively stale; left as-is to keep parity until both writers move
- * to a trigger or RPC.
+ * Bump totals and `updated_at`. `stats` are DELTAS for this turn — the
+ * accumulation runs in SQL (`total_tokens + $3`) so two overlapping turns in
+ * one session can't lose an update via a read-modify-write race. Vercel doesn't
+ * touch `total_messages` either — it's effectively stale; left as-is to keep
+ * parity until both writers move to a trigger or RPC.
  */
 export async function updateSessionStats(
 	env: Env,
 	sessionId: string,
 	userId: string,
-	stats: { totalTokens: number; totalCost: number },
+	stats: { addTokens: number; addCost: number },
 ): Promise<void> {
 	await withClient(env, async (client) => {
 		await client.query(
 			`UPDATE chat_sessions
-			 SET total_tokens = $3, total_cost = $4, updated_at = NOW()
+			 SET total_tokens = total_tokens + $3, total_cost = total_cost + $4, updated_at = NOW()
 			 WHERE id = $1 AND user_id = $2`,
-			[sessionId, userId, stats.totalTokens, stats.totalCost],
+			[sessionId, userId, stats.addTokens, stats.addCost],
 		);
 	});
 }

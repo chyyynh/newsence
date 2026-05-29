@@ -8,7 +8,7 @@ import { createUserFileWorkflow } from './workflows/article-workflow-client';
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const PDF_MIME = 'application/pdf';
 
-export type IngestBlobErrorCode = 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
+export type IngestBlobErrorCode = 'BAD_REQUEST' | 'RATE_LIMITED' | 'PAYLOAD_TOO_LARGE' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
 
 export interface BlobIngestResult {
 	userFileId: string;
@@ -58,6 +58,14 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	if (!userId) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Missing userId form field' };
 	}
+
+	// Per-user throttle, mirroring the JSON ingest paths — without this the
+	// multipart upload surface was the one unmetered entry point on /ingest.
+	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${userId}` });
+	if (!success) {
+		return { ok: false, code: 'RATE_LIMITED', message: 'Too many ingest requests; retry shortly.' };
+	}
+
 	if (file.size === 0) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Empty file' };
 	}
