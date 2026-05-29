@@ -7,7 +7,16 @@
 	"name": "newsence-core",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-05-15",
-	"compatibility_flags": ["nodejs_compat"],
+	/**
+	 * `enable_request_signal` — without this `request.signal` never fires when
+	 *   the client disconnects (default behaviour as of May 2025). We need it so
+	 *   long-running `/api/chat` streams stop billing OpenRouter the moment the
+	 *   user closes the tab. See chat.ts → streamText({ abortSignal }).
+	 * `request_signal_passthrough` — propagate that signal into outbound fetch()
+	 *   subrequests (OpenRouter, etc.) so the cancellation actually reaches the
+	 *   upstream LLM call instead of just stopping our own writer loop.
+	 */
+	"compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
 	"observability": {
 		"logs": {
 			"enabled": true,
@@ -147,6 +156,7 @@
 	 */
 	"vars": {
 		"CORE_WORKER_PUBLIC_URL": "https://core.newsence.app",
-		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000"
+		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
+		"POSTHOG_HOST": "https://us.i.posthog.com"
 	}
 }

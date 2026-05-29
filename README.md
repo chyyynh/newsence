@@ -192,31 +192,32 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 ```
 src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
-├── entrypoints/          # HTTP, scheduled, queue, and RPC adapters
-├── app/
-│   ├── handlers/         # Thin HTTP route handlers (/submit, /preview, /embed, /health)
-│   ├── use-cases/        # Application actions shared by HTTP + RPC
-│   ├── monitors/         # Cross-platform scheduled maintenance
-│   └── workflows/        # Queue consumer, Workflow class, and workflow steps
-├── platforms/            # Each platform lives in its own folder
-│   ├── registry.ts       # URL detection dispatch → platform scraper
-│   ├── twitter/          # monitor + scraper + processor + metadata
-│   ├── youtube/          # monitor + scraper + highlights + metadata
-│   ├── hackernews/       # scraper + processor + metadata (no monitor — fed by RSS)
-│   ├── bilibili/         # monitor + scraper + metadata
-│   ├── xiaohongshu/      # monitor + scraper + metadata
-│   ├── rss/              # monitor + parser + feed-config
-│   └── web/              # shared scraper (Readability + Cheerio + OG extraction)
-├── domain/
-│   ├── content/          # Shared content cleanup and editorial domain helpers
-│   ├── processing/       # AI processor registry, DefaultProcessor, AI helpers
-│   └── entities.ts       # Entity sync to normalized tables
-├── infra/
-│   ├── db.ts             # Hyperdrive client + insertArticle / dedup / transcript helpers
-│   ├── fetch.ts          # fetchWithTimeout
-│   ├── log.ts            # Structured JSON logging
-│   └── openrouter.ts     # OpenRouter + embedding wrappers
-└── models/               # Types + PlatformMetadata discriminated union
+├── entrypoints/          # HTTP router + scheduled + queue dispatch, health
+├── shared/               # cross-subsystem base — used by both pipelines below
+│   ├── db/               # Hyperdrive clients — article insert/dedup helpers + scoped withClient/withTx
+│   ├── auth/             # /submit internal-token middleware + bearer session
+│   ├── openrouter.ts     # OpenRouter + embedding wrappers
+│   ├── embedding.ts      # BGE-M3 wrapper (Workers AI)
+│   ├── platform-metadata.ts  # PlatformMetadata discriminated union + builders
+│   ├── scraped-content.ts    # unified ScrapedContent shape + detectPlatformType
+│   └── …                 # fetch, web, mime, streams, log, cors, types
+├── ingest/               # ── article ingestion pipeline (the open-source core) ──
+│   ├── platforms/        # each platform lives in its own folder
+│   │   ├── registry.ts   # URL detection dispatch → platform scraper
+│   │   ├── twitter/      # monitor + scraper + processor + metadata
+│   │   ├── youtube/      # monitor + scraper + highlights + metadata
+│   │   ├── hackernews/   # scraper + processor + metadata (no monitor — fed by RSS)
+│   │   ├── bilibili/     # monitor + scraper + metadata
+│   │   ├── xiaohongshu/  # monitor + scraper + metadata
+│   │   ├── rss/          # monitor + parser + feed-config
+│   │   └── web/          # shared scraper (Readability + Cheerio + OG extraction)
+│   ├── workflows/        # Queue consumer, Workflow class, and workflow steps
+│   ├── domain/           # AI processor registry, content cleanup, entity sync
+│   ├── handlers/         # ingest / embed / workflow-status HTTP handlers
+│   ├── monitors/         # cross-platform scheduled maintenance
+│   └── urls.ts · blob.ts · image-url.ts   # ingestion entrypoints (URL / blob / image)
+├── chat/                 # ── AI chat surface ── tools, billing, editor, workspace, sessions
+└── media/                # ── asset serving ── image proxy, signed R2 assets, AI image gen
 ```
 
 ## Environment Variables & Bindings
@@ -248,11 +249,11 @@ Platforms today follow a loose convention rather than a formal interface — eac
 
 Minimum to add a new source:
 
-1. **Scraper** (`platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
-2. **Metadata** (`platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `models/platform-metadata.ts`.
-3. **Detection + dispatch** — add the URL pattern to `models/scraped-content.ts:detectPlatformType` and route it in `platforms/registry.ts`.
-4. **Monitor** (optional, `platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `entrypoints/scheduled.ts`.
-5. **Processor** (optional, `platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `domain/processing/processors.ts`.
+1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
+2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
+3. **Detection + dispatch** — add the URL pattern to `shared/scraped-content.ts:detectPlatformType` and route it in `ingest/platforms/registry.ts`.
+4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `entrypoints/scheduled.ts`.
+5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `ingest/domain/processors.ts`.
 
 The new article goes through the same Queue → Workflow pipeline as every other platform — you don't touch the AI steps.
 

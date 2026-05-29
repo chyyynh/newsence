@@ -1,9 +1,9 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { NewsenceMonitorWorkflow } from './app/workflows/article-processing.workflow';
-import { routeRequest } from './entrypoints/http';
-import { handleQueue } from './entrypoints/queue';
-import { handleScheduled } from './entrypoints/scheduled';
-import type { Env, MessageBatch, QueueMessage, ScheduledEvent } from './models/types';
+import { routeRequest } from '@entry/http';
+import { handleQueue } from '@entry/queue';
+import { handleScheduled } from '@entry/scheduled';
+import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
+import type { Env, MessageBatch, QueueMessage, ScheduledEvent } from '@shared/types';
 
 export { NewsenceMonitorWorkflow };
 

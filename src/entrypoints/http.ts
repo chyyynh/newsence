@@ -1,24 +1,27 @@
-import { handleEmbed } from '../app/handlers/embed';
-import { handleGenerateImage } from '../app/handlers/generate-image';
-import { handleHealth } from '../app/handlers/health';
-import { handleIngest } from '../app/handlers/ingest';
-import { handleProxy } from '../app/handlers/proxy';
-import { handleR2Asset } from '../app/handlers/r2-asset';
-import { handleWorkflowStream } from '../app/handlers/workflow-status';
-import type { Env, ExecutionContext } from '../models/types';
+import { handleChat } from '@chat/handlers/chat';
+import { handleEmbed } from '@ingest/handlers/embed';
+import { handleIngest } from '@ingest/handlers/ingest';
+import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
+import { handleGenerateImage } from '@media/generate-image';
+import { handleProxy } from '@media/proxy';
+import { handleR2Asset } from '@media/r2-asset';
+import type { Env, ExecutionContext } from '@shared/types';
+import { handleHealth } from './health';
 
-type RouteHandler = (request: Request, env: Env) => Response | Promise<Response>;
+type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/embed': handleEmbed,
-	'/generate-image': handleGenerateImage,
-	'/ingest': handleIngest,
+	'/api/chat': handleChat,
+	'/embed': (req, env) => handleEmbed(req, env),
+	'/generate-image': (req, env) => handleGenerateImage(req, env),
+	'/ingest': (req, env) => handleIngest(req, env),
 };
 
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
+	'POST /api/chat                            - AI chat (Phase 1 scaffold, mock stream; issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
@@ -58,10 +61,11 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
+	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
 
 	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
-		if (handler) return handler(request, env);
+		if (handler) return handler(request, env, ctx);
 	}
 
 	if (method === 'GET') {

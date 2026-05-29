@@ -13,6 +13,15 @@
 		"module": "es2022",
 		/* Specify how TypeScript looks up a file from a given module specifier. */
 		"moduleResolution": "Bundler",
+		/* Path aliases for the feature-first src layout (shared / ingest / chat / media).
+		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
+		"paths": {
+			"@shared/*": ["./src/shared/*"],
+			"@ingest/*": ["./src/ingest/*"],
+			"@chat/*": ["./src/chat/*"],
+			"@media/*": ["./src/media/*"],
+			"@entry/*": ["./src/entrypoints/*"]
+		},
 		/* Enable importing .json files */
 		"resolveJsonModule": true,
 
