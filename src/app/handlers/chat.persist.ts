@@ -9,7 +9,7 @@
 
 import type { ToolName } from '../../agent/tools/registry';
 import { logError } from '../../infra/log';
-import { calculateTextCost } from '../../lib/billing/pricing';
+import { calculateTextCost } from '../../lib/billing/config';
 import { billing } from '../../lib/billing/server';
 import { saveMessage, updateSessionStats } from '../../lib/chat/sessions';
 import type { Env } from '../../models/types';

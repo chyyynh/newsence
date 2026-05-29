@@ -5,7 +5,7 @@
 // `requestSignal` (so an aborted client cancels mid-tool work).
 
 import type { Tool, ToolExecutionOptions, ToolSet } from 'ai';
-import { getPlanGates, type PlanGate } from '../../lib/billing/plans';
+import { getPlanGates, type PlanGate } from '../../lib/billing/config';
 import type { Env } from '../../models/types';
 import { createAddResourceTool } from './add-resource';
 import { createDocumentTool } from './create-document';

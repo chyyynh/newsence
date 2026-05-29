@@ -1,6 +1,18 @@
-// Mirrors frontend/src/lib/workspace/aiCatalog.ts. `commitNewWorkspaceForDoc`
-// takes a caller-supplied pg client so the workspace insert can land in the
-// same transaction as the doc insert (matches the Vercel `$transaction`).
+// Workspace → AI prompt text. Mirrors the frontend workspace AI helpers
+// (frontend/src/lib/workspace/aiCatalog.ts + aiContext.ts), rewritten from
+// Prisma to raw pg (the worker chat surface is raw-pg for tool/context tables
+// — see #136 re-decision). Keep the output formats aligned with the frontend
+// so a workspace-scoped chat reads the same context on either surface.
+//
+// Two concerns live here, both consumed by the chat handler + create-document:
+//   - Catalog: list workspaces + render the create-document target prompt, and
+//     resolve/validate/commit a workspace for a new document.
+//   - Context summary: render a workspace's pinned resources for AI injection
+//     (used only when `scope.kind === 'workspace'`).
+//
+// `commitNewWorkspaceForDoc` takes a caller-supplied pg client so the workspace
+// insert can land in the same transaction as the doc insert (matches the Vercel
+// `$transaction`).
 //
 // Quota-check race (TOCTOU): two parallel create-document calls at the free
 // plan's limit can both see `count < max` and both insert, landing the user
@@ -10,8 +22,10 @@
 
 import type { Client } from 'pg';
 import type { Env } from '../../models/types';
-import { getPlanQuotas } from '../billing/plans';
+import { getPlanQuotas } from '../billing/config';
 import { withClient } from '../db/client';
+
+// ── Workspace catalog (create-document target) ───────────────
 
 const MAX_CATALOG_ENTRIES = 20;
 
@@ -161,4 +175,79 @@ export async function commitNewWorkspaceForDoc(client: Client, plan: NewWorkspac
 	const row = result.rows[0];
 	if (!row) throw new Error('Failed to create workspace');
 	return { id: row.id, title: row.title };
+}
+
+// ── Workspace context summary (scope.kind === 'workspace') ───
+//
+// Used by the chat handler only when `scope.kind === 'workspace'`; document
+// scope skips the summary because the document itself flows through
+// `contextItems`.
+
+const MAX_CITATIONS = 200;
+const MAX_ARTICLES = 20;
+
+interface CitationRow {
+	to_type: string;
+	to_id: string;
+}
+
+/**
+ * Summary of a workspace's citations for AI context injection. Limited to
+ * counts + lightweight identifiers — the chat route can hydrate full content
+ * via its own retrieval layer if the model asks for it. Returns null when the
+ * workspace is missing or not owned by the user.
+ */
+export async function getWorkspaceContextSummary(env: Env, workspaceId: string, userId: string): Promise<string | null> {
+	return withClient(env, async (client) => {
+		const workspace = await client.query<{ title: string }>(`SELECT title FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1`, [
+			workspaceId,
+			userId,
+		]);
+		const title = workspace.rows[0]?.title;
+		if (title === undefined) return null;
+
+		const citations = await client.query<CitationRow>(
+			`SELECT to_type, to_id FROM citations
+			 WHERE from_type = 'workspace' AND from_id = $1 AND user_id = $2
+			 LIMIT $3`,
+			[workspaceId, userId, MAX_CITATIONS],
+		);
+		if (citations.rows.length === 0) {
+			return `Workspace: ${title}. No pinned resources.`;
+		}
+
+		const collectionIds = citations.rows.filter((c) => c.to_type === 'collection').map((c) => c.to_id);
+		const articleIds = citations.rows.filter((c) => c.to_type === 'article').map((c) => c.to_id);
+
+		const collections = collectionIds.length
+			? (await client.query<{ id: string; name: string }>(`SELECT id, name FROM collections WHERE id = ANY($1::uuid[])`, [collectionIds]))
+					.rows
+			: [];
+		const articles = articleIds.length
+			? (
+					await client.query<{ id: string; title: string; source: string | null; published_date: Date | string | null }>(
+						`SELECT id, title, source, published_date FROM articles
+						 WHERE id = ANY($1::uuid[])
+						 ORDER BY published_date DESC NULLS LAST
+						 LIMIT $2`,
+						[articleIds, MAX_ARTICLES],
+					)
+				).rows
+			: [];
+
+		const lines = [
+			`Workspace: ${title}`,
+			`Cited collections (${collections.length}):`,
+			...collections.map((c) => `- [${c.id}] ${c.name}`),
+			`Pinned articles (${articles.length}):`,
+			...articles.map((a) => `- [${a.id}] ${a.title} — ${a.source ?? 'article'} (${formatDate(a.published_date)})`),
+		];
+		return lines.join('\n');
+	});
+}
+
+function formatDate(value: Date | string | null): string {
+	if (!value) return 'undated';
+	const d = value instanceof Date ? value : new Date(value);
+	return Number.isNaN(d.getTime()) ? 'undated' : d.toISOString().slice(0, 10);
 }

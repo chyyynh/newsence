@@ -16,7 +16,7 @@ import {
 	resolveExistingWorkspaceForDoc,
 	validateNewWorkspaceForDoc,
 	type WorkspacePlanForDoc,
-} from '../../lib/workspace/aiCatalog';
+} from '../../lib/workspace/ai';
 import type { Env } from '../../models/types';
 import type { DataPartWriter, ToolContext } from './registry';
 

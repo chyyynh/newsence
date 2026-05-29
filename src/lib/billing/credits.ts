@@ -14,8 +14,7 @@
 import type { Client } from 'pg';
 import type { Env } from '../../models/types';
 import { withClient, withTx } from '../db/client';
-import { getMonthlyCreditGrant, getPlanDisplayName } from './plans';
-import { calculateImageCost, calculateTextCost } from './pricing';
+import { calculateImageCost, calculateTextCost, getMonthlyCreditGrant, getPlanDisplayName } from './config';
 
 // ── Constants ────────────────────────────────────────────
 
@@ -133,7 +132,7 @@ export async function getSettings(env: Env, userId: string): Promise<SettingsRow
 
 // ── Balance check ────────────────────────────────────────
 
-export interface BalanceCheck {
+interface BalanceCheck {
 	hasQuota: boolean;
 	requiredCredits: number;
 	currentBalance: number;
