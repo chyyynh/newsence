@@ -130,7 +130,10 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 /** Extract article content using Mozilla Readability + turndown (primary method) */
 function extractContentReadability(html: string, url: string): string | null {
 	try {
-		const { document } = parseHTML(html);
+		// linkedom types parseHTML as `Window & typeof globalThis`, which doesn't
+		// surface `document` under the Workers tsconfig (no DOM lib). Widen to read
+		// it; Readability consumes the linkedom document at runtime.
+		const { document } = parseHTML(html) as unknown as { document: object };
 		const reader = new Readability(document, { charThreshold: 100 });
 		const article = reader.parse();
 

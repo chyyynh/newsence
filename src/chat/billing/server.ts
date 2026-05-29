@@ -80,6 +80,20 @@ export class QuotaExceededError extends Error {
 	}
 }
 
+// ── Shared balance gate ──────────────────────────────────
+//
+// Fresh-read quota check shared by the in-stream tools (create-document,
+// generate-image) that don't carry the turn's settings row. It reads fresh —
+// not the pre-loaded balance — because tools run deep in the stream, after any
+// inline deductions earlier in the same turn (e.g. a prior generate-image) have
+// already spent it down. The chat gate (`assertChatQuota`) checks the
+// pre-loaded row instead, so it stays self-contained.
+
+async function assertSufficientBalance(env: Env, userId: string, requiredCredits: number): Promise<void> {
+	const { hasQuota, currentBalance } = await checkBalance(env, userId, requiredCredits);
+	if (!hasQuota) throw new QuotaExceededError(requiredCredits, currentBalance);
+}
+
 export const billing = {
 	// ── Settings (single read; derive planId + gate + snapshot from it) ──
 
@@ -104,10 +118,18 @@ export const billing = {
 		if (balance < required) throw new QuotaExceededError(required, balance);
 	},
 
+	/**
+	 * Pre-check for an in-stream text generation (create-document). Estimates
+	 * output at the content-creation size; the real cost is billed by `trackText`
+	 * afterwards. Reads fresh — see `assertSufficientBalance`.
+	 */
+	async checkText(env: Env, userId: string, model: string, prompt: string): Promise<void> {
+		const required = costToCredits(calculateTextCost(model, estimateTokens(prompt), OUTPUT_TOKEN_ESTIMATES.content_creation));
+		await assertSufficientBalance(env, userId, required);
+	},
+
 	async checkImage(env: Env, userId: string, model: string, count = 1): Promise<void> {
-		const required = costToCredits(calculateImageCost(model, count));
-		const check = await checkBalance(env, userId, required);
-		if (!check.hasQuota) throw new QuotaExceededError(required, check.currentBalance);
+		await assertSufficientBalance(env, userId, costToCredits(calculateImageCost(model, count)));
 	},
 
 	// ── Tracking (never throws) ──

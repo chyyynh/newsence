@@ -143,8 +143,11 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 			[validIds, userId],
 		),
 		client.query<{ from_id: string; to_id: string }>(
+			// from_id is a text column (citations are polymorphic), so compare as
+			// text[] — validIds are already uuid-validated strings, so the match is
+			// exact. (collections.id above is a real uuid column, hence ::uuid[].)
 			`SELECT from_id, to_id FROM citations
-			 WHERE user_id = $1 AND from_type = 'collection' AND from_id = ANY($2::uuid[]) AND to_type = 'article'`,
+			 WHERE user_id = $1 AND from_type = 'collection' AND from_id = ANY($2::text[]) AND to_type = 'article'`,
 			[userId, validIds],
 		),
 	]);

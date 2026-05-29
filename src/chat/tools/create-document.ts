@@ -146,6 +146,12 @@ async function runCreate({ env, input, plan, userId, language, writer }: RunCrea
 	const model = DEFAULT_CHAT_MODEL;
 	const writingPrompt = buildWritingPrompt(title, prompt);
 
+	// Gate on the estimated text cost before burning the paid generation —
+	// mirrors generate-image's pre-check. Throws QuotaExceededError, surfaced to
+	// the model as a tool error so it can tell the user to upgrade. Gated before
+	// the `generating` status so a quota failure doesn't flash a false start.
+	await billing.checkText(env, userId, model, writingPrompt);
+
 	const workspaceCreated = plan.kind === 'new';
 	const provisionalId = plan.kind === 'existing' ? plan.workspace.id : undefined;
 	const provisionalTitle = plan.kind === 'existing' ? plan.workspace.title : plan.pending.title;
