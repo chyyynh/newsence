@@ -1,11 +1,11 @@
-import { handleRetryCron } from '../app/monitors/retry';
-import { logInfo } from '../infra/log';
-import type { Env, ExecutionContext, ScheduledEvent } from '../models/types';
-import { handleBilibiliCron } from '../platforms/bilibili/monitor';
-import { handleRSSCron } from '../platforms/rss/monitor';
-import { handleTwitterCron } from '../platforms/twitter/monitor';
-import { handleXiaohongshuCron } from '../platforms/xiaohongshu/monitor';
-import { handleYouTubeCron } from '../platforms/youtube/monitor';
+import { handleRetryCron } from '@ingest/monitors/retry';
+import { handleBilibiliCron } from '@ingest/platforms/bilibili/monitor';
+import { handleRSSCron } from '@ingest/platforms/rss/monitor';
+import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
+import { handleXiaohongshuCron } from '@ingest/platforms/xiaohongshu/monitor';
+import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
+import { logInfo } from '@shared/log';
+import type { Env, ExecutionContext, ScheduledEvent } from '@shared/types';
 
 export function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
 	logInfo('CORE', 'Scheduled', { cron: event.cron });

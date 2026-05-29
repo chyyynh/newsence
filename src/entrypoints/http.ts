@@ -1,12 +1,12 @@
-import { handleChat } from '../app/handlers/chat';
-import { handleEmbed } from '../app/handlers/embed';
-import { handleGenerateImage } from '../app/handlers/generate-image';
-import { handleHealth } from '../app/handlers/health';
-import { handleIngest } from '../app/handlers/ingest';
-import { handleProxy } from '../app/handlers/proxy';
-import { handleR2Asset } from '../app/handlers/r2-asset';
-import { handleWorkflowStream } from '../app/handlers/workflow-status';
-import type { Env, ExecutionContext } from '../models/types';
+import { handleChat } from '@chat/handlers/chat';
+import { handleEmbed } from '@ingest/handlers/embed';
+import { handleIngest } from '@ingest/handlers/ingest';
+import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
+import { handleGenerateImage } from '@media/generate-image';
+import { handleProxy } from '@media/proxy';
+import { handleR2Asset } from '@media/r2-asset';
+import type { Env, ExecutionContext } from '@shared/types';
+import { handleHealth } from './health';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
