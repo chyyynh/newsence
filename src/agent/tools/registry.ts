@@ -66,7 +66,7 @@ export const TOOL_REGISTRY = {
 		invocationLimit: 5,
 	},
 	'generate-image': {
-		factory: (ctx) => createGenerateImageTool(ctx.env, ctx.userId, ctx.streamWriter) as ExecutableTool,
+		factory: (ctx) => createGenerateImageTool(ctx.env, ctx.userId) as ExecutableTool,
 		invocationLimit: 2,
 		gate: 'imageGeneration',
 	},

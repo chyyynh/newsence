@@ -1,20 +1,18 @@
 // Mirrors frontend/src/lib/ai/tools/generate-image.ts. Reuses the worker's
 // own runGenerateImage primitive (same one /generate-image POSTs through).
-// Phase 6b billing model: cheap balance pre-check here, then a transient
-// data-image-usage part so the frontend onFinish hits /track-image.
+// Billing is server-side and self-contained: a real-cost balance gate before
+// spending the OpenRouter call, then an atomic credit deduction + Polar
+// metering after a successful generation — no client round-trip to skip.
 
 import { tool } from 'ai';
 import { z } from 'zod';
 import { IMAGE_MODEL, runGenerateImage } from '../../app/handlers/generate-image';
-import { getCreditBalance } from '../../lib/billing/balance';
+import { billing } from '../../lib/billing/server';
 import type { Env } from '../../models/types';
-import type { DataPartWriter } from './registry';
-
-const MIN_CREDITS_PER_IMAGE = 1;
 
 export type GenerateImageResult = { imageUrl: string };
 
-export function createGenerateImageTool(env: Env, userId: string, writer?: DataPartWriter) {
+export function createGenerateImageTool(env: Env, userId: string) {
 	return tool({
 		description:
 			'Generate an AI illustration. Only use when explicitly asked. Costs credits — one call per response. ' +
@@ -27,17 +25,20 @@ export function createGenerateImageTool(env: Env, userId: string, writer?: DataP
 				.describe('Narrative scene description (full sentences, not keyword lists). See system prompt for formula.'),
 		}),
 		execute: async ({ prompt }): Promise<GenerateImageResult> => {
-			const balance = await getCreditBalance(env, userId);
-			if (balance < MIN_CREDITS_PER_IMAGE) {
-				throw new Error(`Insufficient credits (balance: ${balance}). Image generation requires ${MIN_CREDITS_PER_IMAGE} credit.`);
-			}
+			// Gate on the actual image cost (not a token of credit) before burning
+			// the paid OpenRouter request. Throws QuotaExceededError → surfaced to
+			// the model as a tool error so it can tell the user to upgrade.
+			await billing.checkImage(env, userId, IMAGE_MODEL, 1);
 
 			const result = await runGenerateImage(env, userId, prompt);
 
-			writer?.write({
-				type: 'data-image-usage',
-				data: { model: IMAGE_MODEL, count: 1 },
-				transient: true,
+			// Deduct + meter after a successful generation. Never throws — a failed
+			// deduction is logged, not surfaced (the pre-check already gated).
+			await billing.trackImage(env, {
+				userId,
+				model: IMAGE_MODEL,
+				count: 1,
+				meta: { endpoint: 'tool/generate-image' },
 			});
 
 			return { imageUrl: result.assetUrl };

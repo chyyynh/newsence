@@ -10,6 +10,11 @@ export interface TextPricing {
 	outputPerMillion: number;
 }
 
+export interface ImagePricing {
+	/** USD per generated image */
+	perImage: number;
+}
+
 const MODEL_ID_ALIASES: Record<string, string> = {
 	'gemini-3.1-pro': 'google/gemini-3.1-pro-preview',
 	'gemini-3.1-flash-lite': 'google/gemini-3.1-flash-lite-preview',
@@ -27,6 +32,12 @@ const TEXT_PRICING: Record<string, TextPricing> = {
 	'openai/gpt-5.4': { inputPerMillion: 1.75, outputPerMillion: 14.0 },
 };
 
+// USD per image. Mirrors modelConfigs[...].pricing.image in
+// frontend/src/lib/config/models.ts — keep in sync on price changes.
+const IMAGE_PRICING: Record<string, ImagePricing> = {
+	'google/gemini-3-pro-image-preview': { perImage: 0.2 },
+};
+
 export function resolveModelId(modelId: string): string {
 	return MODEL_ID_ALIASES[modelId] ?? modelId;
 }
@@ -41,4 +52,15 @@ export function getTextPricing(modelId: string): TextPricing {
 export function calculateTextCost(modelId: string, inputTokens: number, outputTokens: number): number {
 	const { inputPerMillion, outputPerMillion } = getTextPricing(modelId);
 	return (inputTokens / 1_000_000) * inputPerMillion + (outputTokens / 1_000_000) * outputPerMillion;
+}
+
+export function getImagePricing(modelId: string): ImagePricing {
+	const id = resolveModelId(modelId);
+	const pricing = IMAGE_PRICING[id];
+	if (!pricing) throw new Error(`Unknown image model "${modelId}" — not registered in worker pricing table`);
+	return pricing;
+}
+
+export function calculateImageCost(modelId: string, count = 1): number {
+	return getImagePricing(modelId).perImage * count;
 }

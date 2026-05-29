@@ -7,6 +7,7 @@ import { streamText, tool } from 'ai';
 import { z } from 'zod';
 import { DEFAULT_CHAT_MODEL, getModel } from '../../lib/ai/models';
 import { getOutputLanguageInstruction } from '../../lib/ai/prompts';
+import { billing } from '../../lib/billing/server';
 import { withTx } from '../../lib/db/client';
 import { markdownToLexicalJson } from '../../lib/editor/serverEditor';
 import { documentPath } from '../../lib/util/ids';
@@ -206,16 +207,16 @@ async function runCreate({ env, input, plan, userId, language, writer }: RunCrea
 		return { target: ws, document: docRow };
 	});
 
+	// Bill the internal generation's tokens server-side (atomic deduct + Polar),
+	// instead of emitting a transient part for the client to self-report.
+	// `trackText` never throws — a failed deduction is logged, not surfaced.
 	if (usage?.inputTokens != null && usage?.outputTokens != null) {
-		writer?.write({
-			type: 'data-text-usage',
-			data: {
-				model,
-				inputTokens: usage.inputTokens,
-				outputTokens: usage.outputTokens,
-				endpoint: 'tool/create-document',
-			},
-			transient: true,
+		await billing.trackText(env, {
+			userId,
+			model,
+			inputTokens: usage.inputTokens,
+			outputTokens: usage.outputTokens,
+			meta: { endpoint: 'tool/create-document', documentId: document.id },
 		});
 	}
 

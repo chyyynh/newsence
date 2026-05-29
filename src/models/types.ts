@@ -27,6 +27,14 @@ export interface Env extends Cloudflare.Env {
 	POSTHOG_API_KEY?: string;
 	/** PostHog host; defaults to https://us.i.posthog.com if unset. */
 	POSTHOG_HOST?: string;
+	/**
+	 * Polar access token for usage-event ingestion (subscription metering).
+	 * Optional; ingestion is a silent no-op when unset. Set via
+	 * `wrangler secret put POLAR_API_KEY`. Shared with the Vercel `POLAR_API_KEY`.
+	 */
+	POLAR_API_KEY?: string;
+	/** Polar API target; `'sandbox'` routes to sandbox-api.polar.sh, otherwise production. */
+	POLAR_SERVER?: 'sandbox' | 'production';
 }
 
 // Article related types
