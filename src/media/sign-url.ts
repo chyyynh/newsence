@@ -10,8 +10,6 @@
  * public input.
  */
 
-export const PROXY_PATH_PASSTHROUGH = 'passthrough';
-
 const ENCODER = new TextEncoder();
 
 let cachedKey: { secret: string; key: CryptoKey } | null = null;
