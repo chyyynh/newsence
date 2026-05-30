@@ -10,6 +10,11 @@ type DeleteAssetBody = { storageKeys?: unknown };
 // filtered to the `users/` prefix that ingest/generate-image write under.
 const DELETABLE_PREFIX = 'users/';
 
+// R2 batch delete caps at 1000 keys per call. This endpoint is reused
+// server-to-server, so chunk defensively rather than trusting every caller to
+// stay under the limit — an oversized array would otherwise throw mid-delete.
+const R2_BATCH_LIMIT = 1000;
+
 /**
  * Batch-delete R2 user-file objects by storage key. Server-to-server only
  * (X-Internal-Token, same as /ingest) — the frontend owns ownership/citation
@@ -34,7 +39,9 @@ export async function handleDeleteAsset(request: Request, env: Env): Promise<Res
 	}
 
 	try {
-		await env.R2.delete(keys);
+		for (let i = 0; i < keys.length; i += R2_BATCH_LIMIT) {
+			await env.R2.delete(keys.slice(i, i + R2_BATCH_LIMIT));
+		}
 	} catch (err) {
 		logError('MEDIA_DELETE', 'R2 batch delete failed', { count: keys.length, error: String(err) });
 		return Response.json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'R2 delete failed' } }, { status: 500 });
