@@ -4,6 +4,7 @@ import { handleIngest } from '@ingest/handlers/ingest';
 import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
 import { handleDeleteAsset } from '@media/delete-asset';
 import { handleGenerateImage } from '@media/generate-image';
+import { handleOrphanGc } from '@media/orphan-gc';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import type { Env, ExecutionContext } from '@shared/types';
@@ -17,6 +18,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
+	'/media/gc': (req, env) => handleOrphanGc(req, env),
 };
 
 const HELP_TEXT =
@@ -28,6 +30,7 @@ const HELP_TEXT =
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
+	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
