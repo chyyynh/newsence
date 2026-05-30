@@ -1,6 +1,7 @@
 import { storageKeyToAssetUrl } from '@shared/asset-url';
 import { createDbClient, insertBlobUserFile } from '@shared/db/articles';
 import { logError, logInfo } from '@shared/log';
+import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/magic-bytes';
 import { extensionFromMime, isRasterImage } from '@shared/mime';
 import type { Env } from '@shared/types';
 import { createUserFileWorkflow } from './workflows/article-workflow-client';
@@ -76,6 +77,16 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	const fileType = file.type || 'application/octet-stream';
 	if (fileType !== PDF_MIME && !isRasterImage(fileType)) {
 		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported file type: ${fileType}` };
+	}
+
+	// Declared MIME is client-controlled, so verify the actual file signature
+	// before storing — and require the sniffed family (image vs PDF) to match the
+	// declared one, so a PDF can't masquerade as an image (or vice-versa) and slip
+	// past the declared-type gate above.
+	const header = new Uint8Array(await file.slice(0, MAGIC_SNIFF_BYTES).arrayBuffer());
+	const sniffed = sniffMediaType(header);
+	if (!sniffed || (sniffed === PDF_MIME) !== (fileType === PDF_MIME)) {
+		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'File content does not match a supported image or PDF format' };
 	}
 
 	const extension = extensionFromMime(fileType, file.name);
