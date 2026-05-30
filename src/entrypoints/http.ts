@@ -2,6 +2,7 @@ import { handleChat } from '@chat/handlers/chat';
 import { handleEmbed } from '@ingest/handlers/embed';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
+import { handleDeleteAsset } from '@media/delete-asset';
 import { handleGenerateImage } from '@media/generate-image';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
@@ -15,6 +16,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
+	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
 
 const HELP_TEXT =
@@ -25,6 +27,7 @@ const HELP_TEXT =
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
+	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
