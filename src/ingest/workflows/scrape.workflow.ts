@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { logInfo } from '@shared/log';
 import type { Env } from '@shared/types';
-import { type ExtractInput, extractSource, type NormalizedContent } from '../extract/extract-source';
+import { type ExtractInput, extractSource, type NormalizedContent } from '../extract';
 
 // R2 prefix for uploads staged by POST /scrape/jobs. Objects here are ephemeral:
 // the workflow deletes them after extraction (there is no R2 TTL convention in

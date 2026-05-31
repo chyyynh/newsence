@@ -4,7 +4,7 @@ import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/magic-bytes';
 import { extensionFromMime } from '@shared/mime';
 import type { Env } from '@shared/types';
 import { MAX_UPLOAD_BYTES } from '@shared/upload';
-import { extractSource } from '../extract/extract-source';
+import { extractSource } from '../extract';
 import { TMP_SCRAPE_PREFIX } from '../workflows/scrape.workflow';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
