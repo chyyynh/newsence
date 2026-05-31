@@ -1,7 +1,7 @@
 import { handleChat } from '@chat/handlers/chat';
 import { handleEmbed } from '@ingest/handlers/embed';
 import { handleIngest } from '@ingest/handlers/ingest';
-import { handleParse } from '@ingest/handlers/parse';
+import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
 import { handleDeleteAsset } from '@media/delete-asset';
 import { handleGenerateImage } from '@media/generate-image';
@@ -18,7 +18,9 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
-	'/parse': (req, env) => handleParse(req, env),
+	'/parse': (req, env) => handleScrape(req, env),
+	'/scrape': (req, env) => handleScrape(req, env),
+	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 	'/media/gc': (req, env) => handleOrphanGc(req, env),
 };
@@ -29,7 +31,10 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /api/chat                            - AI chat (Phase 1 scaffold, mock stream; issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
-	'POST /parse                               - Stateless PDF text extraction (raw bytes -> {text,status,pages,chars})\n' +
+	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
+	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
+	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
+	'POST /parse                               - Deprecated alias of /scrape\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
@@ -43,6 +48,10 @@ function routePrefixGet(pathname: string, env: Env): Response | Promise<Response
 	if (pathname.startsWith('/stream/')) {
 		const id = pathname.slice('/stream/'.length);
 		if (id) return handleWorkflowStream(id, env);
+	}
+	if (pathname.startsWith('/scrape/jobs/')) {
+		const id = pathname.slice('/scrape/jobs/'.length);
+		if (id) return handleScrapeJobStatus(id, env);
 	}
 	return null;
 }
@@ -70,7 +79,8 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
-	if (method === 'OPTIONS' && pathname === '/parse') return handleParse(request, env);
+	if (method === 'OPTIONS' && (pathname === '/scrape' || pathname === '/parse')) return handleScrape(request, env);
+	if (method === 'OPTIONS' && pathname === '/scrape/jobs') return handleScrapeJobCreate(request, env);
 	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
 
 	if (method === 'POST') {

@@ -75,6 +75,11 @@
 			"binding": "MONITOR_WORKFLOW",
 			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
+		},
+		{
+			"binding": "SCRAPE_WORKFLOW",
+			"name": "newsence-scrape-workflow",
+			"class_name": "ScrapeWorkflow"
 		}
 	],
 	/**

@@ -3,9 +3,10 @@ import { routeRequest } from '@entry/http';
 import { handleQueue } from '@entry/queue';
 import { handleScheduled } from '@entry/scheduled';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
+import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env, MessageBatch, QueueMessage, ScheduledEvent } from '@shared/types';
 
-export { NewsenceMonitorWorkflow };
+export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<Env> {
 	override async fetch(request: Request): Promise<Response> {
