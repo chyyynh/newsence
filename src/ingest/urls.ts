@@ -193,7 +193,7 @@ function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: 
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
-		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
+		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
 		platformType: isBlob ? undefined : row.platform_type || 'web',
 		alreadyExists: true,
