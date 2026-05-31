@@ -2,13 +2,10 @@
 // Canonical Platform Metadata Types + Builders
 // ─────────────────────────────────────────────────────────────
 
-import type { BilibiliMetadata } from '@ingest/platforms/bilibili/metadata';
 import type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
 import type { TwitterMetadata } from '@ingest/platforms/twitter/metadata';
-import type { XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
 import type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
 
-export type { BilibiliMetadata } from '@ingest/platforms/bilibili/metadata';
 export type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
 // Re-exports
 export {
@@ -20,7 +17,6 @@ export {
 	type TwitterMedia,
 	type TwitterMetadata,
 } from '@ingest/platforms/twitter/metadata';
-export type { XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
 export type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
 
 // ─────────────────────────────────────────────────────────────
@@ -50,8 +46,6 @@ export type PlatformMetadata =
 	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'bilibili'; fetchedAt: string; data: BilibiliMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'xiaohongshu'; fetchedAt: string; data: XiaohongshuMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions);
 
 // ─────────────────────────────────────────────────────────────
@@ -63,8 +57,6 @@ interface MetadataDataMap {
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
-	bilibili: BilibiliMetadata;
-	xiaohongshu: XiaohongshuMetadata;
 	default: null;
 }
 
