@@ -5,9 +5,9 @@
 import type { DbClient } from '@shared/db/articles';
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle } from '@shared/db/articles';
 import { logError, logInfo, logWarn } from '@shared/log';
+import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { normalizeUrl } from '@shared/web';
-import { buildXiaohongshu } from './metadata';
 import type { XhsNote } from './scraper';
 import { scrapeXiaohongshuUser } from './scraper';
 
@@ -23,7 +23,7 @@ async function insertNote(db: DbClient, env: Env, note: XhsNote, feed: RSSFeed, 
 	const url = noteUrl(feed.RSSLink, note.noteId);
 	const authorName = note.user?.nickname || nickname || feed.name;
 
-	const platformMetadata = buildXiaohongshu({
+	const platformMetadata = buildMetadata('xiaohongshu', {
 		uid: feed.RSSLink,
 		authorName,
 		noteId: note.noteId,

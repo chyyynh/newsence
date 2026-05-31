@@ -9,15 +9,3 @@ export interface XiaohongshuMetadata {
 	coverUrl?: string;
 	likeCount?: number;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Builders
-// ─────────────────────────────────────────────────────────────
-
-export function buildXiaohongshu(data: XiaohongshuMetadata): { type: 'xiaohongshu'; fetchedAt: string; data: XiaohongshuMetadata } {
-	return {
-		type: 'xiaohongshu',
-		fetchedAt: new Date().toISOString(),
-		data,
-	};
-}

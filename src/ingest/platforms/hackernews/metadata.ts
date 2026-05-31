@@ -10,15 +10,3 @@ export interface HackerNewsMetadata {
 	itemType?: 'story' | 'ask' | 'show' | 'job';
 	storyUrl?: string | null;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Builders
-// ─────────────────────────────────────────────────────────────
-
-export function buildHackerNews(data: HackerNewsMetadata): { type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata } {
-	return {
-		type: 'hackernews',
-		fetchedAt: new Date().toISOString(),
-		data,
-	};
-}

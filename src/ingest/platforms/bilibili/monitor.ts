@@ -5,10 +5,10 @@
 import type { DbClient } from '@shared/db/articles';
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle } from '@shared/db/articles';
 import { logError, logInfo, logWarn } from '@shared/log';
+import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { normalizeUrl } from '@shared/web';
 import { getDynSpace } from './grpc';
-import { buildBilibili } from './metadata';
 import type { ParsedDynamic } from './parser';
 import { parseVideoCards } from './parser';
 
@@ -18,7 +18,7 @@ import { parseVideoCards } from './parser';
 
 async function insertVideo(db: DbClient, env: Env, video: ParsedDynamic, feed: RSSFeed): Promise<boolean> {
 	const url = normalizeUrl(video.url);
-	const platformMetadata = buildBilibili({
+	const platformMetadata = buildMetadata('bilibili', {
 		uid: feed.RSSLink,
 		authorName: video.author || feed.name,
 		cardType: video.cardType,

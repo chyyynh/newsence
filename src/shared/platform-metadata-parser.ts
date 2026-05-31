@@ -1,10 +1,8 @@
 import {
-	buildDefault,
-	buildHackerNews,
+	buildMetadata,
 	buildTwitterArticle,
 	buildTwitterShared,
 	buildTwitterStandard,
-	buildYouTube,
 	type PlatformMetadata,
 	type QuotedTweetData,
 	type TwitterAuthorFields,
@@ -116,7 +114,7 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 
 	switch (type) {
 		case 'youtube':
-			return buildYouTube({
+			return buildMetadata('youtube', {
 				videoId: asString(metadata.videoId) ?? '',
 				channelName: asString(metadata.channelName) ?? '',
 				channelId: asString(metadata.channelId),
@@ -131,7 +129,7 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 				tags: asStringArray(metadata.tags),
 			});
 		case 'hackernews':
-			return buildHackerNews({
+			return buildMetadata('hackernews', {
 				itemId: asString(metadata.itemId) ?? '',
 				author: asString(metadata.author) ?? '',
 				points: asNumber(metadata.points) ?? 0,
@@ -160,6 +158,6 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 			});
 		}
 		default:
-			return buildDefault();
+			return buildMetadata('default', null);
 	}
 }

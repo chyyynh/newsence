@@ -8,8 +8,8 @@ import type { TwitterMetadata } from '@ingest/platforms/twitter/metadata';
 import type { XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
 import type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
 
-export { type BilibiliMetadata, buildBilibili } from '@ingest/platforms/bilibili/metadata';
-export { buildHackerNews, type HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
+export type { BilibiliMetadata } from '@ingest/platforms/bilibili/metadata';
+export type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
 // Re-exports
 export {
 	buildTwitterArticle,
@@ -20,8 +20,8 @@ export {
 	type TwitterMedia,
 	type TwitterMetadata,
 } from '@ingest/platforms/twitter/metadata';
-export { buildXiaohongshu, type XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
-export { buildYouTube, type YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
+export type { XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
+export type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
 
 // ─────────────────────────────────────────────────────────────
 // Source types
@@ -61,13 +61,24 @@ export type PlatformMetadata =
 	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions);
 
 // ─────────────────────────────────────────────────────────────
-// Default Builder
+// Generic envelope builder
 // ─────────────────────────────────────────────────────────────
 
-export function buildDefault(): PlatformMetadata & { type: 'default' } {
-	return {
-		type: 'default',
-		fetchedAt: new Date().toISOString(),
-		data: null,
-	};
+/** Maps each platform `type` to the shape of its `data` payload. */
+interface MetadataDataMap {
+	twitter: TwitterMetadata;
+	youtube: YouTubeMetadata;
+	hackernews: HackerNewsMetadata;
+	bilibili: BilibiliMetadata;
+	xiaohongshu: XiaohongshuMetadata;
+	default: null;
+}
+
+/**
+ * Wraps an already-assembled `data` payload in the platform envelope, binding the
+ * `type` literal to the correct `data` shape via {@link MetadataDataMap}. Replaces the
+ * per-platform `buildX` constructors (which were identical except for the `type` string).
+ */
+export function buildMetadata<T extends keyof MetadataDataMap>(type: T, data: MetadataDataMap[T]): Extract<PlatformMetadata, { type: T }> {
+	return { type, fetchedAt: new Date().toISOString(), data } as Extract<PlatformMetadata, { type: T }>;
 }

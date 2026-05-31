@@ -16,15 +16,3 @@ export interface YouTubeMetadata {
 	description?: string;
 	tags?: string[];
 }
-
-// ─────────────────────────────────────────────────────────────
-// Builders
-// ─────────────────────────────────────────────────────────────
-
-export function buildYouTube(data: YouTubeMetadata): { type: 'youtube'; fetchedAt: string; data: YouTubeMetadata } {
-	return {
-		type: 'youtube',
-		fetchedAt: new Date().toISOString(),
-		data,
-	};
-}
