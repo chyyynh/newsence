@@ -58,11 +58,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as Article;
 
-		if (!article) {
-			logWarn('WORKFLOW', 'Article not found', { article_id });
-			return { success: false, article_id, reason: 'not_found' };
-		}
-
 		if (isUserFile && !article.content && isExtractablePdf(article)) {
 			const storageKey = article.storage_key as string;
 			// Extraction failure must NOT abort the whole article: a bad/scanned PDF
