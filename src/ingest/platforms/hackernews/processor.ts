@@ -2,7 +2,7 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
-import { decodeHtmlEntities, stripHtmlTags } from '@shared/html';
+import { decodeHtmlEntities, htmlToText } from '@shared/html';
 import { logError, logInfo, logWarn } from '@shared/log';
 import { callOpenRouter } from '@shared/openrouter';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
@@ -44,15 +44,11 @@ export interface HnCollectedComment {
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-function cleanHtmlText(raw: string): string {
-	return decodeHtmlEntities(stripHtmlTags(raw)).replace(/\s+/g, ' ').trim();
-}
-
 function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 	const comments: HnCollectedComment[] = [];
 	for (const child of children) {
 		if (child.text) {
-			const cleanText = cleanHtmlText(child.text);
+			const cleanText = htmlToText(child.text);
 			if (cleanText) {
 				comments.push({
 					id: child.id,
@@ -157,7 +153,7 @@ Article excerpt (${pageExcerpt.length} chars):
 ${pageExcerpt || 'N/A'}
 
 HN post text:
-${cleanHtmlText(hnText).slice(0, 1200) || 'N/A'}
+${htmlToText(hnText).slice(0, 1200) || 'N/A'}
 
 HN comments (${commentCount} total):
 ${commentInput}

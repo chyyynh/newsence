@@ -2,7 +2,7 @@
 // RSS Parsing Utilities
 // ─────────────────────────────────────────────────────────────
 
-import { decodeHtmlEntities, stripHtmlTags } from '@shared/html';
+import { decodeHtmlEntities, htmlToText } from '@shared/html';
 
 export type RSSItem = Record<string, unknown>;
 
@@ -49,9 +49,7 @@ export function toPlainText(value: unknown): string {
 }
 
 export function stripHtml(raw: unknown): string {
-	const text = toPlainText(raw);
-	if (!text) return '';
-	return decodeHtmlEntities(stripHtmlTags(text)).replace(/\s+/g, ' ').trim();
+	return htmlToText(toPlainText(raw));
 }
 
 export function htmlToMarkdown(html: string): string {

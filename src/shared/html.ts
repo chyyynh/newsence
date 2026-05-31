@@ -23,3 +23,8 @@ export function decodeHtmlEntities(str: string): string {
 export function stripHtmlTags(str: string): string {
 	return str.replace(/<[^>]*>/g, ' ');
 }
+
+/** Strip tags, decode entities, and collapse runs of whitespace into single spaces. */
+export function htmlToText(str: string): string {
+	return decodeHtmlEntities(stripHtmlTags(str)).replace(/\s+/g, ' ').trim();
+}
