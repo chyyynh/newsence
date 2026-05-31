@@ -25,9 +25,118 @@ export interface ParsedPdf {
 	chars: number;
 }
 
-interface LiteParseResult {
+// LiteParse emits text fragments with bounding boxes, faithful to the PDF's
+// visual line breaks — so a wrapped paragraph arrives as N indented lines. We
+// reflow them back into paragraphs from the geometry below.
+interface TextItem {
 	text?: string;
-	pages?: unknown[];
+	x?: number;
+	y?: number;
+	height?: number;
+}
+interface LiteParsePage {
+	textItems?: TextItem[];
+}
+interface LiteParseResult {
+	pages?: LiteParsePage[];
+}
+
+interface Line {
+	text: string;
+	y: number;
+	x: number;
+	h: number;
+}
+
+function median(nums: number[], fallback: number): number {
+	if (!nums.length) return fallback;
+	const sorted = [...nums].sort((a, b) => a - b);
+	return sorted[Math.floor(sorted.length / 2)];
+}
+
+// Merge fragments sharing a y-band into one visual line (left-to-right),
+// collapsing the justified-text padding into single spaces.
+function pageLines(items: TextItem[]): Line[] {
+	const bands = new Map<number, TextItem[]>();
+	for (const it of items) {
+		if (!it.text?.trim()) continue;
+		const key = Math.round((it.y ?? 0) / 3); // ~3px tolerance
+		const band = bands.get(key);
+		if (band) band.push(it);
+		else bands.set(key, [it]);
+	}
+	return [...bands.values()]
+		.map((frs) => {
+			frs.sort((a, b) => (a.x ?? 0) - (b.x ?? 0));
+			return {
+				text: frs
+					.map((f) => f.text)
+					.join(' ')
+					.replace(/\s+/g, ' ')
+					.trim(),
+				y: Math.min(...frs.map((f) => f.y ?? 0)),
+				x: Math.min(...frs.map((f) => f.x ?? 0)),
+				h: Math.max(...frs.map((f) => f.height ?? 0)),
+			};
+		})
+		.filter((l) => l.text)
+		.sort((a, b) => a.y - b.y);
+}
+
+// Join wrapped lines into paragraphs: break on a larger-than-normal vertical
+// gap, a first-line indent, or a taller line (heading). De-hyphenate splits.
+function reflowLines(lines: Line[]): string[] {
+	if (!lines.length) return [];
+	const gaps = lines
+		.slice(1)
+		.map((l, i) => l.y - lines[i].y)
+		.filter((g) => g > 0);
+	const medGap = median(gaps, 14);
+	const medH = median(
+		lines.map((l) => l.h),
+		13,
+	);
+	const bodyX = Math.min(...lines.map((l) => l.x));
+	const paras: string[] = [];
+	let cur = '';
+	for (let i = 0; i < lines.length; i++) {
+		const l = lines[i];
+		if (i === 0) {
+			cur = l.text;
+			continue;
+		}
+		const isHeading = l.h > medH * 1.3;
+		const gapBreak = l.y - lines[i - 1].y > medGap * 1.6;
+		const indent = l.x > bodyX + 6;
+		if (isHeading || gapBreak || indent) {
+			paras.push(cur);
+			cur = l.text;
+		} else {
+			cur = /[-‐]$/.test(cur) ? cur.replace(/[-‐]$/, '') + l.text : `${cur} ${l.text}`;
+		}
+	}
+	if (cur) paras.push(cur);
+	return paras;
+}
+
+// Reconstruct readable paragraph text from per-page geometry, dropping running
+// headers/footers (lines repeated across ≥half the pages) and edge page numbers.
+function reflowDocument(pages: LiteParsePage[]): string {
+	const perPage = pages.map((p) => pageLines(p.textItems ?? []));
+	const freq = new Map<string, number>();
+	for (const lines of perPage) {
+		for (const key of new Set(lines.map((l) => l.text.toLowerCase()))) {
+			freq.set(key, (freq.get(key) ?? 0) + 1);
+		}
+	}
+	const repeatThreshold = Math.max(2, Math.ceil(perPage.length * 0.5));
+	const isEdgePageNumber = (l: Line, i: number, lines: Line[]) => /^\d{1,5}$/.test(l.text) && (i === 0 || i === lines.length - 1);
+	const out: string[] = [];
+	for (const lines of perPage) {
+		const kept = lines.filter((l, i) => (freq.get(l.text.toLowerCase()) ?? 0) < repeatThreshold && !isEdgePageNumber(l, i, lines));
+		out.push(...reflowLines(kept));
+	}
+	return out.join('\n\n');
 }
 
 // LiteParse WASM is instantiated once per isolate; the `CompiledWasm` wrangler
@@ -81,8 +190,8 @@ export function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	ensureWasm();
 	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'text' });
 	return parser.parse(bytes).then((raw: LiteParseResult) => {
-		const text = raw.text ?? '';
 		const pages = raw.pages?.length ?? 0;
+		const text = reflowDocument(raw.pages ?? []);
 		const chars = text.trim().length;
 		return { text, pages, chars, status: classifyExtraction(chars, pages) };
 	});
