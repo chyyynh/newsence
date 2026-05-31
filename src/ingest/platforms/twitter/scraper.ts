@@ -140,7 +140,7 @@ function extractMedia(media?: KaitoMedia): TwitterMedia[] {
 	);
 }
 
-export function buildTweetMetadata(
+function buildTweetMetadata(
 	tweet: KaitoTweet,
 	_hashtags: string[],
 	expandedUrls: string[],

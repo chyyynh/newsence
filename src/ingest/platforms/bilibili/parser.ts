@@ -60,7 +60,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
 /** Parses Chinese relative time labels (e.g. "3小时前", "昨天 14:30", "5月20日") to a Date. */
-export function parsePubDate(label: string): Date {
+function parsePubDate(label: string): Date {
 	const now = Date.now();
 
 	// "X分钟前"
@@ -132,7 +132,7 @@ function extractModuleInfo(modules: DynModule[], fallbackAuthor: string): Extrac
 	return { author, timeLabel, description };
 }
 
-export function parseDynCard(card: DynCard): ParsedDynamic | null {
+function parseDynCard(card: DynCard): ParsedDynamic | null {
 	const extend = card.extend;
 	if (!extend?.dynIdStr) return null;
 

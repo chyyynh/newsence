@@ -206,7 +206,7 @@ async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): 
 	return buildExistingResult(url, row, instanceId);
 }
 
-export async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
+async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
 	const db = await createDbClient(env);

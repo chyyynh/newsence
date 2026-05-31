@@ -56,11 +56,11 @@ const processors: Record<string, ArticleProcessor> = {
 	default: new DefaultProcessor(),
 };
 
-export function getProcessor(sourceType: string | undefined): ArticleProcessor {
+function getProcessor(sourceType: string | undefined): ArticleProcessor {
 	return processors[sourceType ?? 'default'] ?? processors.default;
 }
 
-export function mergePlatformMetadata(
+function mergePlatformMetadata(
 	baseMetadata: PlatformMetadata | null | undefined,
 	enrichments?: PlatformEnrichments,
 ): PlatformMetadata | null {
