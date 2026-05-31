@@ -14,11 +14,11 @@
  * URL-scrape path (`urls.ts`), the third blob-write entry point.
  */
 
-import { storageKeyToAssetUrl, userUploadKey } from '@shared/asset-url';
 import { createDbClient, type InsertBlobUserFileData, insertBlobUserFile } from '@shared/db/articles';
 import { logError, logInfo } from '@shared/log';
 import { MAGIC_SNIFF_BYTES, sniffMediaType, sniffMediaTypeStream, UnsupportedMediaError } from '@shared/magic-bytes';
 import { extensionFromMime, isRasterImage, PDF_MIME } from '@shared/mime';
+import { storageKeyToAssetUrl, userUploadKey } from '@shared/storage-keys';
 import { PayloadTooLargeError, streamWithByteLimit } from '@shared/streams';
 import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES } from '@shared/upload';

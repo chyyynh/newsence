@@ -1,9 +1,9 @@
-import { userUploadKey } from '@shared/asset-url';
 import { createDbClient, type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '@shared/db/articles';
 import { logError, logInfo } from '@shared/log';
 import { extensionFromMime, PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '@shared/scraped-content';
+import { userUploadKey } from '@shared/storage-keys';
 import { streamWithByteLimit } from '@shared/streams';
 import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES } from '@shared/upload';

@@ -1,4 +1,11 @@
 /**
+ * Our own storage/asset addressing conventions: how R2 keys are laid out and how
+ * a key maps to the frontend asset route. Distinct from `web.ts`, which handles
+ * untrusted *external* URLs (fetch/validate/normalize) — here we only *generate*
+ * trusted internal identifiers from our own data.
+ */
+
+/**
  * Build the frontend's asset-route URL for an R2 storage key. The frontend's
  * `/api/media/asset/[...key]` route signs and forwards to this worker's
  * `/media/asset/`, so consumers of `assetUrl` always go through Next.js auth.
