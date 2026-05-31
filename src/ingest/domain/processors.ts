@@ -61,7 +61,6 @@ function mergePlatformMetadata(
 	baseMetadata: PlatformMetadata | null | undefined,
 	enrichments?: PlatformEnrichments,
 ): PlatformMetadata | null {
-	if (!baseMetadata && (!enrichments || Object.keys(enrichments).length === 0)) return baseMetadata ?? null;
 	if (!enrichments || Object.keys(enrichments).length === 0) return baseMetadata ?? null;
 	if (!baseMetadata) return null;
 
