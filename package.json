@@ -24,6 +24,7 @@
 		"@lexical/markdown": "^0.44.0",
 		"@lexical/rich-text": "^0.44.0",
 		"@lexical/table": "^0.44.0",
+		"@llamaindex/liteparse-wasm": "^2.0.4",
 		"@mozilla/readability": "^0.6.0",
 		"@openrouter/ai-sdk-provider": "^2.9.0",
 		"ai": "^6.0.176",

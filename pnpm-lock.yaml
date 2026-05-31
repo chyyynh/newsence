@@ -35,6 +35,9 @@ importers:
       '@lexical/table':
         specifier: ^0.44.0
         version: 0.44.0
+      '@llamaindex/liteparse-wasm':
+        specifier: ^2.0.4
+        version: 2.0.4
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1132,6 +1135,10 @@ packages:
 
   '@lexical/utils@0.44.0':
     resolution: {integrity: sha512-/D2ptztNevfBJgtkj4uaiYBeRcvSy+1mQj6pNYaCFZIoPJIwl6H5fXwWAvpvr11vcQKP9DEEoXR+V4qkMOA+EA==}
+
+  '@llamaindex/liteparse-wasm@2.0.4':
+    resolution: {integrity: sha512-hrJiOe7b0sBXAq0+8meF6x7muMwThssDJ3M1WVky0057vjgNWszKLRUV0goLFSL2X7EC1RjSQM9pwcUfG193yQ==}
+    engines: {node: '>=18.0.0'}
 
   '@mixmark-io/domino@2.2.0':
     resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
@@ -2959,6 +2966,8 @@ snapshots:
     dependencies:
       '@lexical/selection': 0.44.0
       lexical: 0.44.0
+
+  '@llamaindex/liteparse-wasm@2.0.4': {}
 
   '@mixmark-io/domino@2.2.0': {}
 

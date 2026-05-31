@@ -17,6 +17,13 @@
 	 *   upstream LLM call instead of just stopping our own writer loop.
 	 */
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
+	/**
+	 * Bundle `.wasm` files as compiled `WebAssembly.Module` imports. Used by the
+	 * PDF text-extraction step (`@llamaindex/liteparse-wasm`) — see
+	 * ingest/workflows/steps/pdf-extraction.ts. `fallthrough` keeps default rules
+	 * for any other module types.
+	 */
+	"rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }],
 	"observability": {
 		"logs": {
 			"enabled": true,
@@ -104,7 +111,7 @@
 	 *
 	 * `R2` — user_file blob storage (PDF/image uploads + AI-generated images).
 	 *   Also written by the Next.js frontend via S3 API; the worker reads
-	 *   uploaded PDFs here for env.AI.toMarkdown extraction.
+	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 *
 	 * `IMAGE_CACHE` — durable L2 cache for env.IMAGES transforms. Dedicated
 	 *   bucket (not `R2`) so its metrics, lifecycle rules, and blast radius

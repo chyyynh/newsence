@@ -1,6 +1,7 @@
 import { handleChat } from '@chat/handlers/chat';
 import { handleEmbed } from '@ingest/handlers/embed';
 import { handleIngest } from '@ingest/handlers/ingest';
+import { handleParse } from '@ingest/handlers/parse';
 import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
 import { handleDeleteAsset } from '@media/delete-asset';
 import { handleGenerateImage } from '@media/generate-image';
@@ -17,6 +18,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
+	'/parse': (req, env) => handleParse(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 	'/media/gc': (req, env) => handleOrphanGc(req, env),
 };
@@ -27,6 +29,7 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /api/chat                            - AI chat (Phase 1 scaffold, mock stream; issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
+	'POST /parse                               - Stateless PDF text extraction (raw bytes -> {text,status,pages,chars})\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
@@ -67,6 +70,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
+	if (method === 'OPTIONS' && pathname === '/parse') return handleParse(request, env);
 	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
 
 	if (method === 'POST') {
