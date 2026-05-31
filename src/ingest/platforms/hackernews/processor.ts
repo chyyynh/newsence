@@ -3,16 +3,10 @@
 // ─────────────────────────────────────────────────────────────
 
 import { logError, logInfo, logWarn } from '@shared/log';
+import { callOpenRouter } from '@shared/openrouter';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
-import {
-	type ArticleProcessor,
-	callGeminiForAnalysis,
-	callOpenRouterChat,
-	isEmpty,
-	type ProcessorContext,
-	type ProcessorResult,
-} from '../../domain/ai-utils';
+import { type ArticleProcessor, callGeminiForAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web/scraper';
 import { HN_ALGOLIA_API } from './scraper';
 
@@ -61,7 +55,7 @@ function cleanHtmlText(raw: string): string {
 		.trim();
 }
 
-export function collectAllComments(children: HnComment[]): HnCollectedComment[] {
+function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 	const comments: HnCollectedComment[] = [];
 	for (const child of children) {
 		if (child.text) {
@@ -206,8 +200,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user),
-		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user),
+		callOpenRouter(cnPrompt.user, { apiKey, systemPrompt: cnPrompt.system }),
+		callOpenRouter(enPrompt.user, { apiKey, systemPrompt: enPrompt.system }),
 	]);
 
 	return { en, cn };
