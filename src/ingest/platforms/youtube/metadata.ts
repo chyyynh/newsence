@@ -2,10 +2,6 @@
 // YouTube Platform Metadata Types + Builders
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
-}
-
 export interface YouTubeMetadata {
 	videoId: string;
 	channelName: string;
@@ -28,7 +24,7 @@ export interface YouTubeMetadata {
 export function buildYouTube(data: YouTubeMetadata): { type: 'youtube'; fetchedAt: string; data: YouTubeMetadata } {
 	return {
 		type: 'youtube',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data,
 	};
 }

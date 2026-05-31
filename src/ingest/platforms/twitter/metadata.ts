@@ -2,10 +2,6 @@
 // Twitter Platform Metadata Types + Builders
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
-}
-
 export interface TwitterMedia {
 	url: string;
 	type: 'photo' | 'video' | 'animated_gif';
@@ -63,7 +59,7 @@ export function buildTwitterStandard(
 ): { type: 'twitter'; fetchedAt: string; data: TwitterMetadata } {
 	return {
 		type: 'twitter',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data: { ...author, media: opts?.media ?? [], createdAt: opts?.createdAt, quotedTweet: opts?.quotedTweet },
 	};
 }
@@ -81,7 +77,7 @@ export function buildTwitterShared(
 ): { type: 'twitter'; fetchedAt: string; data: TwitterMetadata } {
 	return {
 		type: 'twitter',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data: {
 			variant: 'shared',
 			...author,
@@ -98,7 +94,7 @@ export function buildTwitterShared(
 export function buildTwitterArticle(author: TwitterAuthorFields): { type: 'twitter'; fetchedAt: string; data: TwitterMetadata } {
 	return {
 		type: 'twitter',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data: { variant: 'article', ...author },
 	};
 }

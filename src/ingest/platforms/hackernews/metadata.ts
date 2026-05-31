@@ -2,10 +2,6 @@
 // HackerNews Platform Metadata Types + Builders
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
-}
-
 export interface HackerNewsMetadata {
 	itemId: string;
 	author: string;
@@ -22,7 +18,7 @@ export interface HackerNewsMetadata {
 export function buildHackerNews(data: HackerNewsMetadata): { type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata } {
 	return {
 		type: 'hackernews',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data,
 	};
 }

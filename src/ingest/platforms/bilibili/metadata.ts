@@ -2,10 +2,6 @@
 // Bilibili Platform Metadata Types + Builders
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
-}
-
 export interface BilibiliMetadata {
 	uid: string;
 	authorName: string;
@@ -21,7 +17,7 @@ export interface BilibiliMetadata {
 export function buildBilibili(data: BilibiliMetadata): { type: 'bilibili'; fetchedAt: string; data: BilibiliMetadata } {
 	return {
 		type: 'bilibili',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data,
 	};
 }

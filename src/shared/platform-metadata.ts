@@ -64,14 +64,10 @@ export type PlatformMetadata =
 // Default Builder
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
-}
-
 export function buildDefault(): PlatformMetadata & { type: 'default' } {
 	return {
 		type: 'default',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data: null,
 	};
 }

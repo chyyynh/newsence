@@ -2,10 +2,6 @@
 // Xiaohongshu Platform Metadata Types + Builders
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
-}
-
 export interface XiaohongshuMetadata {
 	uid: string;
 	authorName: string;
@@ -21,7 +17,7 @@ export interface XiaohongshuMetadata {
 export function buildXiaohongshu(data: XiaohongshuMetadata): { type: 'xiaohongshu'; fetchedAt: string; data: XiaohongshuMetadata } {
 	return {
 		type: 'xiaohongshu',
-		fetchedAt: now(),
+		fetchedAt: new Date().toISOString(),
 		data,
 	};
 }
