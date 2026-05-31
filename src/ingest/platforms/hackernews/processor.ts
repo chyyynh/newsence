@@ -2,6 +2,7 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
+import { decodeHtmlEntities, stripHtmlTags } from '@shared/html';
 import { logError, logInfo, logWarn } from '@shared/log';
 import { callOpenRouter } from '@shared/openrouter';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
@@ -44,15 +45,7 @@ export interface HnCollectedComment {
 // ─────────────────────────────────────────────────────────────
 
 function cleanHtmlText(raw: string): string {
-	return raw
-		.replace(/<[^>]*>/g, ' ')
-		.replace(/&quot;/g, '"')
-		.replace(/&#x27;|&#39;/g, "'")
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/\s+/g, ' ')
-		.trim();
+	return decodeHtmlEntities(stripHtmlTags(raw)).replace(/\s+/g, ' ').trim();
 }
 
 function collectAllComments(children: HnComment[]): HnCollectedComment[] {
@@ -85,10 +78,7 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 	if (hnTextHtml) {
 		const hrefMatches = hnTextHtml.match(/href="([^"]+)"/g);
 		for (const m of hrefMatches ?? []) {
-			const raw = m
-				.slice(6, -1)
-				.replace(/&#x2F;/g, '/')
-				.replace(/&amp;/g, '&');
+			const raw = decodeHtmlEntities(m.slice(6, -1));
 			if (!seen.has(raw) && raw.startsWith('http')) {
 				seen.add(raw);
 				urls.push(raw);
