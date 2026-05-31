@@ -1,5 +1,5 @@
 import { BROWSER_UA } from '@shared/fetch';
-import { isRasterImage } from '@shared/mime';
+import { isRasterImage, PDF_MIME } from '@shared/mime';
 import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '@shared/scraped-content';
 import { assertExternalFetchable } from '@shared/web';
 import { scrapeHackerNews } from './hackernews/scraper';
@@ -25,7 +25,6 @@ export type ScrapeResult =
 			dispose: () => void;
 	  };
 
-const PDF_MIME = 'application/pdf';
 const DISPATCH_TIMEOUT_MS = 8_000;
 
 // Content-neutral headers for the dispatch fetch. Accept: */* avoids tripping

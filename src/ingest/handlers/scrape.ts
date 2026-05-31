@@ -3,6 +3,7 @@ import { logError } from '@shared/log';
 import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/magic-bytes';
 import { extensionFromMime } from '@shared/mime';
 import type { Env } from '@shared/types';
+import { MAX_UPLOAD_BYTES } from '@shared/upload';
 import { extractSource } from '../extract/extract-source';
 import { TMP_SCRAPE_PREFIX } from '../workflows/scrape.workflow';
 
@@ -14,9 +15,6 @@ const CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
-
-// Mirrors the upload cap in ingest/blob.ts.
-const MAX_BYTES = 10 * 1024 * 1024;
 
 // POST /scrape — synchronous, stateless content extraction. Accepts either
 // `{ "url": "..." }` (JSON) or raw file bytes (`--data-binary`). Returns
@@ -40,9 +38,6 @@ export async function handleScrape(request: Request, env: Env): Promise<Response
 		);
 	}
 }
-
-// Back-compat alias for the original `/parse` PDF-bytes smoke-test surface.
-export const handleParse = handleScrape;
 
 // POST /scrape/jobs — async, non-persisting parse. URL → workflow param; raw
 // bytes → staged to a temp R2 key (deleted by the workflow). Returns a job id;
@@ -86,8 +81,8 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 	const bytes = new Uint8Array(await request.arrayBuffer());
 	if (bytes.byteLength === 0)
 		return Response.json({ error: 'Empty body — POST {url} JSON or raw bytes' }, { status: 400, headers: CORS_HEADERS });
-	if (bytes.byteLength > MAX_BYTES)
-		return Response.json({ error: `Body exceeds ${MAX_BYTES} bytes` }, { status: 413, headers: CORS_HEADERS });
+	if (bytes.byteLength > MAX_UPLOAD_BYTES)
+		return Response.json({ error: `Body exceeds ${MAX_UPLOAD_BYTES} bytes` }, { status: 413, headers: CORS_HEADERS });
 	return { kind: 'bytes', bytes };
 }
 

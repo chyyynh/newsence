@@ -10,3 +10,12 @@
 export function storageKeyToAssetUrl(key: string): string {
 	return `/api/media/asset/${key}`;
 }
+
+/**
+ * Build the R2 storage key for a user-owned upload. All three blob-ingest paths
+ * (multipart, external image URL, URL→blob) share this `users/<id>/uploads/<uuid>`
+ * layout — keeping the convention here means no path can drift from it.
+ */
+export function userUploadKey(userId: string, extension: string): string {
+	return `users/${userId}/uploads/${crypto.randomUUID()}.${extension}`;
+}

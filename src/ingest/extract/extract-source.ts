@@ -1,5 +1,5 @@
 import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/magic-bytes';
-import { isRasterImage } from '@shared/mime';
+import { isRasterImage, PDF_MIME } from '@shared/mime';
 import type { ScrapedContent } from '@shared/scraped-content';
 import type { Env } from '@shared/types';
 import { scrapeUrl } from '../platforms/registry';
@@ -9,8 +9,6 @@ import { type ParsedPdf, parsePdf } from '../workflows/steps/pdf-extraction';
 // engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)
 // — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and any future
 // caller all produce identical output instead of diverging per code path.
-
-const PDF_MIME = 'application/pdf';
 
 export type ExtractInput =
 	| { kind: 'url'; url: string }
