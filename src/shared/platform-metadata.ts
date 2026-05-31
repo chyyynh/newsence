@@ -24,12 +24,6 @@ export type { XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata
 export type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
 
 // ─────────────────────────────────────────────────────────────
-// Source types
-// ─────────────────────────────────────────────────────────────
-
-export type SourceType = 'twitter' | 'youtube' | 'hackernews' | 'bilibili' | 'xiaohongshu' | 'default';
-
-// ─────────────────────────────────────────────────────────────
 // Enrichments
 // ─────────────────────────────────────────────────────────────
 
