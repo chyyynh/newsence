@@ -13,6 +13,7 @@
 import { storageKeyToAssetUrl } from '@shared/asset-url';
 import { createDbClient, insertBlobUserFile } from '@shared/db/articles';
 import { logError, logInfo } from '@shared/log';
+import { sniffMediaTypeStream, UnsupportedMediaError } from '@shared/magic-bytes';
 import { extensionFromMime, isRasterImage } from '@shared/mime';
 import { PayloadTooLargeError, streamWithByteLimit } from '@shared/streams';
 import type { Env } from '@shared/types';
@@ -95,14 +96,21 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 	const extension = extensionFromMime(contentType);
 	const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${extension}`;
 
+	// Size cap then signature check, both fail-before-commit: the upstream
+	// Content-Type was attacker-influenced, so confirm the bytes are a real raster
+	// image (no PDF/SVG/HTML) before R2 commits the object.
 	const limited = streamWithByteLimit(upstream.body, MAX_IMAGE_BYTES);
+	const sniffed = sniffMediaTypeStream(limited.stream, (type) => type !== 'application/pdf');
 	try {
-		await env.R2.put(storageKey, limited.stream, {
+		await env.R2.put(storageKey, sniffed.stream, {
 			httpMetadata: { contentType, cacheControl: 'private, max-age=31536000' },
 		});
 	} catch (err) {
 		if (err instanceof PayloadTooLargeError) {
 			return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'Image exceeds 10MB' };
+		}
+		if (err instanceof UnsupportedMediaError) {
+			return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'URL content is not a supported raster image' };
 		}
 		logError('INGEST_IMAGE_URL', 'R2 put failed', { imageUrl: trimmed, storageKey, error: String(err) });
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
