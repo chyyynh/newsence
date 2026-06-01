@@ -17,7 +17,7 @@ export interface PdfExtractionResult {
 	status: ExtractionStatus;
 }
 
-// Pure parse output (no DB) — shared by the workflow step and the /parse endpoint.
+// Pure parse output (no DB) — shared by the workflow step and the /scrape endpoint.
 export interface ParsedPdf {
 	text: string;
 	status: Exclude<ExtractionStatus, 'failed'>;
@@ -233,7 +233,7 @@ export function isExtractablePdf(article: Article): boolean {
 }
 
 // Pure extraction — no R2, no DB. Runs LiteParse on raw PDF bytes and classifies
-// the result. Shared by extractAndPersistPdf (workflow) and the /parse endpoint.
+// the result. Shared by extractAndPersistPdf (workflow) and the /scrape endpoint.
 export function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	ensureWasm();
 	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'text' });

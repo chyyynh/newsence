@@ -18,7 +18,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
-	'/parse': (req, env) => handleScrape(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
@@ -29,12 +28,11 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'POST /api/chat                            - AI chat (Phase 1 scaffold, mock stream; issue #136)\n' +
+	'POST /api/chat                            - AI chat (streaming; env-switched with the Vercel route via NEXT_PUBLIC_CHAT_API_URL, issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
-	'POST /parse                               - Deprecated alias of /scrape\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
@@ -79,7 +77,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
-	if (method === 'OPTIONS' && (pathname === '/scrape' || pathname === '/parse')) return handleScrape(request, env);
+	if (method === 'OPTIONS' && pathname === '/scrape') return handleScrape(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape/jobs') return handleScrapeJobCreate(request, env);
 	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
 
