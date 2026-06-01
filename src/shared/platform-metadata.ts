@@ -5,7 +5,8 @@
 // platform_metadata (articles) / metadata (user_files) JSONB; the frontend
 // READS it — both PlatformMetadata unions must describe the SAME JSON. Separate
 // pnpm workspaces can't share a module, so keep these shapes identical by hand:
-// change one, change the other.
+// change one, change the other. NOTE: the per-platform `data` interfaces live in
+// ingest/platforms/*/metadata.ts and are re-exported just below — edit them there.
 // ─────────────────────────────────────────────────────────────
 
 import type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';

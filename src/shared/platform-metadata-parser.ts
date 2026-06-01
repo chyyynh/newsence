@@ -126,24 +126,22 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 				storyUrl: asNullableString(metadata.storyUrl),
 			});
 		case 'twitter': {
+			const author = parseTwitterAuthor(metadata);
 			const variant = asEnum(metadata.variant, TWITTER_VARIANTS);
-			const data: TwitterMetadata = { ...parseTwitterAuthor(metadata) };
-			if (variant === 'article') {
-				data.variant = 'article';
-			} else if (variant === 'shared') {
-				data.variant = 'shared';
-				data.media = asTwitterMediaArray(metadata.media);
-				data.createdAt = asString(metadata.createdAt);
-				data.tweetText = asString(metadata.tweetText);
-				data.externalUrl = asString(metadata.externalUrl) ?? '';
-				data.externalOgImage = asNullableString(metadata.externalOgImage);
-				data.externalTitle = asNullableString(metadata.externalTitle);
-			} else {
-				data.media = asTwitterMediaArray(metadata.media);
-				data.createdAt = asString(metadata.createdAt);
-				data.quotedTweet = asQuotedTweet(metadata.quotedTweet);
+			if (variant === 'article') return buildMetadata('twitter', { ...author, variant: 'article' });
+
+			const base: TwitterMetadata = { ...author, media: asTwitterMediaArray(metadata.media), createdAt: asString(metadata.createdAt) };
+			if (variant === 'shared') {
+				return buildMetadata('twitter', {
+					...base,
+					variant: 'shared',
+					tweetText: asString(metadata.tweetText),
+					externalUrl: asString(metadata.externalUrl) ?? '',
+					externalOgImage: asNullableString(metadata.externalOgImage),
+					externalTitle: asNullableString(metadata.externalTitle),
+				});
 			}
-			return buildMetadata('twitter', data);
+			return buildMetadata('twitter', { ...base, quotedTweet: asQuotedTweet(metadata.quotedTweet) });
 		}
 		default:
 			return buildMetadata('default', null);
