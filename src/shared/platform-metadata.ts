@@ -1,5 +1,11 @@
 // ─────────────────────────────────────────────────────────────
-// Canonical Platform Metadata Types + Builders
+// Canonical Platform Metadata Types + Builder
+//
+// MIRROR OF frontend/src/types/platform-metadata.ts. The worker WRITES
+// platform_metadata (articles) / metadata (user_files) JSONB; the frontend
+// READS it — both PlatformMetadata unions must describe the SAME JSON. Separate
+// pnpm workspaces can't share a module, so keep these shapes identical by hand:
+// change one, change the other.
 // ─────────────────────────────────────────────────────────────
 
 import type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
@@ -7,17 +13,15 @@ import type { TwitterMetadata } from '@ingest/platforms/twitter/metadata';
 import type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
 
 export type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
-// Re-exports
-export {
-	buildTwitterArticle,
-	buildTwitterShared,
-	buildTwitterStandard,
-	type QuotedTweetData,
-	type TwitterAuthorFields,
-	type TwitterMedia,
-	type TwitterMetadata,
-} from '@ingest/platforms/twitter/metadata';
+export type { QuotedTweetData, TwitterAuthorFields, TwitterMedia, TwitterMetadata } from '@ingest/platforms/twitter/metadata';
 export type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
+
+/** PDF upload metadata (stored in `user_files.metadata`). */
+export interface PdfMetadata {
+	fileName: string;
+	fileSize: number;
+	pdfUrl: string;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Enrichments
@@ -46,6 +50,7 @@ export type PlatformMetadata =
 	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions);
 
 // ─────────────────────────────────────────────────────────────
@@ -57,6 +62,7 @@ interface MetadataDataMap {
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
+	pdf: PdfMetadata;
 	default: null;
 }
 

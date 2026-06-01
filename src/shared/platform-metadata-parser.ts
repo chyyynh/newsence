@@ -1,12 +1,10 @@
 import {
 	buildMetadata,
-	buildTwitterArticle,
-	buildTwitterShared,
-	buildTwitterStandard,
 	type PlatformMetadata,
 	type QuotedTweetData,
 	type TwitterAuthorFields,
 	type TwitterMedia,
+	type TwitterMetadata,
 } from './platform-metadata';
 
 type PlatformInputType = 'youtube' | 'twitter' | 'hackernews' | 'default';
@@ -128,24 +126,24 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 				storyUrl: asNullableString(metadata.storyUrl),
 			});
 		case 'twitter': {
-			const author = parseTwitterAuthor(metadata);
 			const variant = asEnum(metadata.variant, TWITTER_VARIANTS);
-			if (variant === 'shared') {
-				return buildTwitterShared(author, {
-					media: asTwitterMediaArray(metadata.media),
-					createdAt: asString(metadata.createdAt),
-					tweetText: asString(metadata.tweetText),
-					externalUrl: asString(metadata.externalUrl) ?? '',
-					externalOgImage: asNullableString(metadata.externalOgImage),
-					externalTitle: asNullableString(metadata.externalTitle),
-				});
+			const data: TwitterMetadata = { ...parseTwitterAuthor(metadata) };
+			if (variant === 'article') {
+				data.variant = 'article';
+			} else if (variant === 'shared') {
+				data.variant = 'shared';
+				data.media = asTwitterMediaArray(metadata.media);
+				data.createdAt = asString(metadata.createdAt);
+				data.tweetText = asString(metadata.tweetText);
+				data.externalUrl = asString(metadata.externalUrl) ?? '';
+				data.externalOgImage = asNullableString(metadata.externalOgImage);
+				data.externalTitle = asNullableString(metadata.externalTitle);
+			} else {
+				data.media = asTwitterMediaArray(metadata.media);
+				data.createdAt = asString(metadata.createdAt);
+				data.quotedTweet = asQuotedTweet(metadata.quotedTweet);
 			}
-			if (variant === 'article') return buildTwitterArticle(author);
-			return buildTwitterStandard(author, {
-				media: asTwitterMediaArray(metadata.media),
-				createdAt: asString(metadata.createdAt),
-				quotedTweet: asQuotedTweet(metadata.quotedTweet),
-			});
+			return buildMetadata('twitter', data);
 		}
 		default:
 			return buildMetadata('default', null);

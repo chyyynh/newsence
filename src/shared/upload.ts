@@ -1,4 +1,5 @@
 import { PDF_MIME } from './mime';
+import { buildMetadata } from './platform-metadata';
 import { storageKeyToAssetUrl } from './storage-keys';
 
 // Single source of truth for the blob-ingest size cap. Every path that accepts a
@@ -20,13 +21,9 @@ export function deriveFileTitle(fileName: string): string {
 // every caller. Shared by the multipart-upload and URL→blob paths.
 export function buildPdfMetadata(args: { fileType: string; fileName: string; fileSize: number; storageKey: string }) {
 	if (args.fileType !== PDF_MIME) return null;
-	return {
-		type: 'pdf' as const,
-		fetchedAt: new Date().toISOString(),
-		data: {
-			fileName: args.fileName,
-			fileSize: args.fileSize,
-			pdfUrl: storageKeyToAssetUrl(args.storageKey),
-		},
-	};
+	return buildMetadata('pdf', {
+		fileName: args.fileName,
+		fileSize: args.fileSize,
+		pdfUrl: storageKeyToAssetUrl(args.storageKey),
+	});
 }
