@@ -192,7 +192,7 @@ async function runCreate({ env, input, plan, userId, language, writer }: RunCrea
 	const usage = await result.usage;
 	if (!content.trim()) throw new Error('Generated document content is empty');
 
-	const lexical = markdownToLexicalJson(content);
+	const lexical = await markdownToLexicalJson(env, content);
 
 	const { target, document } = await withTx(env, async (client) => {
 		const ws = plan.kind === 'existing' ? plan.workspace : await commitNewWorkspaceForDoc(client, plan.pending);

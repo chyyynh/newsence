@@ -69,7 +69,7 @@ export function createEditDocumentTool(env: Env, userId: string, writer?: DataPa
 				}).catch((err) => console.error('[edit-document] snapshot failed:', err));
 			}
 
-			const lexicalJson = markdownToLexicalJson(result);
+			const lexicalJson = await markdownToLexicalJson(env, result);
 			const newVersion = doc.version + 1;
 
 			await withClient(env, async (client) => {
@@ -121,7 +121,7 @@ async function fetchDocument(env: Env, docId: string, userId: string): Promise<D
 			title: row.title ?? '',
 			content: row.content,
 			version: row.version,
-			markdown: contentToMarkdown(row.content),
+			markdown: await contentToMarkdown(env, row.content),
 		};
 	});
 }

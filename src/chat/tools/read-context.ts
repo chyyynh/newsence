@@ -212,7 +212,7 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 	);
 }
 
-async function readDocuments(client: Client, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
+async function readDocuments(client: Client, ids: string[], userId: string, env: Env): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
@@ -227,18 +227,24 @@ async function readDocuments(client: Client, ids: string[], userId: string): Pro
 		userId,
 	]);
 
-	return new Map(
-		result.rows.map((d) => [
-			d.id,
-			{
-				type: 'document' as const,
-				id: d.id,
-				title: d.title,
-				content: truncate(contentToMarkdown(d.content), CONTENT_MAX),
-				metadata: { createdAt: d.created_at, updatedAt: d.updated_at },
-			},
-		]),
+	// contentToMarkdown is a remote (Vercel) call now — convert the few matched
+	// docs in parallel rather than sequentially.
+	const entries = await Promise.all(
+		result.rows.map(async (d) => {
+			const markdown = await contentToMarkdown(env, d.content);
+			return [
+				d.id,
+				{
+					type: 'document' as const,
+					id: d.id,
+					title: d.title,
+					content: truncate(markdown, CONTENT_MAX),
+					metadata: { createdAt: d.created_at, updatedAt: d.updated_at },
+				},
+			] as const;
+		}),
 	);
+	return new Map(entries);
 }
 
 async function readUrls(client: Client, urls: string[]): Promise<Map<string, ReadContextResult>> {
@@ -259,7 +265,7 @@ async function readUrls(client: Client, urls: string[]): Promise<Map<string, Rea
 	return new Map(matches.map((m) => [m.url, formattedById.get(m.article.id)!] as const));
 }
 
-type Reader = (client: Client, ids: string[], userId: string) => Promise<Map<string, ReadContextResult>>;
+type Reader = (client: Client, ids: string[], userId: string, env: Env) => Promise<Map<string, ReadContextResult>>;
 
 const READERS: Record<ItemType, Reader> = {
 	article: (client, ids) => readArticles(client, ids),
@@ -288,7 +294,7 @@ export function createReadContextTool(env: Env, userId: string) {
 				const resultMaps = new Map<ItemType, Map<string, ReadContextResult>>();
 				await Promise.all(
 					[...groups.entries()].map(async ([type, ids]) => {
-						resultMaps.set(type, await READERS[type](client, ids, userId));
+						resultMaps.set(type, await READERS[type](client, ids, userId, env));
 					}),
 				);
 

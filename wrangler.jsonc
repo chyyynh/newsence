@@ -162,6 +162,10 @@
 	 *   origins can read response bytes from JS after a signed URL leaks.
 	 *   When unset, falls back to `*` (with a one-time console warning).
 	 *
+	 * `APP_BASE_URL` — frontend (Vercel) origin the worker calls for Lexical
+	 *   conversion (POST /api/internal/lexical), authed by CORE_WORKER_INTERNAL_TOKEN.
+	 *   Local dev: override to http://localhost:3000 via `.dev.vars`.
+	 *
 	 * Secret (set via `wrangler secret put`):
 	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
 	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
@@ -169,6 +173,7 @@
 	"vars": {
 		"CORE_WORKER_PUBLIC_URL": "https://core.newsence.app",
 		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
+		"APP_BASE_URL": "https://www.newsence.app",
 		"POSTHOG_HOST": "https://us.i.posthog.com"
 	}
 }
