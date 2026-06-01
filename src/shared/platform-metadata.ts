@@ -5,17 +5,77 @@
 // platform_metadata (articles) / metadata (user_files) JSONB; the frontend
 // READS it — both PlatformMetadata unions must describe the SAME JSON. Separate
 // pnpm workspaces can't share a module, so keep these shapes identical by hand:
-// change one, change the other. NOTE: the per-platform `data` interfaces live in
-// ingest/platforms/*/metadata.ts and are re-exported just below — edit them there.
+// change one, change the other.
 // ─────────────────────────────────────────────────────────────
 
-import type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
-import type { TwitterMetadata } from '@ingest/platforms/twitter/metadata';
-import type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
+// ── Twitter ──────────────────────────────────────────────────
 
-export type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
-export type { QuotedTweetData, TwitterAuthorFields, TwitterMedia, TwitterMetadata } from '@ingest/platforms/twitter/metadata';
-export type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
+export interface TwitterMedia {
+	url: string;
+	type: 'photo' | 'video' | 'animated_gif';
+	videoUrl?: string;
+	width?: number;
+	height?: number;
+}
+
+export interface TwitterAuthorFields {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+}
+
+export interface QuotedTweetData {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	text: string;
+}
+
+/**
+ * Flat shape (mirrors the frontend). `variant` discriminates standard (omitted),
+ * `'shared'` (external link — adds tweetText/externalUrl/externalOgImage/externalTitle),
+ * and `'article'` (long-form — author only). Constructed via `buildMetadata('twitter', …)`.
+ */
+export interface TwitterMetadata extends TwitterAuthorFields {
+	variant?: 'shared' | 'article';
+	media?: TwitterMedia[];
+	createdAt?: string;
+	quotedTweet?: QuotedTweetData;
+	tweetText?: string;
+	externalUrl?: string;
+	externalOgImage?: string | null;
+	externalTitle?: string | null;
+}
+
+// ── YouTube ──────────────────────────────────────────────────
+
+export interface YouTubeMetadata {
+	videoId: string;
+	channelName: string;
+	channelId?: string;
+	channelAvatar?: string;
+	duration?: string;
+	thumbnailUrl?: string;
+	viewCount?: number;
+	likeCount?: number;
+	commentCount?: number;
+	publishedAt?: string;
+	description?: string;
+	tags?: string[];
+}
+
+// ── HackerNews ───────────────────────────────────────────────
+
+export interface HackerNewsMetadata {
+	itemId: string;
+	author: string;
+	points: number;
+	commentCount: number;
+	itemType?: 'story' | 'ask' | 'show' | 'job';
+	storyUrl?: string | null;
+}
+
+// ── PDF ──────────────────────────────────────────────────────
 
 /** PDF upload metadata (stored in `user_files.metadata`). */
 export interface PdfMetadata {

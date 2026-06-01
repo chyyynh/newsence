@@ -3,8 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { logInfo, logWarn } from '@shared/log';
+import type { TwitterMedia } from '@shared/platform-metadata';
 import type { ScrapedContent } from '@shared/scraped-content';
-import type { TwitterMedia } from './metadata';
 
 interface KaitoTweet {
 	id: string;
