@@ -1,4 +1,3 @@
-import { handleChat } from '@chat/handlers/chat';
 import { handleEmbed } from '@ingest/handlers/embed';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
@@ -14,7 +13,6 @@ import { handleHealth } from './health';
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/api/chat': handleChat,
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
@@ -28,7 +26,6 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'POST /api/chat                            - AI chat (streaming; env-switched with the Vercel route via NEXT_PUBLIC_CHAT_API_URL, issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
@@ -79,7 +76,6 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape') return handleScrape(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape/jobs') return handleScrapeJobCreate(request, env);
-	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
 
 	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
