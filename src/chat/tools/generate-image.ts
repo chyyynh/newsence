@@ -4,7 +4,7 @@
 // spending the OpenRouter call, then an atomic credit deduction + Polar
 // metering after a successful generation — no client round-trip to skip.
 
-import { IMAGE_MODEL, runGenerateImage } from '@media/generate-image';
+import { generateImage, IMAGE_MODEL } from '@media/service';
 import type { Env } from '@shared/types';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -30,7 +30,7 @@ export function createGenerateImageTool(env: Env, userId: string) {
 			// the model as a tool error so it can tell the user to upgrade.
 			await billing.checkImage(env, userId, IMAGE_MODEL, 1);
 
-			const result = await runGenerateImage(env, userId, prompt);
+			const result = await generateImage(env, userId, prompt);
 
 			// Deduct + meter after a successful generation. Never throws — a failed
 			// deduction is logged, not surfaced (the pre-check already gated).

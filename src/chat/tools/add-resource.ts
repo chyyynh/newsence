@@ -1,8 +1,9 @@
-// Mirrors frontend/src/lib/ai/tools/add-resource.ts. Calls ingestUrls in
-// the same isolate (no self-fetch to /ingest); ON CONFLICT DO NOTHING gives
-// Prisma's skipDuplicates semantics on the citations insert.
+// Mirrors frontend/src/lib/ai/tools/add-resource.ts. Ingestion goes through the
+// @ingest/service facade (the only ingest module chat imports) — it runs in the
+// same isolate today and promotes to a service-binding RPC when chat splits out.
+// ON CONFLICT DO NOTHING gives Prisma's skipDuplicates semantics on the citations insert.
 
-import { ingestUrls } from '@ingest/urls';
+import { ingestUrlsForUser } from '@ingest/service';
 import { withClient } from '@shared/db/client';
 import { isValidUuid } from '@shared/ids';
 import type { Env } from '@shared/types';
@@ -36,18 +37,6 @@ const addResourceSchema = z
 	.refine((v) => (v.resourceIds?.length ?? 0) + (v.urls?.length ?? 0) > 0, {
 		message: 'Provide at least one of resourceIds or urls',
 	});
-
-async function ingestUrlsForUser(env: Env, urls: string[], userId: string): Promise<string[]> {
-	if (urls.length === 0) return [];
-	try {
-		const outcome = await ingestUrls(env, { urls, userId });
-		if (!outcome.ok) return [];
-		return outcome.results.map((r) => r.userFileId).filter((id): id is string => !!id);
-	} catch (err) {
-		console.error('[add-resource] ingestUrls failed:', err);
-		return [];
-	}
-}
 
 export function createAddResourceTool(env: Env, userId: string) {
 	return tool({
