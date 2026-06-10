@@ -103,7 +103,12 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 
 // GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent
 // once the Workflow completes (from its `output`).
-export async function handleScrapeJobStatus(jobId: string, env: Env): Promise<Response> {
+export async function handleScrapeJobStatus(request: Request, jobId: string, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, CORS_HEADERS);
+	if (unauth) return unauth;
+
 	try {
 		const instance = await env.SCRAPE_WORKFLOW.get(jobId);
 		const { status, error, output } = await instance.status();

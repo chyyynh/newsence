@@ -39,15 +39,18 @@ const HELP_TEXT =
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
 	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset\n';
 
-function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
+function scrapeJobId(pathname: string): string | null {
+	if (!pathname.startsWith('/scrape/jobs/')) return null;
+	return pathname.slice('/scrape/jobs/'.length) || null;
+}
+
+function routePrefixGet(request: Request, pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/stream/')) {
 		const id = pathname.slice('/stream/'.length);
 		if (id) return handleWorkflowStream(id, env);
 	}
-	if (pathname.startsWith('/scrape/jobs/')) {
-		const id = pathname.slice('/scrape/jobs/'.length);
-		if (id) return handleScrapeJobStatus(id, env);
-	}
+	const id = scrapeJobId(pathname);
+	if (id) return handleScrapeJobStatus(request, id, env);
 	return null;
 }
 
@@ -76,6 +79,10 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape') return handleScrape(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape/jobs') return handleScrapeJobCreate(request, env);
+	if (method === 'OPTIONS') {
+		const id = scrapeJobId(pathname);
+		if (id) return handleScrapeJobStatus(request, id, env);
+	}
 
 	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
@@ -83,7 +90,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'GET') {
-		const response = routePrefixGet(pathname, env);
+		const response = routePrefixGet(request, pathname, env);
 		if (response) return response;
 	}
 
