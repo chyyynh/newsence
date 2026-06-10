@@ -204,7 +204,7 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 		fileName: file.name,
 		originType: 'upload',
 		title,
-		metadata: buildPdfMetadata({ fileType, fileName: file.name, fileSize: file.size, storageKey }),
+		metadata: buildPdfMetadata({ fileType, fileName: file.name, fileSize: file.size }),
 	});
 	if (!persisted.ok) return persisted;
 

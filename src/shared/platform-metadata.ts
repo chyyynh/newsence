@@ -77,11 +77,15 @@ export interface HackerNewsMetadata {
 
 // ── PDF ──────────────────────────────────────────────────────
 
-/** PDF upload metadata (stored in `user_files.metadata`). */
+/**
+ * PDF upload metadata (stored in `user_files.metadata`). Descriptive fields only
+ * — the fetch URL is NOT stored. The asset lives at `storage_key` (the
+ * authoritative column); the URL is derived from it at read time, so renaming
+ * the asset route never rots persisted data.
+ */
 export interface PdfMetadata {
 	fileName: string;
 	fileSize: number;
-	pdfUrl: string;
 }
 
 // ─────────────────────────────────────────────────────────────

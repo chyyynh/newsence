@@ -1,6 +1,5 @@
 import { PDF_MIME } from './mime';
 import { buildMetadata } from './platform-metadata';
-import { storageKeyToAssetUrl } from './storage-keys';
 
 // Single source of truth for the blob-ingest size cap. Every path that accepts a
 // user file — multipart upload, URL→blob, external image URL, and the /scrape
@@ -18,12 +17,13 @@ export function deriveFileTitle(fileName: string): string {
 
 // Builds the `user_files.metadata` jsonb for a stored PDF, or null for any other
 // type. Folding the PDF check in here keeps the "is this a PDF?" branch out of
-// every caller. Shared by the multipart-upload and URL→blob paths.
-export function buildPdfMetadata(args: { fileType: string; fileName: string; fileSize: number; storageKey: string }) {
+// every caller. Shared by the multipart-upload and URL→blob paths. The fetch URL
+// is intentionally NOT stored — it's derived from `storage_key` at read time
+// (see frontend `getUserFileResourceUrl`), so a route rename can't rot the row.
+export function buildPdfMetadata(args: { fileType: string; fileName: string; fileSize: number }) {
 	if (args.fileType !== PDF_MIME) return null;
 	return buildMetadata('pdf', {
 		fileName: args.fileName,
 		fileSize: args.fileSize,
-		pdfUrl: storageKeyToAssetUrl(args.storageKey),
 	});
 }

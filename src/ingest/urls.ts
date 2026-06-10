@@ -144,7 +144,7 @@ async function insertScrapedBlob(
 
 		const fileSize = limited.getBytesSeen();
 		const title = deriveFileTitle(blob.suggestedFilename);
-		const metadata = buildPdfMetadata({ fileType: blob.contentType, fileName: blob.suggestedFilename, fileSize, storageKey });
+		const metadata = buildPdfMetadata({ fileType: blob.contentType, fileName: blob.suggestedFilename, fileSize });
 
 		const persisted = await persistBlobRow(env, {
 			userId,
