@@ -1,7 +1,7 @@
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '@shared/db/articles';
 import { FEED_UA, fetchWithTimeout } from '@shared/fetch';
 import { logError, logInfo, logWarn } from '@shared/log';
-import { parsePlatformMetadata } from '@shared/platform-metadata-parser';
+import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { normalizeUrl } from '@shared/web';
 import { XMLParser } from 'fast-xml-parser';
@@ -57,20 +57,16 @@ async function processYouTubeVideo(
 	videoId: string,
 ): Promise<boolean> {
 	const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '');
-	const platformMetadata = parsePlatformMetadata(
-		{
-			...scraped.metadata,
-			type: 'youtube',
-			videoId,
-			channelName: scraped.author || channel.name,
-			thumbnailUrl: scraped.ogImageUrl ?? scraped.metadata?.thumbnailUrl,
-			publishedAt: scraped.publishedDate ?? scraped.metadata?.publishedAt,
-		},
-		'youtube',
-	);
-	const youtubeMetadata = platformMetadata?.type === 'youtube' ? platformMetadata.data : null;
+	const youtubeMetadata: YouTubeMetadata = {
+		...scraped.metadata,
+		videoId,
+		channelName: scraped.author || channel.name,
+		thumbnailUrl: scraped.ogImageUrl ?? scraped.metadata.thumbnailUrl,
+		publishedAt: scraped.publishedDate ?? scraped.metadata.publishedAt,
+	};
+	const platformMetadata = buildMetadata('youtube', youtubeMetadata);
 
-	const duration = youtubeMetadata?.duration;
+	const duration = youtubeMetadata.duration;
 	if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
 		logInfo('YOUTUBE-CRON', 'Skipping short', { videoId, duration });
 		return false;
@@ -93,7 +89,7 @@ async function processYouTubeVideo(
 	await enqueueArticleProcess(env, articleId, 'youtube');
 	logInfo('YOUTUBE-CRON', 'Inserted video', { channel: channel.name, title: scraped.title.slice(0, 60) });
 
-	const avatar = youtubeMetadata?.channelAvatar;
+	const avatar = youtubeMetadata.channelAvatar;
 	if (avatar && !channel.avatar_url) {
 		await db.query(`UPDATE "RssList" SET avatar_url = $1 WHERE id = $2`, [avatar, channel.id]);
 		channel.avatar_url = avatar;

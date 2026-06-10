@@ -29,11 +29,6 @@ export function prepareArticleTextForEmbedding(article: EmbeddingInput): string 
 	return `${headerText} ${article.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
 }
 
-export function normalizeVector(values: number[]): number[] {
-	const norm = Math.sqrt(values.reduce((sum, val) => sum + val * val, 0));
-	return norm === 0 ? values : values.map((v) => v / norm);
-}
-
 export async function generateArticleEmbedding(text: string, ai: Ai): Promise<number[] | null> {
 	const sanitizedText = text?.trim();
 	if (!sanitizedText) return null;
@@ -48,7 +43,9 @@ export async function generateArticleEmbedding(text: string, ai: Ai): Promise<nu
 			return null;
 		}
 
-		return normalizeVector(result.data[0]);
+		// bge-m3 output is stored/queried with pgvector cosine (`<=>`,
+		// vector_cosine_ops), which is scale-invariant — no L2 normalization needed.
+		return result.data[0];
 	} catch (error: unknown) {
 		logError('EMBEDDING', 'Workers AI error', { error: (error as Error).message });
 		return null;

@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { logInfo, logWarn } from '@shared/log';
+import type { YouTubeMetadata } from '@shared/platform-metadata';
 import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@shared/scraped-content';
 
 interface YouTubeVideoItem {
@@ -81,7 +82,7 @@ async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptS
 	return { segments, language };
 }
 
-export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent> {
+export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent & { metadata: YouTubeMetadata }> {
 	logInfo('YOUTUBE', 'Fetching video', { videoId });
 
 	const videoResponse = await fetch(
@@ -149,9 +150,9 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 			videoId: video.id,
 			channelName: snippet.channelTitle,
 			channelId: snippet.channelId,
-			channelAvatar,
+			channelAvatar: channelAvatar ?? undefined,
 			duration: video.contentDetails.duration,
-			thumbnailUrl,
+			thumbnailUrl: thumbnailUrl ?? undefined,
 			viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,
 			likeCount: stats.likeCount ? Number.parseInt(stats.likeCount, 10) : undefined,
 			commentCount: stats.commentCount ? Number.parseInt(stats.commentCount, 10) : undefined,

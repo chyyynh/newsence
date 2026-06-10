@@ -1,33 +1,92 @@
 // ─────────────────────────────────────────────────────────────
-// Canonical Platform Metadata Types + Builders
+// Canonical Platform Metadata Types + Builder
+//
+// MIRROR OF frontend/src/types/platform-metadata.ts. The worker WRITES
+// platform_metadata (articles) / metadata (user_files) JSONB; the frontend
+// READS it — both PlatformMetadata unions must describe the SAME JSON. Separate
+// pnpm workspaces can't share a module, so keep these shapes identical by hand:
+// change one, change the other.
 // ─────────────────────────────────────────────────────────────
 
-import type { BilibiliMetadata } from '@ingest/platforms/bilibili/metadata';
-import type { HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
-import type { TwitterMetadata } from '@ingest/platforms/twitter/metadata';
-import type { XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
-import type { YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
+// ── Twitter ──────────────────────────────────────────────────
 
-export { type BilibiliMetadata, buildBilibili } from '@ingest/platforms/bilibili/metadata';
-export { buildHackerNews, type HackerNewsMetadata } from '@ingest/platforms/hackernews/metadata';
-// Re-exports
-export {
-	buildTwitterArticle,
-	buildTwitterShared,
-	buildTwitterStandard,
-	type QuotedTweetData,
-	type TwitterAuthorFields,
-	type TwitterMedia,
-	type TwitterMetadata,
-} from '@ingest/platforms/twitter/metadata';
-export { buildXiaohongshu, type XiaohongshuMetadata } from '@ingest/platforms/xiaohongshu/metadata';
-export { buildYouTube, type YouTubeMetadata } from '@ingest/platforms/youtube/metadata';
+export interface TwitterMedia {
+	url: string;
+	type: 'photo' | 'video' | 'animated_gif';
+	videoUrl?: string;
+	width?: number;
+	height?: number;
+}
 
-// ─────────────────────────────────────────────────────────────
-// Source types
-// ─────────────────────────────────────────────────────────────
+export interface TwitterAuthorFields {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+}
 
-export type SourceType = 'twitter' | 'youtube' | 'hackernews' | 'bilibili' | 'xiaohongshu' | 'default';
+export interface QuotedTweetData {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	text: string;
+}
+
+/**
+ * Flat shape (mirrors the frontend). `variant` discriminates standard (omitted),
+ * `'shared'` (external link — adds tweetText/externalUrl/externalOgImage/externalTitle),
+ * and `'article'` (long-form — author only). Constructed via `buildMetadata('twitter', …)`.
+ */
+export interface TwitterMetadata extends TwitterAuthorFields {
+	variant?: 'shared' | 'article';
+	media?: TwitterMedia[];
+	createdAt?: string;
+	quotedTweet?: QuotedTweetData;
+	tweetText?: string;
+	externalUrl?: string;
+	externalOgImage?: string | null;
+	externalTitle?: string | null;
+}
+
+// ── YouTube ──────────────────────────────────────────────────
+
+export interface YouTubeMetadata {
+	videoId: string;
+	channelName: string;
+	channelId?: string;
+	channelAvatar?: string;
+	duration?: string;
+	thumbnailUrl?: string;
+	viewCount?: number;
+	likeCount?: number;
+	commentCount?: number;
+	publishedAt?: string;
+	description?: string;
+	tags?: string[];
+}
+
+// ── HackerNews ───────────────────────────────────────────────
+
+export interface HackerNewsMetadata {
+	itemId: string;
+	author: string;
+	points: number;
+	commentCount: number;
+	itemType?: 'story' | 'ask' | 'show' | 'job';
+	storyUrl?: string | null;
+}
+
+// ── PDF ──────────────────────────────────────────────────────
+
+/**
+ * PDF upload metadata (stored in `user_files.metadata`). Descriptive fields only
+ * — the fetch URL is NOT stored. The asset lives at `storage_key` (the
+ * authoritative column); the URL is derived from it at read time, so renaming
+ * the asset route never rots persisted data.
+ */
+export interface PdfMetadata {
+	fileName: string;
+	fileSize: number;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Enrichments
@@ -56,22 +115,27 @@ export type PlatformMetadata =
 	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'bilibili'; fetchedAt: string; data: BilibiliMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'xiaohongshu'; fetchedAt: string; data: XiaohongshuMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions);
 
 // ─────────────────────────────────────────────────────────────
-// Default Builder
+// Generic envelope builder
 // ─────────────────────────────────────────────────────────────
 
-function now(): string {
-	return new Date().toISOString();
+/** Maps each platform `type` to the shape of its `data` payload. */
+interface MetadataDataMap {
+	twitter: TwitterMetadata;
+	youtube: YouTubeMetadata;
+	hackernews: HackerNewsMetadata;
+	pdf: PdfMetadata;
+	default: null;
 }
 
-export function buildDefault(): PlatformMetadata & { type: 'default' } {
-	return {
-		type: 'default',
-		fetchedAt: now(),
-		data: null,
-	};
+/**
+ * Wraps an already-assembled `data` payload in the platform envelope, binding the
+ * `type` literal to the correct `data` shape via {@link MetadataDataMap}. Replaces the
+ * per-platform `buildX` constructors (which were identical except for the `type` string).
+ */
+export function buildMetadata<T extends keyof MetadataDataMap>(type: T, data: MetadataDataMap[T]): Extract<PlatformMetadata, { type: T }> {
+	return { type, fetchedAt: new Date().toISOString(), data } as Extract<PlatformMetadata, { type: T }>;
 }

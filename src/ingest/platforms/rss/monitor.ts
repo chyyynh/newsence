@@ -2,7 +2,7 @@ import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } 
 import { FEED_UA, fetchWithTimeout } from '@shared/fetch';
 import { logInfo, logWarn } from '@shared/log';
 import type { PlatformMetadata } from '@shared/platform-metadata';
-import { buildHackerNews } from '@shared/platform-metadata';
+import { buildMetadata } from '@shared/platform-metadata';
 import { detectPlatformType, extractHackerNewsId } from '@shared/scraped-content';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { normalizeUrl } from '@shared/web';
@@ -39,7 +39,7 @@ async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMe
 		descendants?: number;
 		type?: string;
 	};
-	return buildHackerNews({
+	return buildMetadata('hackernews', {
 		itemId: hn.id.toString(),
 		author: hn.author ?? '',
 		points: hn.points ?? 0,

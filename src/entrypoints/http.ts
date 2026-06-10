@@ -1,6 +1,6 @@
-import { handleChat } from '@chat/handlers/chat';
 import { handleEmbed } from '@ingest/handlers/embed';
 import { handleIngest } from '@ingest/handlers/ingest';
+import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
 import { handleDeleteAsset } from '@media/delete-asset';
 import { handleGenerateImage } from '@media/generate-image';
@@ -13,10 +13,11 @@ import { handleHealth } from './health';
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/api/chat': handleChat,
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
+	'/scrape': (req, env) => handleScrape(req, env),
+	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 	'/media/gc': (req, env) => handleOrphanGc(req, env),
 };
@@ -25,8 +26,10 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
-	'POST /api/chat                            - AI chat (Phase 1 scaffold, mock stream; issue #136)\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
+	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
+	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
+	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
@@ -36,11 +39,18 @@ const HELP_TEXT =
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
 	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset\n';
 
-function routePrefixGet(pathname: string, env: Env): Response | Promise<Response> | null {
+function scrapeJobId(pathname: string): string | null {
+	if (!pathname.startsWith('/scrape/jobs/')) return null;
+	return pathname.slice('/scrape/jobs/'.length) || null;
+}
+
+function routePrefixGet(request: Request, pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/stream/')) {
 		const id = pathname.slice('/stream/'.length);
 		if (id) return handleWorkflowStream(id, env);
 	}
+	const id = scrapeJobId(pathname);
+	if (id) return handleScrapeJobStatus(request, id, env);
 	return null;
 }
 
@@ -67,7 +77,12 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
-	if (method === 'OPTIONS' && pathname === '/api/chat') return handleChat(request, env, ctx);
+	if (method === 'OPTIONS' && pathname === '/scrape') return handleScrape(request, env);
+	if (method === 'OPTIONS' && pathname === '/scrape/jobs') return handleScrapeJobCreate(request, env);
+	if (method === 'OPTIONS') {
+		const id = scrapeJobId(pathname);
+		if (id) return handleScrapeJobStatus(request, id, env);
+	}
 
 	if (method === 'POST') {
 		const handler = POST_ROUTES[pathname];
@@ -75,7 +90,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'GET') {
-		const response = routePrefixGet(pathname, env);
+		const response = routePrefixGet(request, pathname, env);
 		if (response) return response;
 	}
 

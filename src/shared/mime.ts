@@ -1,3 +1,5 @@
+export const PDF_MIME = 'application/pdf';
+
 export function isRasterImage(contentType: string): boolean {
 	const lower = contentType.toLowerCase();
 	return lower.startsWith('image/') && !lower.startsWith('image/svg');

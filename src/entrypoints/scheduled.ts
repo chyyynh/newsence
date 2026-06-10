@@ -1,8 +1,6 @@
 import { handleRetryCron } from '@ingest/monitors/retry';
-import { handleBilibiliCron } from '@ingest/platforms/bilibili/monitor';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
-import { handleXiaohongshuCron } from '@ingest/platforms/xiaohongshu/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { logInfo } from '@shared/log';
 import type { Env, ExecutionContext, ScheduledEvent } from '@shared/types';
@@ -16,8 +14,6 @@ export function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
 		ctx.waitUntil(handleTwitterCron(env, ctx));
 	} else if (event.cron === '*/30 * * * *') {
 		ctx.waitUntil(handleYouTubeCron(env, ctx));
-		ctx.waitUntil(handleBilibiliCron(env, ctx));
-		ctx.waitUntil(handleXiaohongshuCron(env, ctx));
 	} else if (event.cron === '0 3 * * *') {
 		ctx.waitUntil(handleRetryCron(env, ctx));
 	}

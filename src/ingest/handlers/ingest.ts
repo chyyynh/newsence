@@ -1,7 +1,6 @@
 import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
 import type { Env } from '@shared/types';
-import { ingestBlob } from '../blob';
-import { type IngestImageUrlErrorCode, ingestImageUrl } from '../image-url';
+import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
 import { ingestUrls } from '../urls';
 
 // Matches `simple.period` in `wrangler.jsonc` `ratelimits[USER_INGEST_LIMITER]`.
@@ -75,6 +74,8 @@ function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
 			return 429;
 		case 'PAYLOAD_TOO_LARGE':
 			return 413;
+		case 'QUOTA_EXCEEDED':
+			return 403;
 		case 'UNSUPPORTED_MEDIA_TYPE':
 			return 415;
 		case 'UPSTREAM_ERROR':
@@ -114,10 +115,12 @@ async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	const status =
 		outcome.code === 'PAYLOAD_TOO_LARGE'
 			? 413
-			: outcome.code === 'UNSUPPORTED_MEDIA_TYPE'
-				? 415
-				: outcome.code === 'INTERNAL_ERROR'
-					? 500
-					: 400;
+			: outcome.code === 'QUOTA_EXCEEDED'
+				? 403
+				: outcome.code === 'UNSUPPORTED_MEDIA_TYPE'
+					? 415
+					: outcome.code === 'INTERNAL_ERROR'
+						? 500
+						: 400;
 	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
 }

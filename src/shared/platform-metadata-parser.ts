@@ -1,14 +1,10 @@
 import {
-	buildDefault,
-	buildHackerNews,
-	buildTwitterArticle,
-	buildTwitterShared,
-	buildTwitterStandard,
-	buildYouTube,
+	buildMetadata,
 	type PlatformMetadata,
 	type QuotedTweetData,
 	type TwitterAuthorFields,
 	type TwitterMedia,
+	type TwitterMetadata,
 } from './platform-metadata';
 
 type PlatformInputType = 'youtube' | 'twitter' | 'hackernews' | 'default';
@@ -52,26 +48,16 @@ function asPlatformType(value: unknown, fallbackType: string): PlatformInputType
 	return 'default';
 }
 
-function asHackerNewsItemType(value: unknown): HackerNewsItemType | undefined {
-	const itemType = asString(value);
-	return HACKERNEWS_ITEM_TYPES.find((candidate) => candidate === itemType);
-}
-
-function asTwitterVariant(value: unknown): TwitterVariant | undefined {
-	const variant = asString(value);
-	return TWITTER_VARIANTS.find((candidate) => candidate === variant);
-}
-
-function asTwitterMediaType(value: unknown): TwitterMediaType | undefined {
-	const mediaType = asString(value);
-	return TWITTER_MEDIA_TYPES.find((candidate) => candidate === mediaType);
+function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+	const str = asString(value);
+	return allowed.find((candidate) => candidate === str);
 }
 
 function parseTwitterMediaItem(value: unknown): TwitterMedia | null {
 	const item = asRecord(value);
 	if (!item) return null;
 	const url = asString(item.url);
-	const type = asTwitterMediaType(item.type);
+	const type = asEnum(item.type, TWITTER_MEDIA_TYPES);
 	if (!url || !type) return null;
 	return {
 		url,
@@ -116,7 +102,7 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 
 	switch (type) {
 		case 'youtube':
-			return buildYouTube({
+			return buildMetadata('youtube', {
 				videoId: asString(metadata.videoId) ?? '',
 				channelName: asString(metadata.channelName) ?? '',
 				channelId: asString(metadata.channelId),
@@ -131,35 +117,33 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 				tags: asStringArray(metadata.tags),
 			});
 		case 'hackernews':
-			return buildHackerNews({
+			return buildMetadata('hackernews', {
 				itemId: asString(metadata.itemId) ?? '',
 				author: asString(metadata.author) ?? '',
 				points: asNumber(metadata.points) ?? 0,
 				commentCount: asNumber(metadata.commentCount) ?? 0,
-				itemType: asHackerNewsItemType(metadata.itemType),
+				itemType: asEnum(metadata.itemType, HACKERNEWS_ITEM_TYPES),
 				storyUrl: asNullableString(metadata.storyUrl),
 			});
 		case 'twitter': {
 			const author = parseTwitterAuthor(metadata);
-			const variant = asTwitterVariant(metadata.variant);
+			const variant = asEnum(metadata.variant, TWITTER_VARIANTS);
+			if (variant === 'article') return buildMetadata('twitter', { ...author, variant: 'article' });
+
+			const base: TwitterMetadata = { ...author, media: asTwitterMediaArray(metadata.media), createdAt: asString(metadata.createdAt) };
 			if (variant === 'shared') {
-				return buildTwitterShared(author, {
-					media: asTwitterMediaArray(metadata.media),
-					createdAt: asString(metadata.createdAt),
+				return buildMetadata('twitter', {
+					...base,
+					variant: 'shared',
 					tweetText: asString(metadata.tweetText),
 					externalUrl: asString(metadata.externalUrl) ?? '',
 					externalOgImage: asNullableString(metadata.externalOgImage),
 					externalTitle: asNullableString(metadata.externalTitle),
 				});
 			}
-			if (variant === 'article') return buildTwitterArticle(author);
-			return buildTwitterStandard(author, {
-				media: asTwitterMediaArray(metadata.media),
-				createdAt: asString(metadata.createdAt),
-				quotedTweet: asQuotedTweet(metadata.quotedTweet),
-			});
+			return buildMetadata('twitter', { ...base, quotedTweet: asQuotedTweet(metadata.quotedTweet) });
 		}
 		default:
-			return buildDefault();
+			return buildMetadata('default', null);
 	}
 }

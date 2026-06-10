@@ -2,17 +2,12 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
+import { decodeHtmlEntities, htmlToText } from '@shared/html';
 import { logError, logInfo, logWarn } from '@shared/log';
+import { callOpenRouter } from '@shared/openrouter';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
-import {
-	type ArticleProcessor,
-	callGeminiForAnalysis,
-	callOpenRouterChat,
-	isEmpty,
-	type ProcessorContext,
-	type ProcessorResult,
-} from '../../domain/ai-utils';
+import { type ArticleProcessor, callGeminiForAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web/scraper';
 import { HN_ALGOLIA_API } from './scraper';
 
@@ -49,23 +44,11 @@ export interface HnCollectedComment {
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-function cleanHtmlText(raw: string): string {
-	return raw
-		.replace(/<[^>]*>/g, ' ')
-		.replace(/&quot;/g, '"')
-		.replace(/&#x27;|&#39;/g, "'")
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/\s+/g, ' ')
-		.trim();
-}
-
-export function collectAllComments(children: HnComment[]): HnCollectedComment[] {
+function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 	const comments: HnCollectedComment[] = [];
 	for (const child of children) {
 		if (child.text) {
-			const cleanText = cleanHtmlText(child.text);
+			const cleanText = htmlToText(child.text);
 			if (cleanText) {
 				comments.push({
 					id: child.id,
@@ -91,10 +74,7 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 	if (hnTextHtml) {
 		const hrefMatches = hnTextHtml.match(/href="([^"]+)"/g);
 		for (const m of hrefMatches ?? []) {
-			const raw = m
-				.slice(6, -1)
-				.replace(/&#x2F;/g, '/')
-				.replace(/&amp;/g, '&');
+			const raw = decodeHtmlEntities(m.slice(6, -1));
 			if (!seen.has(raw) && raw.startsWith('http')) {
 				seen.add(raw);
 				urls.push(raw);
@@ -173,7 +153,7 @@ Article excerpt (${pageExcerpt.length} chars):
 ${pageExcerpt || 'N/A'}
 
 HN post text:
-${cleanHtmlText(hnText).slice(0, 1200) || 'N/A'}
+${htmlToText(hnText).slice(0, 1200) || 'N/A'}
 
 HN comments (${commentCount} total):
 ${commentInput}
@@ -206,8 +186,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		callOpenRouterChat(apiKey, cnPrompt.system, cnPrompt.user),
-		callOpenRouterChat(apiKey, enPrompt.system, enPrompt.user),
+		callOpenRouter(cnPrompt.user, { apiKey, systemPrompt: cnPrompt.system }),
+		callOpenRouter(enPrompt.user, { apiKey, systemPrompt: enPrompt.system }),
 	]);
 
 	return { en, cn };

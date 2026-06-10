@@ -12,7 +12,7 @@ import {
 	translateContent,
 } from '../domain/processors';
 import { fetchOgImage } from '../platforms/web/scraper';
-import { extractAndPersistPdf, isExtractablePdf } from './steps/pdf-extraction';
+import { extractAndPersistPdf, isExtractablePdf, markExtractionFailed, type PdfExtractionResult } from './steps/pdf-extraction';
 import { generateAndSaveYouTubeHighlights } from './steps/youtube-highlights';
 
 const ARTICLE_FIELDS_FOR_ARTICLES =
@@ -58,19 +58,25 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as Article;
 
-		if (!article) {
-			logWarn('WORKFLOW', 'Article not found', { article_id });
-			return { success: false, article_id, reason: 'not_found' };
-		}
-
 		if (isUserFile && !article.content && isExtractablePdf(article)) {
 			const storageKey = article.storage_key as string;
-			const extracted = (await step.do(
-				'extract-pdf-text',
-				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-				() => extractAndPersistPdf(this.env, article_id, storageKey),
-			)) as string;
-			article.content = extracted;
+			// Extraction failure must NOT abort the whole article: a bad/scanned PDF
+			// would otherwise lose AI analysis, OG image, and embedding. On a hard
+			// failure we flag the row and continue with empty content — downstream
+			// (AI analysis, embedding) already degrade gracefully on missing content.
+			try {
+				const extracted = (await step.do(
+					'extract-pdf-text',
+					{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+					() => extractAndPersistPdf(this.env, article_id, storageKey),
+				)) as PdfExtractionResult;
+				article.content = extracted.text;
+			} catch (error) {
+				logWarn('WORKFLOW', 'PDF extraction failed, continuing without content', { article_id, error: String(error) });
+				await step.do('flag-extraction-failed', { retries: { limit: 1, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
+					markExtractionFailed(this.env, article_id),
+				);
+			}
 		}
 
 		// Step 2: AI analysis (translate / tags / summary)

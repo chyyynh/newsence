@@ -122,7 +122,7 @@ interface TweetAnalysis {
 
 const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [], entities: [] };
 
-export async function translateTweet(tweetText: string, apiKey: string): Promise<TweetAnalysis> {
+async function translateTweet(tweetText: string, apiKey: string): Promise<TweetAnalysis> {
 	logInfo('AI', 'Translating tweet', { text: tweetText.substring(0, 60) });
 
 	const prompt = `請將以下推文直接翻譯成繁體中文，並提供標籤和關鍵字。
