@@ -11,12 +11,9 @@ import {
 	type ProcessorResult,
 } from './ai-utils';
 
-export { collectAllComments } from '../platforms/hackernews/processor';
-export { translateTweet } from '../platforms/twitter/processor';
-export { generateYouTubeHighlights, type YouTubeHighlight, type YouTubeHighlightsResult } from '../platforms/youtube/highlights';
-export type { ArticleProcessor, ProcessingDeps, ProcessorContext, ProcessorResult } from './ai-utils';
-// Re-exports
-export { callGeminiForAnalysis, callOpenRouterChat, createFallbackResult, isEmpty, translateContent } from './ai-utils';
+export { generateYouTubeHighlights } from '../platforms/youtube/highlights';
+export type { ProcessorResult } from './ai-utils';
+export { translateContent } from './ai-utils';
 
 // ─────────────────────────────────────────────────────────────
 // Default Processor
@@ -56,15 +53,14 @@ const processors: Record<string, ArticleProcessor> = {
 	default: new DefaultProcessor(),
 };
 
-export function getProcessor(sourceType: string | undefined): ArticleProcessor {
+function getProcessor(sourceType: string | undefined): ArticleProcessor {
 	return processors[sourceType ?? 'default'] ?? processors.default;
 }
 
-export function mergePlatformMetadata(
+function mergePlatformMetadata(
 	baseMetadata: PlatformMetadata | null | undefined,
 	enrichments?: PlatformEnrichments,
 ): PlatformMetadata | null {
-	if (!baseMetadata && (!enrichments || Object.keys(enrichments).length === 0)) return baseMetadata ?? null;
 	if (!enrichments || Object.keys(enrichments).length === 0) return baseMetadata ?? null;
 	if (!baseMetadata) return null;
 

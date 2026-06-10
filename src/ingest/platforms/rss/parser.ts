@@ -2,6 +2,8 @@
 // RSS Parsing Utilities
 // ─────────────────────────────────────────────────────────────
 
+import { decodeHtmlEntities, htmlToText } from '@shared/html';
+
 export type RSSItem = Record<string, unknown>;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -47,63 +49,44 @@ export function toPlainText(value: unknown): string {
 }
 
 export function stripHtml(raw: unknown): string {
-	const text = toPlainText(raw);
-	if (!text) return '';
-	return text
-		.replace(/<[^>]*>/g, ' ')
-		.replace(/&quot;/g, '"')
-		.replace(/&#x27;|&#39;/g, "'")
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/\s+/g, ' ')
-		.trim();
+	return htmlToText(toPlainText(raw));
 }
 
 export function htmlToMarkdown(html: string): string {
-	return (
-		html
-			// Block elements
-			.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
-			.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
-			.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
-			.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
-			.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n\n##### $1\n\n')
-			.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n\n###### $1\n\n')
-			// Lists
-			.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
-			.replace(/<\/?[ou]l[^>]*>/gi, '\n')
-			// Inline elements
-			.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
-			.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
-			.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
-			.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
-			.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-			.replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '^($1)')
-			// Block breaks
-			.replace(/<br\s*\/?>/gi, '\n')
-			.replace(/<\/p>/gi, '\n\n')
-			.replace(/<hr\s*\/?>/gi, '\n\n---\n\n')
-			.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) =>
-				content
-					.trim()
-					.split('\n')
-					.map((line: string) => `> ${line}`)
-					.join('\n'),
-			)
-			// Strip remaining tags
-			.replace(/<[^>]*>/g, '')
-			// HTML entities
-			.replace(/&quot;/g, '"')
-			.replace(/&#x27;|&#39;/g, "'")
-			.replace(/&amp;/g, '&')
-			.replace(/&lt;/g, '<')
-			.replace(/&gt;/g, '>')
-			.replace(/&nbsp;/g, ' ')
-			// Clean up whitespace
-			.replace(/\n{3,}/g, '\n\n')
-			.trim()
-	);
+	const markdown = html
+		// Block elements
+		.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
+		.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
+		.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
+		.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
+		.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n\n##### $1\n\n')
+		.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n\n###### $1\n\n')
+		// Lists
+		.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
+		.replace(/<\/?[ou]l[^>]*>/gi, '\n')
+		// Inline elements
+		.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+		.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+		.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
+		.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
+		.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+		.replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '^($1)')
+		// Block breaks
+		.replace(/<br\s*\/?>/gi, '\n')
+		.replace(/<\/p>/gi, '\n\n')
+		.replace(/<hr\s*\/?>/gi, '\n\n---\n\n')
+		.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) =>
+			content
+				.trim()
+				.split('\n')
+				.map((line: string) => `> ${line}`)
+				.join('\n'),
+		)
+		// Strip remaining tags
+		.replace(/<[^>]*>/g, '');
+	return decodeHtmlEntities(markdown)
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
 }
 
 export function extractRssFullContent(item: RSSItem): string {

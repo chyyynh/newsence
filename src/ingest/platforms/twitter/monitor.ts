@@ -2,7 +2,7 @@ import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } 
 import { fetchWithTimeout } from '@shared/fetch';
 import { logError, logInfo, logWarn } from '@shared/log';
 import type { PlatformMetadata, QuotedTweetData, TwitterMedia } from '@shared/platform-metadata';
-import { buildTwitterArticle, buildTwitterShared, buildTwitterStandard } from '@shared/platform-metadata';
+import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
 import type { Client } from 'pg';
@@ -134,7 +134,8 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise
 		summary: scraped.summary || '',
 		content: scraped.content,
 		ogImage: scraped.ogImageUrl || null,
-		metadata: buildTwitterArticle({
+		metadata: buildMetadata('twitter', {
+			variant: 'article',
 			authorName: meta?.authorName || tweet.author?.name || '',
 			authorUserName: meta?.authorUserName || tweet.author?.userName || '',
 			authorProfilePicture: meta?.authorProfilePicture || tweet.author?.profilePicture,
@@ -189,7 +190,9 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: st
 		summary: '',
 		content: scraped.content,
 		ogImage: scraped.ogImageUrl,
-		metadata: buildTwitterShared(extractAuthor(tweet), {
+		metadata: buildMetadata('twitter', {
+			variant: 'shared',
+			...extractAuthor(tweet),
 			media: extractTweetMedia(tweet),
 			createdAt: tweet.createdAt,
 			tweetText: textWithoutUrls,
@@ -254,7 +257,9 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const author = extractAuthor(tweet);
 	const media = extractTweetMedia(tweet);
 	const metadata = externalUrl
-		? buildTwitterShared(author, {
+		? buildMetadata('twitter', {
+				variant: 'shared',
+				...author,
 				media,
 				createdAt: tweet.createdAt,
 				tweetText: textWithoutUrls,
@@ -262,7 +267,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 				externalOgImage,
 				externalTitle,
 			})
-		: buildTwitterStandard(author, { media, createdAt: tweet.createdAt, quotedTweet: extractQuotedTweet(tweet) });
+		: buildMetadata('twitter', { ...author, media, createdAt: tweet.createdAt, quotedTweet: extractQuotedTweet(tweet) });
 
 	const id = await insertTwitterArticle(db, env, {
 		url: tweetUrl,
@@ -304,7 +309,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	const allMedia = sorted.flatMap(extractTweetMedia);
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
 	const author = extractAuthor(first);
-	const metadata = buildTwitterStandard(author, { media: allMedia, createdAt: first.createdAt, quotedTweet });
+	const metadata = buildMetadata('twitter', { ...author, media: allMedia, createdAt: first.createdAt, quotedTweet });
 
 	if (existing.rows.length > 0) {
 		// Update existing root tweet with merged thread content and re-queue for AI processing

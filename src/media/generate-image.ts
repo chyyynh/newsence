@@ -7,12 +7,12 @@
  * visually separable from user-curated uploads.
  */
 
-import { storageKeyToAssetUrl } from '@shared/asset-url';
 import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
 import { createDbClient, insertBlobUserFile } from '@shared/db/articles';
 import { logError, logInfo } from '@shared/log';
 import { extensionFromMime, isRasterImage, parseBase64DataUrl } from '@shared/mime';
 import { OPENROUTER_CHAT_COMPLETIONS_URL, openRouterHeaders } from '@shared/openrouter';
+import { storageKeyToAssetUrl } from '@shared/storage-keys';
 import type { Env } from '@shared/types';
 
 // Must stay in sync with `frontend/src/lib/ai/image-generation.ts` IMAGE_MODEL

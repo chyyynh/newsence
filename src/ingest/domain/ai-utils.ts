@@ -50,14 +50,6 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export async function callOpenRouterChat(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string | null> {
-	return callOpenRouter(userPrompt, {
-		apiKey,
-		model: AI_MODELS.FLASH,
-		systemPrompt,
-	});
-}
-
 export async function translateContent(content: string, apiKey: string): Promise<string | null> {
 	const prompt = `請將以下文章內容翻譯成繁體中文。保持 Markdown 格式，包括標題、段落、列表等。只翻譯，不要添加任何額外內容。
 
@@ -72,7 +64,7 @@ ${content}`;
 
 const MAX_CONTENT_LENGTH = 10000;
 
-export function createFallbackResult(article: Article): AIAnalysisResult {
+function createFallbackResult(article: Article): AIAnalysisResult {
 	return {
 		tags: ['Other'],
 		keywords: article.title.split(' ').slice(0, 5),

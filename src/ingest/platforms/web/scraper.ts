@@ -4,6 +4,7 @@
 
 import { Readability } from '@mozilla/readability';
 import { BROWSER_UA } from '@shared/fetch';
+import { decodeHtmlEntities } from '@shared/html';
 import { logInfo, logWarn } from '@shared/log';
 import type { ScrapedContent } from '@shared/scraped-content';
 import * as cheerio from 'cheerio';
@@ -425,17 +426,6 @@ function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
 		offset += chunk.length;
 	}
 	return merged;
-}
-
-function decodeHtmlEntities(str: string): string {
-	return str
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&#x27;/g, "'")
-		.replace(/&#x2F;/g, '/');
 }
 
 function extractMeta(html: string, property: string): string | null {

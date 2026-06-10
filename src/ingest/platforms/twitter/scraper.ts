@@ -3,8 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { logInfo, logWarn } from '@shared/log';
+import type { TwitterMedia } from '@shared/platform-metadata';
 import type { ScrapedContent } from '@shared/scraped-content';
-import type { TwitterMedia } from './metadata';
 
 interface KaitoTweet {
 	id: string;
@@ -140,13 +140,7 @@ function extractMedia(media?: KaitoMedia): TwitterMedia[] {
 	);
 }
 
-export function buildTweetMetadata(
-	tweet: KaitoTweet,
-	_hashtags: string[],
-	expandedUrls: string[],
-	media?: KaitoMedia,
-	extra?: Record<string, unknown>,
-): Record<string, unknown> {
+function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[], media?: KaitoMedia): Record<string, unknown> {
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 	const tweetText = tweet.text.replace(/https?:\/\/\S+/g, '').trim();
 	const tweetMedia = extractMedia(media);
@@ -161,7 +155,6 @@ export function buildTweetMetadata(
 			externalUrl,
 			tweetText,
 		}),
-		...extra,
 	};
 }
 
@@ -182,7 +175,6 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	const tweet = data.tweets[0];
 	const media = tweet.extendedEntities?.media;
 	const ogImageUrl = media?.length ? media[0].media_url_https : null;
-	const hashtags = tweet.entities?.hashtags?.map((h) => h.text) || [];
 	const expandedUrls = tweet.entities?.urls?.map((u) => u.expanded_url).filter(Boolean) || [];
 
 	const articleUrl = expandedUrls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
@@ -245,6 +237,6 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		siteName: 'Twitter',
 		author: tweet.author?.userName || null,
 		publishedDate: tweet.createdAt,
-		metadata: buildTweetMetadata(tweet, hashtags, expandedUrls, media),
+		metadata: buildTweetMetadata(tweet, expandedUrls, media),
 	};
 }

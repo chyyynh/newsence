@@ -17,6 +17,13 @@
 	 *   upstream LLM call instead of just stopping our own writer loop.
 	 */
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
+	/**
+	 * Bundle `.wasm` files as compiled `WebAssembly.Module` imports. Used by the
+	 * PDF text-extraction step (`@llamaindex/liteparse-wasm`) — see
+	 * ingest/workflows/steps/pdf-extraction.ts. `fallthrough` keeps default rules
+	 * for any other module types.
+	 */
+	"rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }],
 	"observability": {
 		"logs": {
 			"enabled": true,
@@ -68,6 +75,11 @@
 			"binding": "MONITOR_WORKFLOW",
 			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
+		},
+		{
+			"binding": "SCRAPE_WORKFLOW",
+			"name": "newsence-scrape-workflow",
+			"class_name": "ScrapeWorkflow"
 		}
 	],
 	/**
@@ -104,7 +116,7 @@
 	 *
 	 * `R2` — user_file blob storage (PDF/image uploads + AI-generated images).
 	 *   Also written by the Next.js frontend via S3 API; the worker reads
-	 *   uploaded PDFs here for env.AI.toMarkdown extraction.
+	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 *
 	 * `IMAGE_CACHE` — durable L2 cache for env.IMAGES transforms. Dedicated
 	 *   bucket (not `R2`) so its metrics, lifecycle rules, and blast radius
@@ -150,6 +162,10 @@
 	 *   origins can read response bytes from JS after a signed URL leaks.
 	 *   When unset, falls back to `*` (with a one-time console warning).
 	 *
+	 * `APP_BASE_URL` — frontend (Vercel) origin the worker calls for Lexical
+	 *   conversion (POST /api/internal/lexical), authed by CORE_WORKER_INTERNAL_TOKEN.
+	 *   Local dev: override to http://localhost:3000 via `.dev.vars`.
+	 *
 	 * Secret (set via `wrangler secret put`):
 	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
 	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
@@ -157,6 +173,7 @@
 	"vars": {
 		"CORE_WORKER_PUBLIC_URL": "https://core.newsence.app",
 		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
+		"APP_BASE_URL": "https://www.newsence.app",
 		"POSTHOG_HOST": "https://us.i.posthog.com"
 	}
 }

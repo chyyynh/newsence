@@ -1,27 +1,20 @@
-import { storageKeyToAssetUrl } from '@shared/asset-url';
-import {
-	createDbClient,
-	type InsertUserFileResult,
-	insertBlobUserFile,
-	insertUserFile,
-	USER_FILES_TABLE,
-	upsertYoutubeTranscript,
-} from '@shared/db/articles';
+import { createDbClient, type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '@shared/db/articles';
 import { logError, logInfo } from '@shared/log';
-import { extensionFromMime } from '@shared/mime';
+import { extensionFromMime, PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata-parser';
 import { detectPlatformType, type ScrapedContent } from '@shared/scraped-content';
+import { userUploadKey } from '@shared/storage-keys';
 import { streamWithByteLimit } from '@shared/streams';
 import type { Env } from '@shared/types';
-import { assertBlobUploadQuotaTx, UploadQuotaExceededError } from '@shared/upload-quota';
+import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES } from '@shared/upload';
 import { normalizeUrl } from '@shared/web';
+import { persistBlobRow, putUserUpload } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 import { createUserFileWorkflow } from './workflows/article-workflow-client';
 
 const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
-const PDF_MIME = 'application/pdf';
 
 type ExistingUserFileRow = {
 	id: string;
@@ -53,23 +46,6 @@ type IngestResult = {
 
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
-
-function deriveTitle(fileName: string, fileType: string): string {
-	if (fileType === PDF_MIME) return fileName.replace(/\.pdf$/i, '');
-	return fileName.replace(/\.[a-z0-9]{1,8}$/i, '');
-}
-
-function buildPdfMetadata(args: { fileName: string; fileSize: number; storageKey: string }) {
-	return {
-		type: 'pdf' as const,
-		fetchedAt: new Date().toISOString(),
-		data: {
-			fileName: args.fileName,
-			fileSize: args.fileSize,
-			pdfUrl: storageKeyToAssetUrl(args.storageKey),
-		},
-	};
-}
 
 type InsertOutcome =
 	| { kind: 'page'; row: InsertUserFileResult }
@@ -140,8 +116,6 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 	}
 }
 
-const MAX_BLOB_BYTES = 10 * 1024 * 1024;
-
 async function insertScrapedBlob(
 	blob: Extract<ScrapeResult, { kind: 'blob' }>,
 	url: string,
@@ -150,66 +124,47 @@ async function insertScrapedBlob(
 ): Promise<InsertOutcome> {
 	try {
 		// Reject before piping if upstream is honest about being oversized.
-		if (blob.contentLength !== null && blob.contentLength > MAX_BLOB_BYTES) {
+		if (blob.contentLength !== null && blob.contentLength > MAX_UPLOAD_BYTES) {
 			await blob.body.cancel();
-			return { error: `Resource exceeds ${MAX_BLOB_BYTES} bytes (declared ${blob.contentLength})` };
+			return { error: `Resource exceeds ${MAX_UPLOAD_BYTES} bytes (declared ${blob.contentLength})` };
 		}
 
 		const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
-		const storageKey = `users/${userId}/uploads/${crypto.randomUUID()}.${ext}`;
+		const storageKey = userUploadKey(userId, ext);
 
-		// On overrun the transform errors, `env.R2.put` rejects, and R2 doesn't
+		// On overrun the transform errors, `putUserUpload` rejects, and R2 doesn't
 		// commit a partial object.
-		const limited = streamWithByteLimit(blob.body, MAX_BLOB_BYTES);
+		const limited = streamWithByteLimit(blob.body, MAX_UPLOAD_BYTES);
 		try {
-			await env.R2.put(storageKey, limited.stream, {
-				httpMetadata: { contentType: blob.contentType, cacheControl: 'private, max-age=31536000' },
-			});
+			await putUserUpload(env, { storageKey, body: limited.stream, contentType: blob.contentType });
 		} catch (err) {
 			logError('INGEST', 'R2 put failed', { url, storageKey, error: String(err) });
 			return { error: 'R2 put failed' };
 		}
 
 		const fileSize = limited.getBytesSeen();
-		const title = deriveTitle(blob.suggestedFilename, blob.contentType);
-		const metadata = blob.contentType === PDF_MIME ? buildPdfMetadata({ fileName: blob.suggestedFilename, fileSize, storageKey }) : null;
+		const title = deriveFileTitle(blob.suggestedFilename);
+		const metadata = buildPdfMetadata({ fileType: blob.contentType, fileName: blob.suggestedFilename, fileSize });
 
-		const db = await createDbClient(env);
-		try {
-			await db.query('BEGIN');
-			await assertBlobUploadQuotaTx(db, userId, fileSize);
-			const row = await insertBlobUserFile(db, {
-				userId,
-				storageKey,
-				fileSize,
-				fileType: blob.contentType,
-				fileName: blob.suggestedFilename,
-				originType: 'saved_url',
-				title,
-				sourceUrl: blob.sourceUrl,
-				normalizedSourceUrl: url,
-				metadata,
-			});
-			await db.query('COMMIT');
-			logInfo('INGEST', 'Saved blob from URL', { title: title.slice(0, 50), userFileId: row.id, contentType: blob.contentType });
-			return { kind: 'blob', userFileId: row.id, fileType: blob.contentType };
-		} catch (err) {
-			await db
-				.query('ROLLBACK')
-				.catch((rollbackErr) => logError('INGEST', 'Blob insert rollback failed', { url, storageKey, error: String(rollbackErr) }));
-			logError('INGEST', 'Blob row insert failed', { url, error: String(err) });
-			// Compensate: drop the R2 blob we just wrote. delete is strongly consistent
-			// + idempotent — best-effort, log if it also fails.
-			await env.R2.delete(storageKey).catch((delErr) =>
-				logError('INGEST', 'R2 cleanup after DB failure also failed', { url, storageKey, error: String(delErr) }),
-			);
-			if (err instanceof UploadQuotaExceededError) {
-				return { error: err.message };
-			}
-			return { error: 'DB insert failed' };
-		} finally {
-			await db.end();
-		}
+		const persisted = await persistBlobRow(env, {
+			userId,
+			storageKey,
+			fileSize,
+			fileType: blob.contentType,
+			fileName: blob.suggestedFilename,
+			originType: 'saved_url',
+			title,
+			sourceUrl: blob.sourceUrl,
+			normalizedSourceUrl: url,
+			metadata,
+		});
+		if (!persisted.ok) return { error: persisted.message };
+		logInfo('INGEST', 'Saved blob from URL', {
+			title: title.slice(0, 50),
+			userFileId: persisted.userFileId,
+			contentType: blob.contentType,
+		});
+		return { kind: 'blob', userFileId: persisted.userFileId, fileType: blob.contentType };
 	} finally {
 		blob.dispose();
 	}
@@ -238,7 +193,7 @@ function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: 
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
-		tags: row.tags ? (Array.isArray(row.tags) ? row.tags : []) : undefined,
+		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
 		platformType: isBlob ? undefined : row.platform_type || 'web',
 		alreadyExists: true,
@@ -251,7 +206,7 @@ async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): 
 	return buildExistingResult(url, row, instanceId);
 }
 
-export async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
+async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
 	const db = await createDbClient(env);
