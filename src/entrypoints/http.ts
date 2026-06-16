@@ -7,7 +7,7 @@ import { handleGenerateImage } from '@media/generate-image';
 import { handleOrphanGc } from '@media/orphan-gc';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
-import { handleSearch } from '@retrieval/handlers/search';
+import { handleRelated, handleSearch } from '@retrieval/handlers/search';
 import type { Env, ExecutionContext } from '@shared/types';
 import { handleHealth } from './health';
 
@@ -16,6 +16,7 @@ type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Respo
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': (req, env) => handleEmbed(req, env),
 	'/search': (req, env) => handleSearch(req, env),
+	'/search/related': (req, env) => handleRelated(req, env),
 	'/generate-image': (req, env) => handleGenerateImage(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
@@ -35,6 +36,7 @@ const HELP_TEXT =
 	'POST /generate-image                      - AI image gen (OpenRouter → R2 → user_files)\n' +
 	'POST /embed                               - Generate embeddings\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {results:[{id,score}]}\n' +
+	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {ids:[...]}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
 	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
@@ -81,6 +83,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 	if (method === 'OPTIONS' && pathname === '/embed') return handleEmbed(request, env);
 	if (method === 'OPTIONS' && pathname === '/search') return handleSearch(request, env);
+	if (method === 'OPTIONS' && pathname === '/search/related') return handleRelated(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape') return handleScrape(request, env);
 	if (method === 'OPTIONS' && pathname === '/scrape/jobs') return handleScrapeJobCreate(request, env);
 	if (method === 'OPTIONS') {
