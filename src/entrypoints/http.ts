@@ -2,6 +2,7 @@ import { handleEmbed } from '@ingest/handlers/embed';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleWorkflowStream } from '@ingest/handlers/workflow-status';
+import { handleBackfillOgDims } from '@media/backfill-og-dims';
 import { handleDeleteAsset } from '@media/delete-asset';
 import { handleGenerateImage } from '@media/generate-image';
 import { handleOrphanGc } from '@media/orphan-gc';
@@ -23,6 +24,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 	'/media/gc': (req, env) => handleOrphanGc(req, env),
+	'/media/backfill-og-dims': (req, env) => handleBackfillOgDims(req, env),
 };
 
 const HELP_TEXT =
@@ -39,6 +41,7 @@ const HELP_TEXT =
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {ids:[...]}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
 	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162)\n' +
+	'POST /media/backfill-og-dims?cursor=:id   - Measure + store OG image dims for articles missing them (re-run with nextCursor)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +

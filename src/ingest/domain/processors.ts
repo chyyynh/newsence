@@ -1,6 +1,6 @@
 import { type ProcessableTable, USER_FILES_TABLE } from '@shared/db/articles';
 import { prepareArticleTextForEmbedding } from '@shared/embedding';
-import type { PlatformEnrichments, PlatformMetadata } from '@shared/platform-metadata';
+import { type PlatformEnrichments, type PlatformMetadata, withOgDimensions } from '@shared/platform-metadata';
 import type { Article } from '@shared/types';
 import {
 	type ArticleProcessor,
@@ -60,18 +60,26 @@ function getProcessor(sourceType: string | undefined): ArticleProcessor {
 function mergePlatformMetadata(
 	baseMetadata: PlatformMetadata | null | undefined,
 	enrichments?: PlatformEnrichments,
+	ogImageDimensions?: { width: number; height: number },
 ): PlatformMetadata | null {
-	if (!enrichments || Object.keys(enrichments).length === 0) return baseMetadata ?? null;
-	if (!baseMetadata) return null;
+	const hasEnrichments = !!enrichments && Object.keys(enrichments).length > 0;
+	const hasDims = !!ogImageDimensions && ogImageDimensions.width > 0 && ogImageDimensions.height > 0;
+	if (!hasEnrichments && !hasDims) return baseMetadata ?? null;
 
-	return {
-		...baseMetadata,
-		enrichments: {
-			...(baseMetadata.enrichments || {}),
-			...enrichments,
-			processedAt: new Date().toISOString(),
-		},
-	};
+	// Dimensions can stand alone — they synthesize a `default` envelope when the
+	// article has none yet. Enrichments still require a base envelope (they
+	// describe an already-typed platform), so an enrichments-only merge with no
+	// base is dropped, matching the prior behavior.
+	let result = hasDims ? withOgDimensions(baseMetadata, ogImageDimensions.width, ogImageDimensions.height) : (baseMetadata ?? null);
+	if (!result) return null;
+
+	if (hasEnrichments) {
+		result = {
+			...result,
+			enrichments: { ...(result.enrichments || {}), ...enrichments, processedAt: new Date().toISOString() },
+		};
+	}
+	return result;
 }
 
 export async function runArticleProcessor(
@@ -105,7 +113,7 @@ export async function persistProcessorResult(
 	result: ProcessorResult,
 	deps: ProcessingDeps,
 ): Promise<void> {
-	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments);
+	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
 	if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
 
