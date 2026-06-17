@@ -111,6 +111,22 @@ export interface OgImageDimensions {
 	ogImageHeight?: number | null;
 }
 
+/** True when an envelope already carries usable (positive) OG image dimensions. */
+export function hasOgDimensions(metadata: PlatformMetadata | null | undefined): boolean {
+	return !!metadata && !!metadata.ogImageWidth && !!metadata.ogImageHeight;
+}
+
+/**
+ * Attach OG image dimensions to an envelope, synthesizing a `default` envelope
+ * when the article has none yet (mirrors rss/monitor's dims-only envelope, so an
+ * article that was stored with `platform_metadata = null` still gets boxable
+ * dims). Used by both the processing workflow and the backfill endpoint.
+ */
+export function withOgDimensions(metadata: PlatformMetadata | null | undefined, width: number, height: number): PlatformMetadata {
+	const base: PlatformMetadata = metadata ?? { type: 'default', fetchedAt: new Date().toISOString(), data: null };
+	return { ...base, ogImageWidth: width, ogImageHeight: height };
+}
+
 export type PlatformMetadata =
 	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
 	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)

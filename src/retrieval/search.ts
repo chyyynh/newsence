@@ -25,6 +25,34 @@ export function sortByRank<T extends { id: string }>(articles: T[], ranks: Searc
 	return [...articles].sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0));
 }
 
+/**
+ * Nearest-neighbour articles to a seed (an article or a user_file) by pgvector
+ * cosine distance. Returns ordered article ids; the caller hydrates + filters.
+ * The readability/ownership gate stays at the caller — a private user_file must
+ * not leak its topic via similarity — so this only ranks an already-authorized
+ * seed. `seedTable` is a fixed allowlist, not user input (no injection).
+ */
+export async function relatedArticles(
+	client: Client,
+	seed: { id: string; type: 'article' | 'user_file' },
+	limit: number,
+	offset: number,
+): Promise<string[]> {
+	const seedTable = seed.type === 'user_file' ? 'user_files' : 'articles';
+	const rows = await client.query<{ id: string }>(
+		`WITH src AS (
+			SELECT embedding FROM ${seedTable} WHERE id = $1::uuid AND embedding IS NOT NULL LIMIT 1
+		)
+		SELECT a.id
+		FROM articles a, src
+		WHERE a.id <> $1::uuid AND a.embedding IS NOT NULL
+		ORDER BY a.embedding <=> src.embedding
+		LIMIT $2 OFFSET $3`,
+		[seed.id, limit, offset],
+	);
+	return rows.rows.map((r) => r.id);
+}
+
 export async function searchArticles(client: Client, env: Env, query: string, limit = 100): Promise<SearchResponse> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY;
