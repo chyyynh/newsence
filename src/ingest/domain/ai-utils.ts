@@ -27,6 +27,13 @@ export interface ProcessorResult {
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
+	/**
+	 * Measured OG image dimensions, merged into `platform_metadata` at persist
+	 * time (creating a `default` envelope if none exists). Populated by the
+	 * workflow's measure step for articles that have an og image but no
+	 * source-provided `og:image:width/height` meta tags.
+	 */
+	ogImageDimensions?: { width: number; height: number };
 }
 
 export interface ProcessorContext {

@@ -1,7 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { measureImageDimensions } from '@media/dimensions';
 import { createDbClient, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from '@shared/db/articles';
 import { generateArticleEmbedding, saveArticleEmbedding } from '@shared/embedding';
 import { logInfo, logWarn } from '@shared/log';
+import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { syncArticleEntities } from '../domain/entities';
 import {
@@ -104,6 +106,23 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 			if (ogResult?.ogImageUrl) {
 				processorResult.updateData.og_image_url = ogResult.ogImageUrl;
+			}
+		}
+
+		// Step 3b: Measure OG image dimensions when missing. Most sources don't emit
+		// `og:image:width/height` meta tags, so dims are absent for the bulk of
+		// articles; the frontend hero/card then snap from a 16:9 placeholder to the
+		// real ratio on load. Measuring the actual bytes (via the Images binding)
+		// fills dims for any source with an og image. Failure returns null and is
+		// non-fatal — a missing dim only costs one cosmetic layout snap.
+		const effectiveOgImageUrl = processorResult.updateData.og_image_url ?? article.og_image_url;
+		if (effectiveOgImageUrl && !hasOgDimensions(article.platform_metadata)) {
+			const dims = await step.do('measure-og-dimensions', { retries: { limit: 1, delay: '3 seconds' }, timeout: '15 seconds' }, async () =>
+				measureImageDimensions(this.env, effectiveOgImageUrl),
+			);
+			if (dims) {
+				processorResult.ogImageDimensions = dims;
+				logInfo('WORKFLOW', 'Measured OG image dimensions', { article_id, ...dims });
 			}
 		}
 
