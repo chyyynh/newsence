@@ -148,7 +148,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 
 // Source priorities for the upgrade-on-duplicate flow: RSS feeds default to 10
 // and overwrite anything below them. Lower number = lower priority.
-const SOURCE_PRIORITY: Record<string, number> = { Unknown: 0, Telegram: 1 };
+const SOURCE_PRIORITY: Record<string, number> = { Unknown: 0 };
 const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
 const DEFAULT_FEED_PRIORITY = 10;
 
