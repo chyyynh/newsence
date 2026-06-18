@@ -37,6 +37,12 @@ function extractTweetText(article: Article): string {
 	return raw;
 }
 
+function getLinkedUrl(article: Article): string | null {
+	const metadata = article.platform_metadata;
+	if (metadata?.type !== 'twitter' || metadata.data.variant !== 'shared') return null;
+	return metadata.data.externalUrl?.trim() || null;
+}
+
 // ─────────────────────────────────────────────────────────────
 // TwitterProcessor class
 // ─────────────────────────────────────────────────────────────
@@ -56,7 +62,7 @@ export class TwitterProcessor implements ArticleProcessor {
 		const tweetText = extractTweetText(article);
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
-		const linkedUrl = this.extractLinkedUrl(tweetText);
+		const linkedUrl = getLinkedUrl(article);
 		if (linkedUrl && (await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData))) {
 			return { updateData };
 		}
@@ -95,19 +101,6 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (!article.tags?.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
-	}
-
-	private extractLinkedUrl(tweetText: string): string | null {
-		const textWithoutUrls = tweetText.replace(/https?:\/\/\S+/g, '').trim();
-		if (textWithoutUrls.length > 50) return null;
-
-		const urlMatch = tweetText.match(/https?:\/\/\S+/);
-		if (urlMatch) {
-			const url = urlMatch[0];
-			if (/(?:twitter\.com|x\.com)/.test(url)) return null;
-			return url;
-		}
-		return null;
 	}
 }
 
