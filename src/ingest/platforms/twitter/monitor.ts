@@ -369,8 +369,10 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		linkFallback = linkResult;
 	}
 
-	// 3. Rule-based triage (no AI — tracked users are curated)
-	if (!shouldSaveStandaloneTweet(textWithoutUrls)) {
+	// 3. Rule-based triage (no AI — tracked users are curated). Retweets are
+	// kept even when short: the tracked user's retweet is itself a curator
+	// signal, and the saved article is what gets translated for the feed.
+	if (!tweet.retweetedBy && !shouldSaveStandaloneTweet(textWithoutUrls)) {
 		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short standalone tweet' });
 		return false;
 	}
