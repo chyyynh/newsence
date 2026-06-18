@@ -23,6 +23,8 @@ import {
 
 const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/advanced_search';
 
+type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
+
 function buildRetweetedBy(tweet: Tweet): RetweetedByData {
 	return {
 		tweetId: tweet.id,
@@ -43,16 +45,126 @@ function normalizeRetweet(tweet: Tweet): Tweet | null {
 	return tweet;
 }
 
-async function urlExists(db: Client, url: string): Promise<boolean> {
-	const result = await db.query(`SELECT 1 FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
-	return result.rows.length > 0;
+function sourceEventTypeFor(tweet: Tweet, eventType: TwitterSourceEventType): TwitterSourceEventType {
+	if (tweet.retweetedBy) return 'retweet';
+	if (eventType === 'tweet' && tweet.quoted_tweet) return 'quote';
+	return eventType;
 }
 
-async function urlsExist(db: Client, urls: string[]): Promise<boolean> {
-	const normalized = urls.map(normalizeUrl).filter(Boolean);
-	if (normalized.length === 0) return false;
-	const result = await db.query(`SELECT 1 FROM ${ARTICLES_TABLE} WHERE url = ANY($1) LIMIT 1`, [normalized]);
-	return result.rows.length > 0;
+function publicMetricsFor(tweet: Tweet): Record<string, number | undefined> {
+	return {
+		viewCount: tweet.viewCount,
+		likeCount: tweet.likeCount,
+		retweetCount: tweet.retweetCount,
+		replyCount: tweet.replyCount,
+		quoteCount: tweet.quoteCount,
+	};
+}
+
+async function findArticleIdByUrl(db: Client, url: string): Promise<string | null> {
+	const result = await db.query<{ id: string }>(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
+	return result.rows[0]?.id ?? null;
+}
+
+async function upsertTwitterSourceEvent(
+	db: Client,
+	tweet: Tweet,
+	options: { articleId: string | null; eventType: TwitterSourceEventType; text?: string | null },
+): Promise<void> {
+	const eventTweetId = tweet.retweetedBy?.tweetId ?? tweet.id;
+	const eventTweetUrl = tweet.retweetedBy?.tweetUrl ?? tweet.url;
+	if (!eventTweetId || !eventTweetUrl) return;
+
+	const author = tweet.retweetedBy
+		? {
+				name: tweet.retweetedBy.authorName,
+				userName: tweet.retweetedBy.authorUserName,
+				profilePicture: tweet.retweetedBy.authorProfilePicture,
+				isBlueVerified: tweet.retweetedBy.authorVerified,
+			}
+		: tweet.author;
+	const createdAt = tweet.retweetedBy?.retweetedAt ?? tweet.createdAt;
+	const eventType = sourceEventTypeFor(tweet, options.eventType);
+	const text = options.text ?? stripTweetUrls(tweet.text);
+
+	try {
+		const event = await db.query<{ id: string }>(
+			`INSERT INTO twitter_source_events (
+				tweet_id, tweet_url, event_type, article_id,
+				author_user_name, author_name, author_profile_picture, author_verified,
+				text, created_at, lang, public_metrics, raw
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb)
+			ON CONFLICT (tweet_id) DO UPDATE SET
+				tweet_url = EXCLUDED.tweet_url,
+				event_type = EXCLUDED.event_type,
+				article_id = COALESCE(EXCLUDED.article_id, twitter_source_events.article_id),
+				author_user_name = EXCLUDED.author_user_name,
+				author_name = EXCLUDED.author_name,
+				author_profile_picture = EXCLUDED.author_profile_picture,
+				author_verified = EXCLUDED.author_verified,
+				text = EXCLUDED.text,
+				created_at = EXCLUDED.created_at,
+				lang = EXCLUDED.lang,
+				public_metrics = EXCLUDED.public_metrics,
+				raw = EXCLUDED.raw
+			RETURNING id`,
+			[
+				eventTweetId,
+				eventTweetUrl,
+				eventType,
+				options.articleId,
+				author?.userName || '',
+				author?.name || '',
+				author?.profilePicture,
+				author?.isBlueVerified,
+				text,
+				createdAt,
+				tweet.lang,
+				JSON.stringify(publicMetricsFor(tweet)),
+				JSON.stringify(tweet),
+			],
+		);
+		const sourceEventId = event.rows[0]?.id;
+		if (!sourceEventId) return;
+
+		await db.query('DELETE FROM twitter_media_assets WHERE source_event_id = $1', [sourceEventId]);
+		for (const media of extractTweetMedia(tweet)) {
+			await db.query(
+				`INSERT INTO twitter_media_assets (
+					source_event_id, media_type, url, video_url, width, height
+				) VALUES ($1, $2, $3, $4, $5, $6)`,
+				[sourceEventId, media.type, media.url, media.videoUrl, media.width, media.height],
+			);
+		}
+
+		const references: Array<{ id: string; type: 'quoted' | 'retweeted' | 'replied_to'; metadata?: Record<string, unknown> }> = [];
+		if (tweet.retweetedBy && tweet.id) references.push({ id: tweet.id, type: 'retweeted' });
+		if (tweet.quoted_tweet?.id) {
+			references.push({
+				id: tweet.quoted_tweet.id,
+				type: 'quoted',
+				metadata: {
+					authorUserName: tweet.quoted_tweet.author?.userName,
+					authorName: tweet.quoted_tweet.author?.name,
+					text: stripTweetUrls(tweet.quoted_tweet.text),
+				},
+			});
+		}
+		if (tweet.inReplyToId) references.push({ id: tweet.inReplyToId, type: 'replied_to' });
+
+		for (const reference of references) {
+			await db.query(
+				`INSERT INTO twitter_references (
+					source_event_id, referenced_tweet_id, reference_type, metadata
+				) VALUES ($1, $2, $3, $4::jsonb)
+				ON CONFLICT (source_event_id, referenced_tweet_id, reference_type)
+				DO UPDATE SET metadata = EXCLUDED.metadata`,
+				[sourceEventId, reference.id, reference.type, JSON.stringify(reference.metadata ?? null)],
+			);
+		}
+	} catch (err) {
+		console.warn({ tag: 'TWITTER', msg: 'Source event write skipped', tweetId: eventTweetId, error: String(err) });
+	}
 }
 
 /** Insert a twitter article and queue it for AI processing */
@@ -123,7 +235,10 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expanded
 		}),
 	});
 
-	if (id) console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
+	if (id) {
+		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: 'article', text: scraped.summary || stripTweetUrls(tweet.text) });
+		console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
+	}
 	return !!id;
 }
 
@@ -146,7 +261,9 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalU
 		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
 		return false;
 	}
-	if (await urlsExist(db, [resolvedUrl])) {
+	const existingArticleId = await findArticleIdByUrl(db, resolvedUrl);
+	if (existingArticleId) {
+		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticleId, eventType: 'share', text: textWithoutUrls });
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 		return false;
 	}
@@ -176,10 +293,14 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalU
 			externalUrl: resolvedUrl,
 			externalOgImage: scraped.ogImageUrl,
 			externalTitle: scraped.title || null,
+			originalTweetUrl: tweet.url,
 		}),
 	});
 
-	if (id) console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
+	if (id) {
+		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: 'share', text: textWithoutUrls });
+		console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
+	}
 	return !!id;
 }
 
@@ -187,11 +308,19 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalU
 
 async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
-	if (await urlExists(db, tweetUrl)) return false;
-
 	const expandedUrls = extractExpandedUrls(tweet);
 	const externalUrl = findExternalUrl(expandedUrls);
 	const textWithoutUrls = stripTweetUrls(tweet.text);
+
+	const existingTweetArticleId = await findArticleIdByUrl(db, tweetUrl);
+	if (existingTweetArticleId) {
+		await upsertTwitterSourceEvent(db, tweet, {
+			articleId: existingTweetArticleId,
+			eventType: externalUrl ? 'share' : 'tweet',
+			text: textWithoutUrls,
+		});
+		return false;
+	}
 
 	// 1. Twitter Article?
 	if (await handleTwitterArticle(tweet, db, env, expandedUrls)) return true;
@@ -207,7 +336,9 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	if (triage === 'follow_link' && externalUrl) return handleFollowLink(tweet, textWithoutUrls, externalUrl, db, env);
 
 	// 3. Save as tweet
-	if (externalUrl && (await urlsExist(db, [externalUrl]))) {
+	const existingExternalArticleId = externalUrl ? await findArticleIdByUrl(db, externalUrl) : null;
+	if (existingExternalArticleId) {
+		await upsertTwitterSourceEvent(db, tweet, { articleId: existingExternalArticleId, eventType: 'share', text: textWithoutUrls });
 		console.info({ tag: 'TWITTER', msg: 'External URL already exists (dedup)', url: externalUrl });
 		return false;
 	}
@@ -229,7 +360,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 
 	const metadata = buildTweetPlatformMetadata(
 		tweet,
-		externalUrl ? { tweetText: textWithoutUrls, externalUrl, externalOgImage, externalTitle } : {},
+		externalUrl ? { tweetText: textWithoutUrls, externalUrl, externalOgImage, externalTitle, originalTweetUrl: tweet.url } : {},
 	);
 	const media = metadata.data.media ?? [];
 
@@ -245,7 +376,10 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		hashTags: tweet.hashTags,
 	});
 
-	if (id) console.info({ tag: 'TWITTER', msg: 'Saved tweet', author: tweet.author?.userName });
+	if (id) {
+		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: externalUrl ? 'share' : 'tweet', text: textWithoutUrls });
+		console.info({ tag: 'TWITTER', msg: 'Saved tweet', author: tweet.author?.userName });
+	}
 	return !!id;
 }
 
@@ -282,6 +416,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 			[combinedText, combinedText, JSON.stringify(metadata), existingId],
 		);
 		await enqueueArticleProcess(env, existingId);
+		await upsertTwitterSourceEvent(db, first, { articleId: existingId, eventType: 'thread', text: combinedText });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
@@ -298,7 +433,10 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 		hashTags: first.hashTags,
 	});
 
-	if (id) console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
+	if (id) {
+		await upsertTwitterSourceEvent(db, first, { articleId: id, eventType: 'thread', text: combinedText });
+		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
+	}
 	return !!id;
 }
 
