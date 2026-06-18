@@ -12,9 +12,9 @@ import {
 	extractTweetMedia,
 	findExternalUrl,
 	findTwitterArticleUrl,
+	scrapeTwitterArticle,
 	stripTweetUrls,
-} from './normalize';
-import { scrapeTwitterArticle } from './scraper';
+} from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Twitter Monitor
