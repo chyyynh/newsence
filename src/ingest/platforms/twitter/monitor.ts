@@ -61,9 +61,17 @@ function publicMetricsFor(tweet: Tweet): Record<string, number | undefined> {
 	};
 }
 
-async function findArticleIdByUrl(db: Client, url: string): Promise<string | null> {
-	const result = await db.query<{ id: string }>(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [url]);
-	return result.rows[0]?.id ?? null;
+async function findArticleByUrl(db: Client, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
+	const result = await db.query<{ id: string; summary_cn: string | null }>(
+		`SELECT id, summary_cn FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`,
+		[url],
+	);
+	return result.rows[0] ?? null;
+}
+
+async function enqueueMissingTwitterTranslation(env: Env, article: { id: string; summary_cn: string | null }): Promise<void> {
+	if (article.summary_cn) return;
+	await enqueueArticleProcess(env, article.id);
 }
 
 async function upsertTwitterSourceEvent(
@@ -284,9 +292,10 @@ async function handleFollowLink(
 		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
 		return { status: 'skipped', resolvedUrl };
 	}
-	const existingArticleId = await findArticleIdByUrl(db, resolvedUrl);
-	if (existingArticleId) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticleId, eventType: 'share', text: textWithoutUrls });
+	const existingArticle = await findArticleByUrl(db, resolvedUrl);
+	if (existingArticle) {
+		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls });
+		await enqueueMissingTwitterTranslation(env, existingArticle);
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 		return { status: 'handled' };
 	}
@@ -335,13 +344,14 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const externalUrl = findExternalUrl(expandedUrls);
 	const textWithoutUrls = stripTweetUrls(tweet.text);
 
-	const existingTweetArticleId = await findArticleIdByUrl(db, tweetUrl);
-	if (existingTweetArticleId) {
+	const existingTweetArticle = await findArticleByUrl(db, tweetUrl);
+	if (existingTweetArticle) {
 		await upsertTwitterSourceEvent(db, tweet, {
-			articleId: existingTweetArticleId,
+			articleId: existingTweetArticle.id,
 			eventType: externalUrl ? 'share' : 'tweet',
 			text: textWithoutUrls,
 		});
+		await enqueueMissingTwitterTranslation(env, existingTweetArticle);
 		return false;
 	}
 
