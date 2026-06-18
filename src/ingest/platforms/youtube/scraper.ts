@@ -95,17 +95,6 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 	const snippet = video.snippet;
 	const stats = video.statistics;
 
-	// Fetch channel avatar
-	let channelAvatar: string | null = null;
-	try {
-		const channelData = await fetchJsonWithTimeout<{
-			items?: Array<{ snippet: { thumbnails: { medium?: { url: string }; default?: { url: string } } } }>;
-		}>(`https://www.googleapis.com/youtube/v3/channels?id=${snippet.channelId}&part=snippet&key=${youtubeApiKey}`);
-		channelAvatar = channelData.items?.[0]?.snippet?.thumbnails?.medium?.url ?? null;
-	} catch (e) {
-		console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch channel avatar', error: String(e) });
-	}
-
 	const thumbnailUrl =
 		snippet.thumbnails.maxres?.url ||
 		snippet.thumbnails.standard?.url ||
@@ -138,7 +127,6 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 			videoId: video.id,
 			channelName: snippet.channelTitle,
 			channelId: snippet.channelId,
-			channelAvatar: channelAvatar ?? undefined,
 			duration: video.contentDetails.duration,
 			thumbnailUrl: thumbnailUrl ?? undefined,
 			viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,

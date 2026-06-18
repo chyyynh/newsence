@@ -52,6 +52,7 @@ async function processYouTubeVideo(
 		...scraped.metadata,
 		videoId,
 		channelName: scraped.author || channel.name,
+		channelAvatar: scraped.metadata.channelAvatar ?? channel.avatar_url,
 		thumbnailUrl: scraped.ogImageUrl ?? scraped.metadata.thumbnailUrl,
 		publishedAt: scraped.publishedDate ?? scraped.metadata.publishedAt,
 	};
@@ -79,12 +80,6 @@ async function processYouTubeVideo(
 	if (scraped.youtubeTranscript) await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
 	await enqueueArticleProcess(env, articleId);
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'Inserted video', channel: channel.name, title: scraped.title.slice(0, 60) });
-
-	const avatar = youtubeMetadata.channelAvatar;
-	if (avatar && !channel.avatar_url) {
-		await db.query(`UPDATE "RssList" SET avatar_url = $1 WHERE id = $2`, [avatar, channel.id]);
-		channel.avatar_url = avatar;
-	}
 	return true;
 }
 
