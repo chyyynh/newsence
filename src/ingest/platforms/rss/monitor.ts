@@ -1,11 +1,10 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
-import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
-import { fetchHnItem, hnItemTypeForMetadata } from '../hackernews/scraper';
+import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web/scraper';
 import {
 	extractImageFromItem,
@@ -53,14 +52,7 @@ async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMe
 	const hnItemId = extractHackerNewsId(commentsUrl);
 	if (!hnItemId) return null;
 	const hn = await fetchHnItem(hnItemId);
-	return buildMetadata('hackernews', {
-		itemId: hn.id.toString(),
-		author: hn.author ?? '',
-		points: hn.points ?? 0,
-		commentCount: hn.descendants ?? 0,
-		itemType: hnItemTypeForMetadata(hn.type),
-		storyUrl: commentsUrl,
-	});
+	return buildHnPlatformMetadata(hn, commentsUrl);
 }
 
 interface FetchedRssContent {

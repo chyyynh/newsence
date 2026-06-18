@@ -2,6 +2,7 @@
 // HackerNews Scraper
 // ─────────────────────────────────────────────────────────────
 
+import { buildMetadata, type HackerNewsMetadata, type PlatformMetadata } from '@shared/platform-metadata';
 import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
@@ -29,6 +30,21 @@ export interface HnItem {
 export function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
 	if (type === 'ask' || type === 'show' || type === 'job') return type;
 	return 'story';
+}
+
+export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
+	return {
+		itemId: item.id.toString(),
+		author: item.author ?? '',
+		points: item.points ?? 0,
+		commentCount: item.descendants ?? 0,
+		itemType: hnItemTypeForMetadata(item.type),
+		storyUrl,
+	};
+}
+
+export function buildHnPlatformMetadata(item: HnItem, storyUrl?: string | null): Extract<PlatformMetadata, { type: 'hackernews' }> {
+	return buildMetadata('hackernews', buildHnMetadata(item, storyUrl));
 }
 
 export async function fetchHnItem(itemId: string | number): Promise<HnItem> {
@@ -72,13 +88,6 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 		siteName: 'Hacker News',
 		author: item.author || null,
 		publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
-		metadata: {
-			itemId: item.id.toString(),
-			points: item.points || 0,
-			commentCount: item.descendants || 0,
-			itemType: hnItemTypeForMetadata(item.type),
-			author: item.author,
-			storyUrl: item.url || null,
-		},
+		metadata: { ...buildHnMetadata(item) },
 	};
 }
