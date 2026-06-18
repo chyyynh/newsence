@@ -1,7 +1,7 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
 import type { PlatformMetadata, RetweetedByData } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
-import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
+import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web/scraper';
 import {
@@ -247,37 +247,51 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expanded
 /** Rule-based content triage. Tracked users are curated, so no AI needed for quality gating. */
 const MIN_TWEET_LENGTH = 150;
 
-function triageTweet(textWithoutUrls: string, externalUrl: string | undefined): 'save' | 'follow_link' | 'discard' {
-	if (textWithoutUrls.length < MIN_TWEET_LENGTH) return externalUrl ? 'follow_link' : 'discard';
-	return 'save';
+function shouldSaveStandaloneTweet(textWithoutUrls: string): boolean {
+	return textWithoutUrls.length >= MIN_TWEET_LENGTH;
 }
 
 // -- Follow Link (tweet shares an external URL) -------------------------------
 
-async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalUrl: string, db: Client, env: Env): Promise<boolean> {
-	const resolvedUrl = await resolveUrl(externalUrl);
+type FollowLinkResult =
+	| { status: 'inserted' }
+	| { status: 'handled' }
+	| { status: 'skipped'; resolvedUrl?: string; scraped?: ScrapedContent | null };
+
+async function handleFollowLink(
+	tweet: Tweet,
+	textWithoutUrls: string,
+	externalUrl: string,
+	db: Client,
+	env: Env,
+): Promise<FollowLinkResult> {
+	const resolvedUrl = await resolveUrl(externalUrl).catch((err) => {
+		console.warn({ tag: 'TWITTER', msg: 'Failed to resolve shared link', url: externalUrl, error: String(err) });
+		return null;
+	});
+	if (!resolvedUrl) return { status: 'skipped' };
 
 	if (isSocialMediaUrl(resolvedUrl)) {
 		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
-		return false;
+		return { status: 'skipped', resolvedUrl };
 	}
 	const existingArticleId = await findArticleIdByUrl(db, resolvedUrl);
 	if (existingArticleId) {
 		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticleId, eventType: 'share', text: textWithoutUrls });
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
-		return false;
+		return { status: 'handled' };
 	}
 
 	const scraped = await scrapeWebPage(resolvedUrl).catch((err) => {
 		console.warn({ tag: 'TWITTER', msg: 'Failed to scrape followed link', url: resolvedUrl, error: String(err) });
 		return null;
 	});
-	if (!scraped) return false;
+	if (!scraped) return { status: 'skipped', resolvedUrl };
 
 	// Skip if scraped content is too short to be meaningful
 	if (!scraped.content || scraped.content.length < 100) {
 		console.info({ tag: 'TWITTER', msg: 'Scraped content too short', url: resolvedUrl, chars: scraped.content?.length ?? 0 });
-		return false;
+		return { status: 'skipped', resolvedUrl, scraped };
 	}
 
 	const id = await insertTwitterArticle(db, env, {
@@ -301,7 +315,7 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalU
 		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: 'share', text: textWithoutUrls });
 		console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
 	}
-	return !!id;
+	return id ? { status: 'inserted' } : { status: 'skipped', resolvedUrl, scraped };
 }
 
 // -- Save Single Tweet --------------------------------------------------------
@@ -325,42 +339,33 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	// 1. Twitter Article?
 	if (await handleTwitterArticle(tweet, db, env, expandedUrls)) return true;
 
-	// 2. Rule-based triage (no AI — tracked users are curated)
-	const triage = triageTweet(textWithoutUrls, externalUrl);
-
-	if (triage === 'discard') {
-		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short, no links' });
-		return false;
-	}
-
-	if (triage === 'follow_link' && externalUrl) return handleFollowLink(tweet, textWithoutUrls, externalUrl, db, env);
-
-	// 3. Save as tweet
-	const existingExternalArticleId = externalUrl ? await findArticleIdByUrl(db, externalUrl) : null;
-	if (existingExternalArticleId) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: existingExternalArticleId, eventType: 'share', text: textWithoutUrls });
-		console.info({ tag: 'TWITTER', msg: 'External URL already exists (dedup)', url: externalUrl });
-		return false;
-	}
-
-	// Fetch external link metadata if present
-	let externalOgImage: string | null = null;
-	let externalTitle: string | null = null;
-	let externalContent: string | null = null;
+	// 2. External link? Prefer one canonical article row for the linked page,
+	// with this tweet captured as a source event. Fall back to standalone tweet
+	// only when the linked page cannot be scraped into meaningful content.
+	let linkFallback: Extract<FollowLinkResult, { status: 'skipped' }> | null = null;
 	if (externalUrl) {
-		try {
-			const scraped = await scrapeWebPage(externalUrl);
-			externalOgImage = scraped.ogImageUrl;
-			externalTitle = scraped.title || null;
-			if (scraped.content && scraped.content.length > 100) externalContent = scraped.content;
-		} catch (err) {
-			console.warn({ tag: 'TWITTER', msg: 'Failed to fetch external link metadata', url: externalUrl, error: String(err) });
-		}
+		const linkResult = await handleFollowLink(tweet, textWithoutUrls, externalUrl, db, env);
+		if (linkResult.status === 'inserted') return true;
+		if (linkResult.status === 'handled') return false;
+		linkFallback = linkResult;
 	}
+
+	// 3. Rule-based triage (no AI — tracked users are curated)
+	if (!shouldSaveStandaloneTweet(textWithoutUrls)) {
+		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short standalone tweet' });
+		return false;
+	}
+
+	// 4. Save as tweet
+	const metadataExternalUrl = linkFallback?.resolvedUrl ?? externalUrl;
+	const externalOgImage = linkFallback?.scraped?.ogImageUrl ?? null;
+	const externalTitle = linkFallback?.scraped?.title || null;
 
 	const metadata = buildTweetPlatformMetadata(
 		tweet,
-		externalUrl ? { tweetText: textWithoutUrls, externalUrl, externalOgImage, externalTitle, originalTweetUrl: tweet.url } : {},
+		metadataExternalUrl
+			? { tweetText: textWithoutUrls, externalUrl: metadataExternalUrl, externalOgImage, externalTitle, originalTweetUrl: tweet.url }
+			: {},
 	);
 	const media = metadata.data.media ?? [];
 
@@ -370,7 +375,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		source: tweet.author?.name || 'Twitter',
 		publishedDate: new Date(tweet.createdAt),
 		summary: textWithoutUrls,
-		content: externalContent || textWithoutUrls || null,
+		content: textWithoutUrls || null,
 		ogImage: media[0]?.url ?? externalOgImage ?? null,
 		metadata,
 		hashTags: tweet.hashTags,
@@ -443,14 +448,6 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 /** Max usernames per query batch to stay within query length limits */
 const TWITTER_BATCH_SIZE = 20;
 
-/** Format a unix timestamp (seconds) to Twitter advanced search date format */
-function toTwitterDate(epochSec: number): string {
-	return new Date(epochSec * 1000)
-		.toISOString()
-		.replace('T', '_')
-		.replace(/\.\d+Z$/, '_UTC');
-}
-
 // -- Twitter Cron: staged pipeline --------------------------------------------
 
 async function getTwitterUsersToMonitor(db: Client): Promise<RSSFeed[]> {
@@ -481,8 +478,7 @@ async function fetchTweetsForBatch(
 	sinceTime: number,
 ): Promise<{ tweets: Tweet[]; completed: boolean }> {
 	const fromClause = userNames.map((u) => `from:${u}`).join(' OR ');
-	const sinceDate = toTwitterDate(sinceTime);
-	const query = `(${fromClause}) since:${sinceDate}`;
+	const query = `(${fromClause}) since_time:${sinceTime}`;
 
 	const tweets: Tweet[] = [];
 	let cursor = '';
