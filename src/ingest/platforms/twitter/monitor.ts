@@ -1,10 +1,8 @@
-import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db/articles';
-import { fetchWithTimeout } from '@shared/fetch';
-import { logError, logInfo, logWarn } from '@shared/log';
+import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
 import type { PlatformMetadata, QuotedTweetData, TwitterMedia } from '@shared/platform-metadata';
 import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
-import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
+import { fetchWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web/scraper';
 import { scrapeTwitterArticle } from './scraper';
@@ -103,7 +101,7 @@ async function insertTwitterArticle(
 		keywords: data.hashTags,
 	});
 	if (articleId) {
-		await enqueueArticleProcess(env, articleId, 'twitter');
+		await enqueueArticleProcess(env, articleId);
 	}
 	return articleId;
 }
@@ -118,10 +116,10 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise
 	const tweetId = tweet.id || tweet.url.split('/').pop();
 	if (!tweetId) return false;
 
-	logInfo('TWITTER', 'Detected Twitter Article', { tweetId, articleUrl });
+	console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', tweetId, articleUrl });
 	const scraped = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
 	if (!scraped) {
-		logWarn('TWITTER', 'Article API failed, falling through');
+		console.warn({ tag: 'TWITTER', msg: 'Article API failed, falling through' });
 		return false;
 	}
 
@@ -142,7 +140,7 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise
 		}),
 	});
 
-	if (id) logInfo('TWITTER', 'Saved Twitter Article', { title: scraped.title.slice(0, 50) });
+	if (id) console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
 	return !!id;
 }
 
@@ -162,23 +160,23 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: st
 	const resolvedUrl = await resolveUrl(links[0]!);
 
 	if (isSocialMediaUrl(resolvedUrl)) {
-		logInfo('TWITTER', 'Skipped social media link', { url: resolvedUrl });
+		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
 		return false;
 	}
 	if (await urlsExist(db, [resolvedUrl])) {
-		logInfo('TWITTER', 'Link already exists (dedup)', { url: resolvedUrl });
+		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 		return false;
 	}
 
 	const scraped = await scrapeWebPage(resolvedUrl).catch((err) => {
-		logWarn('TWITTER', 'Failed to scrape followed link', { url: resolvedUrl, error: String(err) });
+		console.warn({ tag: 'TWITTER', msg: 'Failed to scrape followed link', url: resolvedUrl, error: String(err) });
 		return null;
 	});
 	if (!scraped) return false;
 
 	// Skip if scraped content is too short to be meaningful
 	if (!scraped.content || scraped.content.length < 100) {
-		logInfo('TWITTER', 'Scraped content too short', { url: resolvedUrl, chars: scraped.content?.length ?? 0 });
+		console.info({ tag: 'TWITTER', msg: 'Scraped content too short', url: resolvedUrl, chars: scraped.content?.length ?? 0 });
 		return false;
 	}
 
@@ -202,7 +200,7 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: st
 		}),
 	});
 
-	if (id) logInfo('TWITTER', 'Saved shared article', { title: scraped.title?.slice(0, 50) });
+	if (id) console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
 	return !!id;
 }
 
@@ -222,7 +220,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const triage = triageTweet(textWithoutUrls, links);
 
 	if (triage === 'discard') {
-		logInfo('TWITTER', 'Filtered tweet', { author: tweet.author?.userName, reason: 'too short, no links' });
+		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short, no links' });
 		return false;
 	}
 
@@ -235,7 +233,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
 
 	if (externalUrl && (await urlsExist(db, [externalUrl]))) {
-		logInfo('TWITTER', 'External URL already exists (dedup)', { url: externalUrl });
+		console.info({ tag: 'TWITTER', msg: 'External URL already exists (dedup)', url: externalUrl });
 		return false;
 	}
 
@@ -250,7 +248,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 			externalTitle = scraped.title || null;
 			if (scraped.content && scraped.content.length > 100) externalContent = scraped.content;
 		} catch (err) {
-			logWarn('TWITTER', 'Failed to fetch external link metadata', { url: externalUrl, error: String(err) });
+			console.warn({ tag: 'TWITTER', msg: 'Failed to fetch external link metadata', url: externalUrl, error: String(err) });
 		}
 	}
 
@@ -281,7 +279,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		hashTags: tweet.hashTags,
 	});
 
-	if (id) logInfo('TWITTER', 'Saved tweet', { author: tweet.author?.userName });
+	if (id) console.info({ tag: 'TWITTER', msg: 'Saved tweet', author: tweet.author?.userName });
 	return !!id;
 }
 
@@ -318,8 +316,8 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 			`UPDATE ${ARTICLES_TABLE} SET summary = $1, content = $2, platform_metadata = $3, summary_cn = NULL, content_cn = NULL, title_cn = NULL, embedding = NULL WHERE id = $4`,
 			[combinedText, combinedText, JSON.stringify(metadata), existingId],
 		);
-		await enqueueArticleProcess(env, existingId, 'twitter');
-		logInfo('TWITTER', 'Updated thread', { author: first.author?.userName, tweets: sorted.length });
+		await enqueueArticleProcess(env, existingId);
+		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
 
@@ -335,7 +333,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 		hashTags: first.hashTags,
 	});
 
-	if (id) logInfo('TWITTER', 'Saved thread', { author: first.author?.userName, tweets: sorted.length });
+	if (id) console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
 	return !!id;
 }
 
@@ -396,7 +394,7 @@ async function fetchTweetsForBatch(
 			20_000,
 		);
 		if (!res.ok) {
-			logError('TWITTER', 'Advanced Search HTTP error', { status: res.status, statusText: res.statusText });
+			console.error({ tag: 'TWITTER', msg: 'Advanced Search HTTP error', status: res.status, statusText: res.statusText });
 			return { tweets, completed: false };
 		}
 
@@ -446,19 +444,19 @@ async function saveTweetGroups(db: Client, env: Env, groups: Tweet[][]): Promise
 				if (await saveTweet(group[0], db, env)) count++;
 			}
 		} catch (err) {
-			logError('TWITTER', 'Save failed', { url: group[0]?.url, error: String(err) });
+			console.error({ tag: 'TWITTER', msg: 'Save failed', url: group[0]?.url, error: String(err) });
 		}
 	}
 	return count;
 }
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
-	logInfo('TWITTER', 'start');
+	console.info({ tag: 'TWITTER', msg: 'start' });
 	const db = await createDbClient(env);
 	try {
 		const users = await getTwitterUsersToMonitor(db);
 		if (!users.length) {
-			logInfo('TWITTER', 'No twitter_user entries in RssList');
+			console.info({ tag: 'TWITTER', msg: 'No twitter_user entries in RssList' });
 			return;
 		}
 
@@ -469,7 +467,7 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
 		}
 
-		logInfo('TWITTER', 'Fetching via Advanced Search', { users: userNames.length, batches: batches.length, sinceTime });
+		console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
 
 		let total = 0;
 		let allCompleted = true;
@@ -486,7 +484,7 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), users.map((u) => u.id)]);
 		}
 
-		logInfo('TWITTER', 'end', { inserted: total, users: users.length, batches: batches.length });
+		console.info({ tag: 'TWITTER', msg: 'end', inserted: total, users: users.length, batches: batches.length });
 	} finally {
 		await db.end();
 	}

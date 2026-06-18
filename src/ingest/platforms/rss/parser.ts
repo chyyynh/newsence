@@ -2,7 +2,7 @@
 // RSS Parsing Utilities
 // ─────────────────────────────────────────────────────────────
 
-import { decodeHtmlEntities, htmlToText } from '@shared/html';
+import { decodeHtmlEntities, htmlToText } from '@shared/web';
 
 export type RSSItem = Record<string, unknown>;
 

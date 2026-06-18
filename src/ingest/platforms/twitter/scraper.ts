@@ -2,9 +2,8 @@
 // Twitter Scraper
 // ─────────────────────────────────────────────────────────────
 
-import { logInfo, logWarn } from '@shared/log';
 import type { TwitterMedia } from '@shared/platform-metadata';
-import type { ScrapedContent } from '@shared/scraped-content';
+import type { ScrapedContent } from '@shared/web';
 
 interface KaitoTweet {
 	id: string;
@@ -56,7 +55,7 @@ interface TwitterArticle {
 }
 
 export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<ScrapedContent | null> {
-	logInfo('TWITTER', 'Fetching article for tweet', { tweetId });
+	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
 	const response = await fetch(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
 		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
@@ -82,7 +81,7 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 	md += `- Likes: ${(article.likeCount || 0).toLocaleString()}\n`;
 	md += `- Replies: ${(article.replyCount || 0).toLocaleString()}\n`;
 
-	logInfo('TWITTER', 'Article fetched', { title: article.title });
+	console.info({ tag: 'TWITTER', msg: 'Article fetched', title: article.title });
 
 	return {
 		title: article.title,
@@ -159,7 +158,7 @@ function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[], media?: K
 }
 
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
-	logInfo('TWITTER', 'Fetching tweet', { tweetId });
+	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
 
 	const response = await fetch(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
 		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
@@ -182,21 +181,21 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 
 	// 1. Twitter Article — detected by expanded_url containing /i/article/
 	if (articleUrl) {
-		logInfo('TWITTER', 'Detected Twitter Article', { articleUrl });
+		console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', articleUrl });
 		const articleContent = await scrapeTwitterArticle(tweetId, apiKey);
 		if (articleContent) return articleContent;
-		logWarn('TWITTER', 'Article API failed, falling through to regular tweet handling', {});
+		console.warn({ tag: 'TWITTER', msg: 'Article API failed, falling through to regular tweet handling' });
 	}
 
 	// 2. Tweet has external link — scrape the linked page directly
 	if (externalUrl) {
-		logInfo('TWITTER', 'Tweet has external link, scraping', { externalUrl });
+		console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
 		try {
 			// Import scrapeWebPage at call site to avoid circular dependency
 			const { scrapeWebPage } = await import('../web/scraper');
 			const linked = await scrapeWebPage(externalUrl);
 			if (linked.content && linked.content.length > 100) {
-				logInfo('TWITTER', 'Scraped linked article', { title: linked.title });
+				console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
 				return {
 					title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
 					content: linked.content,
@@ -220,14 +219,14 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 				};
 			}
 		} catch (e) {
-			logWarn('TWITTER', 'Failed to scrape linked URL', { externalUrl, error: String(e) });
+			console.warn({ tag: 'TWITTER', msg: 'Failed to scrape linked URL', externalUrl, error: String(e) });
 		}
 	}
 
 	// 3. Regular tweet — no full content, summary carries the tweet text
 	const title = `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}${tweet.text.length > 80 ? '...' : ''}`;
 
-	logInfo('TWITTER', 'Tweet fetched', { userName: tweet.author?.userName });
+	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });
 
 	return {
 		title,

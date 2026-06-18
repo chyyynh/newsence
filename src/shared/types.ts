@@ -1,5 +1,5 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
-import type { ProcessableTable } from './db/articles';
+import type { ProcessableTable } from './db';
 import type { PlatformMetadata } from './platform-metadata';
 
 /**
@@ -9,7 +9,6 @@ import type { PlatformMetadata } from './platform-metadata';
  * editing wrangler.jsonc — bindings/vars come from the generated base.
  */
 export interface Env extends Cloudflare.Env {
-	OPENROUTER_API_KEY: string;
 	// CORE_WORKER_INTERNAL_TOKEN, BETTER_AUTH_SECRET, and POSTHOG_HOST come from
 	// the generated Cloudflare.Env (wrangler vars / .dev.vars) — re-declaring them
 	// here would widen the type and conflict (TS2430). Don't add them back.
@@ -67,15 +66,6 @@ export interface AIAnalysisResult {
 	entities?: ExtractedEntity[];
 }
 
-// OpenRouter API response
-export interface OpenRouterResponse {
-	choices: Array<{
-		message: {
-			content: string | null;
-		};
-	}>;
-}
-
 // RSS Feed related
 export interface RSSFeed {
 	id: string;
@@ -127,7 +117,7 @@ export interface Tweet {
 
 // Queue message types
 export type QueueMessage =
-	| { type: 'article_process'; article_id: string; source_type: string; target_table?: ProcessableTable }
+	| { type: 'article_process'; article_id: string; target_table?: ProcessableTable }
 	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable };
 
 // Exported handlers

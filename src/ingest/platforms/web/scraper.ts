@@ -3,10 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Readability } from '@mozilla/readability';
-import { BROWSER_UA } from '@shared/fetch';
-import { decodeHtmlEntities } from '@shared/html';
-import { logInfo, logWarn } from '@shared/log';
-import type { ScrapedContent } from '@shared/scraped-content';
+import { BROWSER_UA, decodeHtmlEntities, type ScrapedContent } from '@shared/web';
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
@@ -121,7 +118,7 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 			const fragment = handler($el, url);
 			if (fragment) content += fragment;
 		} catch (error) {
-			logWarn('WEB', 'Error processing element', { error: String(error) });
+			console.warn({ tag: 'WEB', msg: 'Error processing element', error: String(error) });
 		}
 	}
 
@@ -177,7 +174,7 @@ function extractContentReadability(html: string, url: string): string | null {
 
 		return markdown;
 	} catch (error) {
-		logWarn('WEB', 'Readability extraction failed', { url, error: String(error) });
+		console.warn({ tag: 'WEB', msg: 'Readability extraction failed', url, error: String(error) });
 		return null;
 	}
 }
@@ -308,7 +305,7 @@ function getRetryUrls(inputUrl: string, finalUrl: string, content: string): stri
 }
 
 export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
-	logInfo('WEB', 'Scraping', { url });
+	console.info({ tag: 'WEB', msg: 'Scraping', url });
 
 	const result = await fetchAndExtract(url);
 
@@ -317,20 +314,20 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 		const retryUrls = getRetryUrls(url, result.finalUrl, result.content);
 		if (retryUrls.length > 0) {
 			const retryUrl = retryUrls[0];
-			logInfo('WEB', 'Low-quality content, retrying', { url, retryUrl });
+			console.info({ tag: 'WEB', msg: 'Low-quality content, retrying', url, retryUrl });
 			try {
 				const retryResult = await fetchAndExtract(retryUrl);
 				if (!isLowQualityContent(retryResult.content) && retryResult.content.length > result.content.length) {
-					logInfo('WEB', 'Retry succeeded', { url: retryUrl, chars: retryResult.content.length });
+					console.info({ tag: 'WEB', msg: 'Retry succeeded', url: retryUrl, chars: retryResult.content.length });
 					return retryResult;
 				}
 			} catch (err) {
-				logWarn('WEB', 'Retry failed', { url: retryUrl, error: String(err) });
+				console.warn({ tag: 'WEB', msg: 'Retry failed', url: retryUrl, error: String(err) });
 			}
 		}
 	}
 
-	logInfo('WEB', 'Scraped', { url, chars: result.content.length });
+	console.info({ tag: 'WEB', msg: 'Scraped', url, chars: result.content.length });
 
 	return result;
 }

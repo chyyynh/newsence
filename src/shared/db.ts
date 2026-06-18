@@ -1,7 +1,6 @@
 import { Client } from 'pg';
-import { validateImageUrl } from '../fetch';
-import type { Env } from '../types';
-import { normalizeUrl } from '../web';
+import type { Env } from './types';
+import { normalizeUrl, validateImageUrl } from './web';
 export type DbClient = Client;
 
 export async function createDbClient(env: Env): Promise<Client> {
@@ -275,16 +274,22 @@ export async function upsertYoutubeTranscript(db: DbClient, transcript: YoutubeT
 // ─────────────────────────────────────────────────────────────
 
 /** Enqueue an article for the AI-processing workflow. */
-export async function enqueueArticleProcess(
-	env: Env,
-	articleId: string,
-	sourceType: string,
-	targetTable?: ProcessableTable,
-): Promise<void> {
+export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
 	await env.ARTICLE_QUEUE.send({
 		type: 'article_process',
 		article_id: articleId,
-		source_type: sourceType,
 		...(targetTable ? { target_table: targetTable } : {}),
 	});
+}
+
+export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
+	try {
+		const instance = await env.MONITOR_WORKFLOW.create({
+			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
+		});
+		return instance.id;
+	} catch (err) {
+		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
+		return undefined;
+	}
 }

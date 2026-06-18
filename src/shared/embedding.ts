@@ -1,5 +1,4 @@
-import { ARTICLES_TABLE, type ProcessableTable } from './db/articles';
-import { logError, logInfo } from './log';
+import { ARTICLES_TABLE, type ProcessableTable } from './db';
 import type { Article } from './types';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
@@ -39,7 +38,7 @@ export async function generateArticleEmbedding(text: string, ai: Ai): Promise<nu
 		})) as AiEmbeddingResult;
 
 		if (!result.data?.[0]) {
-			logError('EMBEDDING', 'Invalid response format');
+			console.error({ tag: 'EMBEDDING', msg: 'Invalid response format' });
 			return null;
 		}
 
@@ -47,7 +46,7 @@ export async function generateArticleEmbedding(text: string, ai: Ai): Promise<nu
 		// vector_cosine_ops), which is scale-invariant — no L2 normalization needed.
 		return result.data[0];
 	} catch (error: unknown) {
-		logError('EMBEDDING', 'Workers AI error', { error: (error as Error).message });
+		console.error({ tag: 'EMBEDDING', msg: 'Workers AI error', error: (error as Error).message });
 		return null;
 	}
 }
@@ -62,10 +61,10 @@ export async function saveArticleEmbedding(
 
 	try {
 		await db.query(`UPDATE ${table} SET embedding = $1 WHERE id = $2`, [vectorStr, articleId]);
-		logInfo('EMBEDDING', 'Saved', { articleId, table });
+		console.info({ tag: 'EMBEDDING', msg: 'Saved', articleId, table });
 		return true;
 	} catch (error: unknown) {
-		logError('EMBEDDING', 'Error saving', { articleId, error: (error as Error).message });
+		console.error({ tag: 'EMBEDDING', msg: 'Error saving', articleId, error: (error as Error).message });
 		return false;
 	}
 }

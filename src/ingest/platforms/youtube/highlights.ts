@@ -2,9 +2,9 @@
 // YouTube Highlights Generator
 // ─────────────────────────────────────────────────────────────
 
-import { logError, logInfo } from '@shared/log';
-import { AI_MODELS, callOpenRouter, extractJson } from '@shared/openrouter';
-import type { TranscriptSegment } from '@shared/scraped-content';
+import { generateJson } from '@shared/ai';
+import type { Env } from '@shared/types';
+import type { TranscriptSegment } from '@shared/web';
 
 export interface YouTubeHighlight {
 	title: string;
@@ -34,37 +34,49 @@ const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 
 }
 
 只回傳 JSON，不要其他文字。`;
+const YOUTUBE_HIGHLIGHTS_SCHEMA = {
+	type: 'object',
+	properties: {
+		highlights: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					title: { type: 'string' },
+					summary: { type: 'string' },
+					startTime: { type: 'number' },
+					endTime: { type: 'number' },
+				},
+				required: ['title', 'summary', 'startTime', 'endTime'],
+			},
+		},
+	},
+	required: ['highlights'],
+};
 
 export async function generateYouTubeHighlights(
 	videoId: string,
 	transcript: TranscriptSegment[],
-	apiKey: string,
+	ai: Env['AI'],
 ): Promise<YouTubeHighlightsResult | null> {
-	logInfo('AI', 'Generating YouTube highlights', { videoId });
+	console.info({ tag: 'AI', msg: 'Generating YouTube highlights', videoId });
 
 	const transcriptText = transcript.map((s) => `[${Math.floor(s.startTime)}s] ${s.text}`).join('\n');
 	const last = transcript[transcript.length - 1];
 	const duration = Math.ceil(last.endTime);
 
-	const rawContent = await callOpenRouter(`影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
-		apiKey,
-		model: AI_MODELS.FLASH,
+	const result = await generateJson<YouTubeHighlightsResult>(ai, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+		schema: YOUTUBE_HIGHLIGHTS_SCHEMA,
 		maxTokens: 2000,
 		temperature: 0.3,
 		systemPrompt: HIGHLIGHTS_SYSTEM_PROMPT,
 	});
 
-	if (!rawContent) {
-		logError('AI', 'YouTube highlights: empty response', { videoId });
-		return null;
-	}
-
-	const result = extractJson<YouTubeHighlightsResult>(rawContent);
 	if (!result?.highlights || !Array.isArray(result.highlights) || result.highlights.length === 0) {
-		logError('AI', 'YouTube highlights: invalid JSON', { videoId });
+		console.error({ tag: 'AI', msg: 'YouTube highlights: invalid JSON', videoId });
 		return null;
 	}
 
-	logInfo('AI', 'YouTube highlights generated', { videoId, count: result.highlights.length });
+	console.info({ tag: 'AI', msg: 'YouTube highlights generated', videoId, count: result.highlights.length });
 	return result;
 }

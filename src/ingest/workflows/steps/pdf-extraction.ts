@@ -1,8 +1,7 @@
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
-import { createDbClient, USER_FILES_TABLE } from '@shared/db/articles';
-import { logInfo } from '@shared/log';
-import type { Article, Env } from '@shared/types';
+import { createDbClient, USER_FILES_TABLE } from '@shared/db';
+import type { Env } from '@shared/types';
 
 // Digital PDFs with a real text layer yield plenty of characters; scanned /
 // image-only PDFs come back near-empty (LiteParse base does not OCR). We flag
@@ -227,11 +226,6 @@ async function recordExtraction(
 	}
 }
 
-export function isExtractablePdf(article: Article): boolean {
-	const originType = article.origin_type;
-	return (originType === 'upload' || originType === 'saved_url') && article.file_type === 'application/pdf' && !!article.storage_key;
-}
-
 // Pure extraction — no R2, no DB. Runs LiteParse on raw PDF bytes and classifies
 // the result. Shared by extractAndPersistPdf (workflow) and the /scrape endpoint.
 export function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
@@ -251,7 +245,7 @@ export async function extractAndPersistPdf(env: Env, articleId: string, storageK
 
 	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
 	await recordExtraction(env, articleId, status, text, { chars, pages });
-	logInfo('WORKFLOW', 'PDF extracted', { article_id: articleId, status, chars, pages });
+	console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: articleId, status, chars, pages });
 	return { text, status };
 }
 

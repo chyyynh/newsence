@@ -2,9 +2,8 @@
 // YouTube Scraper
 // ─────────────────────────────────────────────────────────────
 
-import { logInfo, logWarn } from '@shared/log';
 import type { YouTubeMetadata } from '@shared/platform-metadata';
-import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@shared/scraped-content';
+import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@shared/web';
 
 interface YouTubeVideoItem {
 	id: string;
@@ -61,7 +60,7 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 
 async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
+	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
 
 	const { YoutubeTranscript } = await import('youtube-transcript');
 	const items = await YoutubeTranscript.fetchTranscript(videoId);
@@ -78,12 +77,12 @@ async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptS
 	}));
 
 	const language = items[0].lang ?? null;
-	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length, language });
+	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', count: segments.length, language });
 	return { segments, language };
 }
 
 export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent & { metadata: YouTubeMetadata }> {
-	logInfo('YOUTUBE', 'Fetching video', { videoId });
+	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
 	const videoResponse = await fetch(
 		`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,contentDetails,statistics&key=${youtubeApiKey}`,
@@ -115,7 +114,7 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 			channelAvatar = channelData.items?.[0]?.snippet?.thumbnails?.medium?.url ?? null;
 		}
 	} catch (e) {
-		logWarn('YOUTUBE', 'Failed to fetch channel avatar', { error: String(e) });
+		console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch channel avatar', error: String(e) });
 	}
 
 	const thumbnailUrl =
@@ -132,11 +131,11 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 	try {
 		transcriptResult = await fetchTranscript(videoId);
 	} catch (e) {
-		logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
+		console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch transcript', error: String(e) });
 	}
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 
-	logInfo('YOUTUBE', 'Video fetched', { title: snippet.title });
+	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
 		title: snippet.title,
