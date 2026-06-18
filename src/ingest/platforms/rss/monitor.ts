@@ -283,19 +283,11 @@ export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<v
 		// Pass 1: default sources → articles table
 		const defaultResult = await db.query(`SELECT id, name, "RSSLink", url, type FROM "RssList" WHERE is_default = true AND type = 'rss'`);
 		const feeds = defaultResult.rows as RSSFeed[];
-		const FEED_CONCURRENCY = 5;
-		for (let i = 0; i < feeds.length; i += FEED_CONCURRENCY) {
-			const batch = feeds.slice(i, i + FEED_CONCURRENCY);
-			const results = await Promise.allSettled(batch.map((feed: RSSFeed) => processFeed(db, env, feed, parser)));
-			for (let j = 0; j < results.length; j++) {
-				if (results[j].status === 'rejected') {
-					console.warn({
-						tag: 'RSS',
-						msg: 'Feed failed',
-						feed: batch[j].name,
-						error: String((results[j] as PromiseRejectedResult).reason),
-					});
-				}
+		for (const feed of feeds) {
+			try {
+				await processFeed(db, env, feed, parser);
+			} catch (err) {
+				console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
 			}
 		}
 
