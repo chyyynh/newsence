@@ -468,6 +468,26 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 
 /** Max usernames per query batch to stay within query length limits */
 const TWITTER_BATCH_SIZE = 20;
+const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
+const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
+
+function normalizeTwitterUserName(input: string | null | undefined): string | null {
+	const trimmed = input?.trim();
+	if (!trimmed) return null;
+
+	let candidate = trimmed.replace(/^@/, '');
+	try {
+		const url = new URL(trimmed);
+		if (!/(^|\.)x\.com$|(^|\.)twitter\.com$/.test(url.hostname.toLowerCase())) return null;
+		candidate = url.pathname.split('/').filter(Boolean)[0] ?? '';
+		if (TWITTER_NON_PROFILE_PATHS.has(candidate.toLowerCase())) return null;
+	} catch {
+		// Plain handle input.
+	}
+
+	const userName = candidate.replace(/^@/, '').trim();
+	return TWITTER_USERNAME_RE.test(userName) ? userName : null;
+}
 
 // -- Twitter Cron: staged pipeline --------------------------------------------
 
@@ -492,7 +512,7 @@ function calculateMonitoringSinceTime(users: RSSFeed[]): number {
 	return Math.floor((oldest - 60 * 60 * 1000) / 1000);
 }
 
-/** Fetch all tweets matching `(from:u1 OR from:u2 …) since:<date>`, paginating through cursors. */
+/** Fetch all tweets matching `(from:u1 OR from:u2 …) since_time:<unix>`, paginating through cursors. */
 async function fetchTweetsForBatch(
 	apiKey: string,
 	userNames: string[],
@@ -583,7 +603,11 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 		}
 
 		const sinceTime = calculateMonitoringSinceTime(users);
-		const userNames = users.map((u) => u.RSSLink).filter(Boolean);
+		const userNames = [...new Set(users.map((u) => normalizeTwitterUserName(u.RSSLink)).filter((u): u is string => !!u))];
+		if (userNames.length === 0) {
+			console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in RssList', users: users.length });
+			return;
+		}
 		const batches: string[][] = [];
 		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
 			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
