@@ -115,11 +115,7 @@ async function detectHnSource(
 	return { sourceType: 'rss', platformMetadata: null };
 }
 
-async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed: RSSFeed, config: FeedConfig): Promise<void> {
-	const rawUrl = extractUrlFromItem(item);
-	const url = rawUrl ? normalizeUrl(rawUrl) : null;
-	if (!url) return;
-
+async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const { sourceType, platformMetadata } = await detectHnSource(toPlainText(item.comments) || undefined, feed.name);
 
 	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
@@ -168,6 +164,16 @@ const DEFAULT_FEED_PRIORITY = 10;
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 
 type ExistingRecord = { url: string; source: string; source_type: string };
+type FeedItemWithUrl = { item: RSSItem; url: string };
+
+function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
+	const entries: FeedItemWithUrl[] = [];
+	for (const item of items) {
+		const rawUrl = extractUrlFromItem(item);
+		if (rawUrl) entries.push({ item, url: normalizeUrl(rawUrl) });
+	}
+	return entries;
+}
 
 async function fetchExistingRecords(db: Client, urls: string[]): Promise<ExistingRecord[]> {
 	const dedupBatchSize = 50;
@@ -238,21 +244,15 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	const config = getFeedConfig(feed.name);
 	if (items.length > 30) items = items.slice(0, 30);
 
-	const urls = items
-		.map((item) => extractUrlFromItem(item))
-		.filter(Boolean)
-		.map((u) => normalizeUrl(u!));
+	const itemUrls = extractFeedItemUrls(items);
+	const urls = itemUrls.map(({ url }) => url);
 	const existingRecords = await fetchExistingRecords(db, urls);
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
-	const newItems = items.filter((item) => {
-		const url = extractUrlFromItem(item);
-		return url && !existingSet.has(normalizeUrl(url));
-	});
+	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 
 	const urlToItem = new Map<string, RSSItem>();
-	for (const item of items) {
-		const url = extractUrlFromItem(item);
-		if (url) urlToItem.set(normalizeUrl(url), item);
+	for (const { item, url } of itemUrls) {
+		urlToItem.set(url, item);
 	}
 
 	const feedPriority = SOURCE_PRIORITY[feed.name] ?? DEFAULT_FEED_PRIORITY;
@@ -262,12 +262,12 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
 	let inserted = 0;
-	for (const item of newItems) {
+	for (const { item, url } of newItems) {
 		try {
-			await processAndInsertArticle(db, env, item, feed, config);
+			await processAndInsertArticle(db, env, item, url, feed, config);
 			inserted++;
 		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Item insert failed, skipping', feed: feed.name, url: extractUrlFromItem(item), error: String(err) });
+			console.warn({ tag: 'RSS', msg: 'Item insert failed, skipping', feed: feed.name, url, error: String(err) });
 		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed insert done', feed: feed.name, inserted, total: newItems.length });
