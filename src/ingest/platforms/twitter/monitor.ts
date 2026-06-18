@@ -87,8 +87,8 @@ async function insertTwitterArticle(
 
 // -- Twitter Article (long-form) ----------------------------------------------
 
-async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
-	const articleUrl = findTwitterArticleUrl(extractExpandedUrls(tweet));
+async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expandedUrls: string[]): Promise<boolean> {
+	const articleUrl = findTwitterArticleUrl(expandedUrls);
 	if (!articleUrl) return false;
 
 	const tweetId = tweet.id || tweet.url.split('/').pop();
@@ -127,15 +127,15 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise
 /** Rule-based content triage. Tracked users are curated, so no AI needed for quality gating. */
 const MIN_TWEET_LENGTH = 150;
 
-function triageTweet(textWithoutUrls: string, links: string[]): 'save' | 'follow_link' | 'discard' {
-	if (textWithoutUrls.length < MIN_TWEET_LENGTH) return links.length > 0 ? 'follow_link' : 'discard';
+function triageTweet(textWithoutUrls: string, externalUrl: string | undefined): 'save' | 'follow_link' | 'discard' {
+	if (textWithoutUrls.length < MIN_TWEET_LENGTH) return externalUrl ? 'follow_link' : 'discard';
 	return 'save';
 }
 
 // -- Follow Link (tweet shares an external URL) -------------------------------
 
-async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: string[], db: Client, env: Env): Promise<boolean> {
-	const resolvedUrl = await resolveUrl(links[0]!);
+async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalUrl: string, db: Client, env: Env): Promise<boolean> {
+	const resolvedUrl = await resolveUrl(externalUrl);
 
 	if (isSocialMediaUrl(resolvedUrl)) {
 		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
@@ -188,27 +188,24 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
 	if (await urlExists(db, tweetUrl)) return false;
 
-	// 1. Twitter Article?
-	if (await handleTwitterArticle(tweet, db, env)) return true;
-
-	const links = tweet.text.match(/https?:\/\/\S+/g) || [];
+	const expandedUrls = extractExpandedUrls(tweet);
+	const externalUrl = findExternalUrl(expandedUrls);
 	const textWithoutUrls = stripTweetUrls(tweet.text);
 
+	// 1. Twitter Article?
+	if (await handleTwitterArticle(tweet, db, env, expandedUrls)) return true;
+
 	// 2. Rule-based triage (no AI — tracked users are curated)
-	const triage = triageTweet(textWithoutUrls, links);
+	const triage = triageTweet(textWithoutUrls, externalUrl);
 
 	if (triage === 'discard') {
 		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short, no links' });
 		return false;
 	}
 
-	if (triage === 'follow_link') {
-		return handleFollowLink(tweet, textWithoutUrls, links, db, env);
-	}
+	if (triage === 'follow_link' && externalUrl) return handleFollowLink(tweet, textWithoutUrls, externalUrl, db, env);
 
 	// 3. Save as tweet
-	const externalUrl = findExternalUrl(extractExpandedUrls(tweet));
-
 	if (externalUrl && (await urlsExist(db, [externalUrl]))) {
 		console.info({ tag: 'TWITTER', msg: 'External URL already exists (dedup)', url: externalUrl });
 		return false;
