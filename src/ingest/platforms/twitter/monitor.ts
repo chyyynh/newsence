@@ -1,5 +1,5 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
-import type { PlatformMetadata } from '@shared/platform-metadata';
+import type { PlatformMetadata, RetweetedByData } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
 import type { Client } from 'pg';
@@ -23,9 +23,24 @@ import {
 
 const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/advanced_search';
 
-/** Skip RTs. All other filtering (replies vs threads) handled in Phase 2. */
-function isNotRetweet(tweet: Tweet): boolean {
-	return !tweet.retweeted_tweet && !tweet.text.startsWith('RT @');
+function buildRetweetedBy(tweet: Tweet): RetweetedByData {
+	return {
+		tweetId: tweet.id,
+		tweetUrl: tweet.url,
+		retweetedAt: tweet.createdAt,
+		authorName: tweet.author?.name || '',
+		authorUserName: tweet.author?.userName || '',
+		authorProfilePicture: tweet.author?.profilePicture,
+		authorVerified: tweet.author?.isBlueVerified,
+	};
+}
+
+function normalizeRetweet(tweet: Tweet): Tweet | null {
+	if (tweet.retweeted_tweet) {
+		return { ...tweet.retweeted_tweet, retweetedBy: buildRetweetedBy(tweet) };
+	}
+	if (tweet.text.startsWith('RT @')) return null;
+	return tweet;
 }
 
 async function urlExists(db: Client, url: string): Promise<boolean> {
@@ -351,7 +366,8 @@ async function fetchTweetsForBatch(
 			return { tweets, completed: false };
 		}
 		for (const tweet of apiRes.tweets || []) {
-			if (isNotRetweet(tweet)) tweets.push(tweet);
+			const normalized = normalizeRetweet(tweet);
+			if (normalized) tweets.push(normalized);
 		}
 
 		if (!apiRes.has_next_page) break;

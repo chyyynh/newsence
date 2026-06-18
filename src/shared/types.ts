@@ -1,6 +1,6 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 import type { ProcessableTable } from './db';
-import type { PlatformMetadata } from './platform-metadata';
+import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
 
 /**
  * Environment bindings.
@@ -114,6 +114,7 @@ export interface Tweet {
 	// Quote & retweet
 	quoted_tweet?: Tweet | null;
 	retweeted_tweet?: Tweet | null;
+	retweetedBy?: RetweetedByData;
 }
 
 // Queue message types

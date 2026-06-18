@@ -6,6 +6,7 @@ import {
 	buildMetadata,
 	type PlatformMetadata,
 	type QuotedTweetData,
+	type RetweetedByData,
 	type TwitterAuthorFields,
 	type TwitterMedia,
 } from '@shared/platform-metadata';
@@ -38,6 +39,7 @@ export interface TwitterLikeTweet {
 	entities?: { urls?: TwitterUrlEntity[] };
 	extendedEntities?: { media?: TwitterMediaEntity[] };
 	quoted_tweet?: TwitterLikeTweet | null;
+	retweetedBy?: RetweetedByData;
 }
 
 export function extractTweetAuthor(tweet: TwitterLikeTweet): TwitterAuthorFields {
@@ -45,6 +47,7 @@ export function extractTweetAuthor(tweet: TwitterLikeTweet): TwitterAuthorFields
 		authorName: tweet.author?.name || '',
 		authorUserName: tweet.author?.userName || '',
 		authorProfilePicture: tweet.author?.profilePicture,
+		authorVerified: tweet.author?.isBlueVerified,
 	};
 }
 
@@ -120,9 +123,9 @@ export function buildTweetPlatformMetadata(
 	const base = {
 		tweetId: tweet.id,
 		...extractTweetAuthor(tweet),
-		authorVerified: tweet.author?.isBlueVerified,
 		media,
 		createdAt: tweet.createdAt,
+		retweetedBy: tweet.retweetedBy,
 	};
 
 	if (options.externalUrl) {

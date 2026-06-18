@@ -32,6 +32,16 @@ export interface QuotedTweetData {
 	text: string;
 }
 
+export interface RetweetedByData {
+	tweetId?: string;
+	tweetUrl?: string;
+	retweetedAt?: string;
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	authorVerified?: boolean;
+}
+
 /**
  * Flat shape (mirrors the frontend). `variant` discriminates standard (omitted),
  * `'shared'` (external link — adds tweetText/externalUrl/externalOgImage/externalTitle),
@@ -43,6 +53,7 @@ export interface TwitterMetadata extends TwitterAuthorFields {
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
+	retweetedBy?: RetweetedByData;
 	tweetText?: string;
 	externalUrl?: string;
 	externalOgImage?: string | null;
@@ -244,6 +255,23 @@ function asQuotedTweet(value: unknown): QuotedTweetData | undefined {
 	};
 }
 
+function asRetweetedBy(value: unknown): RetweetedByData | undefined {
+	const retweet = asRecord(value);
+	if (!retweet) return undefined;
+	const authorName = asString(retweet.authorName);
+	const authorUserName = asString(retweet.authorUserName);
+	if (!authorName || !authorUserName) return undefined;
+	return {
+		authorName,
+		authorUserName,
+		tweetId: asString(retweet.tweetId),
+		tweetUrl: asString(retweet.tweetUrl),
+		retweetedAt: asString(retweet.retweetedAt),
+		authorProfilePicture: asString(retweet.authorProfilePicture),
+		authorVerified: asBoolean(retweet.authorVerified),
+	};
+}
+
 function parseTwitterAuthor(metadata: Record<string, unknown>): TwitterAuthorFields {
 	return {
 		authorName: asString(metadata.authorName) ?? '',
@@ -291,6 +319,7 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 				...baseData,
 				media: asTwitterMediaArray(metadata.media),
 				createdAt: asString(metadata.createdAt),
+				retweetedBy: asRetweetedBy(metadata.retweetedBy),
 			};
 			if (variant === 'shared') {
 				return buildMetadata('twitter', {
