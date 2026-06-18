@@ -67,7 +67,7 @@ const RECENCY_HALF_LIFE_DAYS = 30;
 const OVERFETCH_MULTIPLIER = 5;
 const OVERFETCH_CAP = 200;
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function rankCorpusArticleIds(env: Env, query: string, limit = 100): Promise<Array<{ id: string; score: number }>> {
 	return withDb(env, async (client) => {
