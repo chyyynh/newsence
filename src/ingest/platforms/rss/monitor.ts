@@ -2,18 +2,10 @@ import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } 
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
-import {
-	detectPlatformType,
-	extractHackerNewsId,
-	FEED_UA,
-	fetchJsonWithTimeout,
-	fetchWithTimeout,
-	normalizeUrl,
-	readTextWithLimit,
-} from '@shared/web';
+import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
-import { HN_ALGOLIA_API } from '../hackernews/scraper';
+import { fetchHnItem, hnItemTypeForMetadata } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web/scraper';
 import {
 	extractImageFromItem,
@@ -60,19 +52,13 @@ async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMe
 	if (detectPlatformType(commentsUrl) !== 'hackernews') return null;
 	const hnItemId = extractHackerNewsId(commentsUrl);
 	if (!hnItemId) return null;
-	const hn = await fetchJsonWithTimeout<{
-		id: number;
-		author?: string;
-		points?: number;
-		descendants?: number;
-		type?: string;
-	}>(`${HN_ALGOLIA_API}/${hnItemId}`);
+	const hn = await fetchHnItem(hnItemId);
 	return buildMetadata('hackernews', {
 		itemId: hn.id.toString(),
 		author: hn.author ?? '',
 		points: hn.points ?? 0,
 		commentCount: hn.descendants ?? 0,
-		itemType: (hn.type as 'story' | 'ask' | 'show' | 'job') ?? 'story',
+		itemType: hnItemTypeForMetadata(hn.type),
 		storyUrl: commentsUrl,
 	});
 }

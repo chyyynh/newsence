@@ -4,22 +4,40 @@
 
 import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
 
-export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
-interface HNItem {
-	id: number;
-	title: string;
-	url?: string;
-	author: string;
-	points: number;
-	descendants?: number;
-	type: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
-	created_at_i: number;
+export interface HnComment {
+	id?: number;
+	author?: string;
 	text?: string;
+	children?: HnComment[];
 }
 
-function buildHnMarkdown(item: HNItem): string {
-	const parts: string[] = [`# ${item.title}\n`];
+export interface HnItem {
+	id: number;
+	title?: string;
+	url?: string;
+	author?: string;
+	points?: number;
+	descendants?: number;
+	type: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
+	created_at_i?: number;
+	text?: string;
+	children?: HnComment[];
+}
+
+export function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
+	if (type === 'ask' || type === 'show' || type === 'job') return type;
+	return 'story';
+}
+
+export async function fetchHnItem(itemId: string | number): Promise<HnItem> {
+	return fetchJsonWithTimeout<HnItem>(`${HN_ALGOLIA_API}/${itemId}`);
+}
+
+function buildHnMarkdown(item: HnItem): string {
+	const title = item.title || `HN Item ${item.id}`;
+	const parts: string[] = [`# ${title}\n`];
 
 	const metaParts: string[] = [];
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
@@ -38,15 +56,16 @@ function buildHnMarkdown(item: HNItem): string {
 export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
-	const item = await fetchJsonWithTimeout<HNItem>(`${HN_ALGOLIA_API}/${itemId}`);
+	const item = await fetchHnItem(itemId);
 
-	let summary = item.text?.slice(0, 200) || item.title;
+	const title = item.title || `HN Item ${itemId}`;
+	let summary = item.text?.slice(0, 200) || title;
 	if (item.text && item.text.length > 200) summary += '...';
 
-	console.info({ tag: 'HN', msg: 'Item fetched', title: item.title });
+	console.info({ tag: 'HN', msg: 'Item fetched', title });
 
 	return {
-		title: item.title || `HN Item ${itemId}`,
+		title,
 		content: buildHnMarkdown(item),
 		summary,
 		ogImageUrl: null,
@@ -57,7 +76,7 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 			itemId: item.id.toString(),
 			points: item.points || 0,
 			commentCount: item.descendants || 0,
-			itemType: item.type,
+			itemType: hnItemTypeForMetadata(item.type),
 			author: item.author,
 			storyUrl: item.url || null,
 		},

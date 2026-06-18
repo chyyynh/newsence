@@ -5,7 +5,7 @@
 import { generateText } from '@shared/ai';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
-import { decodeHtmlEntities, fetchJsonWithTimeout, htmlToText } from '@shared/web';
+import { decodeHtmlEntities, htmlToText } from '@shared/web';
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
@@ -14,30 +14,11 @@ import {
 	type ProcessorResult,
 } from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web/scraper';
-import { HN_ALGOLIA_API } from './scraper';
+import { fetchHnItem, type HnComment, type HnItem } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
-
-interface HnComment {
-	id?: number;
-	author?: string;
-	text?: string;
-	children?: HnComment[];
-}
-
-interface HnItemData {
-	id: number;
-	title?: string;
-	url?: string;
-	text?: string;
-	author?: string;
-	points?: number;
-	descendants?: number;
-	type?: string;
-	children?: HnComment[];
-}
 
 export interface HnCollectedComment {
 	id?: number;
@@ -265,10 +246,10 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		return { updateData, enrichments };
 	}
 
-	private async fetchHnData(itemId: string | null): Promise<HnItemData | null> {
+	private async fetchHnData(itemId: string | null): Promise<HnItem | null> {
 		if (!itemId) return null;
 		try {
-			return await fetchJsonWithTimeout<HnItemData>(`${HN_ALGOLIA_API}/${itemId}`);
+			return await fetchHnItem(itemId);
 		} catch (error) {
 			console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
 			return null;
