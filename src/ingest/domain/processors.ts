@@ -4,7 +4,6 @@ import { type PlatformEnrichments, type PlatformMetadata, withOgDimensions } fro
 import type { Article } from '@shared/types';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
 
-export { generateYouTubeHighlights } from '../platforms/youtube/highlights';
 export type { ProcessorResult } from './ai-utils';
 
 // ─────────────────────────────────────────────────────────────
