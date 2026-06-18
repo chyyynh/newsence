@@ -2,7 +2,15 @@ import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } 
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
-import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl } from '@shared/web';
+import {
+	detectPlatformType,
+	extractHackerNewsId,
+	FEED_UA,
+	fetchJsonWithTimeout,
+	fetchWithTimeout,
+	normalizeUrl,
+	readTextWithLimit,
+} from '@shared/web';
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
 import { HN_ALGOLIA_API } from '../hackernews/scraper';
@@ -52,15 +60,13 @@ async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMe
 	if (detectPlatformType(commentsUrl) !== 'hackernews') return null;
 	const hnItemId = extractHackerNewsId(commentsUrl);
 	if (!hnItemId) return null;
-	const res = await fetch(`${HN_ALGOLIA_API}/${hnItemId}`);
-	if (!res.ok) return null;
-	const hn = (await res.json()) as {
+	const hn = await fetchJsonWithTimeout<{
 		id: number;
 		author?: string;
 		points?: number;
 		descendants?: number;
 		type?: string;
-	};
+	}>(`${HN_ALGOLIA_API}/${hnItemId}`);
 	return buildMetadata('hackernews', {
 		itemId: hn.id.toString(),
 		author: hn.author ?? '',
@@ -173,6 +179,7 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, feed
 const SOURCE_PRIORITY: Record<string, number> = { Unknown: 0 };
 const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
 const DEFAULT_FEED_PRIORITY = 10;
+const MAX_FEED_BYTES = 3 * 1024 * 1024;
 
 type ExistingRecord = { url: string; source: string; source_type: string };
 
@@ -239,7 +246,7 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	}
 	if (!res.ok) return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
 
-	let items = extractItemsFromFeed(parser.parse(await res.text()));
+	let items = extractItemsFromFeed(parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES)));
 	if (!items.length) return;
 
 	const config = getFeedConfig(feed.name);

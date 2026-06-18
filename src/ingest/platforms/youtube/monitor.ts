@@ -1,7 +1,7 @@
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
-import { FEED_UA, fetchWithTimeout, normalizeUrl } from '@shared/web';
+import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
@@ -30,6 +30,7 @@ interface YouTubeAtomEntry {
 }
 
 const SHORTS_MAX_SECONDS = 180;
+const MAX_FEED_BYTES = 1024 * 1024;
 
 function buildVideoUrl(videoId: string): string {
 	return normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
@@ -41,7 +42,7 @@ async function fetchChannelEntries(channel: RSSFeed, parser: XMLParser): Promise
 		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
 		return null;
 	}
-	const feed = parser.parse(await res.text());
+	const feed = parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES));
 	const rawEntries = feed?.feed?.entry;
 	if (!rawEntries) return [];
 	return Array.isArray(rawEntries) ? rawEntries : [rawEntries];

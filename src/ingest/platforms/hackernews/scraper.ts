@@ -2,7 +2,7 @@
 // HackerNews Scraper
 // ─────────────────────────────────────────────────────────────
 
-import type { ScrapedContent } from '@shared/web';
+import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
 
 export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
@@ -38,10 +38,7 @@ function buildHnMarkdown(item: HNItem): string {
 export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
-	const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
-	if (!response.ok) throw new Error(`HN API error: ${response.status}`);
-
-	const item: HNItem = await response.json();
+	const item = await fetchJsonWithTimeout<HNItem>(`${HN_ALGOLIA_API}/${itemId}`);
 
 	let summary = item.text?.slice(0, 200) || item.title;
 	if (item.text && item.text.length > 200) summary += '...';

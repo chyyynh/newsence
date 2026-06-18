@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Readability } from '@mozilla/readability';
-import { BROWSER_UA, decodeHtmlEntities, type ScrapedContent } from '@shared/web';
+import { BROWSER_UA, decodeHtmlEntities, readTextWithLimit, type ScrapedContent } from '@shared/web';
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
@@ -213,27 +213,7 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 
 	const finalUrl = response.url || url;
 
-	// Stream-decode with a hard byte cap. `decoder.decode(chunk, { stream: true })`
-	// avoids buffering the entire body in a merged Uint8Array before decoding
-	// (the previous pattern held ~3× the body in memory at peak).
-	if (!response.body) throw new Error('Response body is empty');
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let html = '';
-	let totalBytes = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) {
-			html += decoder.decode();
-			break;
-		}
-		totalBytes += value.byteLength;
-		if (totalBytes > MAX_HTML_BYTES) {
-			await reader.cancel();
-			throw new Error(`Response body exceeded ${MAX_HTML_BYTES} bytes`);
-		}
-		html += decoder.decode(value, { stream: true });
-	}
+	const html = await readTextWithLimit(response, MAX_HTML_BYTES);
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 

@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { YouTubeMetadata } from '@shared/platform-metadata';
-import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@shared/web';
+import { fetchJsonWithTimeout, type ScrapedContent, type TranscriptSegment, type YouTubeChapter } from '@shared/web';
 
 interface YouTubeVideoItem {
 	id: string;
@@ -84,15 +84,9 @@ async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptS
 export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent & { metadata: YouTubeMetadata }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
-	const videoResponse = await fetch(
+	const videoData = await fetchJsonWithTimeout<{ items?: YouTubeVideoItem[]; error?: { message: string } }>(
 		`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,contentDetails,statistics&key=${youtubeApiKey}`,
 	);
-
-	if (!videoResponse.ok) {
-		throw new Error(`YouTube API error: HTTP ${videoResponse.status}`);
-	}
-
-	const videoData = (await videoResponse.json()) as { items?: YouTubeVideoItem[]; error?: { message: string } };
 
 	if (videoData.error) throw new Error(`YouTube API: ${videoData.error.message}`);
 	if (!videoData.items?.length) throw new Error('Video not found');
@@ -104,15 +98,10 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 	// Fetch channel avatar
 	let channelAvatar: string | null = null;
 	try {
-		const channelResponse = await fetch(
-			`https://www.googleapis.com/youtube/v3/channels?id=${snippet.channelId}&part=snippet&key=${youtubeApiKey}`,
-		);
-		if (channelResponse.ok) {
-			const channelData = (await channelResponse.json()) as {
-				items?: Array<{ snippet: { thumbnails: { medium?: { url: string }; default?: { url: string } } } }>;
-			};
-			channelAvatar = channelData.items?.[0]?.snippet?.thumbnails?.medium?.url ?? null;
-		}
+		const channelData = await fetchJsonWithTimeout<{
+			items?: Array<{ snippet: { thumbnails: { medium?: { url: string }; default?: { url: string } } } }>;
+		}>(`https://www.googleapis.com/youtube/v3/channels?id=${snippet.channelId}&part=snippet&key=${youtubeApiKey}`);
+		channelAvatar = channelData.items?.[0]?.snippet?.thumbnails?.medium?.url ?? null;
 	} catch (e) {
 		console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch channel avatar', error: String(e) });
 	}

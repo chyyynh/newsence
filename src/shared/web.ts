@@ -31,14 +31,70 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
 	}
 }
 
+const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
+
+export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_TEXT_MAX_BYTES): Promise<string> {
+	const contentLength = Number(response.headers.get('content-length') || '0');
+	if (contentLength > maxBytes) throw new Error(`Response too large: ${contentLength} bytes`);
+	if (!response.body) return '';
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let text = '';
+	let totalBytes = 0;
+
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) {
+			text += decoder.decode();
+			break;
+		}
+		totalBytes += value.byteLength;
+		if (totalBytes > maxBytes) {
+			await reader.cancel();
+			throw new Error(`Response body exceeded ${maxBytes} bytes`);
+		}
+		text += decoder.decode(value, { stream: true });
+	}
+
+	return text;
+}
+
+export async function fetchJsonWithTimeout<T>(
+	url: string,
+	options: RequestInit = {},
+	timeoutMs = 15_000,
+	maxBytes = DEFAULT_TEXT_MAX_BYTES,
+): Promise<T> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const response = await fetch(url, { ...options, signal: controller.signal });
+		if (!response.ok) {
+			await response.body?.cancel();
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+		const text = await readTextWithLimit(response, maxBytes);
+		return JSON.parse(text) as T;
+	} catch (err) {
+		if (err instanceof Error && err.name === 'AbortError') {
+			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /**
  * Resolves shortened URLs (t.co, bit.ly, etc.) to their final destination
  */
 export async function resolveUrl(url: string): Promise<string> {
 	try {
-		const response = await fetch(url, {
+		const response = await fetchWithTimeout(url, {
 			method: 'HEAD',
 			redirect: 'follow',
+			headers: { 'User-Agent': BROWSER_UA },
 		});
 		return response.url;
 	} catch {

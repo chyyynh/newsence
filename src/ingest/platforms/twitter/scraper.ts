@@ -2,8 +2,16 @@
 // Twitter Scraper
 // ─────────────────────────────────────────────────────────────
 
-import type { TwitterMedia } from '@shared/platform-metadata';
-import type { ScrapedContent } from '@shared/web';
+import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
+import {
+	buildTweetTitle,
+	extractExpandedUrls,
+	extractTweetAuthor,
+	extractTweetMedia,
+	findExternalUrl,
+	findTwitterArticleUrl,
+	stripTweetUrls,
+} from './normalize';
 
 interface KaitoTweet {
 	id: string;
@@ -57,13 +65,11 @@ interface TwitterArticle {
 export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<ScrapedContent | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
-	const response = await fetch(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
-		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
-	});
-
-	if (!response.ok) return null;
-
-	const data = (await response.json()) as { article?: TwitterArticle; status: string; message?: string };
+	const data = await fetchJsonWithTimeout<{ article?: TwitterArticle; status: string; message?: string }>(
+		`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`,
+		{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
+	).catch(() => null);
+	if (!data) return null;
 	if (data.status !== 'success' || !data.article) return null;
 
 	const article = data.article;
@@ -102,52 +108,15 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 	};
 }
 
-interface TweetAuthor {
-	authorName: string;
-	authorUserName: string;
-	authorProfilePicture?: string;
-	authorVerified?: boolean;
-}
-
-function extractTweetAuthor(tweet: KaitoTweet): TweetAuthor {
-	return {
-		authorName: tweet.author?.name ?? '',
-		authorUserName: tweet.author?.userName ?? '',
-		authorProfilePicture: tweet.author?.profilePicture,
-		authorVerified: tweet.author?.isBlueVerified,
-	};
-}
-
-type KaitoMedia = NonNullable<NonNullable<KaitoTweet['extendedEntities']>['media']>;
-
-function extractMedia(media?: KaitoMedia): TwitterMedia[] {
-	return (
-		media?.map((m) => {
-			const result: TwitterMedia = { url: m.media_url_https, type: m.type as TwitterMedia['type'] };
-			if (m.sizes?.large) {
-				result.width = m.sizes.large.w;
-				result.height = m.sizes.large.h;
-			}
-			if (m.video_info?.variants) {
-				const mp4 = m.video_info.variants
-					.filter((v) => v.content_type === 'video/mp4')
-					.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
-				if (mp4) result.videoUrl = mp4.url;
-			}
-			return result;
-		}) ?? []
-	);
-}
-
-function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[], media?: KaitoMedia): Record<string, unknown> {
-	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
-	const tweetText = tweet.text.replace(/https?:\/\/\S+/g, '').trim();
-	const tweetMedia = extractMedia(media);
+function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[]): Record<string, unknown> {
+	const externalUrl = findExternalUrl(expandedUrls);
+	const tweetText = stripTweetUrls(tweet.text);
 
 	return {
 		tweetId: tweet.id,
 		...extractTweetAuthor(tweet),
-		media: tweetMedia,
+		authorVerified: tweet.author?.isBlueVerified,
+		media: extractTweetMedia(tweet),
 		createdAt: tweet.createdAt,
 		...(externalUrl && {
 			variant: 'shared',
@@ -160,24 +129,21 @@ function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[], media?: K
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
 
-	const response = await fetch(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
-		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
-	});
-
-	if (!response.ok) throw new Error(`Kaito API error: HTTP ${response.status}`);
-
-	const data = (await response.json()) as { tweets?: KaitoTweet[]; status: string; msg?: string };
+	const data = await fetchJsonWithTimeout<{ tweets?: KaitoTweet[]; status: string; msg?: string }>(
+		`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`,
+		{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
+	);
 	if (!data.tweets?.length) {
 		throw new Error(`Kaito API: Tweet not found (status=${data.status})`);
 	}
 
 	const tweet = data.tweets[0];
-	const media = tweet.extendedEntities?.media;
-	const ogImageUrl = media?.length ? media[0].media_url_https : null;
-	const expandedUrls = tweet.entities?.urls?.map((u) => u.expanded_url).filter(Boolean) || [];
+	const media = extractTweetMedia(tweet);
+	const ogImageUrl = media[0]?.url ?? null;
+	const expandedUrls = extractExpandedUrls(tweet);
 
-	const articleUrl = expandedUrls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
-	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+	const articleUrl = findTwitterArticleUrl(expandedUrls);
+	const externalUrl = findExternalUrl(expandedUrls);
 
 	// 1. Twitter Article — detected by expanded_url containing /i/article/
 	if (articleUrl) {
@@ -208,9 +174,10 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 						variant: 'shared',
 						tweetId: tweet.id,
 						...extractTweetAuthor(tweet),
-						media: extractMedia(media),
+						authorVerified: tweet.author?.isBlueVerified,
+						media,
 						createdAt: tweet.createdAt,
-						tweetText: tweet.text.replace(/https?:\/\/\S+/g, '').trim(),
+						tweetText: stripTweetUrls(tweet.text),
 						externalUrl,
 						externalOgImage: linked.ogImageUrl || null,
 						externalTitle: linked.title || null,
@@ -224,7 +191,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	}
 
 	// 3. Regular tweet — no full content, summary carries the tweet text
-	const title = `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}${tweet.text.length > 80 ? '...' : ''}`;
+	const title = buildTweetTitle(tweet, 80);
 
 	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });
 
@@ -236,6 +203,6 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		siteName: 'Twitter',
 		author: tweet.author?.userName || null,
 		publishedDate: tweet.createdAt,
-		metadata: buildTweetMetadata(tweet, expandedUrls, media),
+		metadata: buildTweetMetadata(tweet, expandedUrls),
 	};
 }

@@ -1,10 +1,19 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
-import type { PlatformMetadata, QuotedTweetData, TwitterMedia } from '@shared/platform-metadata';
+import type { PlatformMetadata, QuotedTweetData } from '@shared/platform-metadata';
 import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
-import { fetchWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
+import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web/scraper';
+import {
+	buildTweetTitle,
+	extractExpandedUrls,
+	extractTweetAuthor,
+	extractTweetMedia,
+	findExternalUrl,
+	findTwitterArticleUrl,
+	stripTweetUrls,
+} from './normalize';
 import { scrapeTwitterArticle } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
@@ -27,36 +36,6 @@ function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 		authorUserName: q.author.userName || '',
 		authorProfilePicture: q.author.profilePicture,
 		text: q.text.replace(/https?:\/\/\S+/g, '').trim(),
-	};
-}
-
-// -- Twitter Helpers ----------------------------------------------------------
-
-function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
-	return (
-		tweet.extendedEntities?.media?.flatMap((m) => {
-			if (!m.media_url_https) return [];
-			const result: TwitterMedia = { url: m.media_url_https, type: m.type as TwitterMedia['type'] };
-			if (m.sizes?.large) {
-				result.width = m.sizes.large.w;
-				result.height = m.sizes.large.h;
-			}
-			if (m.video_info?.variants) {
-				const mp4 = m.video_info.variants
-					.filter((v) => v.content_type === 'video/mp4')
-					.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
-				if (mp4) result.videoUrl = mp4.url;
-			}
-			return [result];
-		}) ?? []
-	);
-}
-
-function extractAuthor(tweet: Tweet) {
-	return {
-		authorName: tweet.author?.name || '',
-		authorUserName: tweet.author?.userName || '',
-		authorProfilePicture: tweet.author?.profilePicture,
 	};
 }
 
@@ -109,8 +88,7 @@ async function insertTwitterArticle(
 // -- Twitter Article (long-form) ----------------------------------------------
 
 async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
-	const expandedUrls = (tweet.urls || []).map((u) => u.expanded_url || u.url || '').filter(Boolean);
-	const articleUrl = expandedUrls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
+	const articleUrl = findTwitterArticleUrl(extractExpandedUrls(tweet));
 	if (!articleUrl) return false;
 
 	const tweetId = tweet.id || tweet.url.split('/').pop();
@@ -190,7 +168,7 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, links: st
 		ogImage: scraped.ogImageUrl,
 		metadata: buildMetadata('twitter', {
 			variant: 'shared',
-			...extractAuthor(tweet),
+			...extractTweetAuthor(tweet),
 			media: extractTweetMedia(tweet),
 			createdAt: tweet.createdAt,
 			tweetText: textWithoutUrls,
@@ -214,7 +192,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	if (await handleTwitterArticle(tweet, db, env)) return true;
 
 	const links = tweet.text.match(/https?:\/\/\S+/g) || [];
-	const textWithoutUrls = tweet.text.replace(/https?:\/\/\S+/g, '').trim();
+	const textWithoutUrls = stripTweetUrls(tweet.text);
 
 	// 2. Rule-based triage (no AI — tracked users are curated)
 	const triage = triageTweet(textWithoutUrls, links);
@@ -229,8 +207,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	}
 
 	// 3. Save as tweet
-	const expandedUrls = (tweet.urls || []).map((u) => u.expanded_url || u.url || '').filter(Boolean);
-	const externalUrl = expandedUrls.find((u) => !/(?:twitter\.com|x\.com|t\.co)/.test(u));
+	const externalUrl = findExternalUrl(extractExpandedUrls(tweet));
 
 	if (externalUrl && (await urlsExist(db, [externalUrl]))) {
 		console.info({ tag: 'TWITTER', msg: 'External URL already exists (dedup)', url: externalUrl });
@@ -252,7 +229,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		}
 	}
 
-	const author = extractAuthor(tweet);
+	const author = extractTweetAuthor(tweet);
 	const media = extractTweetMedia(tweet);
 	const metadata = externalUrl
 		? buildMetadata('twitter', {
@@ -269,7 +246,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 
 	const id = await insertTwitterArticle(db, env, {
 		url: tweetUrl,
-		title: `@${tweet.author?.userName}: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`,
+		title: buildTweetTitle(tweet),
 		source: tweet.author?.name || 'Twitter',
 		publishedDate: new Date(tweet.createdAt),
 		summary: textWithoutUrls,
@@ -297,7 +274,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
 	for (const t of sorted.slice(0, 10)) {
-		const text = t.text.replace(/https?:\/\/\S+/g, '').trim();
+		const text = stripTweetUrls(t.text);
 		if (text && !seen.has(text)) {
 			seen.add(text);
 			uniqueTexts.push(text);
@@ -306,7 +283,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	const combinedText = uniqueTexts.join('\n\n');
 	const allMedia = sorted.flatMap(extractTweetMedia);
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
-	const author = extractAuthor(first);
+	const author = extractTweetAuthor(first);
 	const metadata = buildMetadata('twitter', { ...author, media: allMedia, createdAt: first.createdAt, quotedTweet });
 
 	if (existing.rows.length > 0) {
@@ -323,7 +300,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 
 	const id = await insertTwitterArticle(db, env, {
 		url: firstUrl,
-		title: `@${first.author?.userName}: ${first.text.substring(0, 100)}${first.text.length > 100 ? '...' : ''}`,
+		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
 		publishedDate: new Date(first.createdAt),
 		summary: combinedText,
@@ -388,17 +365,18 @@ async function fetchTweetsForBatch(
 		const params = new URLSearchParams({ query, queryType: 'Latest' });
 		if (cursor) params.set('cursor', cursor);
 
-		const res = await fetchWithTimeout(
-			`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
-			{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
-			20_000,
-		);
-		if (!res.ok) {
-			console.error({ tag: 'TWITTER', msg: 'Advanced Search HTTP error', status: res.status, statusText: res.statusText });
+		let apiRes: { tweets?: Tweet[]; has_next_page?: boolean; next_cursor?: string };
+		try {
+			apiRes = await fetchJsonWithTimeout(
+				`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
+				{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
+				20_000,
+				2 * 1024 * 1024,
+			);
+		} catch (err) {
+			console.error({ tag: 'TWITTER', msg: 'Advanced Search fetch failed', error: String(err) });
 			return { tweets, completed: false };
 		}
-
-		const apiRes = (await res.json()) as { tweets?: Tweet[]; has_next_page?: boolean; next_cursor?: string };
 		for (const tweet of apiRes.tweets || []) {
 			if (isNotRetweet(tweet)) tweets.push(tweet);
 		}

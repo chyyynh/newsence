@@ -5,7 +5,7 @@
 import { generateText } from '@shared/ai';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
-import { decodeHtmlEntities, htmlToText } from '@shared/web';
+import { decodeHtmlEntities, fetchJsonWithTimeout, htmlToText } from '@shared/web';
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
@@ -268,8 +268,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 	private async fetchHnData(itemId: string | null): Promise<HnItemData | null> {
 		if (!itemId) return null;
 		try {
-			const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
-			return response.ok ? ((await response.json()) as HnItemData) : null;
+			return await fetchJsonWithTimeout<HnItemData>(`${HN_ALGOLIA_API}/${itemId}`);
 		} catch (error) {
 			console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
 			return null;
