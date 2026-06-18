@@ -228,6 +228,10 @@ export const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm
 /** YouTube shortlink hosts that use path-based video ID */
 export const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
 
+export function buildYouTubeWatchUrl(videoId: string): string {
+	return `https://youtube.com/watch?v=${videoId}`;
+}
+
 /**
  * Normalizes URL by:
  * 1. Canonicalizing domain aliases (twitter.com → x.com, etc.)
@@ -249,16 +253,9 @@ export function normalizeUrl(url: string): string {
 		}
 
 		// YouTube → canonical youtube.com/watch?v=VIDEO_ID
-		if (YOUTUBE_WATCH_HOSTS.has(hostname)) {
-			if (urlObj.pathname === '/watch') {
-				const videoId = urlObj.searchParams.get('v');
-				if (videoId) return `https://youtube.com/watch?v=${videoId}`;
-			}
-			const pathMatch = urlObj.pathname.match(/^\/(embed|shorts|live)\/([a-zA-Z0-9_-]{11})/);
-			if (pathMatch) return `https://youtube.com/watch?v=${pathMatch[2]}`;
-		} else if (YOUTUBE_SHORT_HOSTS.has(hostname)) {
-			const match = urlObj.pathname.match(/^\/([a-zA-Z0-9_-]{11})/);
-			if (match) return `https://youtube.com/watch?v=${match[1]}`;
+		if (YOUTUBE_WATCH_HOSTS.has(hostname) || YOUTUBE_SHORT_HOSTS.has(hostname)) {
+			const videoId = extractYouTubeId(urlObj.toString());
+			if (videoId) return buildYouTubeWatchUrl(videoId);
 		}
 
 		for (const param of TRACKING_PARAMS) urlObj.searchParams.delete(param);

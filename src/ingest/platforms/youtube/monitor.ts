@@ -1,7 +1,7 @@
 import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
-import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
+import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
@@ -25,10 +25,6 @@ type FeedVideo = { videoId: string; url: string };
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
 
-function buildVideoUrl(videoId: string): string {
-	return normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
-}
-
 async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<FeedVideo[] | null> {
 	const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
 	if (!res.ok) {
@@ -42,7 +38,7 @@ async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<
 	return entries
 		.map((entry) => entry['yt:videoId'])
 		.filter((videoId): videoId is string => !!videoId)
-		.map((videoId) => ({ videoId, url: buildVideoUrl(videoId) }));
+		.map((videoId) => ({ videoId, url: buildYouTubeWatchUrl(videoId) }));
 }
 
 /** Returns true on insert, false on skip/failure. */
