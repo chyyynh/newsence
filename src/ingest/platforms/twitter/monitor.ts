@@ -471,6 +471,8 @@ const TWITTER_BATCH_SIZE = 20;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
 
+type MonitoredTwitterUser = RSSFeed & { twitterUserName: string };
+
 function normalizeTwitterUserName(input: string | null | undefined): string | null {
 	const trimmed = input?.trim();
 	if (!trimmed) return null;
@@ -494,6 +496,13 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 async function getTwitterUsersToMonitor(db: Client): Promise<RSSFeed[]> {
 	const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1`, ['twitter_user']);
 	return result.rows as RSSFeed[];
+}
+
+function normalizeTwitterUsers(users: RSSFeed[]): MonitoredTwitterUser[] {
+	return users.flatMap((user) => {
+		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
+		return twitterUserName ? [{ ...user, twitterUserName }] : [];
+	});
 }
 
 /**
@@ -602,12 +611,13 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 			return;
 		}
 
-		const sinceTime = calculateMonitoringSinceTime(users);
-		const userNames = [...new Set(users.map((u) => normalizeTwitterUserName(u.RSSLink)).filter((u): u is string => !!u))];
+		const monitoredUsers = normalizeTwitterUsers(users);
+		const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
 		if (userNames.length === 0) {
 			console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in RssList', users: users.length });
 			return;
 		}
+		const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
 		const batches: string[][] = [];
 		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
 			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
@@ -627,10 +637,17 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 		// Advance scraped_at only if every batch completed — partial fetches would
 		// let the next cron skip tweets we failed to pull.
 		if (allCompleted) {
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), users.map((u) => u.id)]);
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
 		}
 
-		console.info({ tag: 'TWITTER', msg: 'end', inserted: total, users: users.length, batches: batches.length });
+		console.info({
+			tag: 'TWITTER',
+			msg: 'end',
+			inserted: total,
+			users: users.length,
+			validUsers: monitoredUsers.length,
+			batches: batches.length,
+		});
 	} finally {
 		await db.end();
 	}
