@@ -1,14 +1,15 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
-import type { PlatformMetadata, QuotedTweetData } from '@shared/platform-metadata';
+import type { PlatformMetadata } from '@shared/platform-metadata';
 import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web/scraper';
 import {
+	buildTweetPlatformMetadata,
 	buildTweetTitle,
 	extractExpandedUrls,
-	extractTweetAuthor,
+	extractQuotedTweet,
 	extractTweetMedia,
 	findExternalUrl,
 	findTwitterArticleUrl,
@@ -25,18 +26,6 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 /** Skip RTs. All other filtering (replies vs threads) handled in Phase 2. */
 function isNotRetweet(tweet: Tweet): boolean {
 	return !tweet.retweeted_tweet && !tweet.text.startsWith('RT @');
-}
-
-/** Extract quoted tweet data for platform_metadata */
-function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
-	const q = tweet.quoted_tweet;
-	if (!q?.text || !q?.author) return undefined;
-	return {
-		authorName: q.author.name || '',
-		authorUserName: q.author.userName || '',
-		authorProfilePicture: q.author.profilePicture,
-		text: q.text.replace(/https?:\/\/\S+/g, '').trim(),
-	};
 }
 
 async function urlExists(db: Client, url: string): Promise<boolean> {
@@ -166,11 +155,7 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalU
 		summary: '',
 		content: scraped.content,
 		ogImage: scraped.ogImageUrl,
-		metadata: buildMetadata('twitter', {
-			variant: 'shared',
-			...extractTweetAuthor(tweet),
-			media: extractTweetMedia(tweet),
-			createdAt: tweet.createdAt,
+		metadata: buildTweetPlatformMetadata(tweet, {
 			tweetText: textWithoutUrls,
 			externalUrl: resolvedUrl,
 			externalOgImage: scraped.ogImageUrl,
@@ -226,20 +211,11 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		}
 	}
 
-	const author = extractTweetAuthor(tweet);
-	const media = extractTweetMedia(tweet);
-	const metadata = externalUrl
-		? buildMetadata('twitter', {
-				variant: 'shared',
-				...author,
-				media,
-				createdAt: tweet.createdAt,
-				tweetText: textWithoutUrls,
-				externalUrl,
-				externalOgImage,
-				externalTitle,
-			})
-		: buildMetadata('twitter', { ...author, media, createdAt: tweet.createdAt, quotedTweet: extractQuotedTweet(tweet) });
+	const metadata = buildTweetPlatformMetadata(
+		tweet,
+		externalUrl ? { tweetText: textWithoutUrls, externalUrl, externalOgImage, externalTitle } : {},
+	);
+	const media = metadata.data.media ?? [];
 
 	const id = await insertTwitterArticle(db, env, {
 		url: tweetUrl,
@@ -280,8 +256,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	const combinedText = uniqueTexts.join('\n\n');
 	const allMedia = sorted.flatMap(extractTweetMedia);
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
-	const author = extractTweetAuthor(first);
-	const metadata = buildMetadata('twitter', { ...author, media: allMedia, createdAt: first.createdAt, quotedTweet });
+	const metadata = buildTweetPlatformMetadata(first, { media: allMedia, quotedTweet });
 
 	if (existing.rows.length > 0) {
 		// Update existing root tweet with merged thread content and re-queue for AI processing

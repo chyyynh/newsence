@@ -2,7 +2,13 @@
 // Twitter Scraper
 // ─────────────────────────────────────────────────────────────
 
-import type { TwitterAuthorFields, TwitterMedia } from '@shared/platform-metadata';
+import {
+	buildMetadata,
+	type PlatformMetadata,
+	type QuotedTweetData,
+	type TwitterAuthorFields,
+	type TwitterMedia,
+} from '@shared/platform-metadata';
 import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
 
 interface TwitterUrlEntity {
@@ -31,6 +37,7 @@ export interface TwitterLikeTweet {
 	urls?: TwitterUrlEntity[];
 	entities?: { urls?: TwitterUrlEntity[] };
 	extendedEntities?: { media?: TwitterMediaEntity[] };
+	quoted_tweet?: TwitterLikeTweet | null;
 }
 
 export function extractTweetAuthor(tweet: TwitterLikeTweet): TwitterAuthorFields {
@@ -70,6 +77,17 @@ export function stripTweetUrls(text: string): string {
 	return text.replace(/https?:\/\/\S+/g, '').trim();
 }
 
+export function extractQuotedTweet(tweet: TwitterLikeTweet): QuotedTweetData | undefined {
+	const q = tweet.quoted_tweet;
+	if (!q?.text || !q.author) return undefined;
+	return {
+		authorName: q.author.name || '',
+		authorUserName: q.author.userName || '',
+		authorProfilePicture: q.author.profilePicture,
+		text: stripTweetUrls(q.text),
+	};
+}
+
 export function findTwitterArticleUrl(urls: string[]): string | undefined {
 	return urls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
 }
@@ -81,6 +99,37 @@ export function findExternalUrl(urls: string[]): string | undefined {
 export function buildTweetTitle(tweet: TwitterLikeTweet, maxLength = 100): string {
 	const suffix = tweet.text.length > maxLength ? '...' : '';
 	return `@${tweet.author?.userName}: ${tweet.text.substring(0, maxLength)}${suffix}`;
+}
+
+interface TweetMetadataOptions {
+	externalUrl?: string;
+	externalOgImage?: string | null;
+	externalTitle?: string | null;
+	tweetText?: string;
+	media?: TwitterMedia[];
+	quotedTweet?: QuotedTweetData;
+}
+
+export function buildTweetPlatformMetadata(
+	tweet: TwitterLikeTweet,
+	options: TweetMetadataOptions = {},
+): Extract<PlatformMetadata, { type: 'twitter' }> {
+	const media = options.media ?? extractTweetMedia(tweet);
+	const tweetText = options.tweetText ?? stripTweetUrls(tweet.text);
+	const base = { ...extractTweetAuthor(tweet), media, createdAt: tweet.createdAt };
+
+	if (options.externalUrl) {
+		return buildMetadata('twitter', {
+			variant: 'shared',
+			...base,
+			tweetText,
+			externalUrl: options.externalUrl,
+			externalOgImage: options.externalOgImage ?? null,
+			externalTitle: options.externalTitle ?? null,
+		});
+	}
+
+	return buildMetadata('twitter', { ...base, quotedTweet: options.quotedTweet ?? extractQuotedTweet(tweet) });
 }
 
 interface KaitoTweet {
@@ -184,15 +233,8 @@ function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[]): Record<s
 
 	return {
 		tweetId: tweet.id,
-		...extractTweetAuthor(tweet),
 		authorVerified: tweet.author?.isBlueVerified,
-		media: extractTweetMedia(tweet),
-		createdAt: tweet.createdAt,
-		...(externalUrl && {
-			variant: 'shared',
-			externalUrl,
-			tweetText,
-		}),
+		...buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}).data,
 	};
 }
 
