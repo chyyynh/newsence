@@ -1,6 +1,5 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
-import { buildMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl } from '@shared/web';
 import type { Client } from 'pg';
@@ -8,6 +7,7 @@ import { scrapeWebPage } from '../web/scraper';
 import {
 	buildTweetPlatformMetadata,
 	buildTweetTitle,
+	buildTwitterArticlePlatformMetadata,
 	extractExpandedUrls,
 	extractQuotedTweet,
 	extractTweetMedia,
@@ -90,7 +90,8 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expanded
 		return false;
 	}
 
-	const meta = scraped.metadata as Record<string, string | undefined> | undefined;
+	const meta = scraped.metadata;
+	const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
 	const id = await insertTwitterArticle(db, env, {
 		url: normalizeUrl(tweet.url),
 		title: scraped.title,
@@ -99,11 +100,11 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expanded
 		summary: scraped.summary || '',
 		content: scraped.content,
 		ogImage: scraped.ogImageUrl || null,
-		metadata: buildMetadata('twitter', {
-			variant: 'article',
-			authorName: meta?.authorName || tweet.author?.name || '',
-			authorUserName: meta?.authorUserName || tweet.author?.userName || '',
-			authorProfilePicture: meta?.authorProfilePicture || tweet.author?.profilePicture,
+		metadata: buildTwitterArticlePlatformMetadata(tweetId, {
+			name: typeof meta?.authorName === 'string' ? meta.authorName : tweet.author?.name,
+			userName: typeof meta?.authorUserName === 'string' ? meta.authorUserName : tweet.author?.userName,
+			profilePicture: typeof meta?.authorProfilePicture === 'string' ? meta.authorProfilePicture : tweet.author?.profilePicture,
+			isBlueVerified: authorVerified,
 		}),
 	});
 

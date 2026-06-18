@@ -88,6 +88,7 @@ export interface Tweet {
 		userName: string;
 		name: string;
 		profilePicture?: string;
+		isBlueVerified?: boolean;
 	};
 	text: string;
 	likeCount?: number;

@@ -105,6 +105,7 @@ interface TweetMetadataOptions {
 	externalUrl?: string;
 	externalOgImage?: string | null;
 	externalTitle?: string | null;
+	originalTweetUrl?: string;
 	tweetText?: string;
 	media?: TwitterMedia[];
 	quotedTweet?: QuotedTweetData;
@@ -116,7 +117,13 @@ export function buildTweetPlatformMetadata(
 ): Extract<PlatformMetadata, { type: 'twitter' }> {
 	const media = options.media ?? extractTweetMedia(tweet);
 	const tweetText = options.tweetText ?? stripTweetUrls(tweet.text);
-	const base = { ...extractTweetAuthor(tweet), media, createdAt: tweet.createdAt };
+	const base = {
+		tweetId: tweet.id,
+		...extractTweetAuthor(tweet),
+		authorVerified: tweet.author?.isBlueVerified,
+		media,
+		createdAt: tweet.createdAt,
+	};
 
 	if (options.externalUrl) {
 		return buildMetadata('twitter', {
@@ -126,10 +133,25 @@ export function buildTweetPlatformMetadata(
 			externalUrl: options.externalUrl,
 			externalOgImage: options.externalOgImage ?? null,
 			externalTitle: options.externalTitle ?? null,
+			originalTweetUrl: options.originalTweetUrl,
 		});
 	}
 
 	return buildMetadata('twitter', { ...base, quotedTweet: options.quotedTweet ?? extractQuotedTweet(tweet) });
+}
+
+export function buildTwitterArticlePlatformMetadata(
+	tweetId: string,
+	author: TwitterLikeTweet['author'] | undefined,
+): Extract<PlatformMetadata, { type: 'twitter' }> {
+	return buildMetadata('twitter', {
+		variant: 'article',
+		tweetId,
+		authorName: author?.name ?? '',
+		authorUserName: author?.userName ?? '',
+		authorProfilePicture: author?.profilePicture,
+		authorVerified: author?.isBlueVerified,
+	});
 }
 
 interface KaitoTweet {
@@ -216,14 +238,7 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 		siteName: 'Twitter',
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
-		metadata: {
-			variant: 'article',
-			tweetId,
-			authorName: article.author?.name ?? '',
-			authorUserName: article.author?.userName ?? '',
-			authorProfilePicture: article.author?.profilePicture,
-			authorVerified: article.author?.isBlueVerified,
-		},
+		metadata: { ...buildTwitterArticlePlatformMetadata(tweetId, article.author).data },
 	};
 }
 
@@ -231,11 +246,7 @@ function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[]): Record<s
 	const externalUrl = findExternalUrl(expandedUrls);
 	const tweetText = stripTweetUrls(tweet.text);
 
-	return {
-		tweetId: tweet.id,
-		authorVerified: tweet.author?.isBlueVerified,
-		...buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}).data,
-	};
+	return { ...buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}).data };
 }
 
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
@@ -283,17 +294,14 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 					author: tweet.author?.userName || linked.author || null,
 					publishedDate: tweet.createdAt,
 					metadata: {
-						variant: 'shared',
-						tweetId: tweet.id,
-						...extractTweetAuthor(tweet),
-						authorVerified: tweet.author?.isBlueVerified,
-						media,
-						createdAt: tweet.createdAt,
-						tweetText: stripTweetUrls(tweet.text),
-						externalUrl,
-						externalOgImage: linked.ogImageUrl || null,
-						externalTitle: linked.title || null,
-						originalTweetUrl: tweet.url,
+						...buildTweetPlatformMetadata(tweet, {
+							media,
+							tweetText: stripTweetUrls(tweet.text),
+							externalUrl,
+							externalOgImage: linked.ogImageUrl || null,
+							externalTitle: linked.title || null,
+							originalTweetUrl: tweet.url,
+						}).data,
 					},
 				};
 			}

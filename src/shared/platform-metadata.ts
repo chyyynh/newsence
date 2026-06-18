@@ -22,6 +22,7 @@ export interface TwitterAuthorFields {
 	authorName: string;
 	authorUserName: string;
 	authorProfilePicture?: string;
+	authorVerified?: boolean;
 }
 
 export interface QuotedTweetData {
@@ -38,6 +39,7 @@ export interface QuotedTweetData {
  */
 export interface TwitterMetadata extends TwitterAuthorFields {
 	variant?: 'shared' | 'article';
+	tweetId?: string;
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
@@ -45,6 +47,7 @@ export interface TwitterMetadata extends TwitterAuthorFields {
 	externalUrl?: string;
 	externalOgImage?: string | null;
 	externalTitle?: string | null;
+	originalTweetUrl?: string;
 }
 
 // ── YouTube ──────────────────────────────────────────────────
@@ -185,6 +188,10 @@ function asNumber(value: unknown): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+	return typeof value === 'boolean' ? value : undefined;
+}
+
 function asStringArray(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
@@ -242,6 +249,7 @@ function parseTwitterAuthor(metadata: Record<string, unknown>): TwitterAuthorFie
 		authorName: asString(metadata.authorName) ?? '',
 		authorUserName: asString(metadata.authorUserName) ?? '',
 		authorProfilePicture: asString(metadata.authorProfilePicture),
+		authorVerified: asBoolean(metadata.authorVerified),
 	};
 }
 
@@ -275,11 +283,15 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 				storyUrl: asNullableString(metadata.storyUrl),
 			});
 		case 'twitter': {
-			const author = parseTwitterAuthor(metadata);
+			const baseData = { ...parseTwitterAuthor(metadata), tweetId: asString(metadata.tweetId) };
 			const variant = asEnum(metadata.variant, TWITTER_VARIANTS);
-			if (variant === 'article') return buildMetadata('twitter', { ...author, variant: 'article' });
+			if (variant === 'article') return buildMetadata('twitter', { ...baseData, variant: 'article' });
 
-			const base: TwitterMetadata = { ...author, media: asTwitterMediaArray(metadata.media), createdAt: asString(metadata.createdAt) };
+			const base: TwitterMetadata = {
+				...baseData,
+				media: asTwitterMediaArray(metadata.media),
+				createdAt: asString(metadata.createdAt),
+			};
 			if (variant === 'shared') {
 				return buildMetadata('twitter', {
 					...base,
@@ -288,6 +300,7 @@ export function parsePlatformMetadata(metadata: Record<string, unknown> | undefi
 					externalUrl: asString(metadata.externalUrl) ?? '',
 					externalOgImage: asNullableString(metadata.externalOgImage),
 					externalTitle: asNullableString(metadata.externalTitle),
+					originalTweetUrl: asString(metadata.originalTweetUrl),
 				});
 			}
 			return buildMetadata('twitter', { ...base, quotedTweet: asQuotedTweet(metadata.quotedTweet) });
