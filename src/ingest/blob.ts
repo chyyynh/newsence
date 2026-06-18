@@ -36,6 +36,7 @@ import {
 	UploadQuotaExceededError,
 	userUploadKey,
 } from '@shared/upload';
+import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@shared/web';
 
 /** Served upload assets are per-user-private and content-addressed by UUID key, so cache hard + privately. */
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
@@ -234,20 +235,6 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	return { ok: true, result: buildBlobResult({ ...persisted, storageKey, fileType, fileSize: file.size, title, instanceId }) };
 }
 
-// ── External image URL ───────────────────────────────────────────────────────
-
-function parseImageUrl(raw: string): { ok: true; url: URL } | { ok: false; message: string } {
-	let parsed: URL;
-	try {
-		parsed = new URL(raw);
-	} catch {
-		return { ok: false, message: 'Invalid image URL' };
-	}
-	if (parsed.protocol !== 'https:') return { ok: false, message: 'Image URL must use HTTPS' };
-	if (parsed.username || parsed.password) return { ok: false, message: 'Image URL must not include credentials' };
-	return { ok: true, url: parsed };
-}
-
 export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promise<IngestImageUrlOutcome> {
 	if (!args.userId) {
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
@@ -258,9 +245,11 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 	if (!trimmed) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'imageUrl is required' };
 	}
-	const urlCheck = parseImageUrl(trimmed);
-	if (!urlCheck.ok) {
-		return { ok: false, code: 'BAD_REQUEST', message: urlCheck.message };
+	let parsedUrl: URL;
+	try {
+		parsedUrl = assertExternalFetchable(trimmed);
+	} catch (err) {
+		return { ok: false, code: 'BAD_REQUEST', message: err instanceof Error ? err.message : 'Invalid image URL' };
 	}
 
 	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${userId}` });
@@ -270,11 +259,15 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 
 	let upstream: Response;
 	try {
-		upstream = await fetch(urlCheck.url.toString(), { redirect: 'follow' });
+		upstream = await fetchWithTimeout(parsedUrl.toString(), {
+			redirect: 'follow',
+			headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*,*/*;q=0.8' },
+		});
 	} catch (err) {
 		return { ok: false, code: 'UPSTREAM_ERROR', message: `Fetch failed: ${err}` };
 	}
 	if (!upstream.ok) {
+		await upstream.body?.cancel();
 		return { ok: false, code: 'UPSTREAM_ERROR', message: `Upstream returned ${upstream.status}` };
 	}
 	if (!upstream.body) {
@@ -283,10 +276,12 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 
 	const contentType = upstream.headers.get('content-type')?.split(';')[0].trim() || '';
 	if (!isRasterImage(contentType)) {
+		await upstream.body.cancel();
 		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'URL must point to a raster image' };
 	}
 	const declaredLength = upstream.headers.get('content-length');
 	if (declaredLength && Number.parseInt(declaredLength, 10) > MAX_UPLOAD_BYTES) {
+		await upstream.body.cancel();
 		return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'Image exceeds 10MB' };
 	}
 
