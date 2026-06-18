@@ -20,6 +20,8 @@ interface YouTubeAtomEntry {
 	'yt:videoId'?: string;
 }
 
+type FeedVideo = { videoId: string; url: string };
+
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
 
@@ -27,7 +29,7 @@ function buildVideoUrl(videoId: string): string {
 	return normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
 }
 
-async function fetchChannelVideoIds(channel: RSSFeed, parser: XMLParser): Promise<string[] | null> {
+async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<FeedVideo[] | null> {
 	const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
 	if (!res.ok) {
 		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
@@ -37,7 +39,10 @@ async function fetchChannelVideoIds(channel: RSSFeed, parser: XMLParser): Promis
 	const rawEntries = feed?.feed?.entry;
 	if (!rawEntries) return [];
 	const entries = (Array.isArray(rawEntries) ? rawEntries : [rawEntries]) as YouTubeAtomEntry[];
-	return entries.map((entry) => entry['yt:videoId']).filter((videoId): videoId is string => !!videoId);
+	return entries
+		.map((entry) => entry['yt:videoId'])
+		.filter((videoId): videoId is string => !!videoId)
+		.map((videoId) => ({ videoId, url: buildVideoUrl(videoId) }));
 }
 
 /** Returns true on insert, false on skip/failure. */
@@ -45,8 +50,9 @@ async function processYouTubeVideo(
 	db: Awaited<ReturnType<typeof createDbClient>>,
 	env: Env,
 	channel: RSSFeed,
-	videoId: string,
+	video: FeedVideo,
 ): Promise<boolean> {
+	const { videoId, url } = video;
 	const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '');
 	const youtubeMetadata: YouTubeMetadata = {
 		...scraped.metadata,
@@ -65,7 +71,7 @@ async function processYouTubeVideo(
 	}
 
 	const articleId = await insertArticle(db, {
-		url: buildVideoUrl(videoId),
+		url,
 		title: scraped.title,
 		source: channel.name,
 		publishedDate: scraped.publishedDate || new Date().toISOString(),
@@ -90,24 +96,24 @@ async function processYouTubeChannel(
 	parser: XMLParser,
 ): Promise<number> {
 	if (!channel.RSSLink) return 0;
-	const videoIds = await fetchChannelVideoIds(channel, parser);
-	if (!videoIds?.length) return 0;
+	const videos = await fetchChannelVideos(channel, parser);
+	if (!videos?.length) return 0;
 
-	const videoUrls = videoIds.map(buildVideoUrl);
+	const videoUrls = videos.map(({ url }) => url);
 	const existingSet = await getExistingUrls(db, videoUrls);
-	const newVideoIds = videoIds.filter((videoId) => !existingSet.has(buildVideoUrl(videoId)));
+	const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 
-	if (!newVideoIds.length) {
+	if (!newVideos.length) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 		return 0;
 	}
 
 	let inserted = 0;
-	for (const videoId of newVideoIds) {
+	for (const video of newVideos) {
 		try {
-			if (await processYouTubeVideo(db, env, channel, videoId)) inserted++;
+			if (await processYouTubeVideo(db, env, channel, video)) inserted++;
 		} catch (err) {
-			console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId, error: String(err) });
+			console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
 		}
 	}
 
