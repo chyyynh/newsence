@@ -17,16 +17,7 @@ function parseDurationSeconds(iso: string): number {
 }
 
 interface YouTubeAtomEntry {
-	'yt:videoId': string;
-	title: string;
-	published: string;
-	updated?: string;
-	author?: { name?: string };
-	'media:group'?: {
-		'media:thumbnail'?: { '@_url'?: string };
-		'media:description'?: string;
-	};
-	link?: { '@_href'?: string } | string;
+	'yt:videoId'?: string;
 }
 
 const SHORTS_MAX_SECONDS = 180;
@@ -36,7 +27,7 @@ function buildVideoUrl(videoId: string): string {
 	return normalizeUrl(`https://www.youtube.com/watch?v=${videoId}`);
 }
 
-async function fetchChannelEntries(channel: RSSFeed, parser: XMLParser): Promise<YouTubeAtomEntry[] | null> {
+async function fetchChannelVideoIds(channel: RSSFeed, parser: XMLParser): Promise<string[] | null> {
 	const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
 	if (!res.ok) {
 		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
@@ -45,7 +36,8 @@ async function fetchChannelEntries(channel: RSSFeed, parser: XMLParser): Promise
 	const feed = parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES));
 	const rawEntries = feed?.feed?.entry;
 	if (!rawEntries) return [];
-	return Array.isArray(rawEntries) ? rawEntries : [rawEntries];
+	const entries = (Array.isArray(rawEntries) ? rawEntries : [rawEntries]) as YouTubeAtomEntry[];
+	return entries.map((entry) => entry['yt:videoId']).filter((videoId): videoId is string => !!videoId);
 }
 
 /** Returns true on insert, false on skip/failure. */
@@ -103,21 +95,20 @@ async function processYouTubeChannel(
 	parser: XMLParser,
 ): Promise<number> {
 	if (!channel.RSSLink) return 0;
-	const entries = await fetchChannelEntries(channel, parser);
-	if (!entries?.length) return 0;
+	const videoIds = await fetchChannelVideoIds(channel, parser);
+	if (!videoIds?.length) return 0;
 
-	const videoUrls = entries.map((e) => buildVideoUrl(e['yt:videoId']));
+	const videoUrls = videoIds.map(buildVideoUrl);
 	const existingSet = await getExistingUrls(db, videoUrls);
-	const newEntries = entries.filter((e) => !existingSet.has(buildVideoUrl(e['yt:videoId'])));
+	const newVideoIds = videoIds.filter((videoId) => !existingSet.has(buildVideoUrl(videoId)));
 
-	if (!newEntries.length) {
+	if (!newVideoIds.length) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 		return 0;
 	}
 
 	let inserted = 0;
-	for (const entry of newEntries) {
-		const videoId = entry['yt:videoId'];
+	for (const videoId of newVideoIds) {
 		try {
 			if (await processYouTubeVideo(db, env, channel, videoId)) inserted++;
 		} catch (err) {
