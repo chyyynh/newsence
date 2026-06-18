@@ -1,5 +1,5 @@
 import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
-import type { PlatformMetadata, RetweetedByData } from '@shared/platform-metadata';
+import type { PlatformMetadata, RetweetedByData, TwitterMedia } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
 import type { Client } from 'pg';
@@ -69,7 +69,13 @@ async function findArticleIdByUrl(db: Client, url: string): Promise<string | nul
 async function upsertTwitterSourceEvent(
 	db: Client,
 	tweet: Tweet,
-	options: { articleId: string | null; eventType: TwitterSourceEventType; text?: string | null },
+	options: {
+		articleId: string | null;
+		eventType: TwitterSourceEventType;
+		text?: string | null;
+		media?: TwitterMedia[];
+		raw?: unknown;
+	},
 ): Promise<void> {
 	const eventTweetId = tweet.retweetedBy?.tweetId ?? tweet.id;
 	const eventTweetUrl = tweet.retweetedBy?.tweetUrl ?? tweet.url;
@@ -86,6 +92,8 @@ async function upsertTwitterSourceEvent(
 	const createdAt = tweet.retweetedBy?.retweetedAt ?? tweet.createdAt;
 	const eventType = sourceEventTypeFor(tweet, options.eventType);
 	const text = options.text ?? stripTweetUrls(tweet.text);
+	const mediaAssets = options.media ?? extractTweetMedia(tweet);
+	const raw = options.raw ?? tweet;
 
 	try {
 		const event = await db.query<{ id: string }>(
@@ -121,14 +129,14 @@ async function upsertTwitterSourceEvent(
 				createdAt,
 				tweet.lang,
 				JSON.stringify(publicMetricsFor(tweet)),
-				JSON.stringify(tweet),
+				JSON.stringify(raw),
 			],
 		);
 		const sourceEventId = event.rows[0]?.id;
 		if (!sourceEventId) return;
 
 		await db.query('DELETE FROM twitter_media_assets WHERE source_event_id = $1', [sourceEventId]);
-		for (const media of extractTweetMedia(tweet)) {
+		for (const media of mediaAssets) {
 			await db.query(
 				`INSERT INTO twitter_media_assets (
 					source_event_id, media_type, url, video_url, width, height
@@ -152,6 +160,7 @@ async function upsertTwitterSourceEvent(
 		}
 		if (tweet.inReplyToId) references.push({ id: tweet.inReplyToId, type: 'replied_to' });
 
+		await db.query('DELETE FROM twitter_references WHERE source_event_id = $1', [sourceEventId]);
 		for (const reference of references) {
 			await db.query(
 				`INSERT INTO twitter_references (
@@ -421,7 +430,13 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 			[combinedText, combinedText, JSON.stringify(metadata), existingId],
 		);
 		await enqueueArticleProcess(env, existingId);
-		await upsertTwitterSourceEvent(db, first, { articleId: existingId, eventType: 'thread', text: combinedText });
+		await upsertTwitterSourceEvent(db, first, {
+			articleId: existingId,
+			eventType: 'thread',
+			text: combinedText,
+			media: allMedia,
+			raw: { tweets: sorted },
+		});
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
@@ -439,7 +454,13 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	});
 
 	if (id) {
-		await upsertTwitterSourceEvent(db, first, { articleId: id, eventType: 'thread', text: combinedText });
+		await upsertTwitterSourceEvent(db, first, {
+			articleId: id,
+			eventType: 'thread',
+			text: combinedText,
+			media: allMedia,
+			raw: { tweets: sorted },
+		});
 		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
 	}
 	return !!id;
