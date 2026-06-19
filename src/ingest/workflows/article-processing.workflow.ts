@@ -12,7 +12,7 @@ import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
-import type { TranscriptSegment } from '@shared/web';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
 import { articleFromSourceDraft, readSourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
 import { syncArticleEntities } from '../domain/entities';
 import {
@@ -23,7 +23,6 @@ import {
 	runArticleProcessor,
 } from '../domain/processors';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
-import { fetchOgImage } from '../platforms/web-og';
 import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
@@ -31,6 +30,9 @@ import {
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
 import { deletePdfTextArtifact, extractPdfToTextArtifact, type PdfExtractionResult, readPdfTextArtifact } from './pdf-extraction';
+
+const OG_FETCH_TIMEOUT_MS = 6_000;
+const OG_MAX_BYTES = 131_072;
 
 const ARTICLE_FIELDS_FOR_ARTICLES =
 	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
@@ -55,6 +57,93 @@ type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 type SourceWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'source' }>;
 type WorkflowTarget = WorkflowQueueTarget;
 type ArticleShell = Article & { has_content?: boolean };
+type OgImageResult = {
+	ogImageUrl: string | null;
+	ogImageWidth: number | null;
+	ogImageHeight: number | null;
+};
+
+async function fetchOgImage(url: string): Promise<OgImageResult | null> {
+	try {
+		const response = await fetchWithTimeout(
+			url,
+			{
+				headers: {
+					'User-Agent': BROWSER_UA,
+					Accept: 'text/html,application/xhtml+xml',
+				},
+			},
+			OG_FETCH_TIMEOUT_MS,
+		);
+
+		if (!response.ok || !response.body) {
+			await response.body?.cancel();
+			return null;
+		}
+
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let totalBytes = 0;
+
+		while (totalBytes < OG_MAX_BYTES) {
+			const { done, value } = await reader.read();
+			if (done || !value) break;
+			chunks.push(value);
+			totalBytes += value.length;
+		}
+		await reader.cancel();
+
+		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
+		let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
+		if (!ogImageUrl) return null;
+
+		if (!ogImageUrl.startsWith('http')) {
+			try {
+				ogImageUrl = new URL(ogImageUrl, url).toString();
+			} catch {
+				return null;
+			}
+		}
+		if (/^http:\/\//i.test(ogImageUrl)) {
+			ogImageUrl = ogImageUrl.replace(/^http:/i, 'https:');
+		}
+
+		const rawW = extractMeta(html, 'og:image:width');
+		const rawH = extractMeta(html, 'og:image:height');
+
+		return {
+			ogImageUrl,
+			ogImageWidth: rawW ? parseInt(rawW, 10) || null : null,
+			ogImageHeight: rawH ? parseInt(rawH, 10) || null : null,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
+	const merged = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return merged;
+}
+
+function extractMeta(html: string, property: string): string | null {
+	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
+	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+}
+
+function extractMetaName(html: string, name: string): string | null {
+	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
+	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+}
 
 function articleFieldsFor(table: ProcessableTable): string {
 	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
