@@ -1,5 +1,4 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { logInfo } from '@shared/log';
 import type { Env } from '@shared/types';
 import { type ExtractInput, extractSource, type NormalizedContent } from '../extract';
 
@@ -29,7 +28,7 @@ export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ScrapeWorkflowParams
 			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () => this.env.R2.delete(input.key));
 		}
 
-		logInfo('SCRAPE_WORKFLOW', 'Completed', { kind: input.kind, status: result.status, chars: result.metadata.chars });
+		console.info({ tag: 'SCRAPE_WORKFLOW', msg: 'Completed', kind: input.kind, status: result.status, chars: result.metadata.chars });
 		return result;
 	}
 }

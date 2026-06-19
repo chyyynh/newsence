@@ -1,5 +1,5 @@
 /**
- * Blob ingest: write an uploaded/fetched file into the user's R2 namespace +
+ * Blob ingest: write an uploaded/webed file into the user's R2 namespace +
  * a `resource_kind='blob'` row in `user_files`. Two public entry points share
  * the same storage plumbing and result envelope:
  *
@@ -14,16 +14,29 @@
  * URL-scrape path (`urls.ts`), the third blob-write entry point.
  */
 
-import { createDbClient, type InsertBlobUserFileData, insertBlobUserFile } from '@shared/db/articles';
-import { logError, logInfo } from '@shared/log';
-import { MAGIC_SNIFF_BYTES, sniffMediaType, sniffMediaTypeStream, UnsupportedMediaError } from '@shared/magic-bytes';
-import { extensionFromMime, isRasterImage, PDF_MIME } from '@shared/mime';
-import { storageKeyToAssetUrl, userUploadKey } from '@shared/storage-keys';
-import { PayloadTooLargeError, streamWithByteLimit } from '@shared/streams';
+import { createDbClient, createUserFileWorkflow, type InsertBlobUserFileData, insertBlobUserFile } from '@shared/db';
+import {
+	extensionFromMime,
+	isRasterImage,
+	MAGIC_SNIFF_BYTES,
+	PDF_MIME,
+	sniffMediaType,
+	sniffMediaTypeStream,
+	UnsupportedMediaError,
+} from '@shared/mime';
 import type { Env } from '@shared/types';
-import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES } from '@shared/upload';
-import { assertBlobUploadQuotaTx, UploadQuotaExceededError } from '@shared/upload-quota';
-import { createUserFileWorkflow } from './workflows/article-workflow-client';
+import {
+	assertBlobUploadQuotaTx,
+	buildPdfMetadata,
+	deriveFileTitle,
+	MAX_UPLOAD_BYTES,
+	PayloadTooLargeError,
+	storageKeyToAssetUrl,
+	streamWithByteLimit,
+	UploadQuotaExceededError,
+	userUploadKey,
+} from '@shared/upload';
+import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@shared/web';
 
 /** Served upload assets are per-user-private and content-addressed by UUID key, so cache hard + privately. */
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
@@ -101,12 +114,19 @@ export async function persistBlobRow(env: Env, data: InsertBlobUserFileData): Pr
 	} catch (err) {
 		await db
 			.query('ROLLBACK')
-			.catch((rollbackErr) => logError('PERSIST_BLOB', 'rollback failed', { storageKey: data.storageKey, error: String(rollbackErr) }));
-		logError('PERSIST_BLOB', 'blob row insert failed', { storageKey: data.storageKey, error: String(err) });
+			.catch((rollbackErr) =>
+				console.error({ tag: 'PERSIST_BLOB', msg: 'rollback failed', storageKey: data.storageKey, error: String(rollbackErr) }),
+			);
+		console.error({ tag: 'PERSIST_BLOB', msg: 'blob row insert failed', storageKey: data.storageKey, error: String(err) });
 		// Compensate: drop the R2 object the caller staged. delete is strongly
 		// consistent + idempotent — best-effort, log if it also fails.
 		await env.R2.delete(data.storageKey).catch((delErr) =>
-			logError('PERSIST_BLOB', 'R2 cleanup after DB failure also failed', { storageKey: data.storageKey, error: String(delErr) }),
+			console.error({
+				tag: 'PERSIST_BLOB',
+				msg: 'R2 cleanup after DB failure also failed',
+				storageKey: data.storageKey,
+				error: String(delErr),
+			}),
 		);
 		if (err instanceof UploadQuotaExceededError) {
 			return { ok: false, code: 'QUOTA_EXCEEDED', message: err.message };
@@ -191,7 +211,7 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	try {
 		await putUserUpload(env, { storageKey, body: file.stream(), contentType: fileType });
 	} catch (err) {
-		logError('INGEST_BLOB', 'R2 put failed', { storageKey, error: String(err) });
+		console.error({ tag: 'INGEST_BLOB', msg: 'R2 put failed', storageKey, error: String(err) });
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 	}
 
@@ -209,24 +229,10 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	if (!persisted.ok) return persisted;
 
 	// Only PDFs trigger the AI workflow today — images have no text to analyze.
-	const instanceId = fileType === PDF_MIME ? await createUserFileWorkflow(env, persisted.userFileId, 'pdf') : undefined;
+	const instanceId = fileType === PDF_MIME ? await createUserFileWorkflow(env, persisted.userFileId) : undefined;
 
-	logInfo('INGEST_BLOB', 'Stored blob', { userFileId: persisted.userFileId, storageKey, fileType, fileSize: file.size });
+	console.info({ tag: 'INGEST_BLOB', msg: 'Stored blob', userFileId: persisted.userFileId, storageKey, fileType, fileSize: file.size });
 	return { ok: true, result: buildBlobResult({ ...persisted, storageKey, fileType, fileSize: file.size, title, instanceId }) };
-}
-
-// ── External image URL ───────────────────────────────────────────────────────
-
-function parseImageUrl(raw: string): { ok: true; url: URL } | { ok: false; message: string } {
-	let parsed: URL;
-	try {
-		parsed = new URL(raw);
-	} catch {
-		return { ok: false, message: 'Invalid image URL' };
-	}
-	if (parsed.protocol !== 'https:') return { ok: false, message: 'Image URL must use HTTPS' };
-	if (parsed.username || parsed.password) return { ok: false, message: 'Image URL must not include credentials' };
-	return { ok: true, url: parsed };
 }
 
 export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promise<IngestImageUrlOutcome> {
@@ -239,9 +245,11 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 	if (!trimmed) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'imageUrl is required' };
 	}
-	const urlCheck = parseImageUrl(trimmed);
-	if (!urlCheck.ok) {
-		return { ok: false, code: 'BAD_REQUEST', message: urlCheck.message };
+	let parsedUrl: URL;
+	try {
+		parsedUrl = assertExternalFetchable(trimmed);
+	} catch (err) {
+		return { ok: false, code: 'BAD_REQUEST', message: err instanceof Error ? err.message : 'Invalid image URL' };
 	}
 
 	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${userId}` });
@@ -251,11 +259,15 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 
 	let upstream: Response;
 	try {
-		upstream = await fetch(urlCheck.url.toString(), { redirect: 'follow' });
+		upstream = await fetchWithTimeout(parsedUrl.toString(), {
+			redirect: 'follow',
+			headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*,*/*;q=0.8' },
+		});
 	} catch (err) {
 		return { ok: false, code: 'UPSTREAM_ERROR', message: `Fetch failed: ${err}` };
 	}
 	if (!upstream.ok) {
+		await upstream.body?.cancel();
 		return { ok: false, code: 'UPSTREAM_ERROR', message: `Upstream returned ${upstream.status}` };
 	}
 	if (!upstream.body) {
@@ -264,10 +276,12 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 
 	const contentType = upstream.headers.get('content-type')?.split(';')[0].trim() || '';
 	if (!isRasterImage(contentType)) {
+		await upstream.body.cancel();
 		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'URL must point to a raster image' };
 	}
 	const declaredLength = upstream.headers.get('content-length');
 	if (declaredLength && Number.parseInt(declaredLength, 10) > MAX_UPLOAD_BYTES) {
+		await upstream.body.cancel();
 		return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'Image exceeds 10MB' };
 	}
 
@@ -287,7 +301,7 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 		if (err instanceof UnsupportedMediaError) {
 			return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'URL content is not a supported raster image' };
 		}
-		logError('INGEST_IMAGE_URL', 'R2 put failed', { imageUrl: trimmed, storageKey, error: String(err) });
+		console.error({ tag: 'INGEST_IMAGE_URL', msg: 'R2 put failed', imageUrl: trimmed, storageKey, error: String(err) });
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 	}
 
@@ -307,6 +321,6 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 	});
 	if (!persisted.ok) return persisted;
 
-	logInfo('INGEST_IMAGE_URL', 'Stored image', { userFileId: persisted.userFileId, storageKey, contentType, fileSize });
+	console.info({ tag: 'INGEST_IMAGE_URL', msg: 'Stored image', userFileId: persisted.userFileId, storageKey, contentType, fileSize });
 	return { ok: true, result: buildBlobResult({ ...persisted, storageKey, fileType: contentType, fileSize, title }) };
 }

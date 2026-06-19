@@ -2,16 +2,20 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { logError, logInfo, logWarn } from '@shared/log';
-import { callOpenRouter, extractJson } from '@shared/openrouter';
+import { generateJson } from '@shared/ai';
 import type { AIAnalysisResult, Article } from '@shared/types';
-import { type ArticleProcessor, callGeminiForAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from '../../domain/ai-utils';
+import {
+	type ArticleProcessor,
+	generateArticleAnalysis,
+	isEmpty,
+	type ProcessorContext,
+	type ProcessorResult,
+} from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web/scraper';
 
 type UpdateData = ProcessorResult['updateData'];
 
-/** Map a Gemini analysis result onto an article's pending update, only overwriting empty fields. */
-function applyGeminiAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): void {
+function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): void {
 	if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
 	if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
 	if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
@@ -33,28 +37,32 @@ function extractTweetText(article: Article): string {
 	return raw;
 }
 
+function getLinkedUrl(article: Article): string | null {
+	const metadata = article.platform_metadata;
+	if (metadata?.type !== 'twitter' || metadata.data.variant !== 'shared') return null;
+	return metadata.data.externalUrl?.trim() || null;
+}
+
 // ─────────────────────────────────────────────────────────────
 // TwitterProcessor class
 // ─────────────────────────────────────────────────────────────
 
 export class TwitterProcessor implements ArticleProcessor {
-	readonly sourceType = 'twitter';
-
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const updateData: UpdateData = {};
 		const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
 		if (hasFullContent) {
-			logInfo('TWITTER-PROCESSOR', 'Processing Twitter Article', { title: article.title.slice(0, 50) });
-			const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
-			applyGeminiAnalysis(article, analysis, updateData);
+			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
+			const analysis = await generateArticleAnalysis(article, ctx.env.AI);
+			applyArticleAnalysis(article, analysis, updateData);
 			return { updateData };
 		}
 
 		const tweetText = extractTweetText(article);
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
-		const linkedUrl = this.extractLinkedUrl(tweetText);
+		const linkedUrl = getLinkedUrl(article);
 		if (linkedUrl && (await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData))) {
 			return { updateData };
 		}
@@ -73,39 +81,26 @@ export class TwitterProcessor implements ArticleProcessor {
 		try {
 			const linked = await scrapeWebPage(linkedUrl);
 			if (!linked.content || linked.content.length <= 100) return false;
-			logInfo('TWITTER-PROCESSOR', 'Scraped linked article', { title: linked.title });
+			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
 			updateData.content = linked.content;
-			const analysis = await callGeminiForAnalysis(
+			const analysis = await generateArticleAnalysis(
 				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-				ctx.env.OPENROUTER_API_KEY,
+				ctx.env.AI,
 			);
-			applyGeminiAnalysis(article, analysis, updateData);
+			applyArticleAnalysis(article, analysis, updateData);
 			return true;
 		} catch (e) {
-			logWarn('TWITTER-PROCESSOR', 'Failed to scrape linked URL', { url: linkedUrl, error: String(e) });
+			console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(e) });
 			return false;
 		}
 	}
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
-		const analysis = await translateTweet(tweetText, ctx.env.OPENROUTER_API_KEY);
+		const analysis = await translateTweet(tweetText, ctx.env.AI);
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (!article.tags?.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
-	}
-
-	private extractLinkedUrl(tweetText: string): string | null {
-		const textWithoutUrls = tweetText.replace(/https?:\/\/\S+/g, '').trim();
-		if (textWithoutUrls.length > 50) return null;
-
-		const urlMatch = tweetText.match(/https?:\/\/\S+/);
-		if (urlMatch) {
-			const url = urlMatch[0];
-			if (/(?:twitter\.com|x\.com)/.test(url)) return null;
-			return url;
-		}
-		return null;
 	}
 }
 
@@ -121,9 +116,30 @@ interface TweetAnalysis {
 }
 
 const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [], entities: [] };
+const TWEET_ANALYSIS_SCHEMA = {
+	type: 'object',
+	properties: {
+		summary_cn: { type: 'string' },
+		tags: { type: 'array', items: { type: 'string' } },
+		keywords: { type: 'array', items: { type: 'string' } },
+		entities: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					name: { type: 'string' },
+					name_cn: { type: 'string' },
+					type: { type: 'string', enum: ['person', 'organization', 'product', 'technology', 'event'] },
+				},
+				required: ['name', 'name_cn', 'type'],
+			},
+		},
+	},
+	required: ['summary_cn', 'tags', 'keywords', 'entities'],
+};
 
-async function translateTweet(tweetText: string, apiKey: string): Promise<TweetAnalysis> {
-	logInfo('AI', 'Translating tweet', { text: tweetText.substring(0, 60) });
+async function translateTweet(tweetText: string, ai: ProcessorContext['env']['AI']): Promise<TweetAnalysis> {
+	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 
 	const prompt = `請將以下推文直接翻譯成繁體中文，並提供標籤和關鍵字。
 
@@ -156,11 +172,8 @@ ${tweetText}
 
 請只回傳JSON，不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 600 });
-	if (!rawContent) return { ...TWEET_FALLBACK, summary_cn: tweetText };
-
 	try {
-		const result = extractJson<TweetAnalysis>(rawContent);
+		const result = await generateJson<TweetAnalysis>(ai, prompt, { schema: TWEET_ANALYSIS_SCHEMA, maxTokens: 600 });
 		if (!result) throw new Error('No JSON found');
 
 		return {
@@ -170,7 +183,7 @@ ${tweetText}
 			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
 		};
 	} catch (error) {
-		logError('AI', 'Tweet translation failed', { error: String(error) });
+		console.error({ tag: 'AI', msg: 'Tweet translation failed', error: String(error) });
 		return { ...TWEET_FALLBACK, summary_cn: tweetText };
 	}
 }

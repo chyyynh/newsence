@@ -1,4 +1,3 @@
-import { logError } from '../log';
 import type { Env } from '../types';
 
 function getInternalToken(request: Request): string | null {
@@ -18,10 +17,10 @@ export async function isSubmitAuthorized(request: Request, env: Env): Promise<bo
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
 		// Fail closed: a missing server secret must never make the protected
-		// surface (/ingest, /generate-image, /submit) world-writable. The token is
+		// surface (/ingest, /embed, /search, /media/*) world-writable. The token is
 		// set in all deployed envs; an empty value is a misconfiguration, so we
 		// reject and log loudly rather than silently opening the door.
-		logError('AUTH', 'CORE_WORKER_INTERNAL_TOKEN is not set — rejecting internal-token request');
+		console.error({ tag: 'AUTH', msg: 'CORE_WORKER_INTERNAL_TOKEN is not set — rejecting internal-token request' });
 		return false;
 	}
 	const provided = getInternalToken(request)?.trim();

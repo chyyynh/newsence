@@ -1,5 +1,4 @@
-import { ARTICLES_TABLE, createDbClient } from '@shared/db/articles';
-import { logInfo } from '@shared/log';
+import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '@shared/db';
 import type { Env, ExecutionContext } from '@shared/types';
 
 // ─────────────────────────────────────────────────────────────
@@ -9,42 +8,58 @@ import type { Env, ExecutionContext } from '@shared/types';
 const RETRY_BATCH_SIZE = 20;
 
 export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
-	logInfo('RETRY', 'start');
+	console.info({ tag: 'RETRY', msg: 'start' });
 	const db = await createDbClient(env);
 	try {
 		const table = ARTICLES_TABLE;
 		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-		// AI processing failures
-		const aiResult = await db.query(
+		const articleResult = await db.query(
 			`SELECT id FROM ${table} WHERE scraped_date >= $1 AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL)`,
 			[since],
 		);
 
-		// Translation failures (content exists but content_cn is null)
-		const translationResult = await db.query(
-			`SELECT id FROM ${table} WHERE scraped_date >= $1 AND content IS NOT NULL AND content_cn IS NULL`,
+		const userFileResult = await db.query(
+			`SELECT id FROM ${USER_FILES_TABLE}
+			 WHERE created_at >= $1
+			   AND (
+			     (resource_kind = 'url' AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL))
+			     OR (
+			       resource_kind = 'blob'
+			       AND file_type = 'application/pdf'
+			       AND (metadata->'extraction'->>'status') IS DISTINCT FROM 'failed'
+			       AND (extracted_text IS NULL OR embedding IS NULL)
+			     )
+			   )`,
 			[since],
 		);
 
-		const ids = [
-			...new Set([
-				...(aiResult.rows as Array<{ id: string }>).map((r) => r.id),
-				...(translationResult.rows as Array<{ id: string }>).map((r) => r.id),
-			]),
-		];
+		const articleIds = [...new Set((articleResult.rows as Array<{ id: string }>).map((r) => r.id))];
+		const userFileIds = [...new Set((userFileResult.rows as Array<{ id: string }>).map((r) => r.id))];
+		const total = articleIds.length + userFileIds.length;
 
-		if (!ids.length) return logInfo('RETRY', 'No incomplete articles');
-		for (let i = 0; i < ids.length; i += RETRY_BATCH_SIZE) {
+		if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
+		for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
 			await env.ARTICLE_QUEUE.send({
 				type: 'batch_process',
-				article_ids: ids.slice(i, i + RETRY_BATCH_SIZE),
+				article_ids: articleIds.slice(i, i + RETRY_BATCH_SIZE),
 				triggered_by: 'retry_cron',
 			});
 		}
-		logInfo('RETRY', 'Queued articles for retry', {
-			count: ids.length,
-			batches: Math.ceil(ids.length / RETRY_BATCH_SIZE),
+		for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
+			await env.ARTICLE_QUEUE.send({
+				type: 'batch_process',
+				article_ids: userFileIds.slice(i, i + RETRY_BATCH_SIZE),
+				triggered_by: 'retry_cron',
+				target_table: USER_FILES_TABLE,
+			});
+		}
+		console.info({
+			tag: 'RETRY',
+			msg: 'Queued articles for retry',
+			articles: articleIds.length,
+			userFiles: userFileIds.length,
+			batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
 		});
 	} finally {
 		await db.end();

@@ -1,7 +1,13 @@
-import { BROWSER_UA } from '@shared/fetch';
 import { isRasterImage, PDF_MIME } from '@shared/mime';
-import { detectPlatformType, extractHackerNewsId, extractTweetId, extractYouTubeId, type ScrapedContent } from '@shared/scraped-content';
-import { assertExternalFetchable } from '@shared/web';
+import {
+	assertExternalFetchable,
+	BROWSER_UA,
+	detectPlatformType,
+	extractHackerNewsId,
+	extractTweetId,
+	extractYouTubeId,
+	type ScrapedContent,
+} from '@shared/web';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
 import { scrapeHtmlFromResponse } from './web/scraper';

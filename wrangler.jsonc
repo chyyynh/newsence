@@ -8,13 +8,8 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-05-15",
 	/**
-	 * `enable_request_signal` — without this `request.signal` never fires when
-	 *   the client disconnects (default behaviour as of May 2025). We need it so
-	 *   long-running `/api/chat` streams stop billing OpenRouter the moment the
-	 *   user closes the tab. See chat.ts → streamText({ abortSignal }).
-	 * `request_signal_passthrough` — propagate that signal into outbound fetch()
-	 *   subrequests (OpenRouter, etc.) so the cancellation actually reaches the
-	 *   upstream LLM call instead of just stopping our own writer loop.
+	 * Keep request abort signals available to fetch-heavy ingest endpoints and
+	 * propagate them into subrequests.
 	 */
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
 	/**
@@ -114,7 +109,7 @@
 	/**
 	 * R2 buckets.
 	 *
-	 * `R2` — user_file blob storage (PDF/image uploads + AI-generated images).
+	 * `R2` — user_file blob storage (PDF/image uploads + chat-generated images).
 	 *   Also written by the Next.js frontend via S3 API; the worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 *

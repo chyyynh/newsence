@@ -19,9 +19,8 @@
  * cosmetic loss (one layout snap), never worth failing the processing workflow.
  */
 
-import { BROWSER_UA } from '@shared/fetch';
-import { logWarn } from '@shared/log';
 import type { Env } from '@shared/types';
+import { BROWSER_UA } from '@shared/web';
 
 export interface ImageDimensions {
 	width: number;
@@ -58,7 +57,9 @@ export async function measureImageDimensions(env: Env, imageUrl: string): Promis
 
 		return { width: info.width, height: info.height };
 	} catch (err) {
-		logWarn('IMAGE_DIMS', 'Failed to measure image dimensions', {
+		console.warn({
+			tag: 'IMAGE_DIMS',
+			msg: 'Failed to measure image dimensions',
 			imageUrl,
 			error: err instanceof Error ? err.message : String(err),
 		});

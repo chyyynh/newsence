@@ -15,7 +15,6 @@
  * when only PDF.js byte-range streaming benefits.
  */
 
-import { getCorsHeaders, getOriginCacheBucket } from '@shared/cors';
 import type { Env, ExecutionContext } from '@shared/types';
 import { getProxySigningConfig, verifyR2KeySignature } from './sign-url';
 
@@ -33,6 +32,47 @@ const CONTENT_TYPE_FALLBACKS: Record<string, string> = {
 	mp3: 'audio/mpeg',
 	wav: 'audio/wav',
 };
+
+let unsetCorsWarningLogged = false;
+
+function parseOriginAllowlist(env: Env): string[] | null {
+	const list = env.APP_ORIGINS?.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
+	return list?.length ? list : null;
+}
+
+function warnCorsAllowlistUnset(): void {
+	if (unsetCorsWarningLogged) return;
+	console.warn({ tag: 'R2_ASSET', msg: 'APP_ORIGINS unset, media asset CORS falls back to *' });
+	unsetCorsWarningLogged = true;
+}
+
+function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+	const allowlist = parseOriginAllowlist(env);
+	if (!allowlist) {
+		warnCorsAllowlistUnset();
+		return { 'Access-Control-Allow-Origin': '*' };
+	}
+
+	const origin = request.headers.get('Origin');
+	if (origin && allowlist.includes(origin)) {
+		return {
+			'Access-Control-Allow-Origin': origin,
+			Vary: 'Origin',
+		};
+	}
+
+	return { Vary: 'Origin' };
+}
+
+function getOriginCacheBucket(request: Request, env: Env): string {
+	const allowlist = parseOriginAllowlist(env);
+	if (!allowlist) return 'fallback';
+	const origin = request.headers.get('Origin');
+	if (!origin) return 'no-origin';
+	return allowlist.includes(origin) ? `allow:${origin}` : 'denied';
+}
 
 function inferContentType(key: string): string {
 	const ext = key.split('.').pop()?.toLowerCase() ?? '';

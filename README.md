@@ -52,12 +52,11 @@ Each article goes through an automated workflow with independent retries:
 URL arrives (RSS cron / Twitter cron / YouTube cron / /submit)
   │
   ├─ 1. Fetch Article ──────── Load article row from database
-  ├─ 2. AI Analysis ────────── Gemini Flash Lite → bilingual title, summary, tags, keywords, entities
+  ├─ 2. AI Analysis ────────── Workers AI Qwen3 → bilingual title, summary, tags, keywords, entities
   ├─ 3. Fetch OG Image ─────── Grab OG image if missing (first 32 KB of HTML)
-  ├─ 4. Translate Content ──── Full article → Traditional Chinese
-  ├─ 5. Save to DB ─────────── Write all AI results in a single UPDATE
+  ├─ 4. Save to DB ─────────── Write all AI results in a single UPDATE
   ├─    Sync Entities ──────── (conditional) Upsert entities, link to article
-  ├─ 6. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
+  ├─ 5. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
   └─ 7. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
 ```
 
@@ -67,10 +66,9 @@ Roughly 30 seconds per article. Each step retries independently with exponential
 
 | Stage                   | Model             | What it does                                                                                      |
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| **Analysis**            | Gemini Flash Lite | Article → bilingual title, summary, tags, keywords, category                                      |
-| **Entity Extraction**   | Gemini Flash Lite | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
-| **Content Translation** | Gemini Flash      | Full article content → Traditional Chinese                                                        |
-| **Embedding**           | BGE-M3 (1024d)    | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
+| **Analysis**          | Workers AI Qwen3 | Article → bilingual title, summary, tags, keywords, category                                      |
+| **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
+| **Embedding**         | BGE-M3 (1024d)   | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
 Entity extraction happens in the same LLM call as analysis — zero extra API cost.
 
@@ -81,7 +79,7 @@ Entity extraction happens in the same LLM call as analysis — zero extra API co
 | Runtime       | Cloudflare Workers (V8 isolates)                  |
 | Orchestration | Cloudflare Queues + Workflows                     |
 | Database      | PostgreSQL + pgvector (via Cloudflare Hyperdrive) |
-| LLM           | OpenRouter → Gemini Flash / Flash Lite            |
+| LLM           | Cloudflare Workers AI → Qwen3                     |
 | Embeddings    | Cloudflare Workers AI → BGE-M3                    |
 | Twitter Data  | Kaito API (third-party)                           |
 
@@ -119,10 +117,9 @@ Workflows are provisioned automatically on first deploy via the `workflows` bind
 
 ### 4. Secrets
 
-Only `OPENROUTER_API_KEY` is strictly required. The others enable specific platforms:
+AI analysis and embeddings use the Workers AI binding, so no external LLM secret is required. Optional secrets enable specific platforms:
 
 ```bash
-wrangler secret put OPENROUTER_API_KEY       # required — AI analysis
 wrangler secret put KAITO_API_KEY            # optional — Twitter monitoring
 wrangler secret put YOUTUBE_API_KEY          # optional — YouTube monitoring
 wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # optional — auth for /submit
@@ -194,9 +191,9 @@ src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
 ├── entrypoints/          # HTTP router + scheduled + queue dispatch, health
 ├── shared/               # cross-subsystem base — used by both pipelines below
-│   ├── db/               # Hyperdrive clients — article insert/dedup helpers + scoped withClient/withTx
 │   ├── auth/             # /submit internal-token middleware + bearer session
-│   ├── openrouter.ts     # OpenRouter + embedding wrappers
+│   ├── ai.ts             # Workers AI text + JSON helpers
+│   ├── db.ts             # Hyperdrive clients + article/user_file helpers
 │   ├── embedding.ts      # BGE-M3 wrapper (Workers AI)
 │   ├── platform-metadata.ts  # PlatformMetadata discriminated union + builders
 │   ├── scraped-content.ts    # unified ScrapedContent shape + detectPlatformType
@@ -229,14 +226,13 @@ Bindings (in `wrangler.jsonc`):
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
 | `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
-| `AI`               | Workers AI (BGE-M3 embeddings)               |
+| `AI`               | Workers AI (Qwen3 analysis + BGE-M3 embeddings) |
 | `BROWSER`          | Cloudflare Browser Rendering (reserved)      |
 
 Secrets (via `wrangler secret put`):
 
 | Variable                       | Required | Description                              |
 | ------------------------------ | -------- | ---------------------------------------- |
-| `OPENROUTER_API_KEY`           | Yes      | OpenRouter (Gemini) for AI analysis      |
 | `CORE_WORKER_INTERNAL_TOKEN`   | No       | Bearer token for `/submit` endpoint      |
 | `KAITO_API_KEY`                | No       | Enables Twitter monitoring               |
 | `YOUTUBE_API_KEY`              | No       | Enables YouTube channel monitoring       |

@@ -1,7 +1,5 @@
 import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
-import { logError } from '@shared/log';
-import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/magic-bytes';
-import { extensionFromMime } from '@shared/mime';
+import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
 import type { Env } from '@shared/types';
 import { MAX_UPLOAD_BYTES } from '@shared/upload';
 import { extractSource } from '../extract';
@@ -31,7 +29,7 @@ export async function handleScrape(request: Request, env: Env): Promise<Response
 		if (input instanceof Response) return input;
 		return Response.json(await extractSource(env, input), { headers: CORS_HEADERS });
 	} catch (error) {
-		logError('SCRAPE', 'Extraction failed', { error: String(error) });
+		console.error({ tag: 'SCRAPE', msg: 'Extraction failed', error: String(error) });
 		return Response.json(
 			{ error: 'Extraction failed', details: error instanceof Error ? error.message : 'Unknown error' },
 			{ status: 500, headers: CORS_HEADERS },
@@ -56,7 +54,7 @@ export async function handleScrapeJobCreate(request: Request, env: Env): Promise
 		const instance = await env.SCRAPE_WORKFLOW.create({ params });
 		return Response.json({ jobId: instance.id, status: 'queued' }, { status: 202, headers: CORS_HEADERS });
 	} catch (error) {
-		logError('SCRAPE_JOB', 'create failed', { error: String(error) });
+		console.error({ tag: 'SCRAPE_JOB', msg: 'create failed', error: String(error) });
 		return Response.json(
 			{ error: 'Failed to create scrape job', details: error instanceof Error ? error.message : 'Unknown error' },
 			{ status: 500, headers: CORS_HEADERS },

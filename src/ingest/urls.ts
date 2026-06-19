@@ -1,18 +1,21 @@
-import { createDbClient, type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '@shared/db/articles';
-import { logError, logInfo } from '@shared/log';
+import {
+	createDbClient,
+	createUserFileWorkflow,
+	type InsertUserFileResult,
+	insertUserFile,
+	USER_FILES_TABLE,
+	upsertYoutubeTranscript,
+} from '@shared/db';
 import { extensionFromMime, PDF_MIME } from '@shared/mime';
-import { parsePlatformMetadata } from '@shared/platform-metadata-parser';
-import { detectPlatformType, type ScrapedContent } from '@shared/scraped-content';
-import { userUploadKey } from '@shared/storage-keys';
-import { streamWithByteLimit } from '@shared/streams';
+import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
-import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES } from '@shared/upload';
-import { normalizeUrl } from '@shared/web';
+import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
+import { detectPlatformType, normalizeUrl, type ScrapedContent } from '@shared/web';
 import { persistBlobRow, putUserUpload } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
-import { createUserFileWorkflow } from './workflows/article-workflow-client';
 
-const EXIST_COLS = 'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind';
+const EXIST_COLS =
+	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
 
@@ -25,6 +28,7 @@ type ExistingUserFileRow = {
 	platform_type: string | null;
 	og_image_url: string | null;
 	resource_kind: string;
+	has_embedding: boolean;
 };
 
 type IngestResult = {
@@ -86,7 +90,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 		});
 
 		if (!userFile) {
-			logError('INGEST', 'DB insert failed', { url, error: 'No id returned' });
+			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
 			return { error: 'DB insert failed' };
 		}
 
@@ -99,17 +103,19 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 			try {
 				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
 			} catch (transcriptErr) {
-				logError('YOUTUBE', 'Failed to save transcript', {
+				console.error({
+					tag: 'YOUTUBE',
+					msg: 'Failed to save transcript',
 					videoId: scraped.youtubeTranscript.videoId,
 					error: String(transcriptErr),
 				});
 			}
 		}
 
-		logInfo('INGEST', 'Saved user_file', { title: scraped.title.slice(0, 50), userFileId: userFile.id });
+		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
 		return { kind: 'page', row: userFile };
 	} catch (err) {
-		logError('INGEST', 'DB insert failed', { url, error: String(err) });
+		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
 		return { error: 'DB insert failed' };
 	} finally {
 		await db.end();
@@ -138,7 +144,7 @@ async function insertScrapedBlob(
 		try {
 			await putUserUpload(env, { storageKey, body: limited.stream, contentType: blob.contentType });
 		} catch (err) {
-			logError('INGEST', 'R2 put failed', { url, storageKey, error: String(err) });
+			console.error({ tag: 'INGEST', msg: 'R2 put failed', url, storageKey, error: String(err) });
 			return { error: 'R2 put failed' };
 		}
 
@@ -159,7 +165,9 @@ async function insertScrapedBlob(
 			metadata,
 		});
 		if (!persisted.ok) return { error: persisted.message };
-		logInfo('INGEST', 'Saved blob from URL', {
+		console.info({
+			tag: 'INGEST',
+			msg: 'Saved blob from URL',
 			title: title.slice(0, 50),
 			userFileId: persisted.userFileId,
 			contentType: blob.contentType,
@@ -201,8 +209,8 @@ function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: 
 }
 
 async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<IngestResult> {
-	const sourceTypeForWorkflow = row.resource_kind === 'blob' ? 'pdf' : row.platform_type || 'web';
-	const instanceId = row.title_cn ? undefined : await createUserFileWorkflow(env, row.id, sourceTypeForWorkflow);
+	const isProcessed = !!row.title_cn && !!row.summary_cn && row.has_embedding;
+	const instanceId = isProcessed ? undefined : await createUserFileWorkflow(env, row.id);
 	return buildExistingResult(url, row, instanceId);
 }
 
@@ -229,7 +237,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	try {
 		result = await scrapeAndInsert(url, env, userId);
 	} catch (err) {
-		logError('INGEST', 'Scrape failed', { url, error: String(err) });
+		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 	if ('error' in result) return { url, error: result.error };
@@ -237,7 +245,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	if (result.kind === 'blob') {
 		// PDFs run through the AI workflow for text extraction + analysis;
 		// images are stored without further processing (no vision pipeline yet).
-		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId, 'pdf') : undefined;
+		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId) : undefined;
 		return {
 			url,
 			userFileId: result.userFileId,
@@ -253,7 +261,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	// `created=true`: fresh insert, always trigger workflow for AI enrichment.
 	// `created=false`: ON CONFLICT race — a concurrent submit already triggered
 	//   the workflow on the existing row, skip.
-	const instanceId = row.created ? await createUserFileWorkflow(env, row.id, row.platform_type || 'web') : undefined;
+	const instanceId = row.created ? await createUserFileWorkflow(env, row.id) : undefined;
 	return {
 		url,
 		userFileId: row.id,
@@ -293,7 +301,7 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 	const normalizedUrls = args.urls.map(normalizeUrl);
 	const uniqueUrls = [...new Set(normalizedUrls)];
 
-	logInfo('INGEST', 'Processing URLs', { count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
+	console.info({ tag: 'INGEST', msg: 'Processing URLs', count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
 	const userId = args.userId;
 	const uniqueResults: IngestResult[] = [];
 	for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {

@@ -3,10 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Readability } from '@mozilla/readability';
-import { BROWSER_UA } from '@shared/fetch';
-import { decodeHtmlEntities } from '@shared/html';
-import { logInfo, logWarn } from '@shared/log';
-import type { ScrapedContent } from '@shared/scraped-content';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, readTextWithLimit, type ScrapedContent } from '@shared/web';
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
@@ -121,7 +118,7 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 			const fragment = handler($el, url);
 			if (fragment) content += fragment;
 		} catch (error) {
-			logWarn('WEB', 'Error processing element', { error: String(error) });
+			console.warn({ tag: 'WEB', msg: 'Error processing element', error: String(error) });
 		}
 	}
 
@@ -177,7 +174,7 @@ function extractContentReadability(html: string, url: string): string | null {
 
 		return markdown;
 	} catch (error) {
-		logWarn('WEB', 'Readability extraction failed', { url, error: String(error) });
+		console.warn({ tag: 'WEB', msg: 'Readability extraction failed', url, error: String(error) });
 		return null;
 	}
 }
@@ -216,27 +213,7 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 
 	const finalUrl = response.url || url;
 
-	// Stream-decode with a hard byte cap. `decoder.decode(chunk, { stream: true })`
-	// avoids buffering the entire body in a merged Uint8Array before decoding
-	// (the previous pattern held ~3× the body in memory at peak).
-	if (!response.body) throw new Error('Response body is empty');
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let html = '';
-	let totalBytes = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) {
-			html += decoder.decode();
-			break;
-		}
-		totalBytes += value.byteLength;
-		if (totalBytes > MAX_HTML_BYTES) {
-			await reader.cancel();
-			throw new Error(`Response body exceeded ${MAX_HTML_BYTES} bytes`);
-		}
-		html += decoder.decode(value, { stream: true });
-	}
+	const html = await readTextWithLimit(response, MAX_HTML_BYTES);
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 
@@ -257,22 +234,20 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 }
 
 async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl: string }> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-	try {
-		const response = await fetch(url, { headers: HTML_FETCH_HEADERS, signal: controller.signal });
-		if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-		const contentType = response.headers.get('content-type') || '';
-		if (!contentType.includes('text/html') && !contentType.includes('text/xml') && !contentType.includes('application/xhtml')) {
-			throw new Error(`Non-HTML response: ${contentType}`);
-		}
-
-		const scraped = await scrapeHtmlFromResponse(response, url);
-		return { ...scraped, finalUrl: response.url || url };
-	} finally {
-		clearTimeout(timer);
+	const response = await fetchWithTimeout(url, { headers: HTML_FETCH_HEADERS }, FETCH_TIMEOUT_MS);
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
+
+	const contentType = response.headers.get('content-type') || '';
+	if (!contentType.includes('text/html') && !contentType.includes('text/xml') && !contentType.includes('application/xhtml')) {
+		await response.body?.cancel();
+		throw new Error(`Non-HTML response: ${contentType}`);
+	}
+
+	const scraped = await scrapeHtmlFromResponse(response, url);
+	return { ...scraped, finalUrl: response.url || url };
 }
 
 /** Collect candidate retry URLs when content extraction fails */
@@ -308,7 +283,7 @@ function getRetryUrls(inputUrl: string, finalUrl: string, content: string): stri
 }
 
 export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
-	logInfo('WEB', 'Scraping', { url });
+	console.info({ tag: 'WEB', msg: 'Scraping', url });
 
 	const result = await fetchAndExtract(url);
 
@@ -317,20 +292,20 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 		const retryUrls = getRetryUrls(url, result.finalUrl, result.content);
 		if (retryUrls.length > 0) {
 			const retryUrl = retryUrls[0];
-			logInfo('WEB', 'Low-quality content, retrying', { url, retryUrl });
+			console.info({ tag: 'WEB', msg: 'Low-quality content, retrying', url, retryUrl });
 			try {
 				const retryResult = await fetchAndExtract(retryUrl);
 				if (!isLowQualityContent(retryResult.content) && retryResult.content.length > result.content.length) {
-					logInfo('WEB', 'Retry succeeded', { url: retryUrl, chars: retryResult.content.length });
+					console.info({ tag: 'WEB', msg: 'Retry succeeded', url: retryUrl, chars: retryResult.content.length });
 					return retryResult;
 				}
 			} catch (err) {
-				logWarn('WEB', 'Retry failed', { url: retryUrl, error: String(err) });
+				console.warn({ tag: 'WEB', msg: 'Retry failed', url: retryUrl, error: String(err) });
 			}
 		}
 	}
 
-	logInfo('WEB', 'Scraped', { url, chars: result.content.length });
+	console.info({ tag: 'WEB', msg: 'Scraped', url, chars: result.content.length });
 
 	return result;
 }
@@ -359,19 +334,22 @@ export interface OgImageResult {
  * instead of the full page. Returns null on any failure.
  */
 export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), OG_FETCH_TIMEOUT_MS);
-
 	try {
-		const response = await fetch(url, {
-			headers: {
-				'User-Agent': BROWSER_UA,
-				Accept: 'text/html,application/xhtml+xml',
+		const response = await fetchWithTimeout(
+			url,
+			{
+				headers: {
+					'User-Agent': BROWSER_UA,
+					Accept: 'text/html,application/xhtml+xml',
+				},
 			},
-			signal: controller.signal,
-		});
+			OG_FETCH_TIMEOUT_MS,
+		);
 
-		if (!response.ok || !response.body) return null;
+		if (!response.ok || !response.body) {
+			await response.body?.cancel();
+			return null;
+		}
 
 		// Read only the first chunk (enough for <head>)
 		const reader = response.body.getReader();
@@ -384,7 +362,7 @@ export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 			chunks.push(value);
 			totalBytes += value.length;
 		}
-		reader.cancel();
+		await reader.cancel();
 
 		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
 
@@ -413,8 +391,6 @@ export async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 		};
 	} catch {
 		return null;
-	} finally {
-		clearTimeout(timer);
 	}
 }
 

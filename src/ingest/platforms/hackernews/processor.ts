@@ -2,37 +2,23 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
-import { decodeHtmlEntities, htmlToText } from '@shared/html';
-import { logError, logInfo, logWarn } from '@shared/log';
-import { callOpenRouter } from '@shared/openrouter';
+import { generateText } from '@shared/ai';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
-import { type ArticleProcessor, callGeminiForAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from '../../domain/ai-utils';
+import { decodeHtmlEntities, htmlToText } from '@shared/web';
+import {
+	type ArticleProcessor,
+	generateArticleAnalysis,
+	isEmpty,
+	type ProcessorContext,
+	type ProcessorResult,
+} from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web/scraper';
-import { HN_ALGOLIA_API } from './scraper';
+import { fetchHnItem, type HnComment, type HnItem } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
-
-interface HnComment {
-	id?: number;
-	author?: string;
-	text?: string;
-	children?: HnComment[];
-}
-
-interface HnItemData {
-	id: number;
-	title?: string;
-	url?: string;
-	text?: string;
-	author?: string;
-	points?: number;
-	descendants?: number;
-	type?: string;
-	children?: HnComment[];
-}
 
 export interface HnCollectedComment {
 	id?: number;
@@ -166,7 +152,7 @@ ${rulesBlock}`;
 }
 
 async function generateHnEditorial(
-	apiKey: string,
+	ai: Env['AI'],
 	title: string,
 	hnText: string,
 	comments: HnCollectedComment[],
@@ -186,8 +172,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		callOpenRouter(cnPrompt.user, { apiKey, systemPrompt: cnPrompt.system }),
-		callOpenRouter(enPrompt.user, { apiKey, systemPrompt: enPrompt.system }),
+		generateText(ai, cnPrompt.user, { systemPrompt: cnPrompt.system }),
+		generateText(ai, enPrompt.user, { systemPrompt: enPrompt.system }),
 	]);
 
 	return { en, cn };
@@ -204,8 +190,6 @@ function extractItemId(article: Article): string | null {
 // ─────────────────────────────────────────────────────────────
 
 export class HackerNewsProcessor implements ArticleProcessor {
-	readonly sourceType = 'hackernews';
-
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const itemId = extractItemId(article);
 		const enrichments: PlatformEnrichments = {};
@@ -217,33 +201,27 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		// 2. 收集評論與外部文章
 		const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 		if (comments.length > 0) {
-			logInfo('HN-PROCESSOR', 'Collected comments', { count: comments.length, title: article.title.slice(0, 50) });
+			console.info({ tag: 'HN-PROCESSOR', msg: 'Collected comments', count: comments.length, title: article.title.slice(0, 50) });
 		}
 
 		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url, ctx.env);
 
 		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
 		if (hnData) {
-			const editorial = await generateHnEditorial(
-				ctx.env.OPENROUTER_API_KEY,
-				article.title,
-				hnData.text || '',
-				comments,
-				externalPageContent,
-			);
+			const editorial = await generateHnEditorial(ctx.env.AI, article.title, hnData.text || '', comments, externalPageContent);
 			if (editorial.cn) {
 				updateData.content_cn = editorial.cn;
-				logInfo('HN-PROCESSOR', 'Generated editorial content_cn', { chars: editorial.cn.length });
+				console.info({ tag: 'HN-PROCESSOR', msg: 'Generated editorial content_cn', chars: editorial.cn.length });
 			}
 			if (editorial.en) {
 				updateData.content = editorial.en;
-				logInfo('HN-PROCESSOR', 'Generated editorial content', { chars: editorial.en.length });
+				console.info({ tag: 'HN-PROCESSOR', msg: 'Generated editorial content', chars: editorial.en.length });
 			}
 
 			// Fallback: if editorial generation failed, use scraped page content directly
 			if (!updateData.content && externalPageContent && externalPageContent.length > 100) {
 				updateData.content = externalPageContent;
-				logWarn('HN-PROCESSOR', 'Editorial failed, falling back to scraped content', { chars: externalPageContent.length });
+				console.warn({ tag: 'HN-PROCESSOR', msg: 'Editorial failed, falling back to scraped content', chars: externalPageContent.length });
 			}
 
 			enrichments.hnUrl = `https://news.ycombinator.com/item?id=${hnData.id}`;
@@ -253,9 +231,9 @@ export class HackerNewsProcessor implements ArticleProcessor {
 			enrichments.links = extractPostLinks(hnData.url, hnData.text);
 		}
 
-		// 4. callGeminiForAnalysis — 用外部文章（若有）做分析，品質更好
+		// 4. 用外部文章（若有）做分析，品質更好
 		const articleForAnalysis = externalPageContent ? { ...article, content: externalPageContent, summary: null } : article;
-		const analysis = await callGeminiForAnalysis(articleForAnalysis, ctx.env.OPENROUTER_API_KEY);
+		const analysis = await generateArticleAnalysis(articleForAnalysis, ctx.env.AI);
 		const allTags = [...new Set([...analysis.tags, analysis.category, 'HackerNews'])];
 
 		if (!article.tags?.length) updateData.tags = allTags;
@@ -268,13 +246,12 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		return { updateData, enrichments };
 	}
 
-	private async fetchHnData(itemId: string | null): Promise<HnItemData | null> {
+	private async fetchHnData(itemId: string | null): Promise<HnItem | null> {
 		if (!itemId) return null;
 		try {
-			const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
-			return response.ok ? ((await response.json()) as HnItemData) : null;
+			return await fetchHnItem(itemId);
 		} catch (error) {
-			logError('HN-PROCESSOR', 'Failed to fetch HN data', { error: String(error) });
+			console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
 			return null;
 		}
 	}
@@ -285,7 +262,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 			const page = await scrapeWebPage(url);
 			return { title: page.title || null, content: page.content || null };
 		} catch (error) {
-			logWarn('HN-PROCESSOR', 'Failed to scrape linked webpage', { error: String(error) });
+			console.warn({ tag: 'HN-PROCESSOR', msg: 'Failed to scrape linked webpage', error: String(error) });
 			return { title: null, content: null };
 		}
 	}

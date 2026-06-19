@@ -20,7 +20,6 @@
 			"@ingest/*": ["./src/ingest/*"],
 			"@chat/*": ["./src/chat/*"],
 			"@media/*": ["./src/media/*"],
-			"@retrieval/*": ["./src/retrieval/*"],
 			"@entry/*": ["./src/entrypoints/*"]
 		},
 		/* Enable importing .json files */
