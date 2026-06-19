@@ -53,9 +53,8 @@ type WorkflowParams = {
 	target: WorkflowQueueTarget;
 };
 
-type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
-type SourceWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'source' }>;
-type WorkflowTarget = WorkflowQueueTarget;
+type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
+type SourceTarget = Extract<WorkflowQueueTarget, { kind: 'source' }>;
 type ArticleShell = Article & { has_content?: boolean };
 type OgImageResult = {
 	ogImageUrl: string | null;
@@ -189,15 +188,11 @@ function embeddingFieldsFor(table: ProcessableTable): string {
 	return table === USER_FILES_TABLE ? EMBEDDING_FIELDS_FOR_USER_FILES : EMBEDDING_FIELDS_FOR_ARTICLES;
 }
 
-function workflowTargetFromPayload(payload: WorkflowParams): WorkflowTarget {
-	return payload.target;
-}
-
-function targetTable(target: WorkflowTarget): ProcessableTable {
+function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 	return target.kind === 'row' ? (target.target_table ?? ARTICLES_TABLE) : ARTICLES_TABLE;
 }
 
-function targetLogContext(target: WorkflowTarget, article: Article): Record<string, string> {
+function targetLogContext(target: WorkflowQueueTarget, article: Article): Record<string, string> {
 	return target.kind === 'row'
 		? { article_id: target.article_id, table: targetTable(target) }
 		: { url: article.url, table: ARTICLES_TABLE };
@@ -214,12 +209,12 @@ async function fetchArticle(env: Env, table: ProcessableTable, articleId: string
 	}
 }
 
-async function loadTargetArticle(env: Env, target: WorkflowTarget, fieldsForRow: string): Promise<Article> {
+async function loadTargetArticle(env: Env, target: WorkflowQueueTarget, fieldsForRow: string): Promise<Article> {
 	if (target.kind === 'source') return articleFromSourceDraft(await readSourceArticleDraft(env, target.source_article));
 	return fetchArticle(env, targetTable(target), target.article_id, fieldsForRow);
 }
 
-async function loadTargetShell(env: Env, target: WorkflowTarget): Promise<ArticleShell> {
+async function loadTargetShell(env: Env, target: WorkflowQueueTarget): Promise<ArticleShell> {
 	const article =
 		target.kind === 'source'
 			? articleFromSourceDraft(await readSourceArticleDraft(env, target.source_article))
@@ -245,7 +240,7 @@ async function withPdfExtractionText(env: Env, article: Article, extraction: Pdf
 
 async function stagePdfExtraction(
 	env: Env,
-	target: WorkflowTarget,
+	target: WorkflowQueueTarget,
 	article: ArticleShell,
 	step: WorkflowStep,
 ): Promise<PdfExtractionResult | null> {
@@ -300,7 +295,7 @@ function mergeProcessorResult(
 
 async function prepareYoutubeHighlights(
 	env: Env,
-	target: WorkflowTarget,
+	target: WorkflowQueueTarget,
 	article: Article,
 	sourceType: string,
 	step: WorkflowStep,
@@ -378,7 +373,7 @@ async function insertFinalSourceArticle(
 
 async function persistSourceTarget(
 	env: Env,
-	target: SourceWorkflowTarget,
+	target: SourceTarget,
 	result: ProcessorResult,
 	embedding: number[] | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
@@ -415,7 +410,7 @@ async function persistSourceTarget(
 
 async function persistRowTarget(
 	env: Env,
-	target: RowWorkflowTarget,
+	target: RowTarget,
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -453,7 +448,7 @@ async function persistRowTarget(
 
 async function persistTarget(
 	env: Env,
-	target: WorkflowTarget,
+	target: WorkflowQueueTarget,
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -466,7 +461,7 @@ async function persistTarget(
 
 async function cleanupTargetArtifacts(
 	env: Env,
-	target: WorkflowTarget,
+	target: WorkflowQueueTarget,
 	pdfExtraction: PdfExtractionResult | null,
 	step: WorkflowStep,
 ): Promise<void> {
@@ -485,7 +480,7 @@ async function cleanupTargetArtifacts(
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
-		const target = workflowTargetFromPayload(event.payload);
+		const { target } = event.payload;
 		const article = (await step.do(
 			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
