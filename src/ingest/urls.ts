@@ -56,6 +56,11 @@ type InsertOutcome =
 	| { kind: 'blob'; userFileId: string; fileType: string }
 	| { error: string };
 
+type UserFileUrlResultRow = Pick<
+	ExistingUserFileRow,
+	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
+>;
+
 async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env, userId: string): Promise<InsertOutcome> {
 	const platformType = detectPlatformType(url);
 
@@ -190,28 +195,47 @@ async function scrapeAndInsert(url: string, env: Env, userId: string): Promise<I
 	return insertScrapedBlob(result, url, env, userId);
 }
 
-function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: string | undefined): IngestResult {
-	const isBlob = row.resource_kind === 'blob';
+function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instanceId?: string; alreadyExists: boolean }): IngestResult {
 	return {
 		url,
 		userFileId: row.id,
-		instanceId,
-		resourceKind: isBlob ? 'blob' : 'url',
+		instanceId: args.instanceId,
+		resourceKind: 'url',
 		originType: 'saved_url',
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
-		platformType: isBlob ? undefined : row.platform_type || 'web',
-		alreadyExists: true,
+		platformType: row.platform_type || 'web',
+		alreadyExists: args.alreadyExists,
 	};
 }
 
+function isWorkflowComplete(row: ExistingUserFileRow): boolean {
+	return !!row.title_cn && !!row.summary_cn && row.has_embedding;
+}
+
 async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<IngestResult> {
-	const isProcessed = !!row.title_cn && !!row.summary_cn && row.has_embedding;
-	const instanceId = isProcessed ? undefined : await createUserFileWorkflow(env, row.id);
-	return buildExistingResult(url, row, instanceId);
+	if (row.resource_kind === 'blob') {
+		const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
+		return {
+			url,
+			userFileId: row.id,
+			instanceId,
+			resourceKind: 'blob',
+			originType: 'saved_url',
+			title: row.title,
+			titleCn: row.title_cn || undefined,
+			summaryCn: row.summary_cn || undefined,
+			tags: row.tags ?? undefined,
+			ogImageUrl: row.og_image_url,
+			alreadyExists: true,
+		};
+	}
+
+	const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
+	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
 }
 
 async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
@@ -262,20 +286,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	// `created=false`: ON CONFLICT race — a concurrent submit already triggered
 	//   the workflow on the existing row, skip.
 	const instanceId = row.created ? await createUserFileWorkflow(env, row.id) : undefined;
-	return {
-		url,
-		userFileId: row.id,
-		instanceId,
-		resourceKind: 'url',
-		originType: 'saved_url',
-		title: row.title,
-		titleCn: row.title_cn || undefined,
-		summaryCn: row.summary_cn || undefined,
-		tags: row.tags?.length ? row.tags : undefined,
-		ogImageUrl: row.og_image_url,
-		platformType: row.platform_type || 'web',
-		alreadyExists: !row.created,
-	};
+	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 
 export async function ingestUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<IngestUrlsOutcome> {
