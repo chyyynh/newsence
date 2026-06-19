@@ -13,7 +13,7 @@ import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
-import { articleFromSourceDraft, readSourceArticleDraft, type SourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
+import { readSourceArticleDraft, type SourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
 import type { Client } from 'pg';
 import {
 	buildEmbeddingTextForArticle,
@@ -205,6 +205,27 @@ function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 
 function targetLogContext(target: WorkflowQueueTarget, table: ProcessableTable, article: Article): Record<string, string> {
 	return target.kind === 'row' ? { article_id: target.article_id, table } : { url: article.url, table };
+}
+
+function articleFromSourceDraft(draft: SourceArticleDraft): Article {
+	const data = draft.article;
+	return {
+		id: data.url,
+		title: data.title,
+		title_cn: null,
+		summary: data.summary || null,
+		summary_cn: null,
+		content: data.content,
+		content_cn: null,
+		url: data.url,
+		source: data.source,
+		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+		tags: data.tags ?? [],
+		keywords: data.keywords ?? [],
+		source_type: data.sourceType,
+		og_image_url: data.ogImageUrl,
+		platform_metadata: data.platformMetadata as Article['platform_metadata'],
+	};
 }
 
 function createSourceDraftReader(env: Env, target: WorkflowQueueTarget): SourceDraftReader {

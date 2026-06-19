@@ -7,7 +7,7 @@ import {
 	type YoutubeTranscriptRow,
 } from './db';
 import type { TwitterMedia } from './platform-metadata';
-import type { Article, Env, Tweet } from './types';
+import type { Env, Tweet } from './types';
 import { validateImageUrl } from './web';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
@@ -100,27 +100,6 @@ export async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): P
 	const obj = await env.R2.get(ref.r2Key);
 	if (!obj) throw new Error(`Source article draft missing: ${ref.r2Key}`);
 	return JSON.parse(await obj.text()) as SourceArticleDraft;
-}
-
-export function articleFromSourceDraft(draft: SourceArticleDraft): Article {
-	const data = draft.article;
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		og_image_url: data.ogImageUrl,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
 }
 
 export async function ensureWorkflowsForQueueMessage(
