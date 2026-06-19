@@ -30,6 +30,10 @@ export type WorkflowQueueTarget =
 	| { kind: 'row'; article_id: string; target_table?: ProcessableTable }
 	| { kind: 'source'; source_article: SourceArticleRef };
 
+export type QueueMessage =
+	| { type: 'workflow_process'; target: WorkflowQueueTarget }
+	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[]; triggered_by?: string };
+
 export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);

@@ -1,10 +1,13 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { handleArticleQueue, handleScheduled } from '@entry/events';
 import { routeRequest } from '@entry/http';
-import { type ArticleSummary, type CorpusReadItem, type CorpusReadResult, ingestUrls, readItems, searchArticles } from '@entry/rpc';
+import { ingestUrls as ingestUrlsForUser } from '@ingest/urls';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
-import type { Env, MessageBatch, QueueMessage, ScheduledEvent } from '@shared/types';
+import type { Env, MessageBatch, ScheduledEvent } from '@shared/types';
+import type { QueueMessage } from '@shared/workflow-queue';
+import type { ArticleSummary, CorpusReadItem, CorpusReadResult } from './corpus';
+import { readCorpusItems, searchCorpusArticles } from './corpus';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
@@ -29,16 +32,23 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 
 	/** Crawl + save external URLs to a user's library; returns created user_file IDs. */
 	async ingestUrls(urls: string[], userId: string): Promise<string[]> {
-		return ingestUrls(this.env, urls, userId);
+		if (urls.length === 0) return [];
+		try {
+			const outcome = await ingestUrlsForUser(this.env, { urls, userId });
+			return outcome.ok ? outcome.results.map((r) => r.userFileId).filter((id): id is string => !!id) : [];
+		} catch (err) {
+			console.error({ tag: 'CORE', msg: 'ingestUrls failed', error: String(err) });
+			return [];
+		}
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
 	searchArticles(query: string, opts?: { daysAgo?: number; limit?: number }): Promise<ArticleSummary[]> {
-		return searchArticles(this.env, query, opts);
+		return searchCorpusArticles(this.env, query, opts);
 	}
 
 	/** Read article/collection/url resources from the core corpus (documents are read via Vercel). */
 	readCorpusItems(items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
-		return readItems(this.env, items, userId);
+		return readCorpusItems(this.env, items, userId);
 	}
 }

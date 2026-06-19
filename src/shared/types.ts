@@ -1,6 +1,5 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
-import type { WorkflowQueueTarget } from './workflow-queue';
 
 /**
  * Environment bindings.
@@ -116,11 +115,6 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 	retweetedBy?: RetweetedByData;
 }
-
-// Queue message types
-export type QueueMessage =
-	| { type: 'workflow_process'; target: WorkflowQueueTarget }
-	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[]; triggered_by?: string };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
