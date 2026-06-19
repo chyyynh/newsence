@@ -27,8 +27,8 @@ export interface SourceArticleDraft {
 export type SourceArticleRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
 
 export type WorkflowQueueTarget =
-	| { kind: 'row'; article_id: string; target_table?: ProcessableTable }
-	| { kind: 'source'; source_article: SourceArticleRef };
+	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
+	| { kind: 'source'; sourceArticle: SourceArticleRef };
 
 export type QueueMessage =
 	| { type: 'workflow_process'; target: WorkflowQueueTarget }
@@ -56,8 +56,8 @@ export async function enqueueArticleBatchProcess(env: Env, articleIds: string[],
 function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): WorkflowQueueTarget {
 	return {
 		kind: 'row',
-		article_id: articleId,
-		...(targetTable ? { target_table: targetTable } : {}),
+		articleId,
+		...(targetTable ? { targetTable } : {}),
 	};
 }
 
@@ -69,14 +69,14 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 	const normalizedDraft: SourceArticleDraft = { ...draft, article };
 	const serialized = JSON.stringify(normalizedDraft);
 	const url = article.url;
-	const source_article: SourceArticleRef =
+	const sourceArticle: SourceArticleRef =
 		new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
 			? { url, inline: normalizedDraft }
 			: await writeSourceArticleDraft(env, url, serialized);
 
 	await env.ARTICLE_QUEUE.send({
 		type: 'workflow_process',
-		target: { kind: 'source', source_article },
+		target: { kind: 'source', sourceArticle },
 	});
 }
 
@@ -125,15 +125,15 @@ async function ensureWorkflowForQueueTarget(
 	index: number,
 ): Promise<{ id: string; created: boolean }> {
 	if (target.kind === 'source') {
-		const workflowId = await sourceArticleWorkflowId(target.source_article.url);
-		const result = await ensureSourceArticleWorkflow(env, workflowId, messageId, target.source_article);
-		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.source_article, result.id);
+		const workflowId = await sourceArticleWorkflowId(target.sourceArticle.url);
+		const result = await ensureSourceArticleWorkflow(env, workflowId, messageId, target.sourceArticle);
+		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.sourceArticle, result.id);
 		return { id: result.id, created: result.created };
 	}
 
-	const targetTable = resolveProcessableTable(target.target_table);
-	const workflowId = articleWorkflowId(messageId, targetTable, target.article_id, index);
-	return ensureArticleWorkflow(env, workflowId, target.article_id, targetTable);
+	const targetTable = resolveProcessableTable(target.targetTable);
+	const workflowId = articleWorkflowId(messageId, targetTable, target.articleId, index);
+	return ensureArticleWorkflow(env, workflowId, target.articleId, targetTable);
 }
 
 function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string, index: number): string {
@@ -164,7 +164,7 @@ async function ensureSourceArticleWorkflow(
 	if (isReusableSourceWorkflowStatus(existing.status)) return { id: existing.id, created: false, sourceRefUsed: false };
 
 	try {
-		const id = await createMonitorWorkflow(env, workflowId, { kind: 'source', source_article: sourceArticle });
+		const id = await createMonitorWorkflow(env, workflowId, { kind: 'source', sourceArticle });
 		return { id, created: true, sourceRefUsed: true };
 	} catch {
 		const raced = await getMonitorWorkflowStatus(env, workflowId);
@@ -176,7 +176,7 @@ async function ensureSourceArticleWorkflow(
 	if (existingRetry.status !== 'unknown') return { id: existingRetry.id, created: false, sourceRefUsed: true };
 
 	try {
-		const id = await createMonitorWorkflow(env, retryWorkflowId, { kind: 'source', source_article: sourceArticle });
+		const id = await createMonitorWorkflow(env, retryWorkflowId, { kind: 'source', sourceArticle });
 		return { id, created: true, sourceRefUsed: true };
 	} catch (err) {
 		const raced = await getMonitorWorkflowStatus(env, retryWorkflowId);

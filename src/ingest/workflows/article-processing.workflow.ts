@@ -202,11 +202,11 @@ function articleShellFieldsFor(table: ProcessableTable): string {
 }
 
 function targetTable(target: WorkflowQueueTarget): ProcessableTable {
-	return target.kind === 'row' ? (target.target_table ?? ARTICLES_TABLE) : ARTICLES_TABLE;
+	return target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE;
 }
 
 function targetLogContext(target: WorkflowQueueTarget, table: ProcessableTable, article: Article): Record<string, string> {
-	return target.kind === 'row' ? { article_id: target.article_id, table } : { url: article.url, table };
+	return target.kind === 'row' ? { article_id: target.articleId, table } : { url: article.url, table };
 }
 
 function articleFromSourceDraft(draft: SourceArticleDraft): Article {
@@ -234,7 +234,7 @@ function createSourceDraftReader(env: Env, target: WorkflowQueueTarget): SourceD
 	let cached: Promise<SourceArticleDraft> | undefined;
 	return async () => {
 		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
-		cached ??= readSourceArticleDraft(env, target.source_article).catch((error) => {
+		cached ??= readSourceArticleDraft(env, target.sourceArticle).catch((error) => {
 			cached = undefined;
 			throw error;
 		});
@@ -261,7 +261,7 @@ async function loadTargetArticle(
 	readSourceDraft: SourceDraftReader,
 ): Promise<Article> {
 	if (target.kind === 'source') return articleFromSourceDraft(await readSourceDraft());
-	return fetchArticle(env, table, target.article_id, fieldsForRow);
+	return fetchArticle(env, table, target.articleId, fieldsForRow);
 }
 
 async function loadTargetShell(
@@ -273,7 +273,7 @@ async function loadTargetShell(
 	const article =
 		target.kind === 'source'
 			? articleFromSourceDraft(await readSourceDraft())
-			: await fetchArticle(env, table, target.article_id, articleShellFieldsFor(table));
+			: await fetchArticle(env, table, target.articleId, articleShellFieldsFor(table));
 	return { ...article, content: null };
 }
 
@@ -325,12 +325,12 @@ async function stagePdfExtraction(
 		const extraction = (await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => extractPdfToTextArtifact(env, target.article_id, article.storage_key as string),
+			() => extractPdfToTextArtifact(env, target.articleId, article.storage_key as string),
 		)) as PdfExtractionResult;
 		console.info({
 			tag: 'WORKFLOW',
 			msg: 'PDF extraction staged',
-			article_id: target.article_id,
+			article_id: target.articleId,
 			status: extraction.status,
 			chars: extraction.chars,
 		});
@@ -339,7 +339,7 @@ async function stagePdfExtraction(
 		console.warn({
 			tag: 'WORKFLOW',
 			msg: 'PDF extraction failed, continuing without content',
-			article_id: target.article_id,
+			article_id: target.articleId,
 			error: String(error),
 		});
 		return { status: 'failed', chars: 0, pages: 0 };
@@ -546,11 +546,11 @@ async function persistRowTarget(
 			},
 		};
 
-		await persistProcessorResult(target.article_id, article, finalResult, { db, table }, embedding, extractionMetadata(pdfExtraction));
+		await persistProcessorResult(target.articleId, article, finalResult, { db, table }, embedding, extractionMetadata(pdfExtraction));
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
-			await syncArticleEntities(db, target.article_id, finalResult.updateData.entities);
+			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
-		return target.article_id;
+		return target.articleId;
 	});
 }
 
@@ -575,7 +575,7 @@ async function cleanupTargetArtifacts(
 	pdfExtraction: PdfExtractionResult | null,
 	step: WorkflowStep,
 ): Promise<void> {
-	if (!pdfExtraction?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.source_article)) return;
+	if (!pdfExtraction?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.sourceArticle)) return;
 
 	await step.do('cleanup-workflow-artifacts', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
 		cleanupWorkflowArtifacts(env, target, pdfExtraction),
@@ -596,8 +596,8 @@ async function cleanupWorkflowArtifacts(env: Env, target: WorkflowQueueTarget, p
 		await deleteArtifact('pdf_text', pdfExtraction.textStorageKey, () => deletePdfTextArtifact(env, pdfExtraction.textStorageKey!));
 	}
 
-	if (target.kind === 'source' && 'r2Key' in target.source_article) {
-		await deleteArtifact('source_draft', target.source_article.r2Key, () => env.R2.delete(target.source_article.r2Key));
+	if (target.kind === 'source' && 'r2Key' in target.sourceArticle) {
+		await deleteArtifact('source_draft', target.sourceArticle.r2Key, () => env.R2.delete(target.sourceArticle.r2Key));
 	}
 
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Artifact cleanup incomplete', failures });
