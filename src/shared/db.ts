@@ -296,9 +296,12 @@ const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
 /** Enqueue an article for the AI-processing workflow. */
 export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
 	await env.ARTICLE_QUEUE.send({
-		type: 'article_process',
-		article_id: articleId,
-		...(targetTable ? { target_table: targetTable } : {}),
+		type: 'workflow_process',
+		target: {
+			kind: 'row',
+			article_id: articleId,
+			...(targetTable ? { target_table: targetTable } : {}),
+		},
 	});
 }
 
@@ -316,8 +319,8 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 			: await writeSourceArticleDraft(env, url, serialized);
 
 	await env.ARTICLE_QUEUE.send({
-		type: 'source_article_process',
-		source_article,
+		type: 'workflow_process',
+		target: { kind: 'source', source_article },
 	});
 }
 

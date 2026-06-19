@@ -4,7 +4,7 @@ import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
 import type { ProcessableTable, SourceArticleRef } from '@shared/db';
 import { resolveProcessableTable } from '@shared/db';
-import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from '@shared/types';
+import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent, WorkflowQueueTarget } from '@shared/types';
 
 export function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
 	console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
@@ -22,38 +22,63 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 		const body = message.body;
 
 		try {
-			if (body.type === 'source_article_process') {
-				const workflowId = await sourceArticleWorkflowId(body.source_article.url);
-				const result = await ensureSourceArticleWorkflow(env, workflowId, message.id, body.source_article);
-				if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, body.source_article, result.id);
-				console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured source workflow', url: body.source_article.url, ...result });
-				message.ack();
-				continue;
-			}
-
-			if (body.type !== 'article_process' && body.type !== 'batch_process') {
+			const targets = queueTargetsFromMessage(body);
+			if (!targets.length) {
 				console.warn({ tag: 'ARTICLE-QUEUE', msg: 'Unknown message type, acking' });
 				message.ack();
 				continue;
 			}
 
-			const targetTable = resolveProcessableTable(body.target_table);
-			const ids = body.type === 'article_process' ? [body.article_id] : body.article_ids;
 			let created = 0;
 			let existing = 0;
-			for (const [index, id] of ids.entries()) {
-				const workflowId = articleWorkflowId(message.id, targetTable, id, index);
-				const result = await ensureArticleWorkflow(env, workflowId, id, targetTable);
+			for (const [index, target] of targets.entries()) {
+				const result = await ensureTargetWorkflow(env, message.id, target, index);
+				if (target.kind === 'source' && !result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.source_article, result.id);
 				if (result.created) created++;
 				else existing++;
 			}
-			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count: ids.length, created, existing });
+			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count: targets.length, created, existing });
 			message.ack();
 		} catch (err) {
 			console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling message, retrying', error: String(err) });
 			message.retry();
 		}
 	}
+}
+
+function queueTargetsFromMessage(body: QueueMessage): WorkflowQueueTarget[] {
+	switch (body.type) {
+		case 'workflow_process':
+			return [body.target];
+		case 'batch_workflow_process':
+			return body.targets;
+		case 'source_article_process':
+			return [{ kind: 'source', source_article: body.source_article }];
+		case 'article_process':
+			return [{ kind: 'row', article_id: body.article_id, ...(body.target_table ? { target_table: body.target_table } : {}) }];
+		case 'batch_process':
+			return body.article_ids.map((id) => ({
+				kind: 'row',
+				article_id: id,
+				...(body.target_table ? { target_table: body.target_table } : {}),
+			}));
+	}
+}
+
+async function ensureTargetWorkflow(
+	env: Env,
+	messageId: string,
+	target: WorkflowQueueTarget,
+	index: number,
+): Promise<{ id: string; created: boolean; sourceRefUsed?: boolean }> {
+	if (target.kind === 'source') {
+		const workflowId = await sourceArticleWorkflowId(target.source_article.url);
+		return ensureSourceArticleWorkflow(env, workflowId, messageId, target.source_article);
+	}
+
+	const targetTable = resolveProcessableTable(target.target_table);
+	const workflowId = articleWorkflowId(messageId, targetTable, target.article_id, index);
+	return ensureArticleWorkflow(env, workflowId, target.article_id, targetTable);
 }
 
 function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string, index: number): string {
