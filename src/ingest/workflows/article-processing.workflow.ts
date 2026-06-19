@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { measureImageDimensions } from '@media/dimensions';
 import { createDbClient, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from '@shared/db';
-import { generateArticleEmbedding, saveArticleEmbedding } from '@shared/embedding';
+import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
@@ -123,16 +123,34 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			}
 		}
 
+		const embedding = (await step.do(
+			'generate-embedding',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			async () => {
+				const embeddingArticle = await fetchArticle(this.env, table, article_id, embeddingFieldsFor(table));
+				const text = buildEmbeddingTextForArticle(embeddingArticle, processorResult);
+				if (!text || !this.env.AI) return null;
+				return generateArticleEmbedding(text, this.env.AI);
+			},
+		)) as number[] | null;
+
 		// Full-content translation is a display artifact, not canonical ingest data.
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
 			const db = await createDbClient(this.env);
 			try {
-				await persistProcessorResult(article_id, article, processorResult, {
-					db,
-					table,
-				});
+				await persistProcessorResult(
+					article_id,
+					article,
+					processorResult,
+					{
+						db,
+						table,
+					},
+					embedding,
+				);
 				const fields = Object.keys(processorResult.updateData);
 				if (fields.length > 0) console.info({ tag: 'WORKFLOW', msg: 'Updated fields', fields: fields.join(', ') });
+				if (embedding?.length) console.info({ tag: 'WORKFLOW', msg: 'Embedding saved', article_id });
 				if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
 					console.info({ tag: 'WORKFLOW', msg: 'Enrichments saved', enrichments: Object.keys(processorResult.enrichments).join(', ') });
 				}
@@ -164,27 +182,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				() => generateAndSaveYouTubeHighlights(this.env, article_id, article),
 			);
 		}
-
-		await step.do(
-			'generate-and-save-embedding',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			async () => {
-				const embeddingArticle = await fetchArticle(this.env, table, article_id, embeddingFieldsFor(table));
-				const text = buildEmbeddingTextForArticle(embeddingArticle, processorResult);
-				if (!text || !this.env.AI) return false;
-				const embedding = await generateArticleEmbedding(text, this.env.AI);
-				if (!embedding) return false;
-				const db = await createDbClient(this.env);
-				try {
-					const saved = await saveArticleEmbedding(db, article_id, embedding, table);
-					if (!saved) throw new Error(`Failed to save embedding for ${article_id}`);
-					console.info({ tag: 'WORKFLOW', msg: 'Embedding saved', article_id });
-					return true;
-				} finally {
-					await db.end();
-				}
-			},
-		);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id });
 		return { success: true, article_id };
