@@ -187,37 +187,27 @@ async function ensureSourceArticleWorkflow(
 	messageId: string,
 	sourceArticle: SourceArticleRef,
 ): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
-	const existing = await env.MONITOR_WORKFLOW.get(workflowId);
-	const existingStatus = await existing.status();
-	if (isReusableSourceWorkflowStatus(existingStatus.status)) return { id: existing.id, created: false, sourceRefUsed: false };
+	const existing = await getMonitorWorkflowStatus(env, workflowId);
+	if (isReusableSourceWorkflowStatus(existing.status)) return { id: existing.id, created: false, sourceRefUsed: false };
 
 	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: { target: { kind: 'source', source_article: sourceArticle } },
-		});
-		return { id: instance.id, created: true, sourceRefUsed: true };
+		const id = await createMonitorWorkflow(env, workflowId, { kind: 'source', source_article: sourceArticle });
+		return { id, created: true, sourceRefUsed: true };
 	} catch {
-		const raced = await env.MONITOR_WORKFLOW.get(workflowId);
-		const racedStatus = await raced.status();
-		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: false };
+		const raced = await getMonitorWorkflowStatus(env, workflowId);
+		if (raced.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: false };
 	}
 
 	const retryWorkflowId = `${workflowId}-${workflowIdPart(messageId)}`;
-	const existingRetry = await env.MONITOR_WORKFLOW.get(retryWorkflowId);
-	const existingRetryStatus = await existingRetry.status();
-	if (existingRetryStatus.status !== 'unknown') return { id: existingRetry.id, created: false, sourceRefUsed: true };
+	const existingRetry = await getMonitorWorkflowStatus(env, retryWorkflowId);
+	if (existingRetry.status !== 'unknown') return { id: existingRetry.id, created: false, sourceRefUsed: true };
 
 	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: retryWorkflowId,
-			params: { target: { kind: 'source', source_article: sourceArticle } },
-		});
-		return { id: instance.id, created: true, sourceRefUsed: true };
+		const id = await createMonitorWorkflow(env, retryWorkflowId, { kind: 'source', source_article: sourceArticle });
+		return { id, created: true, sourceRefUsed: true };
 	} catch (err) {
-		const raced = await env.MONITOR_WORKFLOW.get(retryWorkflowId);
-		const racedStatus = await raced.status();
-		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: true };
+		const raced = await getMonitorWorkflowStatus(env, retryWorkflowId);
+		if (raced.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: true };
 		throw err;
 	}
 }
@@ -247,22 +237,15 @@ async function ensureArticleWorkflow(
 	articleId: string,
 	targetTable: ProcessableTable,
 ): Promise<{ id: string; created: boolean }> {
-	const existing = await env.MONITOR_WORKFLOW.get(workflowId);
-	const existingStatus = await existing.status();
-	if (existingStatus.status !== 'unknown') return { id: existing.id, created: false };
+	const existing = await getMonitorWorkflowStatus(env, workflowId);
+	if (existing.status !== 'unknown') return { id: existing.id, created: false };
 
 	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: {
-				target: { kind: 'row', article_id: articleId, target_table: targetTable },
-			},
-		});
-		return { id: instance.id, created: true };
+		const id = await createMonitorWorkflow(env, workflowId, rowWorkflowTarget(articleId, targetTable));
+		return { id, created: true };
 	} catch (err) {
-		const raced = await env.MONITOR_WORKFLOW.get(workflowId);
-		const racedStatus = await raced.status();
-		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false };
+		const raced = await getMonitorWorkflowStatus(env, workflowId);
+		if (raced.status !== 'unknown') return { id: raced.id, created: false };
 		throw err;
 	}
 }
@@ -271,9 +254,8 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 	try {
 		const storedInstanceId = await getUserFileWorkflowInstanceId(env, userFileId);
 		if (storedInstanceId) {
-			const storedInstance = await env.MONITOR_WORKFLOW.get(storedInstanceId);
-			const storedStatus = await storedInstance.status();
-			if (ACTIVE_WORKFLOW_STATUSES.has(storedStatus.status)) return storedInstance.id;
+			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
+			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 		}
 
 		const baseId = userFileWorkflowId(userFileId);
@@ -293,23 +275,28 @@ function userFileWorkflowId(userFileId: string): string {
 
 async function createUserFileWorkflowInstance(env: Env, workflowId: string, userFileId: string): Promise<string> {
 	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: { target: { kind: 'row', article_id: userFileId, target_table: USER_FILES_TABLE } },
-		});
-		return instance.id;
+		return createMonitorWorkflow(env, workflowId, rowWorkflowTarget(userFileId, USER_FILES_TABLE));
 	} catch (err) {
-		const existing = await env.MONITOR_WORKFLOW.get(workflowId);
-		const existingStatus = await existing.status();
-		if (ACTIVE_WORKFLOW_STATUSES.has(existingStatus.status)) return existing.id;
-		if (existingStatus.status === 'unknown') throw err;
+		const existing = await getMonitorWorkflowStatus(env, workflowId);
+		if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
+		if (existing.status === 'unknown') throw err;
 
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: `${workflowId}-${crypto.randomUUID()}`,
-			params: { target: { kind: 'row', article_id: userFileId, target_table: USER_FILES_TABLE } },
-		});
-		return instance.id;
+		return createMonitorWorkflow(env, `${workflowId}-${crypto.randomUUID()}`, rowWorkflowTarget(userFileId, USER_FILES_TABLE));
 	}
+}
+
+async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {
+	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
+	const status = await instance.status();
+	return { id: instance.id, status: status.status };
+}
+
+async function createMonitorWorkflow(env: Env, workflowId: string, target: WorkflowQueueTarget): Promise<string> {
+	const instance = await env.MONITOR_WORKFLOW.create({
+		id: workflowId,
+		params: { target },
+	});
+	return instance.id;
 }
 
 async function getUserFileWorkflowInstanceId(env: Env, userFileId: string): Promise<string | null> {
