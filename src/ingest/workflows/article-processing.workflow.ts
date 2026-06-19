@@ -7,7 +7,7 @@ import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import { syncArticleEntities } from '../domain/entities';
 import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor } from '../domain/processors';
-import { fetchOgImage } from '../platforms/web-scraper';
+import { fetchOgImage } from '../platforms/web-og';
 import { generateAndSaveYouTubeHighlights } from '../platforms/youtube/highlights';
 import { extractAndPersistPdf, markExtractionFailed, type PdfExtractionResult } from './pdf-extraction';
 
