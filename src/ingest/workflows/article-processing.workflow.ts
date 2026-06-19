@@ -67,6 +67,9 @@ type ArticleAnalysisStepResult = {
 	processorResult: ProcessorResult;
 	embedding: number[] | null;
 };
+type YoutubeHighlightsInput =
+	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
+	| { kind: 'article'; article: Article };
 
 const EMPTY_OG_IMAGE_PATCH: OgImagePatch = { ogImageUrl: null, ogImageDimensions: null };
 
@@ -398,30 +401,38 @@ async function prepareYoutubeHighlights(
 	step: WorkflowStep,
 	readSourceDraft: SourceDraftReader,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	if (article.platform_metadata?.type !== 'youtube') return null;
+	const input = await prepareYoutubeHighlightsInput(target, article, sourceType, readSourceDraft);
+	if (!input) return null;
 
-	if (target.kind === 'source') {
-		return (await step.do(
-			'generate-youtube-highlights',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			async () => {
-				const draft = await readSourceDraft();
-				if (!draft.youtubeTranscript) return null;
-				return prepareYouTubeHighlightsFromTranscript(
-					env,
-					article.platform_metadata!.data.videoId,
-					draft.youtubeTranscript.segments as TranscriptSegment[],
-				);
-			},
-		)) as YouTubeHighlightsUpdate | null;
-	}
-
-	if (sourceType !== 'youtube') return null;
 	return (await step.do(
 		'generate-youtube-highlights',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-		() => prepareYouTubeHighlights(env, article),
+		() =>
+			input.kind === 'transcript'
+				? prepareYouTubeHighlightsFromTranscript(env, input.videoId, input.segments)
+				: prepareYouTubeHighlights(env, input.article),
 	)) as YouTubeHighlightsUpdate | null;
+}
+
+async function prepareYoutubeHighlightsInput(
+	target: WorkflowQueueTarget,
+	article: Article,
+	sourceType: string,
+	readSourceDraft: SourceDraftReader,
+): Promise<YoutubeHighlightsInput | null> {
+	if (article.platform_metadata?.type !== 'youtube') return null;
+
+	if (target.kind === 'source') {
+		const draft = await readSourceDraft();
+		if (!draft.youtubeTranscript) return null;
+		return {
+			kind: 'transcript',
+			videoId: article.platform_metadata.data.videoId,
+			segments: draft.youtubeTranscript.segments as TranscriptSegment[],
+		};
+	}
+
+	return sourceType === 'youtube' ? { kind: 'article', article } : null;
 }
 
 async function insertFinalSourceArticle(
