@@ -2,10 +2,8 @@ import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
-import type { ProcessableTable } from '@shared/db';
-import { resolveProcessableTable } from '@shared/db';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent, WorkflowQueueTarget } from '@shared/types';
-import type { SourceArticleRef } from '@shared/workflow-queue';
+import { ensureWorkflowForQueueTarget } from '@shared/workflow-queue';
 
 export function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
 	console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
@@ -27,8 +25,7 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 			let created = 0;
 			let existing = 0;
 			for (const [index, target] of targets.entries()) {
-				const result = await ensureTargetWorkflow(env, message.id, target, index);
-				if (target.kind === 'source' && !result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.source_article, result.id);
+				const result = await ensureWorkflowForQueueTarget(env, message.id, target, index);
 				if (result.created) created++;
 				else existing++;
 			}
@@ -43,125 +40,4 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 
 function queueTargetsFromMessage(body: QueueMessage): WorkflowQueueTarget[] {
 	return body.type === 'workflow_process' ? [body.target] : body.targets;
-}
-
-async function ensureTargetWorkflow(
-	env: Env,
-	messageId: string,
-	target: WorkflowQueueTarget,
-	index: number,
-): Promise<{ id: string; created: boolean; sourceRefUsed?: boolean }> {
-	if (target.kind === 'source') {
-		const workflowId = await sourceArticleWorkflowId(target.source_article.url);
-		return ensureSourceArticleWorkflow(env, workflowId, messageId, target.source_article);
-	}
-
-	const targetTable = resolveProcessableTable(target.target_table);
-	const workflowId = articleWorkflowId(messageId, targetTable, target.article_id, index);
-	return ensureArticleWorkflow(env, workflowId, target.article_id, targetTable);
-}
-
-function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string, index: number): string {
-	return ['article', workflowIdPart(messageId), workflowIdPart(targetTable), String(index), workflowIdPart(articleId)].join('-');
-}
-
-function workflowIdPart(value: string): string {
-	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
-}
-
-async function sourceArticleWorkflowId(url: string): Promise<string> {
-	const bytes = new TextEncoder().encode(url);
-	const digest = await crypto.subtle.digest('SHA-256', bytes);
-	const hash = [...new Uint8Array(digest)]
-		.slice(0, 16)
-		.map((byte) => byte.toString(16).padStart(2, '0'))
-		.join('');
-	return `source-article-${hash}`;
-}
-
-async function ensureSourceArticleWorkflow(
-	env: Env,
-	workflowId: string,
-	messageId: string,
-	sourceArticle: SourceArticleRef,
-): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
-	const existing = await env.MONITOR_WORKFLOW.get(workflowId);
-	const existingStatus = await existing.status();
-	if (isReusableSourceWorkflowStatus(existingStatus.status)) return { id: existing.id, created: false, sourceRefUsed: false };
-
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: { source_article: sourceArticle },
-		});
-		return { id: instance.id, created: true, sourceRefUsed: true };
-	} catch {
-		const raced = await env.MONITOR_WORKFLOW.get(workflowId);
-		const racedStatus = await raced.status();
-		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: false };
-	}
-
-	const retryWorkflowId = `${workflowId}-${workflowIdPart(messageId)}`;
-	const existingRetry = await env.MONITOR_WORKFLOW.get(retryWorkflowId);
-	const existingRetryStatus = await existingRetry.status();
-	if (existingRetryStatus.status !== 'unknown') return { id: existingRetry.id, created: false, sourceRefUsed: true };
-
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: retryWorkflowId,
-			params: { source_article: sourceArticle },
-		});
-		return { id: instance.id, created: true, sourceRefUsed: true };
-	} catch (err) {
-		const raced = await env.MONITOR_WORKFLOW.get(retryWorkflowId);
-		const racedStatus = await raced.status();
-		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: true };
-		throw err;
-	}
-}
-
-function isReusableSourceWorkflowStatus(status: string): boolean {
-	return status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(status);
-}
-
-async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleRef, workflowId: string): Promise<void> {
-	if (!('r2Key' in sourceArticle)) return;
-	try {
-		await env.R2.delete(sourceArticle.r2Key);
-	} catch (err) {
-		console.warn({
-			tag: 'ARTICLE-QUEUE',
-			msg: 'Failed to cleanup unused source article draft',
-			workflowId,
-			r2Key: sourceArticle.r2Key,
-			error: String(err),
-		});
-	}
-}
-
-async function ensureArticleWorkflow(
-	env: Env,
-	workflowId: string,
-	articleId: string,
-	targetTable: ProcessableTable,
-): Promise<{ id: string; created: boolean }> {
-	const existing = await env.MONITOR_WORKFLOW.get(workflowId);
-	const existingStatus = await existing.status();
-	if (existingStatus.status !== 'unknown') return { id: existing.id, created: false };
-
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: {
-				article_id: articleId,
-				target_table: targetTable,
-			},
-		});
-		return { id: instance.id, created: true };
-	} catch (err) {
-		const raced = await env.MONITOR_WORKFLOW.get(workflowId);
-		const racedStatus = await raced.status();
-		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false };
-		throw err;
-	}
 }

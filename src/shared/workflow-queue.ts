@@ -1,4 +1,11 @@
-import { createDbClient, type InsertArticleData, type ProcessableTable, USER_FILES_TABLE, type YoutubeTranscriptRow } from './db';
+import {
+	createDbClient,
+	type InsertArticleData,
+	type ProcessableTable,
+	resolveProcessableTable,
+	USER_FILES_TABLE,
+	type YoutubeTranscriptRow,
+} from './db';
 import type { TwitterMedia } from './platform-metadata';
 import type { Article, Env, Tweet } from './types';
 import { validateImageUrl } from './web';
@@ -18,6 +25,10 @@ export interface SourceArticleDraft {
 }
 
 export type SourceArticleRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
+
+export type WorkflowQueueTarget =
+	| { kind: 'row'; article_id: string; target_table?: ProcessableTable }
+	| { kind: 'source'; source_article: SourceArticleRef };
 
 export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
@@ -88,6 +99,129 @@ export function articleFromSourceDraft(draft: SourceArticleDraft): Article {
 		og_image_url: data.ogImageUrl,
 		platform_metadata: data.platformMetadata as Article['platform_metadata'],
 	};
+}
+
+export async function ensureWorkflowForQueueTarget(
+	env: Env,
+	messageId: string,
+	target: WorkflowQueueTarget,
+	index: number,
+): Promise<{ id: string; created: boolean }> {
+	if (target.kind === 'source') {
+		const workflowId = await sourceArticleWorkflowId(target.source_article.url);
+		const result = await ensureSourceArticleWorkflow(env, workflowId, messageId, target.source_article);
+		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.source_article, result.id);
+		return { id: result.id, created: result.created };
+	}
+
+	const targetTable = resolveProcessableTable(target.target_table);
+	const workflowId = articleWorkflowId(messageId, targetTable, target.article_id, index);
+	return ensureArticleWorkflow(env, workflowId, target.article_id, targetTable);
+}
+
+function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string, index: number): string {
+	return ['article', workflowIdPart(messageId), workflowIdPart(targetTable), String(index), workflowIdPart(articleId)].join('-');
+}
+
+function workflowIdPart(value: string): string {
+	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
+}
+
+async function sourceArticleWorkflowId(url: string): Promise<string> {
+	const bytes = new TextEncoder().encode(url);
+	const digest = await crypto.subtle.digest('SHA-256', bytes);
+	const hash = [...new Uint8Array(digest)]
+		.slice(0, 16)
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join('');
+	return `source-article-${hash}`;
+}
+
+async function ensureSourceArticleWorkflow(
+	env: Env,
+	workflowId: string,
+	messageId: string,
+	sourceArticle: SourceArticleRef,
+): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
+	const existing = await env.MONITOR_WORKFLOW.get(workflowId);
+	const existingStatus = await existing.status();
+	if (isReusableSourceWorkflowStatus(existingStatus.status)) return { id: existing.id, created: false, sourceRefUsed: false };
+
+	try {
+		const instance = await env.MONITOR_WORKFLOW.create({
+			id: workflowId,
+			params: { source_article: sourceArticle },
+		});
+		return { id: instance.id, created: true, sourceRefUsed: true };
+	} catch {
+		const raced = await env.MONITOR_WORKFLOW.get(workflowId);
+		const racedStatus = await raced.status();
+		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: false };
+	}
+
+	const retryWorkflowId = `${workflowId}-${workflowIdPart(messageId)}`;
+	const existingRetry = await env.MONITOR_WORKFLOW.get(retryWorkflowId);
+	const existingRetryStatus = await existingRetry.status();
+	if (existingRetryStatus.status !== 'unknown') return { id: existingRetry.id, created: false, sourceRefUsed: true };
+
+	try {
+		const instance = await env.MONITOR_WORKFLOW.create({
+			id: retryWorkflowId,
+			params: { source_article: sourceArticle },
+		});
+		return { id: instance.id, created: true, sourceRefUsed: true };
+	} catch (err) {
+		const raced = await env.MONITOR_WORKFLOW.get(retryWorkflowId);
+		const racedStatus = await raced.status();
+		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: true };
+		throw err;
+	}
+}
+
+function isReusableSourceWorkflowStatus(status: string): boolean {
+	return status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(status);
+}
+
+async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleRef, workflowId: string): Promise<void> {
+	if (!('r2Key' in sourceArticle)) return;
+	try {
+		await env.R2.delete(sourceArticle.r2Key);
+	} catch (err) {
+		console.warn({
+			tag: 'ARTICLE-QUEUE',
+			msg: 'Failed to cleanup unused source article draft',
+			workflowId,
+			r2Key: sourceArticle.r2Key,
+			error: String(err),
+		});
+	}
+}
+
+async function ensureArticleWorkflow(
+	env: Env,
+	workflowId: string,
+	articleId: string,
+	targetTable: ProcessableTable,
+): Promise<{ id: string; created: boolean }> {
+	const existing = await env.MONITOR_WORKFLOW.get(workflowId);
+	const existingStatus = await existing.status();
+	if (existingStatus.status !== 'unknown') return { id: existing.id, created: false };
+
+	try {
+		const instance = await env.MONITOR_WORKFLOW.create({
+			id: workflowId,
+			params: {
+				article_id: articleId,
+				target_table: targetTable,
+			},
+		});
+		return { id: instance.id, created: true };
+	} catch (err) {
+		const raced = await env.MONITOR_WORKFLOW.get(workflowId);
+		const racedStatus = await raced.status();
+		if (racedStatus.status !== 'unknown') return { id: raced.id, created: false };
+		throw err;
+	}
 }
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
