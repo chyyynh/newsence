@@ -1,29 +1,18 @@
-import { type ProcessableTable, USER_FILES_TABLE } from '@shared/db/articles';
+import { type DbClient, type ProcessableTable, USER_FILES_TABLE } from '@shared/db';
 import { prepareArticleTextForEmbedding } from '@shared/embedding';
 import { type PlatformEnrichments, type PlatformMetadata, withOgDimensions } from '@shared/platform-metadata';
 import type { Article } from '@shared/types';
-import {
-	type ArticleProcessor,
-	callGeminiForAnalysis,
-	isEmpty,
-	type ProcessingDeps,
-	type ProcessorContext,
-	type ProcessorResult,
-} from './ai-utils';
+import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
 
-export { generateYouTubeHighlights } from '../platforms/youtube/highlights';
 export type { ProcessorResult } from './ai-utils';
-export { translateContent } from './ai-utils';
 
 // ─────────────────────────────────────────────────────────────
 // Default Processor
 // ─────────────────────────────────────────────────────────────
 
 class DefaultProcessor implements ArticleProcessor {
-	readonly sourceType = 'default';
-
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const analysis = await callGeminiForAnalysis(article, ctx.env.OPENROUTER_API_KEY);
+		const analysis = await generateArticleAnalysis(article, ctx.env.AI);
 		const updateData: ProcessorResult['updateData'] = {};
 
 		const allTags = [...new Set([...analysis.tags, analysis.category])];
@@ -33,7 +22,6 @@ class DefaultProcessor implements ArticleProcessor {
 		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
 		if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
-		if (analysis.title_en && !article.title_cn) updateData.title = analysis.title_en;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData };
@@ -85,7 +73,7 @@ function mergePlatformMetadata(
 export async function runArticleProcessor(
 	article: Article,
 	sourceType: string | undefined,
-	deps: ProcessingDeps,
+	deps: ProcessorContext,
 ): Promise<ProcessorResult> {
 	return getProcessor(sourceType).process(article, deps);
 }
@@ -111,7 +99,7 @@ export async function persistProcessorResult(
 	articleId: string,
 	article: Article,
 	result: ProcessorResult,
-	deps: ProcessingDeps,
+	deps: { db: DbClient; table: ProcessableTable },
 ): Promise<void> {
 	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
 	const updatePayload: Record<string, unknown> = { ...result.updateData };

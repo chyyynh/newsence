@@ -1,7 +1,6 @@
-import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/magic-bytes';
-import { isRasterImage, PDF_MIME } from '@shared/mime';
-import type { ScrapedContent } from '@shared/scraped-content';
+import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@shared/mime';
 import type { Env } from '@shared/types';
+import type { ScrapedContent } from '@shared/web';
 import { scrapeUrl } from './platforms/registry';
 import { type ParsedPdf, parsePdf } from './workflows/steps/pdf-extraction';
 

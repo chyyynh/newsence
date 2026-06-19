@@ -1,5 +1,4 @@
 import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
-import { logError } from '@shared/log';
 import type { Env } from '@shared/types';
 
 type DeleteAssetBody = { storageKeys?: unknown };
@@ -7,7 +6,7 @@ type DeleteAssetBody = { storageKeys?: unknown };
 // Only user-namespaced uploads may be deleted through this endpoint. Even with a
 // valid internal token, a buggy (or compromised) caller must never be able to
 // wipe article media, the proxy cache, or any other R2 namespace — so keys are
-// filtered to the `users/` prefix that ingest/generate-image write under.
+// filtered to the `users/` prefix that ingest/chat-generated storage writes under.
 const DELETABLE_PREFIX = 'users/';
 
 // R2 batch delete caps at 1000 keys per call. This endpoint is reused
@@ -43,7 +42,7 @@ export async function handleDeleteAsset(request: Request, env: Env): Promise<Res
 			await env.R2.delete(keys.slice(i, i + R2_BATCH_LIMIT));
 		}
 	} catch (err) {
-		logError('MEDIA_DELETE', 'R2 batch delete failed', { count: keys.length, error: String(err) });
+		console.error({ tag: 'MEDIA_DELETE', msg: 'R2 batch delete failed', count: keys.length, error: String(err) });
 		return Response.json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'R2 delete failed' } }, { status: 500 });
 	}
 

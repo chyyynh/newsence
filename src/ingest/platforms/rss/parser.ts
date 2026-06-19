@@ -2,7 +2,7 @@
 // RSS Parsing Utilities
 // ─────────────────────────────────────────────────────────────
 
-import { decodeHtmlEntities, htmlToText } from '@shared/html';
+import { decodeHtmlEntities, htmlToText } from '@shared/web';
 
 export type RSSItem = Record<string, unknown>;
 
@@ -12,6 +12,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
 	return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function attr(record: Record<string, unknown>, name: string): string | undefined {
+	return asString(record[`@_${name}`]) ?? asString(record[name]);
 }
 
 function getPath(value: unknown, path: string[]): unknown {
@@ -96,27 +100,34 @@ export function extractRssFullContent(item: RSSItem): string {
 }
 
 export function extractUrlFromItem(item: RSSItem): string | null {
-	if (typeof item.link === 'string') return item.link;
-	const link = asRecord(item.link);
-	return asString(link?.['@_href']) ?? asString(link?.href) ?? asString(item.url) ?? null;
+	const directLink = asString(item.link);
+	if (directLink) return directLink;
+
+	const links = normalizeItems(item.link);
+	const primaryLink =
+		links.find((link) => (attr(link, 'rel') ?? 'alternate').toLowerCase() === 'alternate' && (attr(link, 'type') ?? '').includes('html')) ??
+		links.find((link) => (attr(link, 'rel') ?? 'alternate').toLowerCase() === 'alternate') ??
+		links[0];
+
+	return (primaryLink ? attr(primaryLink, 'href') : undefined) ?? asString(item.url) ?? null;
 }
 
 function extractEnclosureImage(item: RSSItem): string | null {
 	const enclosure = asRecord(item.enclosure);
 	if (!enclosure) return null;
-	const url = asString(enclosure['@_url']) ?? asString(enclosure.url);
-	const type = asString(enclosure['@_type']) ?? asString(enclosure.type) ?? '';
+	const url = attr(enclosure, 'url');
+	const type = attr(enclosure, 'type') ?? '';
 	return url && (!type || type.startsWith('image/')) ? url : null;
 }
 
 function extractImageFromMediaEntry(entryValue: unknown): string | null {
 	const entry = asRecord(entryValue);
 	if (!entry) return null;
-	const url = asString(entry['@_url']) ?? asString(entry.url);
+	const url = attr(entry, 'url');
 	if (url) return url;
 	const nested = entry['media:content'] ?? entry['media:thumbnail'];
 	for (const nestedValue of normalizeItems(nested)) {
-		const nestedUrl = asString(nestedValue['@_url']) ?? asString(nestedValue.url);
+		const nestedUrl = attr(nestedValue, 'url');
 		if (nestedUrl) return nestedUrl;
 	}
 	return null;
@@ -136,7 +147,7 @@ function extractItunesImage(item: RSSItem): string | null {
 	if (typeof item['itunes:image'] === 'string') return item['itunes:image'];
 	const itunes = asRecord(item['itunes:image']);
 	if (!itunes) return null;
-	return asString(itunes['@_href']) ?? asString(itunes.href) ?? null;
+	return attr(itunes, 'href') ?? null;
 }
 
 function extractEmbeddedImage(item: RSSItem): string | null {

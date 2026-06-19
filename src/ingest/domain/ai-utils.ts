@@ -2,12 +2,10 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import type { ProcessableTable } from '@shared/db/articles';
-import { logError, logInfo } from '@shared/log';
-import { AI_MODELS, callOpenRouter, extractJson } from '@shared/openrouter';
+import { generateJson } from '@shared/ai';
+import type { ProcessableTable } from '@shared/db';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
-import type { Client } from 'pg';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -22,7 +20,6 @@ export interface ProcessorResult {
 		summary_cn?: string;
 		content?: string;
 		content_cn?: string;
-		title?: string;
 		og_image_url?: string;
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
@@ -38,14 +35,10 @@ export interface ProcessorResult {
 
 export interface ProcessorContext {
 	env: Env;
-	db: Client;
 	table: ProcessableTable;
 }
 
-export type ProcessingDeps = ProcessorContext;
-
 export interface ArticleProcessor {
-	readonly sourceType: string;
 	process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult>;
 }
 
@@ -57,19 +50,36 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export async function translateContent(content: string, apiKey: string): Promise<string | null> {
-	const prompt = `請將以下文章內容翻譯成繁體中文。保持 Markdown 格式，包括標題、段落、列表等。只翻譯，不要添加任何額外內容。
-
-${content}`;
-
-	return callOpenRouter(prompt, { apiKey, model: AI_MODELS.FLASH, timeoutMs: 180_000 });
-}
-
 // ─────────────────────────────────────────────────────────────
-// AI Analysis Functions (business logic using OpenRouter)
+// AI Analysis Functions
 // ─────────────────────────────────────────────────────────────
 
 const MAX_CONTENT_LENGTH = 10000;
+const ARTICLE_ANALYSIS_SCHEMA = {
+	type: 'object',
+	properties: {
+		tags: { type: 'array', items: { type: 'string' } },
+		keywords: { type: 'array', items: { type: 'string' } },
+		entities: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					name: { type: 'string' },
+					name_cn: { type: 'string' },
+					type: { type: 'string', enum: ['person', 'organization', 'product', 'technology', 'event'] },
+				},
+				required: ['name', 'name_cn', 'type'],
+			},
+		},
+		title_en: { type: 'string' },
+		title_cn: { type: 'string' },
+		summary_en: { type: 'string' },
+		summary_cn: { type: 'string' },
+		category: { type: 'string', enum: ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] },
+	},
+	required: ['tags', 'keywords', 'summary_en', 'summary_cn', 'category'],
+};
 
 function createFallbackResult(article: Article): AIAnalysisResult {
 	return {
@@ -84,8 +94,8 @@ function createFallbackResult(article: Article): AIAnalysisResult {
 	};
 }
 
-export async function callGeminiForAnalysis(article: Article, apiKey: string): Promise<AIAnalysisResult> {
-	logInfo('AI', 'Analyzing', { title: article.title.substring(0, 80) });
+export async function generateArticleAnalysis(article: Article, ai: Env['AI']): Promise<AIAnalysisResult> {
+	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	const content = article.content || article.summary || article.title;
 	const prompt = `作為一個專業的新聞分析師和翻譯師,請分析以下新聞文章並提供結構化的分析結果,包含英文和中文版本。
@@ -135,13 +145,8 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 
 請只回傳JSON,不要其他文字。`;
 
-	const rawContent = await callOpenRouter(prompt, { apiKey, maxTokens: 1000 });
-	if (!rawContent?.trim()) return createFallbackResult(article);
-
-	logInfo('AI', 'Response', { content: rawContent });
-
 	try {
-		const result = extractJson<AIAnalysisResult>(rawContent);
+		const result = await generateJson<AIAnalysisResult>(ai, prompt, { schema: ARTICLE_ANALYSIS_SCHEMA, maxTokens: 1000 });
 		if (!result || !Array.isArray(result.tags) || !Array.isArray(result.keywords) || !result.summary_en || !result.summary_cn) {
 			throw new Error('Invalid response format');
 		}
@@ -157,7 +162,7 @@ export async function callGeminiForAnalysis(article: Article, apiKey: string): P
 			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
 		};
 	} catch (error) {
-		logError('AI', 'Parse failed', { error: String(error) });
+		console.error({ tag: 'AI', msg: 'Parse failed', error: String(error) });
 		return createFallbackResult(article);
 	}
 }

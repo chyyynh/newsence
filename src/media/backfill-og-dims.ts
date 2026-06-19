@@ -1,6 +1,5 @@
 import { requireAuth } from '@shared/auth/middleware';
-import { ARTICLES_TABLE, createDbClient, type DbClient } from '@shared/db/articles';
-import { logError, logInfo } from '@shared/log';
+import { ARTICLES_TABLE, createDbClient, type DbClient } from '@shared/db';
 import { type PlatformMetadata, withOgDimensions } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
 import { measureImageDimensions } from './dimensions';
@@ -119,16 +118,16 @@ export async function handleBackfillOgDims(request: Request, env: Env): Promise<
 	if (unauth) return unauth;
 
 	const cursor = new URL(request.url).searchParams.get('cursor');
-	logInfo('BACKFILL_OG_DIMS', 'start', { cursor: cursor ?? '(begin)' });
+	console.info({ tag: 'BACKFILL_OG_DIMS', msg: 'start', cursor: cursor ?? '(begin)' });
 
 	let summary: BackfillSummary;
 	try {
 		summary = await runBackfill(env, cursor);
 	} catch (err) {
-		logError('BACKFILL_OG_DIMS', 'failed', { error: String(err) });
+		console.error({ tag: 'BACKFILL_OG_DIMS', msg: 'failed', error: String(err) });
 		return Response.json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Backfill failed' } }, { status: 500 });
 	}
 
-	logInfo('BACKFILL_OG_DIMS', 'done', summary);
+	console.info({ tag: 'BACKFILL_OG_DIMS', msg: 'done', ...summary });
 	return Response.json({ success: true, result: summary });
 }

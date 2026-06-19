@@ -1,9 +1,8 @@
 import { requireAuth } from '@shared/auth/middleware';
-import { createDbClient, type DbClient, USER_FILES_TABLE } from '@shared/db/articles';
-import { logError, logInfo } from '@shared/log';
+import { createDbClient, type DbClient, USER_FILES_TABLE } from '@shared/db';
 import type { Env } from '@shared/types';
 
-// All user-file blobs live under this prefix (ingest + generate-image).
+// All user-file blobs live under this prefix (ingest + chat-generated images).
 const GC_PREFIX = 'users/';
 
 // Steady state produces no orphans — the delete path is blob-first, so a failed
@@ -94,15 +93,15 @@ export async function handleOrphanGc(request: Request, env: Env): Promise<Respon
 	const unauth = await requireAuth(request, env);
 	if (unauth) return unauth;
 
-	logInfo('ORPHAN_GC', 'start');
+	console.info({ tag: 'ORPHAN_GC', msg: 'start' });
 	let summary: GcSummary;
 	try {
 		summary = await sweepOrphans(env);
 	} catch (err) {
-		logError('ORPHAN_GC', 'failed', { error: String(err) });
+		console.error({ tag: 'ORPHAN_GC', msg: 'failed', error: String(err) });
 		return Response.json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'GC sweep failed' } }, { status: 500 });
 	}
 
-	logInfo('ORPHAN_GC', 'done', summary);
+	console.info({ tag: 'ORPHAN_GC', msg: 'done', ...summary });
 	return Response.json({ success: true, result: summary });
 }

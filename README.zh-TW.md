@@ -52,12 +52,11 @@
 URL 進入（RSS 排程 / Twitter 排程 / YouTube 排程 / /submit）
   │
   ├─ 1. 讀取文章 ─────────── 從資料庫載入文章列
-  ├─ 2. AI 分析 ──────────── Gemini Flash Lite → 中英標題、摘要、標籤、關鍵字、實體
+  ├─ 2. AI 分析 ──────────── Workers AI Qwen3 → 中英標題、摘要、標籤、關鍵字、實體
   ├─ 3. 抓取 OG 圖片 ──────── 若缺少圖片則輕量抓取（僅前 32 KB）
-  ├─ 4. 翻譯全文 ─────────── 全文 → 繁體中文
-  ├─ 5. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
+  ├─ 4. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
   ├─    同步實體 ─────────── （條件性）將實體寫入正規化表格，建立關聯
-  ├─ 6. YouTube 精華 ─────── （僅 YouTube）從字幕生成 AI 精華段落
+  ├─ 5. YouTube 精華 ─────── （僅 YouTube）從字幕生成 AI 精華段落
   └─ 7. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文 + 實體名稱）
 ```
 
@@ -67,9 +66,8 @@ URL 進入（RSS 排程 / Twitter 排程 / YouTube 排程 / /submit）
 
 | 階段         | 模型              | 說明                                                        |
 | ------------ | ----------------- | ----------------------------------------------------------- |
-| **分析**     | Gemini Flash Lite | 文章 → 中英標題、摘要、標籤、關鍵字、分類                   |
-| **實體提取** | Gemini Flash Lite | 文章 → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
-| **全文翻譯** | Gemini Flash      | 全文內容 → 繁體中文                                         |
+| **分析**     | Workers AI Qwen3 | 文章 → 中英標題、摘要、標籤、關鍵字、分類                   |
+| **實體提取** | Workers AI Qwen3 | 文章 → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
 | **向量生成** | BGE-M3（1024 維） | 標題 + 摘要 + 全文 + 實體名稱 → 語意向量（HNSW 索引）       |
 
 實體提取與分析在同一次 LLM 呼叫中完成 — 零額外 API 成本。
@@ -81,7 +79,7 @@ URL 進入（RSS 排程 / Twitter 排程 / YouTube 排程 / /submit）
 | 運行環境     | Cloudflare Workers（V8 isolates）                   |
 | 任務編排     | Cloudflare Queues + Workflows                       |
 | 資料庫       | PostgreSQL + pgvector（透過 Cloudflare Hyperdrive） |
-| 大語言模型   | OpenRouter → Gemini Flash / Flash Lite              |
+| 大語言模型   | Cloudflare Workers AI → Qwen3                       |
 | 向量生成     | Cloudflare Workers AI → BGE-M3                      |
 | Twitter 數據 | Kaito API（第三方）                                 |
 
@@ -119,10 +117,9 @@ Workflow 會在第一次 deploy 時透過 `wrangler.jsonc` 裡的 `workflows` bi
 
 ### 4. Secrets
 
-只有 `OPENROUTER_API_KEY` 是必要的，其他都是啟用特定平台用的：
+AI 分析與向量生成都走 Workers AI binding，不需要外部 LLM secret。其他 secrets 是啟用特定平台用的：
 
 ```bash
-wrangler secret put OPENROUTER_API_KEY       # 必要 — AI 分析
 wrangler secret put KAITO_API_KEY            # 可選 — Twitter 監控
 wrangler secret put YOUTUBE_API_KEY          # 可選 — YouTube 監控
 wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # 可選 — /submit 驗證
@@ -194,9 +191,9 @@ src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
 ├── entrypoints/          # HTTP router + scheduled + queue dispatch、health
 ├── shared/               # 跨子系統共用基礎 — 下面兩條 pipeline 都用
-│   ├── db/               # Hyperdrive clients — 文章 insert/dedup helpers + scoped withClient/withTx
 │   ├── auth/             # /submit internal-token middleware + bearer session
-│   ├── openrouter.ts     # OpenRouter + embedding wrappers
+│   ├── ai.ts             # Workers AI 文字 + JSON helpers
+│   ├── db.ts             # Hyperdrive clients + article/user_file helpers
 │   ├── embedding.ts      # BGE-M3 wrapper（Workers AI）
 │   ├── platform-metadata.ts  # PlatformMetadata 聯合型別 + builders
 │   ├── scraped-content.ts    # 統一的 ScrapedContent 格式 + detectPlatformType
@@ -229,14 +226,13 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
 | `ARTICLE_QUEUE`    | `article-processing-queue-core` 的 producer |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
-| `AI`               | Workers AI（BGE-M3 向量生成）               |
+| `AI`               | Workers AI（Qwen3 分析 + BGE-M3 向量生成） |
 | `BROWSER`          | Cloudflare Browser Rendering（預留）        |
 
 Secrets（透過 `wrangler secret put` 設定）：
 
 | 變數                           | 必要 | 說明                          |
 | ------------------------------ | ---- | ----------------------------- |
-| `OPENROUTER_API_KEY`           | 是   | OpenRouter（Gemini）AI 分析用 |
 | `CORE_WORKER_INTERNAL_TOKEN`   | 否   | `/submit` 端點的 bearer token |
 | `KAITO_API_KEY`                | 否   | 啟用 Twitter 監控             |
 | `YOUTUBE_API_KEY`              | 否   | 啟用 YouTube 頻道監控         |

@@ -2,25 +2,58 @@
 // HackerNews Scraper
 // ─────────────────────────────────────────────────────────────
 
-import { logInfo } from '@shared/log';
-import type { ScrapedContent } from '@shared/scraped-content';
+import { buildMetadata, type HackerNewsMetadata, type PlatformMetadata } from '@shared/platform-metadata';
+import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
 
-export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
-interface HNItem {
-	id: number;
-	title: string;
-	url?: string;
-	author: string;
-	points: number;
-	descendants?: number;
-	type: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
-	created_at_i: number;
+export interface HnComment {
+	id?: number;
+	author?: string;
 	text?: string;
+	children?: HnComment[];
 }
 
-function buildHnMarkdown(item: HNItem): string {
-	const parts: string[] = [`# ${item.title}\n`];
+export interface HnItem {
+	id: number;
+	title?: string;
+	url?: string;
+	author?: string;
+	points?: number;
+	descendants?: number;
+	type: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
+	created_at_i?: number;
+	text?: string;
+	children?: HnComment[];
+}
+
+export function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
+	if (type === 'ask' || type === 'show' || type === 'job') return type;
+	return 'story';
+}
+
+export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
+	return {
+		itemId: item.id.toString(),
+		author: item.author ?? '',
+		points: item.points ?? 0,
+		commentCount: item.descendants ?? 0,
+		itemType: hnItemTypeForMetadata(item.type),
+		storyUrl,
+	};
+}
+
+export function buildHnPlatformMetadata(item: HnItem, storyUrl?: string | null): Extract<PlatformMetadata, { type: 'hackernews' }> {
+	return buildMetadata('hackernews', buildHnMetadata(item, storyUrl));
+}
+
+export async function fetchHnItem(itemId: string | number): Promise<HnItem> {
+	return fetchJsonWithTimeout<HnItem>(`${HN_ALGOLIA_API}/${itemId}`);
+}
+
+function buildHnMarkdown(item: HnItem): string {
+	const title = item.title || `HN Item ${item.id}`;
+	const parts: string[] = [`# ${title}\n`];
 
 	const metaParts: string[] = [];
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
@@ -37,33 +70,24 @@ function buildHnMarkdown(item: HNItem): string {
 }
 
 export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
-	logInfo('HN', 'Fetching item', { itemId });
+	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
-	const response = await fetch(`${HN_ALGOLIA_API}/${itemId}`);
-	if (!response.ok) throw new Error(`HN API error: ${response.status}`);
+	const item = await fetchHnItem(itemId);
 
-	const item: HNItem = await response.json();
-
-	let summary = item.text?.slice(0, 200) || item.title;
+	const title = item.title || `HN Item ${itemId}`;
+	let summary = item.text?.slice(0, 200) || title;
 	if (item.text && item.text.length > 200) summary += '...';
 
-	logInfo('HN', 'Item fetched', { title: item.title });
+	console.info({ tag: 'HN', msg: 'Item fetched', title });
 
 	return {
-		title: item.title || `HN Item ${itemId}`,
+		title,
 		content: buildHnMarkdown(item),
 		summary,
 		ogImageUrl: null,
 		siteName: 'Hacker News',
 		author: item.author || null,
 		publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
-		metadata: {
-			itemId: item.id.toString(),
-			points: item.points || 0,
-			commentCount: item.descendants || 0,
-			itemType: item.type,
-			author: item.author,
-			storyUrl: item.url || null,
-		},
+		metadata: { ...buildHnMetadata(item) },
 	};
 }

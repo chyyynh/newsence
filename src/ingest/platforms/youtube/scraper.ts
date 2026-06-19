@@ -2,9 +2,8 @@
 // YouTube Scraper
 // ─────────────────────────────────────────────────────────────
 
-import { logInfo, logWarn } from '@shared/log';
 import type { YouTubeMetadata } from '@shared/platform-metadata';
-import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@shared/scraped-content';
+import { fetchJsonWithTimeout, type ScrapedContent, type TranscriptSegment, type YouTubeChapter } from '@shared/web';
 
 interface YouTubeVideoItem {
 	id: string;
@@ -61,7 +60,7 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 
 async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	logInfo('YOUTUBE', 'Fetching transcript', { videoId });
+	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
 
 	const { YoutubeTranscript } = await import('youtube-transcript');
 	const items = await YoutubeTranscript.fetchTranscript(videoId);
@@ -78,22 +77,16 @@ async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptS
 	}));
 
 	const language = items[0].lang ?? null;
-	logInfo('YOUTUBE', 'Transcript fetched', { count: segments.length, language });
+	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', count: segments.length, language });
 	return { segments, language };
 }
 
 export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Promise<ScrapedContent & { metadata: YouTubeMetadata }> {
-	logInfo('YOUTUBE', 'Fetching video', { videoId });
+	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
-	const videoResponse = await fetch(
+	const videoData = await fetchJsonWithTimeout<{ items?: YouTubeVideoItem[]; error?: { message: string } }>(
 		`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,contentDetails,statistics&key=${youtubeApiKey}`,
 	);
-
-	if (!videoResponse.ok) {
-		throw new Error(`YouTube API error: HTTP ${videoResponse.status}`);
-	}
-
-	const videoData = (await videoResponse.json()) as { items?: YouTubeVideoItem[]; error?: { message: string } };
 
 	if (videoData.error) throw new Error(`YouTube API: ${videoData.error.message}`);
 	if (!videoData.items?.length) throw new Error('Video not found');
@@ -101,22 +94,6 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 	const video = videoData.items[0];
 	const snippet = video.snippet;
 	const stats = video.statistics;
-
-	// Fetch channel avatar
-	let channelAvatar: string | null = null;
-	try {
-		const channelResponse = await fetch(
-			`https://www.googleapis.com/youtube/v3/channels?id=${snippet.channelId}&part=snippet&key=${youtubeApiKey}`,
-		);
-		if (channelResponse.ok) {
-			const channelData = (await channelResponse.json()) as {
-				items?: Array<{ snippet: { thumbnails: { medium?: { url: string }; default?: { url: string } } } }>;
-			};
-			channelAvatar = channelData.items?.[0]?.snippet?.thumbnails?.medium?.url ?? null;
-		}
-	} catch (e) {
-		logWarn('YOUTUBE', 'Failed to fetch channel avatar', { error: String(e) });
-	}
 
 	const thumbnailUrl =
 		snippet.thumbnails.maxres?.url ||
@@ -132,11 +109,11 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 	try {
 		transcriptResult = await fetchTranscript(videoId);
 	} catch (e) {
-		logWarn('YOUTUBE', 'Failed to fetch transcript', { error: String(e) });
+		console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch transcript', error: String(e) });
 	}
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 
-	logInfo('YOUTUBE', 'Video fetched', { title: snippet.title });
+	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
 		title: snippet.title,
@@ -150,7 +127,6 @@ export async function scrapeYouTube(videoId: string, youtubeApiKey: string): Pro
 			videoId: video.id,
 			channelName: snippet.channelTitle,
 			channelId: snippet.channelId,
-			channelAvatar: channelAvatar ?? undefined,
 			duration: video.contentDetails.duration,
 			thumbnailUrl: thumbnailUrl ?? undefined,
 			viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,

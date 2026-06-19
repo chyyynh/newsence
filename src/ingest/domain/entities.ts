@@ -1,4 +1,3 @@
-import { logError, logInfo } from '@shared/log';
 import type { Client } from 'pg';
 
 interface ExtractedEntity {
@@ -35,9 +34,9 @@ export async function syncArticleEntities(db: Client, articleId: string, entitie
 			// article_entities_count_{insert,delete} triggers on the DB side.
 			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
 		} catch (err) {
-			logError('ENTITIES', 'Failed to sync entity', { entity: entity.name, error: String(err) });
+			console.error({ tag: 'ENTITIES', msg: 'Failed to sync entity', entity: entity.name, error: String(err) });
 		}
 	}
 
-	logInfo('ENTITIES', 'Synced', { articleId, count: entities.length });
+	console.info({ tag: 'ENTITIES', msg: 'Synced', articleId, count: entities.length });
 }
