@@ -1,8 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { handleArticleQueue, handleScheduled } from '@entry/events';
 import { routeRequest } from '@entry/http';
-import { handleArticleQueue } from '@entry/queue';
 import { type ArticleSummary, type CorpusReadItem, type CorpusReadResult, ingestUrls, readItems, searchArticles } from '@entry/rpc';
-import { handleScheduled } from '@entry/scheduled';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env, MessageBatch, QueueMessage, ScheduledEvent } from '@shared/types';
