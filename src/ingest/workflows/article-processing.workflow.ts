@@ -2,11 +2,13 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { measureImageDimensions } from '@media/dimensions';
 import {
 	ARTICLES_TABLE,
-	createDbClient,
+	type DbClient,
 	type InsertArticleData,
 	type ProcessableTable,
 	USER_FILES_TABLE,
 	upsertYoutubeTranscript,
+	withDbClient,
+	withDbTransaction,
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
@@ -14,7 +16,6 @@ import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
 import { readSourceArticleDraft, type SourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
-import type { Client } from 'pg';
 import {
 	buildEmbeddingTextForArticle,
 	buildProcessorUpdatePayload,
@@ -29,7 +30,7 @@ import {
 	saveYouTubeHighlights,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
-import { deletePdfTextArtifact, extractPdfToTextArtifact, type PdfExtractionResult, readPdfTextArtifact } from './pdf-extraction';
+import { createPdfTextArtifact, deletePdfTextArtifact, type PdfTextArtifactResult, readPdfTextArtifact } from './pdf-text-artifact';
 
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
@@ -52,6 +53,11 @@ type WorkflowParams = {
 
 type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 type SourceDraftReader = () => Promise<SourceArticleDraft>;
+type WorkflowRunContext = {
+	target: WorkflowQueueTarget;
+	table: ProcessableTable;
+	readSourceDraft: SourceDraftReader;
+};
 type ArticleShell = Article & { has_content?: boolean };
 type OgImageResult = {
 	ogImageUrl: string | null;
@@ -205,8 +211,14 @@ function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 	return target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE;
 }
 
-function targetLogContext(target: WorkflowQueueTarget, table: ProcessableTable, article: Article): Record<string, string> {
-	return target.kind === 'row' ? { article_id: target.articleId, table } : { url: article.url, table };
+function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): WorkflowRunContext {
+	return { target, table: targetTable(target), readSourceDraft: createSourceDraftReader(env, target) };
+}
+
+function targetLogContext(context: WorkflowRunContext, article: Article): Record<string, string> {
+	return context.target.kind === 'row'
+		? { article_id: context.target.articleId, table: context.table }
+		: { url: article.url, table: context.table };
 }
 
 function articleFromSourceDraft(draft: SourceArticleDraft): Article {
@@ -243,54 +255,40 @@ function createSourceDraftReader(env: Env, target: WorkflowQueueTarget): SourceD
 }
 
 async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
-	const db = await createDbClient(env);
-	try {
+	return withDbClient(env, async (db) => {
 		const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [articleId]);
 		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
 		return result.rows[0] as Article;
-	} finally {
-		await db.end();
-	}
+	});
 }
 
-async function loadTargetArticle(
-	env: Env,
-	target: WorkflowQueueTarget,
-	table: ProcessableTable,
-	fieldsForRow: string,
-	readSourceDraft: SourceDraftReader,
-): Promise<Article> {
-	if (target.kind === 'source') return articleFromSourceDraft(await readSourceDraft());
-	return fetchArticle(env, table, target.articleId, fieldsForRow);
+async function loadTargetArticle(env: Env, context: WorkflowRunContext): Promise<Article> {
+	if (context.target.kind === 'source') return articleFromSourceDraft(await context.readSourceDraft());
+	return fetchArticle(env, context.table, context.target.articleId, articleFieldsFor(context.table));
 }
 
-async function loadTargetShell(
-	env: Env,
-	target: WorkflowQueueTarget,
-	table: ProcessableTable,
-	readSourceDraft: SourceDraftReader,
-): Promise<ArticleShell> {
+async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ArticleShell> {
 	const article =
-		target.kind === 'source'
-			? articleFromSourceDraft(await readSourceDraft())
-			: await fetchArticle(env, table, target.articleId, articleShellFieldsFor(table));
+		context.target.kind === 'source'
+			? articleFromSourceDraft(await context.readSourceDraft())
+			: await fetchArticle(env, context.table, context.target.articleId, articleShellFieldsFor(context.table));
 	return { ...article, content: null };
 }
 
-function extractionMetadata(extraction: PdfExtractionResult | null): Record<string, unknown> | undefined {
-	if (!extraction) return undefined;
+function extractionMetadata(pdfTextArtifact: PdfTextArtifactResult | null): Record<string, unknown> | undefined {
+	if (!pdfTextArtifact) return undefined;
 	return {
 		extraction: {
-			status: extraction.status,
+			status: pdfTextArtifact.status,
 			parser: 'liteparse',
-			...(extraction.status === 'failed' ? {} : { chars: extraction.chars, pages: extraction.pages }),
+			...(pdfTextArtifact.status === 'failed' ? {} : { chars: pdfTextArtifact.chars, pages: pdfTextArtifact.pages }),
 		},
 	};
 }
 
-async function withPdfExtractionText(env: Env, article: Article, extraction: PdfExtractionResult | null): Promise<Article> {
-	if (!extraction?.textStorageKey) return article;
-	return { ...article, content: await readPdfTextArtifact(env, extraction.textStorageKey) };
+async function withPdfTextArtifact(env: Env, article: Article, pdfTextArtifact: PdfTextArtifactResult | null): Promise<Article> {
+	if (!pdfTextArtifact?.textStorageKey) return article;
+	return { ...article, content: await readPdfTextArtifact(env, pdfTextArtifact.textStorageKey) };
 }
 
 async function analyzeArticleAndGenerateEmbedding(
@@ -307,11 +305,11 @@ async function analyzeArticleAndGenerateEmbedding(
 
 async function stagePdfExtraction(
 	env: Env,
-	target: WorkflowQueueTarget,
-	table: ProcessableTable,
+	context: WorkflowRunContext,
 	article: ArticleShell,
 	step: WorkflowStep,
-): Promise<PdfExtractionResult | null> {
+): Promise<PdfTextArtifactResult | null> {
+	const { target, table } = context;
 	if (
 		target.kind !== 'row' ||
 		table !== USER_FILES_TABLE ||
@@ -322,19 +320,19 @@ async function stagePdfExtraction(
 	}
 
 	try {
-		const extraction = (await step.do(
+		const pdfTextArtifact = (await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => extractPdfToTextArtifact(env, target.articleId, article.storage_key as string),
-		)) as PdfExtractionResult;
+			() => createPdfTextArtifact(env, target.articleId, article.storage_key as string),
+		)) as PdfTextArtifactResult;
 		console.info({
 			tag: 'WORKFLOW',
 			msg: 'PDF extraction staged',
 			article_id: target.articleId,
-			status: extraction.status,
-			chars: extraction.chars,
+			status: pdfTextArtifact.status,
+			chars: pdfTextArtifact.chars,
 		});
-		return extraction;
+		return pdfTextArtifact;
 	} catch (error) {
 		console.warn({
 			tag: 'WORKFLOW',
@@ -395,13 +393,12 @@ async function resolveOgImageDimensions(
 
 async function prepareYoutubeHighlights(
 	env: Env,
-	target: WorkflowQueueTarget,
+	context: WorkflowRunContext,
 	article: Article,
 	sourceType: string,
 	step: WorkflowStep,
-	readSourceDraft: SourceDraftReader,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	const input = await prepareYoutubeHighlightsInput(target, article, sourceType, readSourceDraft);
+	const input = await prepareYoutubeHighlightsInput(context, article, sourceType);
 	if (!input) return null;
 
 	return (await step.do(
@@ -415,15 +412,14 @@ async function prepareYoutubeHighlights(
 }
 
 async function prepareYoutubeHighlightsInput(
-	target: WorkflowQueueTarget,
+	context: WorkflowRunContext,
 	article: Article,
 	sourceType: string,
-	readSourceDraft: SourceDraftReader,
 ): Promise<YoutubeHighlightsInput | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;
 
-	if (target.kind === 'source') {
-		const draft = await readSourceDraft();
+	if (context.target.kind === 'source') {
+		const draft = await context.readSourceDraft();
 		if (!draft.youtubeTranscript) return null;
 		return {
 			kind: 'transcript',
@@ -436,7 +432,7 @@ async function prepareYoutubeHighlightsInput(
 }
 
 async function insertFinalSourceArticle(
-	db: Awaited<ReturnType<typeof createDbClient>>,
+	db: DbClient,
 	base: InsertArticleData,
 	article: Article,
 	result: ProcessorResult,
@@ -480,35 +476,16 @@ async function insertFinalSourceArticle(
 	return articleId;
 }
 
-async function withWorkflowTransaction<T>(env: Env, rollbackContext: string, fn: (db: Client) => Promise<T>): Promise<T> {
-	const db = await createDbClient(env);
-	try {
-		await db.query('BEGIN');
-		const result = await fn(db);
-		await db.query('COMMIT');
-		return result;
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) =>
-				console.error({ tag: 'WORKFLOW', msg: `${rollbackContext} rollback failed`, error: String(rollbackError) }),
-			);
-		throw error;
-	} finally {
-		await db.end();
-	}
-}
-
 async function persistSourceTarget(
 	env: Env,
+	context: WorkflowRunContext,
 	result: ProcessorResult,
 	embedding: number[] | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
-	readSourceDraft: SourceDraftReader,
 ): Promise<string> {
-	const draft = await readSourceDraft();
+	const draft = await context.readSourceDraft();
 	const fullArticle = articleFromSourceDraft(draft);
-	return withWorkflowTransaction(env, 'source article', async (db) => {
+	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, draft.article, fullArticle, result, embedding);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
 		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
@@ -533,11 +510,11 @@ async function persistRowTarget(
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
-	pdfExtraction: PdfExtractionResult | null,
+	pdfTextArtifact: PdfTextArtifactResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
-	return withWorkflowTransaction(env, 'row workflow', async (db) => {
-		const extractedPdfText = pdfExtraction?.textStorageKey ? await readPdfTextArtifact(env, pdfExtraction.textStorageKey) : null;
+	return withDbTransaction(env, 'row workflow', async (db) => {
+		const extractedPdfText = pdfTextArtifact?.textStorageKey ? await readPdfTextArtifact(env, pdfTextArtifact.textStorageKey) : null;
 		const finalResult: ProcessorResult = {
 			...result,
 			updateData: {
@@ -546,7 +523,7 @@ async function persistRowTarget(
 			},
 		};
 
-		await persistProcessorResult(target.articleId, article, finalResult, { db, table }, embedding, extractionMetadata(pdfExtraction));
+		await persistProcessorResult(target.articleId, article, finalResult, { db, table }, embedding, extractionMetadata(pdfTextArtifact));
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
@@ -556,33 +533,37 @@ async function persistRowTarget(
 
 async function persistTarget(
 	env: Env,
-	target: WorkflowQueueTarget,
-	table: ProcessableTable,
+	context: WorkflowRunContext,
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
-	pdfExtraction: PdfExtractionResult | null,
+	pdfTextArtifact: PdfTextArtifactResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
-	readSourceDraft: SourceDraftReader,
 ): Promise<string> {
-	if (target.kind === 'source') return persistSourceTarget(env, result, embedding, youtubeHighlights, readSourceDraft);
-	return persistRowTarget(env, target, table, article, result, embedding, pdfExtraction, youtubeHighlights);
+	if (context.target.kind === 'source') return persistSourceTarget(env, context, result, embedding, youtubeHighlights);
+	return persistRowTarget(env, context.target, context.table, article, result, embedding, pdfTextArtifact, youtubeHighlights);
 }
 
 async function cleanupTargetArtifacts(
 	env: Env,
-	target: WorkflowQueueTarget,
-	pdfExtraction: PdfExtractionResult | null,
+	context: WorkflowRunContext,
+	pdfTextArtifact: PdfTextArtifactResult | null,
 	step: WorkflowStep,
 ): Promise<void> {
-	if (!pdfExtraction?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.sourceArticle)) return;
+	const { target } = context;
+	if (!pdfTextArtifact?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.sourceArticle)) return;
 
 	await step.do('cleanup-workflow-artifacts', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
-		cleanupWorkflowArtifacts(env, target, pdfExtraction),
+		cleanupWorkflowArtifacts(env, context, pdfTextArtifact),
 	);
 }
 
-async function cleanupWorkflowArtifacts(env: Env, target: WorkflowQueueTarget, pdfExtraction: PdfExtractionResult | null): Promise<void> {
+async function cleanupWorkflowArtifacts(
+	env: Env,
+	context: WorkflowRunContext,
+	pdfTextArtifact: PdfTextArtifactResult | null,
+): Promise<void> {
+	const { target } = context;
 	const failures: Array<{ artifact: string; key: string; error: string }> = [];
 	const deleteArtifact = async (artifact: string, key: string, deleteFn: () => Promise<void>) => {
 		try {
@@ -592,8 +573,8 @@ async function cleanupWorkflowArtifacts(env: Env, target: WorkflowQueueTarget, p
 		}
 	};
 
-	if (pdfExtraction?.textStorageKey) {
-		await deleteArtifact('pdf_text', pdfExtraction.textStorageKey, () => deletePdfTextArtifact(env, pdfExtraction.textStorageKey!));
+	if (pdfTextArtifact?.textStorageKey) {
+		await deleteArtifact('pdf_text', pdfTextArtifact.textStorageKey, () => deletePdfTextArtifact(env, pdfTextArtifact.textStorageKey!));
 	}
 
 	if (target.kind === 'source' && 'r2Key' in target.sourceArticle) {
@@ -605,30 +586,24 @@ async function cleanupWorkflowArtifacts(env: Env, target: WorkflowQueueTarget, p
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
-		const { target } = event.payload;
-		const table = targetTable(target);
-		const readSourceDraft = createSourceDraftReader(this.env, target);
+		const context = createWorkflowRunContext(this.env, event.payload.target);
 		const article = (await step.do(
-			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
+			context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => loadTargetShell(this.env, target, table, readSourceDraft),
+			() => loadTargetShell(this.env, context),
 		)) as ArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
-		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(target, table, article) });
+		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });
 
-		const pdfExtraction = await stagePdfExtraction(this.env, target, table, article, step);
+		const pdfTextArtifact = await stagePdfExtraction(this.env, context, article, step);
 
 		const { processorResult, embedding } = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const fullArticle = await withPdfExtractionText(
-					this.env,
-					await loadTargetArticle(this.env, target, table, articleFieldsFor(table), readSourceDraft),
-					pdfExtraction,
-				);
-				return analyzeArticleAndGenerateEmbedding(this.env, fullArticle, sourceType, table);
+				const fullArticle = await withPdfTextArtifact(this.env, await loadTargetArticle(this.env, context), pdfTextArtifact);
+				return analyzeArticleAndGenerateEmbedding(this.env, fullArticle, sourceType, context.table);
 			},
 		)) as ArticleAnalysisStepResult;
 
@@ -637,17 +612,16 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			await resolveWorkflowOgImagePatch(this.env, article, processorResult, step),
 		);
 
-		const youtubeHighlights = await prepareYoutubeHighlights(this.env, target, article, sourceType, step, readSourceDraft);
+		const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, sourceType, step);
 		const articleId = (await step.do(
-			target.kind === 'source' ? 'insert-final-article' : 'update-db',
+			context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() =>
-				persistTarget(this.env, target, table, article, finalProcessorResult, embedding, pdfExtraction, youtubeHighlights, readSourceDraft),
+			() => persistTarget(this.env, context, article, finalProcessorResult, embedding, pdfTextArtifact, youtubeHighlights),
 		)) as string;
 
-		await cleanupTargetArtifacts(this.env, target, pdfExtraction, step);
+		await cleanupTargetArtifacts(this.env, context, pdfTextArtifact, step);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(target, table, article) });
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(context, article) });
 		return { success: true, article_id: articleId };
 	}
 }

@@ -1,4 +1,4 @@
-import { createDbClient } from '@shared/db';
+import { withDbClient } from '@shared/db';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout } from '@shared/web';
 import type { Client } from 'pg';
@@ -132,8 +132,7 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
-	const db = await createDbClient(env);
-	try {
+	await withDbClient(env, async (db) => {
 		const users = await getTwitterUsersToMonitor(db);
 		if (!users.length) {
 			console.info({ tag: 'TWITTER', msg: 'No twitter_user entries in RssList' });
@@ -177,7 +176,5 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 			validUsers: monitoredUsers.length,
 			batches: batches.length,
 		});
-	} finally {
-		await db.end();
-	}
+	});
 }

@@ -1,5 +1,5 @@
 import { CORE_TEXT_MODEL, generateJson } from '@shared/ai';
-import { createDbClient, type DbClient } from '@shared/db';
+import { type DbClient, withDbClient } from '@shared/db';
 import type { Article, Env } from '@shared/types';
 import type { TranscriptSegment } from '@shared/web';
 
@@ -97,8 +97,7 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 	const videoId = article.platform_metadata.data.videoId;
 	if (!videoId) return null;
 
-	const db = await createDbClient(env);
-	try {
+	return withDbClient(env, async (db) => {
 		const result = await db.query<{
 			transcript: Array<{ startTime: number; endTime: number; text: string }> | null;
 			ai_highlights: unknown;
@@ -107,9 +106,7 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
 		return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
-	} finally {
-		await db.end();
-	}
+	});
 }
 
 export async function prepareYouTubeHighlightsFromTranscript(

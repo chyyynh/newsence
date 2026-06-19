@@ -1,9 +1,9 @@
 import {
-	createDbClient,
 	type InsertArticleData,
 	type ProcessableTable,
 	resolveProcessableTable,
 	USER_FILES_TABLE,
+	withDbClient,
 	type YoutubeTranscriptRow,
 } from './db';
 import type { TwitterMedia } from './platform-metadata';
@@ -273,22 +273,18 @@ async function createMonitorWorkflow(env: Env, workflowId: string, target: Workf
 }
 
 async function getUserFileWorkflowInstanceId(env: Env, userFileId: string): Promise<string | null> {
-	const db = await createDbClient(env);
-	try {
+	return withDbClient(env, async (db) => {
 		const result = await db.query(
 			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
 			[userFileId],
 		);
 		const row = result.rows[0] as { instance_id?: string | null } | undefined;
 		return row?.instance_id ?? null;
-	} finally {
-		await db.end();
-	}
+	});
 }
 
 async function recordUserFileWorkflowInstanceId(env: Env, userFileId: string, instanceId: string): Promise<void> {
-	const db = await createDbClient(env);
-	try {
+	return withDbClient(env, async (db) => {
 		const metadata = JSON.stringify({
 			workflow: {
 				monitor_instance_id: instanceId,
@@ -299,7 +295,5 @@ async function recordUserFileWorkflowInstanceId(env: Env, userFileId: string, in
 			metadata,
 			userFileId,
 		]);
-	} finally {
-		await db.end();
-	}
+	});
 }

@@ -1,11 +1,11 @@
-import { createDbClient, type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '@shared/db';
+import { type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript, withDbClient } from '@shared/db';
 import { extensionFromMime, PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
 import { detectPlatformType, normalizeUrl, type ScrapedContent } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
-import { persistBlobRow, putUserUpload } from './blob-storage';
+import { persistBlobRow, putUserUpload } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 
 const EXIST_COLS =
@@ -63,61 +63,60 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 		return { error: 'Content too short' };
 	}
 
-	const db = await createDbClient(env);
 	try {
-		const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
-		const platformMetadataToStore = normalizedPlatformMetadata
-			? {
-					...normalizedPlatformMetadata,
-					ogImageWidth: scraped.ogImageWidth ?? null,
-					ogImageHeight: scraped.ogImageHeight ?? null,
-				}
-			: null;
+		return await withDbClient(env, async (db) => {
+			const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
+			const platformMetadataToStore = normalizedPlatformMetadata
+				? {
+						...normalizedPlatformMetadata,
+						ogImageWidth: scraped.ogImageWidth ?? null,
+						ogImageHeight: scraped.ogImageHeight ?? null,
+					}
+				: null;
 
-		const userFile = await insertUserFile(db, {
-			url,
-			normalizedUrl: url,
-			title: scraped.title,
-			source: scraped.siteName || 'External',
-			publishedDate: scraped.publishedDate || new Date().toISOString(),
-			summary: scraped.summary || '',
-			platformType,
-			content: scraped.content || null,
-			ogImageUrl: scraped.ogImageUrl || null,
-			platformMetadata: platformMetadataToStore,
-			userId,
-		});
+			const userFile = await insertUserFile(db, {
+				url,
+				normalizedUrl: url,
+				title: scraped.title,
+				source: scraped.siteName || 'External',
+				publishedDate: scraped.publishedDate || new Date().toISOString(),
+				summary: scraped.summary || '',
+				platformType,
+				content: scraped.content || null,
+				ogImageUrl: scraped.ogImageUrl || null,
+				platformMetadata: platformMetadataToStore,
+				userId,
+			});
 
-		if (!userFile) {
-			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
-			return { error: 'DB insert failed' };
-		}
-
-		// ON CONFLICT path: row pre-existed, skip post-insert side effects.
-		if (!userFile.created) {
-			return { kind: 'page', row: userFile };
-		}
-
-		if (scraped.youtubeTranscript) {
-			try {
-				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-			} catch (transcriptErr) {
-				console.error({
-					tag: 'YOUTUBE',
-					msg: 'Failed to save transcript',
-					videoId: scraped.youtubeTranscript.videoId,
-					error: String(transcriptErr),
-				});
+			if (!userFile) {
+				console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
+				return { error: 'DB insert failed' };
 			}
-		}
 
-		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
-		return { kind: 'page', row: userFile };
+			// ON CONFLICT path: row pre-existed, skip post-insert side effects.
+			if (!userFile.created) {
+				return { kind: 'page', row: userFile };
+			}
+
+			if (scraped.youtubeTranscript) {
+				try {
+					await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
+				} catch (transcriptErr) {
+					console.error({
+						tag: 'YOUTUBE',
+						msg: 'Failed to save transcript',
+						videoId: scraped.youtubeTranscript.videoId,
+						error: String(transcriptErr),
+					});
+				}
+			}
+
+			console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
+			return { kind: 'page', row: userFile };
+		});
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
 		return { error: 'DB insert failed' };
-	} finally {
-		await db.end();
 	}
 }
 
@@ -235,8 +234,7 @@ async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): 
 async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
-	const db = await createDbClient(env);
-	try {
+	const existingRow = await withDbClient(env, async (db) => {
 		const existing = await db.query<ExistingUserFileRow>(
 			`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE}
 			 WHERE user_id = $1
@@ -244,11 +242,10 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 			 LIMIT 1`,
 			[userId, url],
 		);
-		if (existing.rows.length > 0) {
-			return returnExisting(url, existing.rows[0], env);
-		}
-	} finally {
-		await db.end();
+		return existing.rows[0] ?? null;
+	});
+	if (existingRow) {
+		return returnExisting(url, existingRow, env);
 	}
 
 	let result: InsertOutcome;

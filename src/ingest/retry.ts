@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, createDbClient, USER_FILES_TABLE } from '@shared/db';
+import { ARTICLES_TABLE, USER_FILES_TABLE, withDbClient } from '@shared/db';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 
@@ -10,8 +10,7 @@ const RETRY_BATCH_SIZE = 20;
 
 export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RETRY', msg: 'start' });
-	const db = await createDbClient(env);
-	try {
+	await withDbClient(env, async (db) => {
 		const table = ARTICLES_TABLE;
 		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
@@ -53,7 +52,5 @@ export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise
 			userFiles: userFileIds.length,
 			batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
 		});
-	} finally {
-		await db.end();
-	}
+	});
 }

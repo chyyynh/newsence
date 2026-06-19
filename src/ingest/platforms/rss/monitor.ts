@@ -1,10 +1,9 @@
-import { ARTICLES_TABLE, createDbClient } from '@shared/db';
+import { ARTICLES_TABLE, type DbClient, withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
 import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
-import type { Client } from 'pg';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web-scraper';
 import {
@@ -164,7 +163,7 @@ function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
 	return entries;
 }
 
-async function fetchExistingRecords(db: Client, urls: string[]): Promise<ExistingRecord[]> {
+async function fetchExistingRecords(db: DbClient, urls: string[]): Promise<ExistingRecord[]> {
 	const dedupBatchSize = 50;
 	const out: ExistingRecord[] = [];
 	for (let i = 0; i < urls.length; i += dedupBatchSize) {
@@ -177,7 +176,7 @@ async function fetchExistingRecords(db: Client, urls: string[]): Promise<Existin
 
 /** Upgrade a single existing article's source/metadata when this feed outranks it. */
 async function upgradeExistingArticleSource(
-	db: Client,
+	db: DbClient,
 	feed: RSSFeed,
 	feedPriority: number,
 	existing: ExistingRecord,
@@ -211,7 +210,7 @@ async function upgradeExistingArticleSource(
 	console.info({ tag: 'RSS', msg: 'Upgraded article source', url: normalized, from: existing.source, to: feed.name });
 }
 
-async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
+async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
 	let res: Response;
@@ -265,8 +264,7 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const db = await createDbClient(env);
-	try {
+	await withDbClient(env, async (db) => {
 		const parser = new XMLParser({ ignoreAttributes: false });
 
 		// Pass 1: default sources → articles table
@@ -281,7 +279,5 @@ export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<v
 		}
 
 		console.info({ tag: 'RSS', msg: 'end' });
-	} finally {
-		await db.end();
-	}
+	});
 }

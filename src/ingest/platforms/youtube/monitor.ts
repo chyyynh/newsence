@@ -1,4 +1,4 @@
-import { createDbClient, getExistingUrls } from '@shared/db';
+import { getExistingUrls, withDbClient } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
@@ -118,8 +118,7 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const db = await createDbClient(env);
-	try {
+	await withDbClient(env, async (db) => {
 		const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at, avatar_url FROM "RssList" WHERE type = $1`, [
 			'youtube_channel',
 		]);
@@ -139,7 +138,5 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 			}
 		}
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'end', inserted: totalInserted, channels: channels.length });
-	} finally {
-		await db.end();
-	}
+	});
 }
