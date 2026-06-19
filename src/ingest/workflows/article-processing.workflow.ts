@@ -61,6 +61,11 @@ type OgImageResult = {
 	ogImageWidth: number | null;
 	ogImageHeight: number | null;
 };
+type OgImageDimensions = Awaited<ReturnType<typeof measureImageDimensions>>;
+type OgImagePatch = {
+	ogImageUrl: string | null;
+	ogImageDimensions: OgImageDimensions | null;
+};
 
 async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 	try {
@@ -112,12 +117,18 @@ async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 
 		return {
 			ogImageUrl,
-			ogImageWidth: rawW ? parseInt(rawW, 10) || null : null,
-			ogImageHeight: rawH ? parseInt(rawH, 10) || null : null,
+			ogImageWidth: parsePositiveInt(rawW),
+			ogImageHeight: parsePositiveInt(rawH),
 		};
 	} catch {
 		return null;
 	}
+}
+
+function parsePositiveInt(raw: string | null): number | null {
+	if (!raw) return null;
+	const parsed = parseInt(raw, 10);
+	return parsed > 0 ? parsed : null;
 }
 
 function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
@@ -278,19 +289,47 @@ async function stagePdfExtraction(
 	}
 }
 
-function mergeProcessorResult(
-	result: ProcessorResult,
-	fetchedOgImageUrl: unknown,
-	ogImageDimensions: Awaited<ReturnType<typeof measureImageDimensions>> | null,
-): ProcessorResult {
+function mergeProcessorResult(result: ProcessorResult, { ogImageUrl, ogImageDimensions }: OgImagePatch): ProcessorResult {
 	return {
 		...result,
 		updateData: {
 			...result.updateData,
-			...(typeof fetchedOgImageUrl === 'string' ? { og_image_url: fetchedOgImageUrl } : {}),
+			...(ogImageUrl ? { og_image_url: ogImageUrl } : {}),
 		},
 		...(ogImageDimensions ? { ogImageDimensions } : {}),
 	};
+}
+
+async function resolveOgImagePatch(env: Env, article: Article, result: ProcessorResult, step: WorkflowStep): Promise<OgImagePatch> {
+	const fetchedOgImage =
+		!article.og_image_url && !result.updateData.og_image_url
+			? ((await step.do('fetch-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' }, () =>
+					fetchOgImage(article.url),
+				)) as OgImageResult | null)
+			: null;
+
+	const effectiveOgImageUrl = result.updateData.og_image_url ?? article.og_image_url ?? fetchedOgImage?.ogImageUrl ?? null;
+	const ogImageDimensions = await resolveOgImageDimensions(env, article, effectiveOgImageUrl, fetchedOgImage, step);
+
+	return { ogImageUrl: fetchedOgImage?.ogImageUrl ?? null, ogImageDimensions };
+}
+
+async function resolveOgImageDimensions(
+	env: Env,
+	article: Article,
+	ogImageUrl: string | null,
+	fetchedOgImage: OgImageResult | null,
+	step: WorkflowStep,
+): Promise<OgImageDimensions | null> {
+	if (!ogImageUrl || hasOgDimensions(article.platform_metadata)) return null;
+
+	if (fetchedOgImage?.ogImageUrl === ogImageUrl && fetchedOgImage.ogImageWidth && fetchedOgImage.ogImageHeight) {
+		return { width: fetchedOgImage.ogImageWidth, height: fetchedOgImage.ogImageHeight };
+	}
+
+	return (await step.do('measure-og-dimensions', { retries: { limit: 1, delay: '3 seconds' }, timeout: '15 seconds' }, () =>
+		measureImageDimensions(env, ogImageUrl),
+	)) as OgImageDimensions | null;
 }
 
 async function prepareYoutubeHighlights(
@@ -505,23 +544,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as ProcessorResult;
 
-		const fetchedOgImageUrl =
-			!article.og_image_url && !processorResult.updateData.og_image_url
-				? await step.do('fetch-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' }, async () => {
-						const ogResult = await fetchOgImage(article.url);
-						return ogResult?.ogImageUrl ?? null;
-					})
-				: null;
-
-		const effectiveOgImageUrl = processorResult.updateData.og_image_url ?? article.og_image_url ?? fetchedOgImageUrl;
-		const ogImageDimensions =
-			effectiveOgImageUrl && !hasOgDimensions(article.platform_metadata)
-				? await step.do('measure-og-dimensions', { retries: { limit: 1, delay: '3 seconds' }, timeout: '15 seconds' }, async () =>
-						measureImageDimensions(this.env, effectiveOgImageUrl),
-					)
-				: null;
-
-		const finalProcessorResult = mergeProcessorResult(processorResult, fetchedOgImageUrl, ogImageDimensions);
+		const finalProcessorResult = mergeProcessorResult(processorResult, await resolveOgImagePatch(this.env, article, processorResult, step));
 
 		const embedding = (await step.do(
 			'generate-embedding',
