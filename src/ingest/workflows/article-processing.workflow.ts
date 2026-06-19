@@ -469,6 +469,25 @@ async function insertFinalSourceArticle(
 	return articleId;
 }
 
+async function withWorkflowTransaction<T>(env: Env, rollbackContext: string, fn: (db: Client) => Promise<T>): Promise<T> {
+	const db = await createDbClient(env);
+	try {
+		await db.query('BEGIN');
+		const result = await fn(db);
+		await db.query('COMMIT');
+		return result;
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) =>
+				console.error({ tag: 'WORKFLOW', msg: `${rollbackContext} rollback failed`, error: String(rollbackError) }),
+			);
+		throw error;
+	} finally {
+		await db.end();
+	}
+}
+
 async function persistSourceTarget(
 	env: Env,
 	result: ProcessorResult,
@@ -478,9 +497,7 @@ async function persistSourceTarget(
 ): Promise<string> {
 	const draft = await readSourceDraft();
 	const fullArticle = articleFromSourceDraft(draft);
-	const db = await createDbClient(env);
-	try {
-		await db.query('BEGIN');
+	return withWorkflowTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, draft.article, fullArticle, result, embedding);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
 		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
@@ -494,16 +511,8 @@ async function persistSourceTarget(
 				raw: draft.twitterSourceEvent.raw,
 			});
 		}
-		await db.query('COMMIT');
 		return articleId;
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'WORKFLOW', msg: 'source article rollback failed', error: String(rollbackError) }));
-		throw error;
-	} finally {
-		await db.end();
-	}
+	});
 }
 
 async function persistRowTarget(
@@ -516,9 +525,7 @@ async function persistRowTarget(
 	pdfExtraction: PdfExtractionResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
-	const db = await createDbClient(env);
-	try {
-		await db.query('BEGIN');
+	return withWorkflowTransaction(env, 'row workflow', async (db) => {
 		const extractedPdfText = pdfExtraction?.textStorageKey ? await readPdfTextArtifact(env, pdfExtraction.textStorageKey) : null;
 		const finalResult: ProcessorResult = {
 			...result,
@@ -532,16 +539,8 @@ async function persistRowTarget(
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.article_id, finalResult.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
-		await db.query('COMMIT');
 		return target.article_id;
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'WORKFLOW', msg: 'row workflow rollback failed', error: String(rollbackError) }));
-		throw error;
-	} finally {
-		await db.end();
-	}
+	});
 }
 
 async function persistTarget(
