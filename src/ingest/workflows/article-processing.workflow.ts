@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { measureImageDimensions } from '@media/dimensions';
 import {
+	ARTICLES_TABLE,
 	createDbClient,
 	type InsertArticleData,
 	type ProcessableTable,
@@ -37,7 +38,6 @@ import { deletePdfTextArtifact, extractPdfToTextArtifact, type PdfExtractionResu
 const ARTICLE_FIELDS_FOR_ARTICLES =
 	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
 
-// user_files carries the same editorial payload under different column names.
 const ARTICLE_FIELDS_FOR_USER_FILES =
 	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
 
@@ -50,16 +50,58 @@ const ARTICLE_SHELL_FIELDS_FOR_USER_FILES =
 const EMBEDDING_FIELDS_FOR_ARTICLES = 'id, title, summary, content, tags, keywords';
 const EMBEDDING_FIELDS_FOR_USER_FILES = 'id, title, summary, extracted_text AS content, tags, keywords';
 
-function articleFieldsFor(table: string): string {
+type WorkflowParams = {
+	article_id?: string;
+	source_article?: SourceArticleRef;
+	target_table?: ProcessableTable;
+};
+
+type RowWorkflowTarget = {
+	kind: 'row';
+	articleId: string;
+	table: ProcessableTable;
+	isUserFile: boolean;
+};
+
+type SourceWorkflowTarget = {
+	kind: 'source';
+	sourceArticle: SourceArticleRef;
+};
+
+type WorkflowTarget = RowWorkflowTarget | SourceWorkflowTarget;
+type ArticleShell = Article & { has_content?: boolean };
+
+function articleFieldsFor(table: ProcessableTable): string {
 	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
 }
 
-function articleShellFieldsFor(table: string): string {
+function articleShellFieldsFor(table: ProcessableTable): string {
 	return table === USER_FILES_TABLE ? ARTICLE_SHELL_FIELDS_FOR_USER_FILES : ARTICLE_SHELL_FIELDS_FOR_ARTICLES;
 }
 
-function embeddingFieldsFor(table: string): string {
+function embeddingFieldsFor(table: ProcessableTable): string {
 	return table === USER_FILES_TABLE ? EMBEDDING_FIELDS_FOR_USER_FILES : EMBEDDING_FIELDS_FOR_ARTICLES;
+}
+
+function workflowTargetFromPayload(payload: WorkflowParams): WorkflowTarget {
+	if (payload.source_article) return { kind: 'source', sourceArticle: payload.source_article };
+	if (!payload.article_id) throw new Error('article_id is required');
+
+	const table = resolveProcessableTable(payload.target_table);
+	return {
+		kind: 'row',
+		articleId: payload.article_id,
+		table,
+		isUserFile: table === USER_FILES_TABLE,
+	};
+}
+
+function targetTable(target: WorkflowTarget): ProcessableTable {
+	return target.kind === 'row' ? target.table : ARTICLES_TABLE;
+}
+
+function targetLogContext(target: WorkflowTarget, article: Article): Record<string, string> {
+	return target.kind === 'row' ? { article_id: target.articleId, table: target.table } : { url: article.url, table: ARTICLES_TABLE };
 }
 
 async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
@@ -71,30 +113,6 @@ async function fetchArticle(env: Env, table: ProcessableTable, articleId: string
 	} finally {
 		await db.end();
 	}
-}
-
-type WorkflowParams = {
-	article_id?: string;
-	source_article?: SourceArticleRef;
-	target_table?: ProcessableTable;
-};
-
-type ArticleShell = Article & { has_content?: boolean };
-
-function extractionMetadata(extraction: PdfExtractionResult | null): Record<string, unknown> | undefined {
-	if (!extraction) return undefined;
-	return {
-		extraction: {
-			status: extraction.status,
-			parser: 'liteparse',
-			...(extraction.status === 'failed' ? {} : { chars: extraction.chars, pages: extraction.pages }),
-		},
-	};
-}
-
-async function withPdfExtractionText(env: Env, article: Article, extraction: PdfExtractionResult | null): Promise<Article> {
-	if (!extraction?.textStorageKey) return article;
-	return { ...article, content: await readPdfTextArtifact(env, extraction.textStorageKey) };
 }
 
 async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<SourceArticleDraft> {
@@ -124,6 +142,123 @@ function articleFromSourceDraft(draft: SourceArticleDraft): Article {
 		og_image_url: data.ogImageUrl,
 		platform_metadata: data.platformMetadata as Article['platform_metadata'],
 	};
+}
+
+async function loadTargetArticle(env: Env, target: WorkflowTarget, fieldsForRow: string): Promise<Article> {
+	if (target.kind === 'source') return articleFromSourceDraft(await readSourceArticleDraft(env, target.sourceArticle));
+	return fetchArticle(env, target.table, target.articleId, fieldsForRow);
+}
+
+async function loadTargetShell(env: Env, target: WorkflowTarget): Promise<ArticleShell> {
+	const article =
+		target.kind === 'source'
+			? articleFromSourceDraft(await readSourceArticleDraft(env, target.sourceArticle))
+			: await fetchArticle(env, target.table, target.articleId, articleShellFieldsFor(target.table));
+	return { ...article, content: null };
+}
+
+function extractionMetadata(extraction: PdfExtractionResult | null): Record<string, unknown> | undefined {
+	if (!extraction) return undefined;
+	return {
+		extraction: {
+			status: extraction.status,
+			parser: 'liteparse',
+			...(extraction.status === 'failed' ? {} : { chars: extraction.chars, pages: extraction.pages }),
+		},
+	};
+}
+
+async function withPdfExtractionText(env: Env, article: Article, extraction: PdfExtractionResult | null): Promise<Article> {
+	if (!extraction?.textStorageKey) return article;
+	return { ...article, content: await readPdfTextArtifact(env, extraction.textStorageKey) };
+}
+
+async function stagePdfExtraction(
+	env: Env,
+	target: WorkflowTarget,
+	article: ArticleShell,
+	step: WorkflowStep,
+): Promise<PdfExtractionResult | null> {
+	if (
+		target.kind !== 'row' ||
+		!target.isUserFile ||
+		article.has_content ||
+		!isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey: article.storage_key })
+	) {
+		return null;
+	}
+
+	try {
+		const extraction = (await step.do(
+			'extract-pdf-text',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => extractPdfToTextArtifact(env, target.articleId, article.storage_key as string),
+		)) as PdfExtractionResult;
+		console.info({
+			tag: 'WORKFLOW',
+			msg: 'PDF extraction staged',
+			article_id: target.articleId,
+			status: extraction.status,
+			chars: extraction.chars,
+		});
+		return extraction;
+	} catch (error) {
+		console.warn({
+			tag: 'WORKFLOW',
+			msg: 'PDF extraction failed, continuing without content',
+			article_id: target.articleId,
+			error: String(error),
+		});
+		return { status: 'failed', chars: 0, pages: 0 };
+	}
+}
+
+function mergeProcessorResult(
+	result: ProcessorResult,
+	fetchedOgImageUrl: unknown,
+	ogImageDimensions: Awaited<ReturnType<typeof measureImageDimensions>> | null,
+): ProcessorResult {
+	return {
+		...result,
+		updateData: {
+			...result.updateData,
+			...(typeof fetchedOgImageUrl === 'string' ? { og_image_url: fetchedOgImageUrl } : {}),
+		},
+		...(ogImageDimensions ? { ogImageDimensions } : {}),
+	};
+}
+
+async function prepareYoutubeHighlights(
+	env: Env,
+	target: WorkflowTarget,
+	article: Article,
+	sourceType: string,
+	step: WorkflowStep,
+): Promise<YouTubeHighlightsUpdate | null> {
+	if (article.platform_metadata?.type !== 'youtube') return null;
+
+	if (target.kind === 'source') {
+		return (await step.do(
+			'generate-youtube-highlights',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			async () => {
+				const draft = await readSourceArticleDraft(env, target.sourceArticle);
+				if (!draft.youtubeTranscript) return null;
+				return prepareYouTubeHighlightsFromTranscript(
+					env,
+					article.platform_metadata!.data.videoId,
+					draft.youtubeTranscript.segments as TranscriptSegment[],
+				);
+			},
+		)) as YouTubeHighlightsUpdate | null;
+	}
+
+	if (sourceType !== 'youtube') return null;
+	return (await step.do(
+		'generate-youtube-highlights',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+		() => prepareYouTubeHighlights(env, article),
+	)) as YouTubeHighlightsUpdate | null;
 }
 
 async function insertFinalSourceArticle(
@@ -171,65 +306,143 @@ async function insertFinalSourceArticle(
 	return articleId;
 }
 
+async function persistSourceTarget(
+	env: Env,
+	target: SourceWorkflowTarget,
+	result: ProcessorResult,
+	embedding: number[] | null,
+	youtubeHighlights: YouTubeHighlightsUpdate | null,
+): Promise<string> {
+	const draft = await readSourceArticleDraft(env, target.sourceArticle);
+	const fullArticle = articleFromSourceDraft(draft);
+	const db = await createDbClient(env);
+	try {
+		await db.query('BEGIN');
+		const articleId = await insertFinalSourceArticle(db, draft.article, fullArticle, result, embedding);
+		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
+		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
+		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
+		if (draft.twitterSourceEvent) {
+			await upsertTwitterSourceEvent(db, draft.twitterSourceEvent.tweet, {
+				articleId,
+				eventType: draft.twitterSourceEvent.eventType,
+				text: draft.twitterSourceEvent.text,
+				media: draft.twitterSourceEvent.media,
+				raw: draft.twitterSourceEvent.raw,
+			});
+		}
+		await db.query('COMMIT');
+		return articleId;
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'WORKFLOW', msg: 'source article rollback failed', error: String(rollbackError) }));
+		throw error;
+	} finally {
+		await db.end();
+	}
+}
+
+async function persistRowTarget(
+	env: Env,
+	target: RowWorkflowTarget,
+	article: Article,
+	result: ProcessorResult,
+	embedding: number[] | null,
+	pdfExtraction: PdfExtractionResult | null,
+	youtubeHighlights: YouTubeHighlightsUpdate | null,
+): Promise<string> {
+	const db = await createDbClient(env);
+	try {
+		await db.query('BEGIN');
+		const extractedPdfText = pdfExtraction?.textStorageKey ? await readPdfTextArtifact(env, pdfExtraction.textStorageKey) : null;
+		const finalResult: ProcessorResult = {
+			...result,
+			updateData: {
+				...result.updateData,
+				...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
+			},
+		};
+
+		await persistProcessorResult(
+			target.articleId,
+			article,
+			finalResult,
+			{ db, table: target.table },
+			embedding,
+			extractionMetadata(pdfExtraction),
+		);
+		if (!target.isUserFile && finalResult.updateData.entities?.length)
+			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
+		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
+		await db.query('COMMIT');
+		return target.articleId;
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'WORKFLOW', msg: 'row workflow rollback failed', error: String(rollbackError) }));
+		throw error;
+	} finally {
+		await db.end();
+	}
+}
+
+async function persistTarget(
+	env: Env,
+	target: WorkflowTarget,
+	article: Article,
+	result: ProcessorResult,
+	embedding: number[] | null,
+	pdfExtraction: PdfExtractionResult | null,
+	youtubeHighlights: YouTubeHighlightsUpdate | null,
+): Promise<string> {
+	if (target.kind === 'source') return persistSourceTarget(env, target, result, embedding, youtubeHighlights);
+	return persistRowTarget(env, target, article, result, embedding, pdfExtraction, youtubeHighlights);
+}
+
+async function cleanupTargetArtifacts(
+	env: Env,
+	target: WorkflowTarget,
+	pdfExtraction: PdfExtractionResult | null,
+	step: WorkflowStep,
+): Promise<void> {
+	if (pdfExtraction?.textStorageKey) {
+		await step.do('cleanup-pdf-text-artifact', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
+			deletePdfTextArtifact(env, pdfExtraction.textStorageKey!),
+		);
+	}
+
+	if (target.kind === 'source' && 'r2Key' in target.sourceArticle) {
+		await step.do('cleanup-source-article-draft', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
+			env.R2.delete(target.sourceArticle.r2Key),
+		);
+	}
+}
+
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
-		if (event.payload.source_article) {
-			return this.runSourceArticle(event.payload.source_article, step);
-		}
-
-		const { article_id, target_table } = event.payload;
-		if (!article_id) throw new Error('article_id is required');
-		const table = resolveProcessableTable(target_table);
-		const isUserFile = table === USER_FILES_TABLE;
-
-		console.info({ tag: 'WORKFLOW', msg: 'Starting', article_id, table });
-
+		const target = workflowTargetFromPayload(event.payload);
 		const article = (await step.do(
-			'fetch-article-shell',
+			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => fetchArticle(this.env, table, article_id, articleShellFieldsFor(table)),
+			() => loadTargetShell(this.env, target),
 		)) as ArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
-		let pdfExtraction: PdfExtractionResult | null = null;
-		if (
-			isUserFile &&
-			!article.has_content &&
-			isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey: article.storage_key })
-		) {
-			const storageKey = article.storage_key as string;
-			try {
-				pdfExtraction = (await step.do(
-					'extract-pdf-text',
-					{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-					() => extractPdfToTextArtifact(this.env, article_id, storageKey),
-				)) as PdfExtractionResult;
-				console.info({
-					tag: 'WORKFLOW',
-					msg: 'PDF extraction staged',
-					article_id,
-					status: pdfExtraction.status,
-					chars: pdfExtraction.chars,
-				});
-			} catch (error) {
-				console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed, continuing without content', article_id, error: String(error) });
-				pdfExtraction = { status: 'failed', chars: 0, pages: 0 };
-			}
-		}
+		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(target, article) });
+
+		const pdfExtraction = await stagePdfExtraction(this.env, target, article, step);
 
 		const processorResult = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const processingArticle = await withPdfExtractionText(
+				const fullArticle = await withPdfExtractionText(
 					this.env,
-					await fetchArticle(this.env, table, article_id, articleFieldsFor(table)),
+					await loadTargetArticle(this.env, target, articleFieldsFor(targetTable(target))),
 					pdfExtraction,
 				);
-				return runArticleProcessor(processingArticle, sourceType, {
-					env: this.env,
-					table,
-				});
+				return runArticleProcessor(fullArticle, sourceType, { env: this.env, table: targetTable(target) });
 			},
 		)) as ProcessorResult;
 
@@ -248,9 +461,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 						measureImageDimensions(this.env, effectiveOgImageUrl),
 					)
 				: null;
-		if (ogImageDimensions) {
-			console.info({ tag: 'WORKFLOW', msg: 'Measured OG image dimensions', article_id, ...ogImageDimensions });
-		}
+
+		const finalProcessorResult = mergeProcessorResult(processorResult, fetchedOgImageUrl, ogImageDimensions);
 
 		const embedding = (await step.do(
 			'generate-embedding',
@@ -258,209 +470,25 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const embeddingArticle = await withPdfExtractionText(
 					this.env,
-					await fetchArticle(this.env, table, article_id, embeddingFieldsFor(table)),
+					await loadTargetArticle(this.env, target, embeddingFieldsFor(targetTable(target))),
 					pdfExtraction,
 				);
-				const text = buildEmbeddingTextForArticle(embeddingArticle, processorResult);
+				const text = buildEmbeddingTextForArticle(embeddingArticle, finalProcessorResult);
 				if (!text || !this.env.AI) return null;
 				return generateArticleEmbedding(text, this.env.AI);
 			},
 		)) as number[] | null;
 
-		const youtubeHighlightsUpdate =
-			sourceType === 'youtube' && article.platform_metadata?.type === 'youtube'
-				? ((await step.do(
-						'generate-youtube-highlights',
-						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-						() => prepareYouTubeHighlights(this.env, article),
-					)) as YouTubeHighlightsUpdate | null)
-				: null;
-
-		// Full-content translation is a display artifact, not canonical ingest data.
-		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
-			const db = await createDbClient(this.env);
-			try {
-				const extractedPdfText = pdfExtraction?.textStorageKey ? await readPdfTextArtifact(this.env, pdfExtraction.textStorageKey) : null;
-				const finalProcessorResult: ProcessorResult = {
-					...processorResult,
-					updateData: {
-						...processorResult.updateData,
-						...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
-						...(fetchedOgImageUrl ? { og_image_url: fetchedOgImageUrl } : {}),
-					},
-					...(ogImageDimensions ? { ogImageDimensions } : {}),
-				};
-				await persistProcessorResult(
-					article_id,
-					article,
-					finalProcessorResult,
-					{
-						db,
-						table,
-					},
-					embedding,
-					extractionMetadata(pdfExtraction),
-				);
-				const fields = Object.keys(finalProcessorResult.updateData);
-				if (fields.length > 0) console.info({ tag: 'WORKFLOW', msg: 'Updated fields', fields: fields.join(', ') });
-				if (embedding?.length) console.info({ tag: 'WORKFLOW', msg: 'Embedding saved', article_id });
-				if (finalProcessorResult.enrichments && Object.keys(finalProcessorResult.enrichments).length > 0) {
-					console.info({
-						tag: 'WORKFLOW',
-						msg: 'Enrichments saved',
-						enrichments: Object.keys(finalProcessorResult.enrichments).join(', '),
-					});
-				}
-				// article_entities FKs point at public articles only.
-				if (!isUserFile && finalProcessorResult.updateData.entities?.length) {
-					await syncArticleEntities(db, article_id, finalProcessorResult.updateData.entities);
-				}
-				if (youtubeHighlightsUpdate) {
-					await saveYouTubeHighlights(db, youtubeHighlightsUpdate);
-					console.info({
-						tag: 'WORKFLOW',
-						msg: 'YouTube highlights saved',
-						article_id,
-						videoId: youtubeHighlightsUpdate.videoId,
-						count: youtubeHighlightsUpdate.count,
-					});
-				}
-			} finally {
-				await db.end();
-			}
-		});
-
-		if (pdfExtraction?.textStorageKey) {
-			await step.do('cleanup-pdf-text-artifact', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
-				deletePdfTextArtifact(this.env, pdfExtraction.textStorageKey!),
-			);
-		}
-
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id });
-		return { success: true, article_id };
-	}
-
-	private async runSourceArticle(sourceArticle: SourceArticleRef, step: WorkflowStep) {
-		const article = (await step.do(
-			'load-source-article-shell',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => {
-				const draft = await readSourceArticleDraft(this.env, sourceArticle);
-				return { ...articleFromSourceDraft(draft), content: null };
-			},
-		)) as Article;
-		const sourceType = article.source_type ?? 'default';
-
-		console.info({ tag: 'WORKFLOW', msg: 'Starting source article', url: article.url, sourceType });
-
-		const processorResult = (await step.do(
-			'ai-analysis',
-			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-			async () => {
-				const draft = await readSourceArticleDraft(this.env, sourceArticle);
-				return runArticleProcessor(articleFromSourceDraft(draft), sourceType, { env: this.env, table: 'articles' });
-			},
-		)) as ProcessorResult;
-
-		const fetchedOgImageUrl =
-			!article.og_image_url && !processorResult.updateData.og_image_url
-				? await step.do('fetch-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' }, async () => {
-						const ogResult = await fetchOgImage(article.url);
-						return ogResult?.ogImageUrl ?? null;
-					})
-				: null;
-
-		const effectiveOgImageUrl = processorResult.updateData.og_image_url ?? article.og_image_url ?? fetchedOgImageUrl;
-		const ogImageDimensions =
-			effectiveOgImageUrl && !hasOgDimensions(article.platform_metadata)
-				? await step.do('measure-og-dimensions', { retries: { limit: 1, delay: '3 seconds' }, timeout: '15 seconds' }, async () =>
-						measureImageDimensions(this.env, effectiveOgImageUrl),
-					)
-				: null;
-
-		const finalProcessorResult: ProcessorResult = {
-			...processorResult,
-			updateData: {
-				...processorResult.updateData,
-				...(fetchedOgImageUrl ? { og_image_url: fetchedOgImageUrl } : {}),
-			},
-			...(ogImageDimensions ? { ogImageDimensions } : {}),
-		};
-
-		const embedding = (await step.do(
-			'generate-embedding',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			async () => {
-				const draft = await readSourceArticleDraft(this.env, sourceArticle);
-				const text = buildEmbeddingTextForArticle(articleFromSourceDraft(draft), finalProcessorResult);
-				if (!text || !this.env.AI) return null;
-				return generateArticleEmbedding(text, this.env.AI);
-			},
-		)) as number[] | null;
-
-		const youtubeHighlightsUpdate =
-			article.platform_metadata?.type === 'youtube'
-				? ((await step.do(
-						'generate-youtube-highlights',
-						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-						async () => {
-							const draft = await readSourceArticleDraft(this.env, sourceArticle);
-							if (!draft.youtubeTranscript) return null;
-							return prepareYouTubeHighlightsFromTranscript(
-								this.env,
-								article.platform_metadata!.data.videoId,
-								draft.youtubeTranscript.segments as TranscriptSegment[],
-							);
-						},
-					)) as YouTubeHighlightsUpdate | null)
-				: null;
-
+		const youtubeHighlights = await prepareYoutubeHighlights(this.env, target, article, sourceType, step);
 		const articleId = (await step.do(
-			'insert-final-article',
+			target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => {
-				const draft = await readSourceArticleDraft(this.env, sourceArticle);
-				const fullArticle = articleFromSourceDraft(draft);
-				const db = await createDbClient(this.env);
-				try {
-					await db.query('BEGIN');
-					const finalizedArticleId = await insertFinalSourceArticle(db, draft.article, fullArticle, finalProcessorResult, embedding);
-					if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
-					if (finalProcessorResult.updateData.entities?.length) {
-						await syncArticleEntities(db, finalizedArticleId, finalProcessorResult.updateData.entities);
-					}
-					if (youtubeHighlightsUpdate) await saveYouTubeHighlights(db, youtubeHighlightsUpdate);
-					if (draft.twitterSourceEvent) {
-						await upsertTwitterSourceEvent(db, draft.twitterSourceEvent.tweet, {
-							articleId: finalizedArticleId,
-							eventType: draft.twitterSourceEvent.eventType,
-							text: draft.twitterSourceEvent.text,
-							media: draft.twitterSourceEvent.media,
-							raw: draft.twitterSourceEvent.raw,
-						});
-					}
-					await db.query('COMMIT');
-					return finalizedArticleId;
-				} catch (error) {
-					await db
-						.query('ROLLBACK')
-						.catch((rollbackError) =>
-							console.error({ tag: 'WORKFLOW', msg: 'source article rollback failed', error: String(rollbackError) }),
-						);
-					throw error;
-				} finally {
-					await db.end();
-				}
-			},
+			() => persistTarget(this.env, target, article, finalProcessorResult, embedding, pdfExtraction, youtubeHighlights),
 		)) as string;
 
-		if ('r2Key' in sourceArticle) {
-			await step.do('cleanup-source-article-draft', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
-				this.env.R2.delete(sourceArticle.r2Key),
-			);
-		}
+		await cleanupTargetArtifacts(this.env, target, pdfExtraction, step);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed source article', article_id: articleId, url: article.url });
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(target, article) });
 		return { success: true, article_id: articleId };
 	}
 }
