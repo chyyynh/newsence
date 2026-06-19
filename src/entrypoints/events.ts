@@ -3,7 +3,7 @@ import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
 import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@shared/types';
-import { ensureWorkflowForQueueTarget, type QueueMessage, type WorkflowQueueTarget } from '@shared/workflow-queue';
+import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 
 export function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
 	console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
@@ -21,23 +21,12 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 		const body = message.body;
 
 		try {
-			const targets = queueTargetsFromMessage(body);
-			let created = 0;
-			let existing = 0;
-			for (const [index, target] of targets.entries()) {
-				const result = await ensureWorkflowForQueueTarget(env, message.id, target, index);
-				if (result.created) created++;
-				else existing++;
-			}
-			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count: targets.length, created, existing });
+			const { count, created, existing } = await ensureWorkflowsForQueueMessage(env, message.id, body);
+			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count, created, existing });
 			message.ack();
 		} catch (err) {
 			console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling message, retrying', error: String(err) });
 			message.retry();
 		}
 	}
-}
-
-function queueTargetsFromMessage(body: QueueMessage): WorkflowQueueTarget[] {
-	return body.type === 'workflow_process' ? [body.target] : body.targets;
 }

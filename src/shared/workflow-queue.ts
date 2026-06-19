@@ -105,7 +105,29 @@ export function articleFromSourceDraft(draft: SourceArticleDraft): Article {
 	};
 }
 
-export async function ensureWorkflowForQueueTarget(
+export async function ensureWorkflowsForQueueMessage(
+	env: Env,
+	messageId: string,
+	body: QueueMessage,
+): Promise<{ count: number; created: number; existing: number }> {
+	const targets = queueTargetsFromMessage(body);
+	let created = 0;
+	let existing = 0;
+
+	for (const [index, target] of targets.entries()) {
+		const result = await ensureWorkflowForQueueTarget(env, messageId, target, index);
+		if (result.created) created++;
+		else existing++;
+	}
+
+	return { count: targets.length, created, existing };
+}
+
+function queueTargetsFromMessage(body: QueueMessage): WorkflowQueueTarget[] {
+	return body.type === 'workflow_process' ? [body.target] : body.targets;
+}
+
+async function ensureWorkflowForQueueTarget(
 	env: Env,
 	messageId: string,
 	target: WorkflowQueueTarget,
