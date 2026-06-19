@@ -1,4 +1,4 @@
-import { requireAuth } from '@shared/auth/middleware';
+import { requireAuth } from '@shared/auth';
 import { createDbClient, type DbClient, USER_FILES_TABLE } from '@shared/db';
 import type { Env } from '@shared/types';
 

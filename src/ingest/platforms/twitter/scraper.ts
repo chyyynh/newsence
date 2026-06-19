@@ -284,7 +284,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
 		try {
 			// Import scrapeWebPage at call site to avoid circular dependency
-			const { scrapeWebPage } = await import('../web/scraper');
+			const { scrapeWebPage } = await import('../web-scraper');
 			const linked = await scrapeWebPage(externalUrl);
 			if (linked.content && linked.content.length > 100) {
 				console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });

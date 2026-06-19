@@ -1,4 +1,4 @@
-import { requireAuth } from '@shared/auth/middleware';
+import { requireAuth } from '@shared/auth';
 import { ARTICLES_TABLE, createDbClient, type DbClient } from '@shared/db';
 import { type PlatformMetadata, withOgDimensions } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';

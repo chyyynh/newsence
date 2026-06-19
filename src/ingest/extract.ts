@@ -2,7 +2,7 @@ import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@sha
 import type { Env } from '@shared/types';
 import type { ScrapedContent } from '@shared/web';
 import { scrapeUrl } from './platforms/registry';
-import { type ParsedPdf, parsePdf } from './workflows/steps/pdf-extraction';
+import { type ParsedPdf, parsePdf } from './workflows/pdf-extraction';
 
 // Shared extraction core: one input → one normalized shape. Wraps the existing
 // engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)

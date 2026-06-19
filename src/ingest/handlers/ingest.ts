@@ -1,4 +1,4 @@
-import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
+import { parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
 import { ingestUrls } from '../urls';

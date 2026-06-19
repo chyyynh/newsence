@@ -1,4 +1,4 @@
-import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
+import { parseJsonBody, requireAuth } from '@shared/auth';
 import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
 import type { Env } from '@shared/types';
 import { MAX_UPLOAD_BYTES } from '@shared/upload';

@@ -3,7 +3,7 @@ import type { PlatformMetadata, RetweetedByData, TwitterMedia } from '@shared/pl
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout, isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
 import type { Client } from 'pg';
-import { scrapeWebPage } from '../web/scraper';
+import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
 	buildTweetTitle,

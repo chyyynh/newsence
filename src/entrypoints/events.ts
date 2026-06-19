@@ -1,7 +1,7 @@
-import { handleRetryCron } from '@ingest/monitors/retry';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
+import { handleRetryCron } from '@ingest/retry';
 import { resolveProcessableTable } from '@shared/db';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent } from '@shared/types';
 

@@ -5,7 +5,7 @@ import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, nor
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
-import { scrapeWebPage } from '../web/scraper';
+import { scrapeWebPage } from '../web-scraper';
 import {
 	extractImageFromItem,
 	extractItemsFromFeed,

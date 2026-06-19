@@ -11,7 +11,7 @@ import {
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
-import { scrapeWebPage } from '../web/scraper';
+import { scrapeWebPage } from '../web-scraper';
 
 type UpdateData = ProcessorResult['updateData'];
 

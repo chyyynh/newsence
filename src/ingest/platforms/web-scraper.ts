@@ -7,7 +7,7 @@ import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, readTextWithLimit, ty
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
-import { cleanExtractedContent } from '../../domain/content-cleanup';
+import { cleanExtractedContent } from '../domain/content-cleanup';
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
