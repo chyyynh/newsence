@@ -203,10 +203,8 @@ function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 	return target.kind === 'row' ? (target.target_table ?? ARTICLES_TABLE) : ARTICLES_TABLE;
 }
 
-function targetLogContext(target: WorkflowQueueTarget, article: Article): Record<string, string> {
-	return target.kind === 'row'
-		? { article_id: target.article_id, table: targetTable(target) }
-		: { url: article.url, table: ARTICLES_TABLE };
+function targetLogContext(target: WorkflowQueueTarget, table: ProcessableTable, article: Article): Record<string, string> {
+	return target.kind === 'row' ? { article_id: target.article_id, table } : { url: article.url, table };
 }
 
 async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
@@ -220,16 +218,16 @@ async function fetchArticle(env: Env, table: ProcessableTable, articleId: string
 	}
 }
 
-async function loadTargetArticle(env: Env, target: WorkflowQueueTarget, fieldsForRow: string): Promise<Article> {
+async function loadTargetArticle(env: Env, target: WorkflowQueueTarget, table: ProcessableTable, fieldsForRow: string): Promise<Article> {
 	if (target.kind === 'source') return articleFromSourceDraft(await readSourceArticleDraft(env, target.source_article));
-	return fetchArticle(env, targetTable(target), target.article_id, fieldsForRow);
+	return fetchArticle(env, table, target.article_id, fieldsForRow);
 }
 
-async function loadTargetShell(env: Env, target: WorkflowQueueTarget): Promise<ArticleShell> {
+async function loadTargetShell(env: Env, target: WorkflowQueueTarget, table: ProcessableTable): Promise<ArticleShell> {
 	const article =
 		target.kind === 'source'
 			? articleFromSourceDraft(await readSourceArticleDraft(env, target.source_article))
-			: await fetchArticle(env, targetTable(target), target.article_id, articleShellFieldsFor(targetTable(target)));
+			: await fetchArticle(env, table, target.article_id, articleShellFieldsFor(table));
 	return { ...article, content: null };
 }
 
@@ -252,12 +250,13 @@ async function withPdfExtractionText(env: Env, article: Article, extraction: Pdf
 async function stagePdfExtraction(
 	env: Env,
 	target: WorkflowQueueTarget,
+	table: ProcessableTable,
 	article: ArticleShell,
 	step: WorkflowStep,
 ): Promise<PdfExtractionResult | null> {
 	if (
 		target.kind !== 'row' ||
-		targetTable(target) !== USER_FILES_TABLE ||
+		table !== USER_FILES_TABLE ||
 		article.has_content ||
 		!isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey: article.storage_key })
 	) {
@@ -450,6 +449,7 @@ async function persistSourceTarget(
 async function persistRowTarget(
 	env: Env,
 	target: RowTarget,
+	table: ProcessableTable,
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -468,7 +468,6 @@ async function persistRowTarget(
 			},
 		};
 
-		const table = targetTable(target);
 		await persistProcessorResult(target.article_id, article, finalResult, { db, table }, embedding, extractionMetadata(pdfExtraction));
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.article_id, finalResult.updateData.entities);
@@ -488,6 +487,7 @@ async function persistRowTarget(
 async function persistTarget(
 	env: Env,
 	target: WorkflowQueueTarget,
+	table: ProcessableTable,
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -495,7 +495,7 @@ async function persistTarget(
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
 	if (target.kind === 'source') return persistSourceTarget(env, target, result, embedding, youtubeHighlights);
-	return persistRowTarget(env, target, article, result, embedding, pdfExtraction, youtubeHighlights);
+	return persistRowTarget(env, target, table, article, result, embedding, pdfExtraction, youtubeHighlights);
 }
 
 async function cleanupTargetArtifacts(
@@ -520,16 +520,17 @@ async function cleanupTargetArtifacts(
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { target } = event.payload;
+		const table = targetTable(target);
 		const article = (await step.do(
 			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => loadTargetShell(this.env, target),
+			() => loadTargetShell(this.env, target, table),
 		)) as ArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
-		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(target, article) });
+		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(target, table, article) });
 
-		const pdfExtraction = await stagePdfExtraction(this.env, target, article, step);
+		const pdfExtraction = await stagePdfExtraction(this.env, target, table, article, step);
 
 		const processorResult = (await step.do(
 			'ai-analysis',
@@ -537,10 +538,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const fullArticle = await withPdfExtractionText(
 					this.env,
-					await loadTargetArticle(this.env, target, articleFieldsFor(targetTable(target))),
+					await loadTargetArticle(this.env, target, table, articleFieldsFor(table)),
 					pdfExtraction,
 				);
-				return runArticleProcessor(fullArticle, sourceType, { env: this.env, table: targetTable(target) });
+				return runArticleProcessor(fullArticle, sourceType, { env: this.env, table });
 			},
 		)) as ProcessorResult;
 
@@ -552,7 +553,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const embeddingArticle = await withPdfExtractionText(
 					this.env,
-					await loadTargetArticle(this.env, target, embeddingFieldsFor(targetTable(target))),
+					await loadTargetArticle(this.env, target, table, embeddingFieldsFor(table)),
 					pdfExtraction,
 				);
 				const text = buildEmbeddingTextForArticle(embeddingArticle, finalProcessorResult);
@@ -565,12 +566,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		const articleId = (await step.do(
 			target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => persistTarget(this.env, target, article, finalProcessorResult, embedding, pdfExtraction, youtubeHighlights),
+			() => persistTarget(this.env, target, table, article, finalProcessorResult, embedding, pdfExtraction, youtubeHighlights),
 		)) as string;
 
 		await cleanupTargetArtifacts(this.env, target, pdfExtraction, step);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(target, article) });
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(target, table, article) });
 		return { success: true, article_id: articleId };
 	}
 }
