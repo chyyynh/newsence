@@ -282,14 +282,81 @@ export async function enqueueArticleProcess(env: Env, articleId: string, targetT
 	});
 }
 
+const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
+
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
 	try {
+		const storedInstanceId = await getUserFileWorkflowInstanceId(env, userFileId);
+		if (storedInstanceId) {
+			const storedInstance = await env.MONITOR_WORKFLOW.get(storedInstanceId);
+			const storedStatus = await storedInstance.status();
+			if (ACTIVE_WORKFLOW_STATUSES.has(storedStatus.status)) return storedInstance.id;
+		}
+
+		const baseId = userFileWorkflowId(userFileId);
+		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
+		const instanceId = await createUserFileWorkflowInstance(env, workflowId, userFileId);
+		await recordUserFileWorkflowInstanceId(env, userFileId, instanceId);
+		return instanceId;
+	} catch (err) {
+		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
+		return undefined;
+	}
+}
+
+function userFileWorkflowId(userFileId: string): string {
+	return `user-file-${userFileId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}`;
+}
+
+async function createUserFileWorkflowInstance(env: Env, workflowId: string, userFileId: string): Promise<string> {
+	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
+			id: workflowId,
 			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
 		});
 		return instance.id;
 	} catch (err) {
-		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
-		return undefined;
+		const existing = await env.MONITOR_WORKFLOW.get(workflowId);
+		const existingStatus = await existing.status();
+		if (ACTIVE_WORKFLOW_STATUSES.has(existingStatus.status)) return existing.id;
+		if (existingStatus.status === 'unknown') throw err;
+
+		const instance = await env.MONITOR_WORKFLOW.create({
+			id: `${workflowId}-${crypto.randomUUID()}`,
+			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
+		});
+		return instance.id;
+	}
+}
+
+async function getUserFileWorkflowInstanceId(env: Env, userFileId: string): Promise<string | null> {
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(
+			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
+			[userFileId],
+		);
+		const row = result.rows[0] as { instance_id?: string | null } | undefined;
+		return row?.instance_id ?? null;
+	} finally {
+		await db.end();
+	}
+}
+
+async function recordUserFileWorkflowInstanceId(env: Env, userFileId: string, instanceId: string): Promise<void> {
+	const db = await createDbClient(env);
+	try {
+		const metadata = JSON.stringify({
+			workflow: {
+				monitor_instance_id: instanceId,
+				monitor_started_at: new Date().toISOString(),
+			},
+		});
+		await db.query(`UPDATE ${USER_FILES_TABLE} SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2`, [
+			metadata,
+			userFileId,
+		]);
+	} finally {
+		await db.end();
 	}
 }
