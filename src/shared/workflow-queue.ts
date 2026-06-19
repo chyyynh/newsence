@@ -41,12 +41,30 @@ const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waitin
 export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
 	await env.ARTICLE_QUEUE.send({
 		type: 'workflow_process',
-		target: {
-			kind: 'row',
-			article_id: articleId,
-			...(targetTable ? { target_table: targetTable } : {}),
-		},
+		target: rowWorkflowTarget(articleId, targetTable),
 	});
+}
+
+export async function enqueueArticleBatchProcess(
+	env: Env,
+	articleIds: string[],
+	targetTable?: ProcessableTable,
+	triggeredBy?: string,
+): Promise<void> {
+	if (!articleIds.length) return;
+	await env.ARTICLE_QUEUE.send({
+		type: 'batch_workflow_process',
+		targets: articleIds.map((articleId) => rowWorkflowTarget(articleId, targetTable)),
+		...(triggeredBy ? { triggered_by: triggeredBy } : {}),
+	});
+}
+
+function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): WorkflowQueueTarget {
+	return {
+		kind: 'row',
+		article_id: articleId,
+		...(targetTable ? { target_table: targetTable } : {}),
+	};
 }
 
 export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticleDraft): Promise<void> {
