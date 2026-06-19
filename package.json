@@ -13,7 +13,7 @@
 	},
 	"dependencies": {
 		"@bufbuild/protobuf": "^1.10.0",
-		"@llamaindex/liteparse-wasm": "^2.0.4",
+		"@llamaindex/liteparse-wasm": "^2.1.1",
 		"@mozilla/readability": "^0.6.0",
 		"cheerio": "^1.2.0",
 		"fast-xml-parser": "^5.3.4",
