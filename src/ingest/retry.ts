@@ -41,10 +41,10 @@ export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise
 
 		if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
 		for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
-			await enqueueArticleBatchProcess(env, articleIds.slice(i, i + RETRY_BATCH_SIZE), undefined, 'retry_cron');
+			await enqueueArticleBatchProcess(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
 		}
 		for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-			await enqueueArticleBatchProcess(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE, 'retry_cron');
+			await enqueueArticleBatchProcess(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE);
 		}
 		console.info({
 			tag: 'RETRY',

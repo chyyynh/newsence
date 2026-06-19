@@ -32,7 +32,7 @@ export type WorkflowQueueTarget =
 
 export type QueueMessage =
 	| { type: 'workflow_process'; target: WorkflowQueueTarget }
-	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[]; triggered_by?: string };
+	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[] };
 
 export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
@@ -45,17 +45,11 @@ export async function enqueueArticleProcess(env: Env, articleId: string, targetT
 	});
 }
 
-export async function enqueueArticleBatchProcess(
-	env: Env,
-	articleIds: string[],
-	targetTable?: ProcessableTable,
-	triggeredBy?: string,
-): Promise<void> {
+export async function enqueueArticleBatchProcess(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<void> {
 	if (!articleIds.length) return;
 	await env.ARTICLE_QUEUE.send({
 		type: 'batch_workflow_process',
 		targets: articleIds.map((articleId) => rowWorkflowTarget(articleId, targetTable)),
-		...(triggeredBy ? { triggered_by: triggeredBy } : {}),
 	});
 }
 
