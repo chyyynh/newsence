@@ -24,12 +24,6 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 
 		try {
 			const targets = queueTargetsFromMessage(body);
-			if (!targets.length) {
-				console.warn({ tag: 'ARTICLE-QUEUE', msg: 'Unknown message type, acking' });
-				message.ack();
-				continue;
-			}
-
 			let created = 0;
 			let existing = 0;
 			for (const [index, target] of targets.entries()) {
@@ -48,22 +42,7 @@ export async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env:
 }
 
 function queueTargetsFromMessage(body: QueueMessage): WorkflowQueueTarget[] {
-	switch (body.type) {
-		case 'workflow_process':
-			return [body.target];
-		case 'batch_workflow_process':
-			return body.targets;
-		case 'source_article_process':
-			return [{ kind: 'source', source_article: body.source_article }];
-		case 'article_process':
-			return [{ kind: 'row', article_id: body.article_id, ...(body.target_table ? { target_table: body.target_table } : {}) }];
-		case 'batch_process':
-			return body.article_ids.map((id) => ({
-				kind: 'row',
-				article_id: id,
-				...(body.target_table ? { target_table: body.target_table } : {}),
-			}));
-	}
+	return body.type === 'workflow_process' ? [body.target] : body.targets;
 }
 
 async function ensureTargetWorkflow(

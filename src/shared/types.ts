@@ -125,10 +125,7 @@ export type WorkflowQueueTarget =
 
 export type QueueMessage =
 	| { type: 'workflow_process'; target: WorkflowQueueTarget }
-	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[]; triggered_by?: string }
-	| { type: 'article_process'; article_id: string; target_table?: ProcessableTable }
-	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable }
-	| { type: 'source_article_process'; source_article: SourceArticleRef };
+	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[]; triggered_by?: string };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
