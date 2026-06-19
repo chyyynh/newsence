@@ -19,10 +19,10 @@ const ARTICLE_FIELDS_FOR_USER_FILES =
 	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
 
 const ARTICLE_SHELL_FIELDS_FOR_ARTICLES =
-	'id, title, title_cn, summary, summary_cn, NULL::text AS content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
+	'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
 
 const ARTICLE_SHELL_FIELDS_FOR_USER_FILES =
-	'id, title, title_cn, summary, summary_cn, NULL::text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
+	'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
 
 const EMBEDDING_FIELDS_FOR_ARTICLES = 'id, title, summary, content, tags, keywords';
 const EMBEDDING_FIELDS_FOR_USER_FILES = 'id, title, summary, extracted_text AS content, tags, keywords';
@@ -55,6 +55,8 @@ type WorkflowParams = {
 	target_table?: ProcessableTable;
 };
 
+type ArticleShell = Article & { has_content?: boolean };
+
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, target_table } = event.payload;
@@ -67,12 +69,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			() => fetchArticle(this.env, table, article_id, articleShellFieldsFor(table)),
-		)) as Article;
+		)) as ArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
 		if (
 			isUserFile &&
-			!article.content &&
+			!article.has_content &&
 			isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey: article.storage_key })
 		) {
 			const storageKey = article.storage_key as string;
