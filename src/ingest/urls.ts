@@ -11,7 +11,7 @@ import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
 import { detectPlatformType, normalizeUrl, type ScrapedContent } from '@shared/web';
-import { persistBlobRow, putUserUpload } from './blob';
+import { persistBlobRow, putUserUpload } from './blob-storage';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 
 const EXIST_COLS =
