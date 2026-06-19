@@ -1,7 +1,8 @@
-import { ARTICLES_TABLE, enqueueArticleProcess, enqueueSourceArticleProcess, type SourceArticleDraft } from '@shared/db';
+import { ARTICLES_TABLE } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
+import { enqueueArticleProcess, enqueueSourceArticleProcess, type SourceArticleDraft } from '@shared/workflow-queue';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import {

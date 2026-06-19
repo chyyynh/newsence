@@ -2,9 +2,10 @@ import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
-import type { ProcessableTable, SourceArticleRef } from '@shared/db';
+import type { ProcessableTable } from '@shared/db';
 import { resolveProcessableTable } from '@shared/db';
 import type { Env, ExecutionContext, MessageBatch, QueueMessage, ScheduledEvent, WorkflowQueueTarget } from '@shared/types';
+import type { SourceArticleRef } from '@shared/workflow-queue';
 
 export function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
 	console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });

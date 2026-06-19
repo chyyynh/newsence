@@ -1,16 +1,10 @@
-import {
-	createDbClient,
-	createUserFileWorkflow,
-	type InsertUserFileResult,
-	insertUserFile,
-	USER_FILES_TABLE,
-	upsertYoutubeTranscript,
-} from '@shared/db';
+import { createDbClient, type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript } from '@shared/db';
 import { extensionFromMime, PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
 import { detectPlatformType, normalizeUrl, type ScrapedContent } from '@shared/web';
+import { createUserFileWorkflow } from '@shared/workflow-queue';
 import { persistBlobRow, putUserUpload } from './blob-storage';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 

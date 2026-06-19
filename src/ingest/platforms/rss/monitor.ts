@@ -1,7 +1,8 @@
-import { ARTICLES_TABLE, createDbClient, enqueueSourceArticleProcess } from '@shared/db';
+import { ARTICLES_TABLE, createDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
+import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import type { Client } from 'pg';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';

@@ -6,9 +6,6 @@ import {
 	type InsertArticleData,
 	type ProcessableTable,
 	resolveProcessableTable,
-	SOURCE_ARTICLE_DRAFT_PREFIX,
-	type SourceArticleDraft,
-	type SourceArticleRef,
 	USER_FILES_TABLE,
 	upsertYoutubeTranscript,
 } from '@shared/db';
@@ -17,6 +14,7 @@ import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import type { TranscriptSegment } from '@shared/web';
+import { SOURCE_ARTICLE_DRAFT_PREFIX, type SourceArticleDraft, type SourceArticleRef } from '@shared/workflow-queue';
 import { syncArticleEntities } from '../domain/entities';
 import {
 	buildEmbeddingTextForArticle,

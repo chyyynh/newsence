@@ -1,6 +1,5 @@
 import { Client } from 'pg';
-import type { TwitterMedia } from './platform-metadata';
-import type { Env, Tweet } from './types';
+import type { Env } from './types';
 import { normalizeUrl, validateImageUrl } from './web';
 export type DbClient = Client;
 
@@ -45,22 +44,6 @@ export interface InsertUserFileData extends Omit<InsertArticleData, 'sourceType'
 	normalizedUrl?: string;
 }
 
-type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
-
-export interface SourceArticleDraft {
-	article: InsertArticleData;
-	youtubeTranscript?: YoutubeTranscriptRow;
-	twitterSourceEvent?: {
-		tweet: Tweet;
-		eventType: TwitterSourceEventType;
-		text?: string | null;
-		media?: TwitterMedia[];
-		raw?: unknown;
-	};
-}
-
-export type SourceArticleRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
-
 export type InsertUserFileResult = {
 	id: string;
 	created: boolean;
@@ -75,43 +58,6 @@ export type InsertUserFileResult = {
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
 	return JSON.stringify(metadata);
-}
-
-/**
- * Insert into the shared `articles` table. Uses ON CONFLICT (url) DO NOTHING
- * so concurrent monitors can't race on the same URL. Returns null when the
- * row already existed.
- *
- * `og_image_url` is stored as the raw upstream URL — the frontend wraps it
- * through the signed `/media/external/` URL at the API boundary
- * (frontend/src/lib/r2/sign-article-media.ts), so secret rotation doesn't
- * require a DB backfill.
- */
-export async function insertArticle(db: DbClient, data: InsertArticleData): Promise<string | null> {
-	const ogImageUrl = await validateImageUrl(data.ogImageUrl);
-	const result = await db.query(
-		`INSERT INTO ${ARTICLES_TABLE}
-			(url, title, source, published_date, scraped_date, keywords, tags, tokens, summary, source_type, content, og_image_url, platform_metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (url) DO NOTHING
-		RETURNING id`,
-		[
-			data.url,
-			data.title,
-			data.source,
-			data.publishedDate,
-			new Date(),
-			data.keywords ?? [],
-			data.tags ?? [],
-			[],
-			data.summary,
-			data.sourceType,
-			data.content,
-			ogImageUrl,
-			serializeMetadata(data.platformMetadata),
-		],
-	);
-	return (result.rows[0]?.id as string | undefined) ?? null;
 }
 
 /**
@@ -287,126 +233,3 @@ export async function upsertYoutubeTranscript(db: DbClient, transcript: YoutubeT
 }
 
 // ─────────────────────────────────────────────────────────────
-// Queue enqueue helper
-// ─────────────────────────────────────────────────────────────
-
-export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
-const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
-
-/** Enqueue an article for the AI-processing workflow. */
-export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
-	await env.ARTICLE_QUEUE.send({
-		type: 'workflow_process',
-		target: {
-			kind: 'row',
-			article_id: articleId,
-			...(targetTable ? { target_table: targetTable } : {}),
-		},
-	});
-}
-
-export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticleDraft): Promise<void> {
-	const article = {
-		...draft.article,
-		ogImageUrl: await validateImageUrl(draft.article.ogImageUrl),
-	};
-	const normalizedDraft: SourceArticleDraft = { ...draft, article };
-	const serialized = JSON.stringify(normalizedDraft);
-	const url = article.url;
-	const source_article: SourceArticleRef =
-		new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
-			? { url, inline: normalizedDraft }
-			: await writeSourceArticleDraft(env, url, serialized);
-
-	await env.ARTICLE_QUEUE.send({
-		type: 'workflow_process',
-		target: { kind: 'source', source_article },
-	});
-}
-
-async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
-	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
-	await env.R2.put(r2Key, serialized, {
-		httpMetadata: { contentType: 'application/json; charset=utf-8' },
-	});
-	return { url, r2Key };
-}
-
-const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
-
-export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
-	try {
-		const storedInstanceId = await getUserFileWorkflowInstanceId(env, userFileId);
-		if (storedInstanceId) {
-			const storedInstance = await env.MONITOR_WORKFLOW.get(storedInstanceId);
-			const storedStatus = await storedInstance.status();
-			if (ACTIVE_WORKFLOW_STATUSES.has(storedStatus.status)) return storedInstance.id;
-		}
-
-		const baseId = userFileWorkflowId(userFileId);
-		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
-		const instanceId = await createUserFileWorkflowInstance(env, workflowId, userFileId);
-		await recordUserFileWorkflowInstanceId(env, userFileId, instanceId);
-		return instanceId;
-	} catch (err) {
-		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
-		return undefined;
-	}
-}
-
-function userFileWorkflowId(userFileId: string): string {
-	return `user-file-${userFileId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}`;
-}
-
-async function createUserFileWorkflowInstance(env: Env, workflowId: string, userFileId: string): Promise<string> {
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
-		});
-		return instance.id;
-	} catch (err) {
-		const existing = await env.MONITOR_WORKFLOW.get(workflowId);
-		const existingStatus = await existing.status();
-		if (ACTIVE_WORKFLOW_STATUSES.has(existingStatus.status)) return existing.id;
-		if (existingStatus.status === 'unknown') throw err;
-
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: `${workflowId}-${crypto.randomUUID()}`,
-			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
-		});
-		return instance.id;
-	}
-}
-
-async function getUserFileWorkflowInstanceId(env: Env, userFileId: string): Promise<string | null> {
-	const db = await createDbClient(env);
-	try {
-		const result = await db.query(
-			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
-			[userFileId],
-		);
-		const row = result.rows[0] as { instance_id?: string | null } | undefined;
-		return row?.instance_id ?? null;
-	} finally {
-		await db.end();
-	}
-}
-
-async function recordUserFileWorkflowInstanceId(env: Env, userFileId: string, instanceId: string): Promise<void> {
-	const db = await createDbClient(env);
-	try {
-		const metadata = JSON.stringify({
-			workflow: {
-				monitor_instance_id: instanceId,
-				monitor_started_at: new Date().toISOString(),
-			},
-		});
-		await db.query(`UPDATE ${USER_FILES_TABLE} SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2`, [
-			metadata,
-			userFileId,
-		]);
-	} finally {
-		await db.end();
-	}
-}

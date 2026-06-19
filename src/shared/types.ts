@@ -1,6 +1,7 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
-import type { ProcessableTable, SourceArticleRef } from './db';
+import type { ProcessableTable } from './db';
 import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
+import type { SourceArticleRef } from './workflow-queue';
 
 /**
  * Environment bindings.

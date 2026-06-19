@@ -14,7 +14,6 @@
  * request-facing blob ingest surfaces.
  */
 
-import { createUserFileWorkflow } from '@shared/db';
 import {
 	extensionFromMime,
 	isRasterImage,
@@ -35,6 +34,7 @@ import {
 	userUploadKey,
 } from '@shared/upload';
 import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@shared/web';
+import { createUserFileWorkflow } from '@shared/workflow-queue';
 import { persistBlobRow, putUserUpload } from './blob-storage';
 
 const DEFAULT_IMAGE_TITLE = 'image';

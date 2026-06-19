@@ -1,7 +1,8 @@
-import { createDbClient, enqueueSourceArticleProcess, getExistingUrls } from '@shared/db';
+import { createDbClient, getExistingUrls } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
+import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
