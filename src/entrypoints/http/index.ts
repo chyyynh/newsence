@@ -6,9 +6,7 @@ import { handleOrphanGc } from '@media/orphan-gc';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import type { Env, ExecutionContext } from '@shared/types';
-import { handleEmbed } from './embed';
-import { handleRelated, handleSearch } from './search';
-import { handleWorkflowStream } from './workflow-stream';
+import { handleEmbed, handleRelated, handleSearch, handleWorkflowStream } from './handlers';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
