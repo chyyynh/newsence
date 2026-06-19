@@ -14,7 +14,7 @@ import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import type { TranscriptSegment } from '@shared/web';
-import { SOURCE_ARTICLE_DRAFT_PREFIX, type SourceArticleDraft, type SourceArticleRef } from '@shared/workflow-queue';
+import { articleFromSourceDraft, readSourceArticleDraft, type SourceArticleRef } from '@shared/workflow-queue';
 import { syncArticleEntities } from '../domain/entities';
 import {
 	buildEmbeddingTextForArticle,
@@ -111,35 +111,6 @@ async function fetchArticle(env: Env, table: ProcessableTable, articleId: string
 	} finally {
 		await db.end();
 	}
-}
-
-async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<SourceArticleDraft> {
-	if ('inline' in ref) return ref.inline;
-	if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
-	const obj = await env.R2.get(ref.r2Key);
-	if (!obj) throw new Error(`Source article draft missing: ${ref.r2Key}`);
-	return JSON.parse(await obj.text()) as SourceArticleDraft;
-}
-
-function articleFromSourceDraft(draft: SourceArticleDraft): Article {
-	const data = draft.article;
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		og_image_url: data.ogImageUrl,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
 }
 
 async function loadTargetArticle(env: Env, target: WorkflowTarget, fieldsForRow: string): Promise<Article> {

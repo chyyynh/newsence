@@ -1,19 +1,13 @@
-import { createDbClient, type InsertArticleData, type ProcessableTable, USER_FILES_TABLE } from './db';
+import { createDbClient, type InsertArticleData, type ProcessableTable, USER_FILES_TABLE, type YoutubeTranscriptRow } from './db';
 import type { TwitterMedia } from './platform-metadata';
-import type { Env, Tweet } from './types';
+import type { Article, Env, Tweet } from './types';
 import { validateImageUrl } from './web';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 
 export interface SourceArticleDraft {
 	article: InsertArticleData;
-	youtubeTranscript?: {
-		videoId: string;
-		segments: unknown[];
-		language: string | null;
-		chapters?: unknown;
-		chaptersFromDescription?: unknown;
-	};
+	youtubeTranscript?: YoutubeTranscriptRow;
 	twitterSourceEvent?: {
 		tweet: Tweet;
 		eventType: TwitterSourceEventType;
@@ -65,6 +59,35 @@ async function writeSourceArticleDraft(env: Env, url: string, serialized: string
 		httpMetadata: { contentType: 'application/json; charset=utf-8' },
 	});
 	return { url, r2Key };
+}
+
+export async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<SourceArticleDraft> {
+	if ('inline' in ref) return ref.inline;
+	if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
+	const obj = await env.R2.get(ref.r2Key);
+	if (!obj) throw new Error(`Source article draft missing: ${ref.r2Key}`);
+	return JSON.parse(await obj.text()) as SourceArticleDraft;
+}
+
+export function articleFromSourceDraft(draft: SourceArticleDraft): Article {
+	const data = draft.article;
+	return {
+		id: data.url,
+		title: data.title,
+		title_cn: null,
+		summary: data.summary || null,
+		summary_cn: null,
+		content: data.content,
+		content_cn: null,
+		url: data.url,
+		source: data.source,
+		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+		tags: data.tags ?? [],
+		keywords: data.keywords ?? [],
+		source_type: data.sourceType,
+		og_image_url: data.ogImageUrl,
+		platform_metadata: data.platformMetadata as Article['platform_metadata'],
+	};
 }
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
