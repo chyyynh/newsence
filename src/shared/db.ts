@@ -1,5 +1,6 @@
 import { Client } from 'pg';
-import type { Env } from './types';
+import type { TwitterMedia } from './platform-metadata';
+import type { Env, Tweet } from './types';
 import { normalizeUrl, validateImageUrl } from './web';
 export type DbClient = Client;
 
@@ -43,6 +44,22 @@ export interface InsertUserFileData extends Omit<InsertArticleData, 'sourceType'
 	userId: string;
 	normalizedUrl?: string;
 }
+
+type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
+
+export interface SourceArticleDraft {
+	article: InsertArticleData;
+	youtubeTranscript?: YoutubeTranscriptRow;
+	twitterSourceEvent?: {
+		tweet: Tweet;
+		eventType: TwitterSourceEventType;
+		text?: string | null;
+		media?: TwitterMedia[];
+		raw?: unknown;
+	};
+}
+
+export type SourceArticleRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
 
 export type InsertUserFileResult = {
 	id: string;
@@ -273,6 +290,9 @@ export async function upsertYoutubeTranscript(db: DbClient, transcript: YoutubeT
 // Queue enqueue helper
 // ─────────────────────────────────────────────────────────────
 
+export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
+const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
+
 /** Enqueue an article for the AI-processing workflow. */
 export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
 	await env.ARTICLE_QUEUE.send({
@@ -280,6 +300,33 @@ export async function enqueueArticleProcess(env: Env, articleId: string, targetT
 		article_id: articleId,
 		...(targetTable ? { target_table: targetTable } : {}),
 	});
+}
+
+export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticleDraft): Promise<void> {
+	const article = {
+		...draft.article,
+		ogImageUrl: await validateImageUrl(draft.article.ogImageUrl),
+	};
+	const normalizedDraft: SourceArticleDraft = { ...draft, article };
+	const serialized = JSON.stringify(normalizedDraft);
+	const url = article.url;
+	const source_article: SourceArticleRef =
+		new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
+			? { url, inline: normalizedDraft }
+			: await writeSourceArticleDraft(env, url, serialized);
+
+	await env.ARTICLE_QUEUE.send({
+		type: 'source_article_process',
+		source_article,
+	});
+}
+
+async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
+	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
+	await env.R2.put(r2Key, serialized, {
+		httpMetadata: { contentType: 'application/json; charset=utf-8' },
+	});
+	return { url, r2Key };
 }
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);

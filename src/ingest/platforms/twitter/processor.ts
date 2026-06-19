@@ -97,6 +97,7 @@ export class TwitterProcessor implements ArticleProcessor {
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
 		const analysis = await translateTweet(tweetText, ctx.env.AI);
+		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80) || article.title;
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (!article.tags?.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;

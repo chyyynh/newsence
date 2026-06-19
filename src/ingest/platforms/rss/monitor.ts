@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
+import { ARTICLES_TABLE, createDbClient, enqueueSourceArticleProcess } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
@@ -107,7 +107,7 @@ async function detectHnSource(
 	return { sourceType: 'rss', platformMetadata: null };
 }
 
-async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
+async function processAndInsertArticle(env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const { sourceType, platformMetadata } = await detectHnSource(toPlainText(item.comments) || undefined, feed.name);
 
 	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
@@ -129,23 +129,19 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, url:
 			? { type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
 			: null;
 
-	const articleId = await insertArticle(db, {
-		url,
-		title,
-		source,
-		publishedDate,
-		summary,
-		sourceType,
-		content,
-		ogImageUrl,
-		platformMetadata: metadataToStore,
+	await enqueueSourceArticleProcess(env, {
+		article: {
+			url,
+			title,
+			source,
+			publishedDate,
+			summary,
+			sourceType,
+			content,
+			ogImageUrl,
+			platformMetadata: metadataToStore,
+		},
 	});
-
-	if (!articleId) {
-		return console.info({ tag: 'RSS', msg: 'Insert skipped (duplicate URL)', feed: feed.name, url });
-	}
-
-	await enqueueArticleProcess(env, articleId);
 }
 
 // Source priorities for the upgrade-on-duplicate flow: RSS feeds default to 10
@@ -256,7 +252,7 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	let inserted = 0;
 	for (const { item, url } of newItems) {
 		try {
-			await processAndInsertArticle(db, env, item, url, feed, config);
+			await processAndInsertArticle(env, item, url, feed, config);
 			inserted++;
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Item insert failed, skipping', feed: feed.name, url, error: String(err) });

@@ -106,24 +106,32 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 		const row = result.rows[0];
 		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
-		const highlights = await generateYouTubeHighlights(videoId, row.transcript, env.AI);
-		if (!highlights) return null;
-
-		const generatedAt = new Date().toISOString();
-		return {
-			videoId,
-			value: {
-				version: '1.0',
-				model: CORE_TEXT_MODEL,
-				highlights: highlights.highlights,
-				generatedAt,
-			},
-			generatedAt,
-			count: highlights.highlights.length,
-		};
+		return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
 	} finally {
 		await db.end();
 	}
+}
+
+export async function prepareYouTubeHighlightsFromTranscript(
+	env: Env,
+	videoId: string,
+	transcript: TranscriptSegment[],
+): Promise<YouTubeHighlightsUpdate | null> {
+	const highlights = await generateYouTubeHighlights(videoId, transcript, env.AI);
+	if (!highlights) return null;
+
+	const generatedAt = new Date().toISOString();
+	return {
+		videoId,
+		value: {
+			version: '1.0',
+			model: CORE_TEXT_MODEL,
+			highlights: highlights.highlights,
+			generatedAt,
+		},
+		generatedAt,
+		count: highlights.highlights.length,
+	};
 }
 
 export async function saveYouTubeHighlights(db: DbClient, update: YouTubeHighlightsUpdate): Promise<void> {

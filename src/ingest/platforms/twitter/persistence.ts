@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, enqueueArticleProcess, insertArticle } from '@shared/db';
+import { ARTICLES_TABLE, enqueueArticleProcess, enqueueSourceArticleProcess, type SourceArticleDraft } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
@@ -31,7 +31,7 @@ async function enqueueMissingTwitterTranslation(env: Env, article: { id: string;
 	await enqueueArticleProcess(env, article.id);
 }
 
-async function insertTwitterArticle(
+async function enqueueTwitterArticle(
 	db: Client,
 	env: Env,
 	data: {
@@ -44,24 +44,26 @@ async function insertTwitterArticle(
 		ogImage: string | null;
 		metadata: PlatformMetadata;
 		hashTags?: string[];
+		sourceEvent?: SourceArticleDraft['twitterSourceEvent'];
 	},
-): Promise<string | null> {
-	const articleId = await insertArticle(db, {
-		url: data.url,
-		title: data.title,
-		source: data.source,
-		publishedDate: data.publishedDate,
-		summary: data.summary,
-		sourceType: 'twitter',
-		content: data.content,
-		ogImageUrl: data.ogImage,
-		platformMetadata: data.metadata,
-		keywords: data.hashTags,
+): Promise<boolean> {
+	if (await findArticleByUrl(db, data.url)) return false;
+	await enqueueSourceArticleProcess(env, {
+		article: {
+			url: data.url,
+			title: data.title,
+			source: data.source,
+			publishedDate: data.publishedDate,
+			summary: data.summary,
+			sourceType: 'twitter',
+			content: data.content,
+			ogImageUrl: data.ogImage,
+			platformMetadata: data.metadata,
+			keywords: data.hashTags,
+		},
+		...(data.sourceEvent ? { twitterSourceEvent: data.sourceEvent } : {}),
 	});
-	if (articleId) {
-		await enqueueArticleProcess(env, articleId);
-	}
-	return articleId;
+	return true;
 }
 
 async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expandedUrls: string[]): Promise<boolean> {
@@ -80,7 +82,7 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expanded
 
 	const meta = scraped.metadata;
 	const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
-	const id = await insertTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(db, env, {
 		url: normalizeUrl(tweet.url),
 		title: scraped.title,
 		source: tweet.author?.name || 'Twitter',
@@ -94,13 +96,13 @@ async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expanded
 			profilePicture: typeof meta?.authorProfilePicture === 'string' ? meta.authorProfilePicture : tweet.author?.profilePicture,
 			isBlueVerified: authorVerified,
 		}),
+		sourceEvent: { tweet, eventType: 'article', text: scraped.summary || stripTweetUrls(tweet.text) },
 	});
 
-	if (id) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: 'article', text: scraped.summary || stripTweetUrls(tweet.text) });
+	if (queued) {
 		console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
 	}
-	return !!id;
+	return queued;
 }
 
 const MIN_TWEET_LENGTH = 150;
@@ -150,7 +152,7 @@ async function handleFollowLink(
 		return { status: 'skipped', resolvedUrl, scraped };
 	}
 
-	const id = await insertTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(db, env, {
 		url: resolvedUrl,
 		title: scraped.title || 'Shared Article',
 		source: tweet.author?.name || 'Twitter',
@@ -165,13 +167,13 @@ async function handleFollowLink(
 			externalTitle: scraped.title || null,
 			originalTweetUrl: tweet.url,
 		}),
+		sourceEvent: { tweet, eventType: 'share', text: textWithoutUrls },
 	});
 
-	if (id) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: 'share', text: textWithoutUrls });
+	if (queued) {
 		console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
 	}
-	return id ? { status: 'inserted' } : { status: 'skipped', resolvedUrl, scraped };
+	return queued ? { status: 'inserted' } : { status: 'skipped', resolvedUrl, scraped };
 }
 
 async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
@@ -218,7 +220,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	);
 	const media = metadata.data.media ?? [];
 
-	const id = await insertTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(db, env, {
 		url: tweetUrl,
 		title: buildTweetTitle(tweet),
 		source: tweet.author?.name || 'Twitter',
@@ -228,13 +230,13 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 		ogImage: media[0]?.url ?? externalOgImage ?? null,
 		metadata,
 		hashTags: tweet.hashTags,
+		sourceEvent: { tweet, eventType: externalUrl ? 'share' : 'tweet', text: textWithoutUrls },
 	});
 
-	if (id) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: id, eventType: externalUrl ? 'share' : 'tweet', text: textWithoutUrls });
+	if (queued) {
 		console.info({ tag: 'TWITTER', msg: 'Saved tweet', author: tweet.author?.userName });
 	}
-	return !!id;
+	return queued;
 }
 
 async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolean> {
@@ -275,7 +277,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 		return true;
 	}
 
-	const id = await insertTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(db, env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
@@ -285,19 +287,13 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 		ogImage: allMedia[0]?.url ?? null,
 		metadata,
 		hashTags: first.hashTags,
+		sourceEvent: { tweet: first, eventType: 'thread', text: combinedText, media: allMedia, raw: { tweets: sorted } },
 	});
 
-	if (id) {
-		await upsertTwitterSourceEvent(db, first, {
-			articleId: id,
-			eventType: 'thread',
-			text: combinedText,
-			media: allMedia,
-			raw: { tweets: sorted },
-		});
+	if (queued) {
 		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
 	}
-	return !!id;
+	return queued;
 }
 
 export async function saveTweetGroups(db: Client, env: Env, groups: Tweet[][]): Promise<number> {

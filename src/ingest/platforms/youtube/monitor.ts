@@ -1,4 +1,4 @@
-import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '@shared/db';
+import { createDbClient, enqueueSourceArticleProcess, getExistingUrls } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
@@ -42,12 +42,7 @@ async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<
 }
 
 /** Returns true on insert, false on skip/failure. */
-async function processYouTubeVideo(
-	db: Awaited<ReturnType<typeof createDbClient>>,
-	env: Env,
-	channel: RSSFeed,
-	video: FeedVideo,
-): Promise<boolean> {
+async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo): Promise<boolean> {
 	const { videoId, url } = video;
 	const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '');
 	const youtubeMetadata: YouTubeMetadata = {
@@ -66,22 +61,21 @@ async function processYouTubeVideo(
 		return false;
 	}
 
-	const articleId = await insertArticle(db, {
-		url,
-		title: scraped.title,
-		source: channel.name,
-		publishedDate: scraped.publishedDate || new Date().toISOString(),
-		summary: scraped.summary || '',
-		sourceType: 'youtube',
-		content: scraped.content || null,
-		ogImageUrl: scraped.ogImageUrl || null,
-		platformMetadata,
+	await enqueueSourceArticleProcess(env, {
+		article: {
+			url,
+			title: scraped.title,
+			source: channel.name,
+			publishedDate: scraped.publishedDate || new Date().toISOString(),
+			summary: scraped.summary || '',
+			sourceType: 'youtube',
+			content: scraped.content || null,
+			ogImageUrl: scraped.ogImageUrl || null,
+			platformMetadata,
+		},
+		...(scraped.youtubeTranscript ? { youtubeTranscript: scraped.youtubeTranscript } : {}),
 	});
-	if (!articleId) return false;
-
-	if (scraped.youtubeTranscript) await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-	await enqueueArticleProcess(env, articleId);
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'Inserted video', channel: channel.name, title: scraped.title.slice(0, 60) });
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'Queued video', channel: channel.name, title: scraped.title.slice(0, 60) });
 	return true;
 }
 
@@ -107,7 +101,7 @@ async function processYouTubeChannel(
 	let inserted = 0;
 	for (const video of newVideos) {
 		try {
-			if (await processYouTubeVideo(db, env, channel, video)) inserted++;
+			if (await processYouTubeVideo(env, channel, video)) inserted++;
 		} catch (err) {
 			console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
 		}

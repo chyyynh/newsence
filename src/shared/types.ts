@@ -1,5 +1,5 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
-import type { ProcessableTable } from './db';
+import type { ProcessableTable, SourceArticleRef } from './db';
 import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
 
 /**
@@ -120,7 +120,8 @@ export interface Tweet {
 // Queue message types
 export type QueueMessage =
 	| { type: 'article_process'; article_id: string; target_table?: ProcessableTable }
-	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable };
+	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable }
+	| { type: 'source_article_process'; source_article: SourceArticleRef };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };

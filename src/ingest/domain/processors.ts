@@ -78,6 +78,20 @@ export async function runArticleProcessor(
 	return getProcessor(sourceType).process(article, deps);
 }
 
+export function buildProcessorUpdatePayload(
+	article: Article,
+	result: ProcessorResult,
+	embedding?: number[] | null,
+	metadataPatch?: Record<string, unknown>,
+): Record<string, unknown> {
+	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
+	const updatePayload: Record<string, unknown> = { ...result.updateData };
+	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
+	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
+	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
+	return updatePayload;
+}
+
 // `user_files` carries the same editorial fields as `articles` but with a few
 // different column names (content/extracted_text, url/source_url, etc.). The
 // processor emits keys that match `articles` column names; remap them when
@@ -103,11 +117,7 @@ export async function persistProcessorResult(
 	embedding?: number[] | null,
 	metadataPatch?: Record<string, unknown>,
 ): Promise<void> {
-	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
-	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
-	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
-	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
+	const updatePayload = buildProcessorUpdatePayload(article, result, embedding, metadataPatch);
 
 	if (Object.keys(updatePayload).length === 0) return;
 
