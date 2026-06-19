@@ -12,8 +12,9 @@ const MIN_CHARS_PER_PAGE = 20;
 export type ExtractionStatus = 'ok' | 'needs_ocr' | 'failed';
 
 export interface PdfExtractionResult {
-	text: string;
 	status: ExtractionStatus;
+	chars: number;
+	pages: number;
 }
 
 // Pure parse output (no DB) — shared by the workflow step and the /scrape endpoint.
@@ -82,7 +83,7 @@ export async function extractAndPersistPdf(env: Env, articleId: string, storageK
 	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
 	await recordExtraction(env, articleId, status, text, { chars, pages });
 	console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: articleId, status, chars, pages });
-	return { text, status };
+	return { status, chars, pages };
 }
 
 // Hard-failure path: extraction threw (bad bytes, R2 miss). Flag the row so it's

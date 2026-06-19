@@ -18,8 +18,36 @@ const ARTICLE_FIELDS_FOR_ARTICLES =
 const ARTICLE_FIELDS_FOR_USER_FILES =
 	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
 
+const ARTICLE_SHELL_FIELDS_FOR_ARTICLES =
+	'id, title, title_cn, summary, summary_cn, NULL::text AS content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
+
+const ARTICLE_SHELL_FIELDS_FOR_USER_FILES =
+	'id, title, title_cn, summary, summary_cn, NULL::text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
+
+const EMBEDDING_FIELDS_FOR_ARTICLES = 'id, title, summary, content, tags, keywords';
+const EMBEDDING_FIELDS_FOR_USER_FILES = 'id, title, summary, extracted_text AS content, tags, keywords';
+
 function articleFieldsFor(table: string): string {
 	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
+}
+
+function articleShellFieldsFor(table: string): string {
+	return table === USER_FILES_TABLE ? ARTICLE_SHELL_FIELDS_FOR_USER_FILES : ARTICLE_SHELL_FIELDS_FOR_ARTICLES;
+}
+
+function embeddingFieldsFor(table: string): string {
+	return table === USER_FILES_TABLE ? EMBEDDING_FIELDS_FOR_USER_FILES : EMBEDDING_FIELDS_FOR_ARTICLES;
+}
+
+async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
+	const db = await createDbClient(env);
+	try {
+		const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [articleId]);
+		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		return result.rows[0] as Article;
+	} finally {
+		await db.end();
+	}
 }
 
 type WorkflowParams = {
@@ -32,23 +60,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		const { article_id, target_table } = event.payload;
 		const table = resolveProcessableTable(target_table);
 		const isUserFile = table === USER_FILES_TABLE;
-		const fields = articleFieldsFor(table);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', article_id, table });
 
 		const article = (await step.do(
-			'fetch-article',
+			'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => {
-				const db = await createDbClient(this.env);
-				try {
-					const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [article_id]);
-					if (result.rows.length === 0) throw new Error(`Failed to fetch article ${article_id}: not found`);
-					return result.rows[0] as Article;
-				} finally {
-					await db.end();
-				}
-			},
+			() => fetchArticle(this.env, table, article_id, articleShellFieldsFor(table)),
 		)) as Article;
 		const sourceType = article.source_type ?? 'default';
 
@@ -64,7 +82,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 					() => extractAndPersistPdf(this.env, article_id, storageKey),
 				)) as PdfExtractionResult;
-				article.content = extracted.text;
+				console.info({ tag: 'WORKFLOW', msg: 'PDF extraction persisted', article_id, status: extracted.status, chars: extracted.chars });
 			} catch (error) {
 				console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed, continuing without content', article_id, error: String(error) });
 				await step.do('flag-extraction-failed', { retries: { limit: 1, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
@@ -76,11 +94,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		const processorResult = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-			() =>
-				runArticleProcessor(article, sourceType, {
+			async () => {
+				const processingArticle = await fetchArticle(this.env, table, article_id, articleFieldsFor(table));
+				return runArticleProcessor(processingArticle, sourceType, {
 					env: this.env,
 					table,
-				}),
+				});
+			},
 		)) as ProcessorResult;
 
 		if (!article.og_image_url && !processorResult.updateData.og_image_url) {
@@ -149,7 +169,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'generate-and-save-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
-				const text = buildEmbeddingTextForArticle(article, processorResult);
+				const embeddingArticle = await fetchArticle(this.env, table, article_id, embeddingFieldsFor(table));
+				const text = buildEmbeddingTextForArticle(embeddingArticle, processorResult);
 				if (!text || !this.env.AI) return false;
 				const embedding = await generateArticleEmbedding(text, this.env.AI);
 				if (!embedding) return false;
