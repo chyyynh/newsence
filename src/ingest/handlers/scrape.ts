@@ -1,9 +1,9 @@
 import { parseJsonBody, requireAuth } from '@shared/auth';
-import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
+import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
+import { putScrapeInputTemp } from '@shared/r2-temp';
 import type { Env } from '@shared/types';
 import { MAX_UPLOAD_BYTES } from '@shared/upload';
 import { extractSource } from '../extract';
-import { TMP_SCRAPE_PREFIX } from '../workflows/scrape.workflow';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
 // same wildcard CORS and 10 MB body cap. The actual extraction lives in
@@ -94,9 +94,7 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 	const sniffed = sniffMediaType(input.bytes.subarray(0, MAGIC_SNIFF_BYTES));
 	if (!sniffed) return Response.json({ error: 'Unrecognized file type' }, { status: 415, headers: CORS_HEADERS });
 
-	const key = `${TMP_SCRAPE_PREFIX}${crypto.randomUUID()}.${extensionFromMime(sniffed)}`;
-	await env.R2.put(key, input.bytes, { httpMetadata: { contentType: sniffed } });
-	return { kind: 'r2', key };
+	return putScrapeInputTemp(env, input.bytes, sniffed);
 }
 
 // GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent

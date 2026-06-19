@@ -1,6 +1,7 @@
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@shared/mime';
+import { readTempBytes } from '@shared/r2-temp';
 import type { Env } from '@shared/types';
 import type { ScrapedContent } from '@shared/web';
 import { scrapeUrl } from './platforms/registry';
@@ -160,9 +161,8 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 		case 'bytes':
 			return extractFromBytes(input.bytes, input.contentType);
 		case 'r2': {
-			const obj = await env.R2.get(input.key);
-			if (!obj) throw new Error(`R2 object missing: ${input.key}`);
-			return extractFromBytes(new Uint8Array(await obj.arrayBuffer()), obj.httpMetadata?.contentType);
+			const { bytes, contentType } = await readTempBytes(env, input.key, { label: 'extract input temp object' });
+			return extractFromBytes(bytes, contentType);
 		}
 	}
 }

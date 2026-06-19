@@ -15,7 +15,12 @@ import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
-import { readSourceArticleDraft, type SourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
+import {
+	deleteSourceArticleDraft,
+	readSourceArticleDraft,
+	type SourceArticleDraft,
+	type WorkflowQueueTarget,
+} from '@shared/workflow-queue';
 import {
 	buildEmbeddingTextForArticle,
 	buildProcessorUpdatePayload,
@@ -30,7 +35,7 @@ import {
 	saveYouTubeHighlights,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
-import { createPdfTextArtifact, deletePdfTextArtifact, type PdfTextArtifactResult, readPdfTextArtifact } from './pdf-text-artifact';
+import { createPdfTextTemp, deletePdfTextTemp, type PdfTextTempResult, readPdfTextTemp } from './pdf-text-temp';
 
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
@@ -275,20 +280,20 @@ async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<A
 	return { ...article, content: null };
 }
 
-function extractionMetadata(pdfTextArtifact: PdfTextArtifactResult | null): Record<string, unknown> | undefined {
-	if (!pdfTextArtifact) return undefined;
+function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {
+	if (!pdfTextTemp) return undefined;
 	return {
 		extraction: {
-			status: pdfTextArtifact.status,
+			status: pdfTextTemp.status,
 			parser: 'liteparse',
-			...(pdfTextArtifact.status === 'failed' ? {} : { chars: pdfTextArtifact.chars, pages: pdfTextArtifact.pages }),
+			...(pdfTextTemp.status === 'failed' ? {} : { chars: pdfTextTemp.chars, pages: pdfTextTemp.pages }),
 		},
 	};
 }
 
-async function withPdfTextArtifact(env: Env, article: Article, pdfTextArtifact: PdfTextArtifactResult | null): Promise<Article> {
-	if (!pdfTextArtifact?.textStorageKey) return article;
-	return { ...article, content: await readPdfTextArtifact(env, pdfTextArtifact.textStorageKey) };
+async function withPdfTextTemp(env: Env, article: Article, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
+	if (!pdfTextTemp?.textStorageKey) return article;
+	return { ...article, content: await readPdfTextTemp(env, pdfTextTemp.textStorageKey) };
 }
 
 async function analyzeArticleAndGenerateEmbedding(
@@ -308,7 +313,7 @@ async function stagePdfExtraction(
 	context: WorkflowRunContext,
 	article: ArticleShell,
 	step: WorkflowStep,
-): Promise<PdfTextArtifactResult | null> {
+): Promise<PdfTextTempResult | null> {
 	const { target, table } = context;
 	if (
 		target.kind !== 'row' ||
@@ -320,19 +325,19 @@ async function stagePdfExtraction(
 	}
 
 	try {
-		const pdfTextArtifact = (await step.do(
+		const pdfTextTemp = (await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => createPdfTextArtifact(env, target.articleId, article.storage_key as string),
-		)) as PdfTextArtifactResult;
+			() => createPdfTextTemp(env, target.articleId, article.storage_key as string),
+		)) as PdfTextTempResult;
 		console.info({
 			tag: 'WORKFLOW',
 			msg: 'PDF extraction staged',
 			article_id: target.articleId,
-			status: pdfTextArtifact.status,
-			chars: pdfTextArtifact.chars,
+			status: pdfTextTemp.status,
+			chars: pdfTextTemp.chars,
 		});
-		return pdfTextArtifact;
+		return pdfTextTemp;
 	} catch (error) {
 		console.warn({
 			tag: 'WORKFLOW',
@@ -510,11 +515,11 @@ async function persistRowTarget(
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
-	pdfTextArtifact: PdfTextArtifactResult | null,
+	pdfTextTemp: PdfTextTempResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
 	return withDbTransaction(env, 'row workflow', async (db) => {
-		const extractedPdfText = pdfTextArtifact?.textStorageKey ? await readPdfTextArtifact(env, pdfTextArtifact.textStorageKey) : null;
+		const extractedPdfText = pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, pdfTextTemp.textStorageKey) : null;
 		const finalResult: ProcessorResult = {
 			...result,
 			updateData: {
@@ -523,7 +528,7 @@ async function persistRowTarget(
 			},
 		};
 
-		await persistProcessorResult(target.articleId, article, finalResult, { db, table }, embedding, extractionMetadata(pdfTextArtifact));
+		await persistProcessorResult(target.articleId, article, finalResult, { db, table }, embedding, extractionMetadata(pdfTextTemp));
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
@@ -537,51 +542,47 @@ async function persistTarget(
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
-	pdfTextArtifact: PdfTextArtifactResult | null,
+	pdfTextTemp: PdfTextTempResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
 	if (context.target.kind === 'source') return persistSourceTarget(env, context, result, embedding, youtubeHighlights);
-	return persistRowTarget(env, context.target, context.table, article, result, embedding, pdfTextArtifact, youtubeHighlights);
+	return persistRowTarget(env, context.target, context.table, article, result, embedding, pdfTextTemp, youtubeHighlights);
 }
 
-async function cleanupTargetArtifacts(
+async function cleanupTargetTemps(
 	env: Env,
 	context: WorkflowRunContext,
-	pdfTextArtifact: PdfTextArtifactResult | null,
+	pdfTextTemp: PdfTextTempResult | null,
 	step: WorkflowStep,
 ): Promise<void> {
 	const { target } = context;
-	if (!pdfTextArtifact?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.sourceArticle)) return;
+	if (!pdfTextTemp?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.sourceArticle)) return;
 
-	await step.do('cleanup-workflow-artifacts', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
-		cleanupWorkflowArtifacts(env, context, pdfTextArtifact),
+	await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
+		cleanupWorkflowTempObjects(env, context, pdfTextTemp),
 	);
 }
 
-async function cleanupWorkflowArtifacts(
-	env: Env,
-	context: WorkflowRunContext,
-	pdfTextArtifact: PdfTextArtifactResult | null,
-): Promise<void> {
+async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<void> {
 	const { target } = context;
-	const failures: Array<{ artifact: string; key: string; error: string }> = [];
-	const deleteArtifact = async (artifact: string, key: string, deleteFn: () => Promise<void>) => {
+	const failures: Array<{ object: string; key: string; error: string }> = [];
+	const deleteTemp = async (object: string, key: string, deleteFn: () => Promise<void>) => {
 		try {
 			await deleteFn();
 		} catch (error) {
-			failures.push({ artifact, key, error: String(error) });
+			failures.push({ object, key, error: String(error) });
 		}
 	};
 
-	if (pdfTextArtifact?.textStorageKey) {
-		await deleteArtifact('pdf_text', pdfTextArtifact.textStorageKey, () => deletePdfTextArtifact(env, pdfTextArtifact.textStorageKey!));
+	if (pdfTextTemp?.textStorageKey) {
+		await deleteTemp('pdf_text', pdfTextTemp.textStorageKey, () => deletePdfTextTemp(env, pdfTextTemp.textStorageKey!));
 	}
 
 	if (target.kind === 'source' && 'r2Key' in target.sourceArticle) {
-		await deleteArtifact('source_draft', target.sourceArticle.r2Key, () => env.R2.delete(target.sourceArticle.r2Key));
+		await deleteTemp('source_draft', target.sourceArticle.r2Key, () => deleteSourceArticleDraft(env, target.sourceArticle));
 	}
 
-	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Artifact cleanup incomplete', failures });
+	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });
 }
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
@@ -596,13 +597,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });
 
-		const pdfTextArtifact = await stagePdfExtraction(this.env, context, article, step);
+		const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
 
 		const { processorResult, embedding } = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const fullArticle = await withPdfTextArtifact(this.env, await loadTargetArticle(this.env, context), pdfTextArtifact);
+				const fullArticle = await withPdfTextTemp(this.env, await loadTargetArticle(this.env, context), pdfTextTemp);
 				return analyzeArticleAndGenerateEmbedding(this.env, fullArticle, sourceType, context.table);
 			},
 		)) as ArticleAnalysisStepResult;
@@ -616,10 +617,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		const articleId = (await step.do(
 			context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => persistTarget(this.env, context, article, finalProcessorResult, embedding, pdfTextArtifact, youtubeHighlights),
+			() => persistTarget(this.env, context, article, finalProcessorResult, embedding, pdfTextTemp, youtubeHighlights),
 		)) as string;
 
-		await cleanupTargetArtifacts(this.env, context, pdfTextArtifact, step);
+		await cleanupTargetTemps(this.env, context, pdfTextTemp, step);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(context, article) });
 		return { success: true, article_id: articleId };

@@ -7,6 +7,7 @@ import {
 	type YoutubeTranscriptRow,
 } from './db';
 import type { TwitterMedia } from './platform-metadata';
+import { deleteTempObject, putTempText, readTempText } from './r2-temp';
 import type { Env, Tweet } from './types';
 import { validateImageUrl } from './web';
 
@@ -82,18 +83,19 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 
 async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
 	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
-	await env.R2.put(r2Key, serialized, {
-		httpMetadata: { contentType: 'application/json; charset=utf-8' },
-	});
+	await putTempText(env, r2Key, serialized, 'application/json; charset=utf-8');
 	return { url, r2Key };
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<SourceArticleDraft> {
 	if ('inline' in ref) return ref.inline;
-	if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
-	const obj = await env.R2.get(ref.r2Key);
-	if (!obj) throw new Error(`Source article draft missing: ${ref.r2Key}`);
-	return JSON.parse(await obj.text()) as SourceArticleDraft;
+	const text = await readTempText(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
+	return JSON.parse(text) as SourceArticleDraft;
+}
+
+export async function deleteSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<void> {
+	if (!('r2Key' in ref)) return;
+	await deleteTempObject(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 }
 
 export async function ensureWorkflowsForQueueMessage(
@@ -192,7 +194,7 @@ function isReusableSourceWorkflowStatus(status: string): boolean {
 async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleRef, workflowId: string): Promise<void> {
 	if (!('r2Key' in sourceArticle)) return;
 	try {
-		await env.R2.delete(sourceArticle.r2Key);
+		await deleteSourceArticleDraft(env, sourceArticle);
 	} catch (err) {
 		console.warn({
 			tag: 'ARTICLE-QUEUE',
