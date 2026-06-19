@@ -565,17 +565,32 @@ async function cleanupTargetArtifacts(
 	pdfExtraction: PdfExtractionResult | null,
 	step: WorkflowStep,
 ): Promise<void> {
+	if (!pdfExtraction?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.source_article)) return;
+
+	await step.do('cleanup-workflow-artifacts', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
+		cleanupWorkflowArtifacts(env, target, pdfExtraction),
+	);
+}
+
+async function cleanupWorkflowArtifacts(env: Env, target: WorkflowQueueTarget, pdfExtraction: PdfExtractionResult | null): Promise<void> {
+	const failures: Array<{ artifact: string; key: string; error: string }> = [];
+	const deleteArtifact = async (artifact: string, key: string, deleteFn: () => Promise<void>) => {
+		try {
+			await deleteFn();
+		} catch (error) {
+			failures.push({ artifact, key, error: String(error) });
+		}
+	};
+
 	if (pdfExtraction?.textStorageKey) {
-		await step.do('cleanup-pdf-text-artifact', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
-			deletePdfTextArtifact(env, pdfExtraction.textStorageKey!),
-		);
+		await deleteArtifact('pdf_text', pdfExtraction.textStorageKey, () => deletePdfTextArtifact(env, pdfExtraction.textStorageKey!));
 	}
 
 	if (target.kind === 'source' && 'r2Key' in target.source_article) {
-		await step.do('cleanup-source-article-draft', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
-			env.R2.delete(target.source_article.r2Key),
-		);
+		await deleteArtifact('source_draft', target.source_article.r2Key, () => env.R2.delete(target.source_article.r2Key));
 	}
+
+	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Artifact cleanup incomplete', failures });
 }
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
