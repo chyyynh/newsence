@@ -14,7 +14,7 @@ import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
 import { articleFromSourceDraft, readSourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
-import { syncArticleEntities } from '../domain/entities';
+import type { Client } from 'pg';
 import {
 	buildEmbeddingTextForArticle,
 	buildProcessorUpdatePayload,
@@ -143,6 +143,38 @@ function extractMetaName(html: string, name: string): string | null {
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
 	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
 	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+}
+
+async function syncArticleEntities(
+	db: Client,
+	articleId: string,
+	entities: Array<{ name: string; name_cn: string; type: string }>,
+): Promise<void> {
+	if (!entities.length) return;
+
+	for (const entity of entities) {
+		const canonical = entity.name.toLowerCase().trim();
+		if (!canonical) continue;
+
+		try {
+			const result = await db.query(
+				`INSERT INTO entities (canonical_name, name, name_cn, type)
+				 VALUES ($1, $2, $3, $4)
+				 ON CONFLICT (canonical_name) DO UPDATE SET
+				   updated_at = NOW()
+				 RETURNING id`,
+				[canonical, entity.name, entity.name_cn, entity.type],
+			);
+			const entityId = result.rows[0]?.id;
+			if (!entityId) continue;
+
+			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
+		} catch (err) {
+			console.error({ tag: 'ENTITIES', msg: 'Failed to sync entity', entity: entity.name, error: String(err) });
+		}
+	}
+
+	console.info({ tag: 'ENTITIES', msg: 'Synced', articleId, count: entities.length });
 }
 
 function articleFieldsFor(table: ProcessableTable): string {

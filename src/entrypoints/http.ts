@@ -1,7 +1,6 @@
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleBackfillOgDims } from '@media/backfill-og-dims';
-import { handleDeleteAsset } from '@media/delete-asset';
 import { handleOrphanGc } from '@media/orphan-gc';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
@@ -26,6 +25,8 @@ const EMBED_CORS_HEADERS: Record<string, string> = {
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const EMBED_MAX_TEXT = 8000;
 const SEARCH_LIMIT_MAX = 500;
+const DELETABLE_PREFIX = 'users/';
+const R2_BATCH_LIMIT = 1000;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/embed': (req, env) => handleEmbed(req, env),
@@ -77,6 +78,33 @@ function health(): Response {
 		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
+}
+
+async function handleDeleteAsset(request: Request, env: Env): Promise<Response> {
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ storageKeys?: unknown }>(request);
+	if (body instanceof Response) return body;
+
+	const requested = Array.isArray(body.storageKeys) ? body.storageKeys : [];
+	const keys = requested.filter((k): k is string => typeof k === 'string' && k.startsWith(DELETABLE_PREFIX));
+	const rejected = requested.length - keys.length;
+
+	if (keys.length === 0) {
+		return Response.json({ success: true, result: { deleted: 0, rejected } });
+	}
+
+	try {
+		for (let i = 0; i < keys.length; i += R2_BATCH_LIMIT) {
+			await env.R2.delete(keys.slice(i, i + R2_BATCH_LIMIT));
+		}
+	} catch (err) {
+		console.error({ tag: 'MEDIA_DELETE', msg: 'R2 batch delete failed', count: keys.length, error: String(err) });
+		return Response.json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'R2 delete failed' } }, { status: 500 });
+	}
+
+	return Response.json({ success: true, result: { deleted: keys.length, rejected } });
 }
 
 async function handleEmbed(request: Request, env: Env): Promise<Response> {
