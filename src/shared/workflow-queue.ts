@@ -150,7 +150,7 @@ async function ensureSourceArticleWorkflow(
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
 			id: workflowId,
-			params: { source_article: sourceArticle },
+			params: { target: { kind: 'source', source_article: sourceArticle } },
 		});
 		return { id: instance.id, created: true, sourceRefUsed: true };
 	} catch {
@@ -167,7 +167,7 @@ async function ensureSourceArticleWorkflow(
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
 			id: retryWorkflowId,
-			params: { source_article: sourceArticle },
+			params: { target: { kind: 'source', source_article: sourceArticle } },
 		});
 		return { id: instance.id, created: true, sourceRefUsed: true };
 	} catch (err) {
@@ -211,8 +211,7 @@ async function ensureArticleWorkflow(
 		const instance = await env.MONITOR_WORKFLOW.create({
 			id: workflowId,
 			params: {
-				article_id: articleId,
-				target_table: targetTable,
+				target: { kind: 'row', article_id: articleId, target_table: targetTable },
 			},
 		});
 		return { id: instance.id, created: true };
@@ -252,7 +251,7 @@ async function createUserFileWorkflowInstance(env: Env, workflowId: string, user
 	try {
 		const instance = await env.MONITOR_WORKFLOW.create({
 			id: workflowId,
-			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
+			params: { target: { kind: 'row', article_id: userFileId, target_table: USER_FILES_TABLE } },
 		});
 		return instance.id;
 	} catch (err) {
@@ -263,7 +262,7 @@ async function createUserFileWorkflowInstance(env: Env, workflowId: string, user
 
 		const instance = await env.MONITOR_WORKFLOW.create({
 			id: `${workflowId}-${crypto.randomUUID()}`,
-			params: { article_id: userFileId, target_table: USER_FILES_TABLE },
+			params: { target: { kind: 'row', article_id: userFileId, target_table: USER_FILES_TABLE } },
 		});
 		return instance.id;
 	}
