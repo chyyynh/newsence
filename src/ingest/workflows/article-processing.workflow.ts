@@ -13,7 +13,7 @@ import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
-import { articleFromSourceDraft, readSourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
+import { articleFromSourceDraft, readSourceArticleDraft, type SourceArticleDraft, type WorkflowQueueTarget } from '@shared/workflow-queue';
 import type { Client } from 'pg';
 import {
 	buildEmbeddingTextForArticle,
@@ -54,7 +54,7 @@ type WorkflowParams = {
 };
 
 type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
-type SourceTarget = Extract<WorkflowQueueTarget, { kind: 'source' }>;
+type SourceDraftReader = () => Promise<SourceArticleDraft>;
 type ArticleShell = Article & { has_content?: boolean };
 type OgImageResult = {
 	ogImageUrl: string | null;
@@ -207,6 +207,18 @@ function targetLogContext(target: WorkflowQueueTarget, table: ProcessableTable, 
 	return target.kind === 'row' ? { article_id: target.article_id, table } : { url: article.url, table };
 }
 
+function createSourceDraftReader(env: Env, target: WorkflowQueueTarget): SourceDraftReader {
+	let cached: Promise<SourceArticleDraft> | undefined;
+	return async () => {
+		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
+		cached ??= readSourceArticleDraft(env, target.source_article).catch((error) => {
+			cached = undefined;
+			throw error;
+		});
+		return cached;
+	};
+}
+
 async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
 	const db = await createDbClient(env);
 	try {
@@ -218,15 +230,26 @@ async function fetchArticle(env: Env, table: ProcessableTable, articleId: string
 	}
 }
 
-async function loadTargetArticle(env: Env, target: WorkflowQueueTarget, table: ProcessableTable, fieldsForRow: string): Promise<Article> {
-	if (target.kind === 'source') return articleFromSourceDraft(await readSourceArticleDraft(env, target.source_article));
+async function loadTargetArticle(
+	env: Env,
+	target: WorkflowQueueTarget,
+	table: ProcessableTable,
+	fieldsForRow: string,
+	readSourceDraft: SourceDraftReader,
+): Promise<Article> {
+	if (target.kind === 'source') return articleFromSourceDraft(await readSourceDraft());
 	return fetchArticle(env, table, target.article_id, fieldsForRow);
 }
 
-async function loadTargetShell(env: Env, target: WorkflowQueueTarget, table: ProcessableTable): Promise<ArticleShell> {
+async function loadTargetShell(
+	env: Env,
+	target: WorkflowQueueTarget,
+	table: ProcessableTable,
+	readSourceDraft: SourceDraftReader,
+): Promise<ArticleShell> {
 	const article =
 		target.kind === 'source'
-			? articleFromSourceDraft(await readSourceArticleDraft(env, target.source_article))
+			? articleFromSourceDraft(await readSourceDraft())
 			: await fetchArticle(env, table, target.article_id, articleShellFieldsFor(table));
 	return { ...article, content: null };
 }
@@ -337,6 +360,7 @@ async function prepareYoutubeHighlights(
 	article: Article,
 	sourceType: string,
 	step: WorkflowStep,
+	readSourceDraft: SourceDraftReader,
 ): Promise<YouTubeHighlightsUpdate | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;
 
@@ -345,7 +369,7 @@ async function prepareYoutubeHighlights(
 			'generate-youtube-highlights',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
-				const draft = await readSourceArticleDraft(env, target.source_article);
+				const draft = await readSourceDraft();
 				if (!draft.youtubeTranscript) return null;
 				return prepareYouTubeHighlightsFromTranscript(
 					env,
@@ -411,12 +435,12 @@ async function insertFinalSourceArticle(
 
 async function persistSourceTarget(
 	env: Env,
-	target: SourceTarget,
 	result: ProcessorResult,
 	embedding: number[] | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
+	readSourceDraft: SourceDraftReader,
 ): Promise<string> {
-	const draft = await readSourceArticleDraft(env, target.source_article);
+	const draft = await readSourceDraft();
 	const fullArticle = articleFromSourceDraft(draft);
 	const db = await createDbClient(env);
 	try {
@@ -493,8 +517,9 @@ async function persistTarget(
 	embedding: number[] | null,
 	pdfExtraction: PdfExtractionResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
+	readSourceDraft: SourceDraftReader,
 ): Promise<string> {
-	if (target.kind === 'source') return persistSourceTarget(env, target, result, embedding, youtubeHighlights);
+	if (target.kind === 'source') return persistSourceTarget(env, result, embedding, youtubeHighlights, readSourceDraft);
 	return persistRowTarget(env, target, table, article, result, embedding, pdfExtraction, youtubeHighlights);
 }
 
@@ -521,10 +546,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { target } = event.payload;
 		const table = targetTable(target);
+		const readSourceDraft = createSourceDraftReader(this.env, target);
 		const article = (await step.do(
 			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => loadTargetShell(this.env, target, table),
+			() => loadTargetShell(this.env, target, table, readSourceDraft),
 		)) as ArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
@@ -538,7 +564,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const fullArticle = await withPdfExtractionText(
 					this.env,
-					await loadTargetArticle(this.env, target, table, articleFieldsFor(table)),
+					await loadTargetArticle(this.env, target, table, articleFieldsFor(table), readSourceDraft),
 					pdfExtraction,
 				);
 				return runArticleProcessor(fullArticle, sourceType, { env: this.env, table });
@@ -553,7 +579,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			async () => {
 				const embeddingArticle = await withPdfExtractionText(
 					this.env,
-					await loadTargetArticle(this.env, target, table, embeddingFieldsFor(table)),
+					await loadTargetArticle(this.env, target, table, embeddingFieldsFor(table), readSourceDraft),
 					pdfExtraction,
 				);
 				const text = buildEmbeddingTextForArticle(embeddingArticle, finalProcessorResult);
@@ -562,11 +588,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
-		const youtubeHighlights = await prepareYoutubeHighlights(this.env, target, article, sourceType, step);
+		const youtubeHighlights = await prepareYoutubeHighlights(this.env, target, article, sourceType, step, readSourceDraft);
 		const articleId = (await step.do(
 			target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => persistTarget(this.env, target, table, article, finalProcessorResult, embedding, pdfExtraction, youtubeHighlights),
+			() =>
+				persistTarget(this.env, target, table, article, finalProcessorResult, embedding, pdfExtraction, youtubeHighlights, readSourceDraft),
 		)) as string;
 
 		await cleanupTargetArtifacts(this.env, target, pdfExtraction, step);
