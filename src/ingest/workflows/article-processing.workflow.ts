@@ -46,9 +46,6 @@ const ARTICLE_SHELL_FIELDS_FOR_ARTICLES =
 const ARTICLE_SHELL_FIELDS_FOR_USER_FILES =
 	'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
 
-const EMBEDDING_FIELDS_FOR_ARTICLES = 'id, title, summary, content, tags, keywords';
-const EMBEDDING_FIELDS_FOR_USER_FILES = 'id, title, summary, extracted_text AS content, tags, keywords';
-
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
 };
@@ -65,6 +62,10 @@ type OgImageDimensions = Awaited<ReturnType<typeof measureImageDimensions>>;
 type OgImagePatch = {
 	ogImageUrl: string | null;
 	ogImageDimensions: OgImageDimensions | null;
+};
+type ArticleAnalysisStepResult = {
+	processorResult: ProcessorResult;
+	embedding: number[] | null;
 };
 
 async function fetchOgImage(url: string): Promise<OgImageResult | null> {
@@ -195,10 +196,6 @@ function articleShellFieldsFor(table: ProcessableTable): string {
 	return table === USER_FILES_TABLE ? ARTICLE_SHELL_FIELDS_FOR_USER_FILES : ARTICLE_SHELL_FIELDS_FOR_ARTICLES;
 }
 
-function embeddingFieldsFor(table: ProcessableTable): string {
-	return table === USER_FILES_TABLE ? EMBEDDING_FIELDS_FOR_USER_FILES : EMBEDDING_FIELDS_FOR_ARTICLES;
-}
-
 function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 	return target.kind === 'row' ? (target.target_table ?? ARTICLES_TABLE) : ARTICLES_TABLE;
 }
@@ -289,6 +286,18 @@ function extractionMetadata(extraction: PdfExtractionResult | null): Record<stri
 async function withPdfExtractionText(env: Env, article: Article, extraction: PdfExtractionResult | null): Promise<Article> {
 	if (!extraction?.textStorageKey) return article;
 	return { ...article, content: await readPdfTextArtifact(env, extraction.textStorageKey) };
+}
+
+async function analyzeArticleAndGenerateEmbedding(
+	env: Env,
+	article: Article,
+	sourceType: string,
+	table: ProcessableTable,
+): Promise<ArticleAnalysisStepResult> {
+	const processorResult = await runArticleProcessor(article, sourceType, { env, table });
+	const text = buildEmbeddingTextForArticle(article, processorResult);
+	const embedding = text && env.AI ? await generateArticleEmbedding(text, env.AI) : null;
+	return { processorResult, embedding };
 }
 
 async function stagePdfExtraction(
@@ -579,7 +588,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 		const pdfExtraction = await stagePdfExtraction(this.env, target, table, article, step);
 
-		const processorResult = (await step.do(
+		const { processorResult, embedding } = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
@@ -588,26 +597,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					await loadTargetArticle(this.env, target, table, articleFieldsFor(table), readSourceDraft),
 					pdfExtraction,
 				);
-				return runArticleProcessor(fullArticle, sourceType, { env: this.env, table });
+				return analyzeArticleAndGenerateEmbedding(this.env, fullArticle, sourceType, table);
 			},
-		)) as ProcessorResult;
+		)) as ArticleAnalysisStepResult;
 
 		const finalProcessorResult = mergeProcessorResult(processorResult, await resolveOgImagePatch(this.env, article, processorResult, step));
-
-		const embedding = (await step.do(
-			'generate-embedding',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			async () => {
-				const embeddingArticle = await withPdfExtractionText(
-					this.env,
-					await loadTargetArticle(this.env, target, table, embeddingFieldsFor(table), readSourceDraft),
-					pdfExtraction,
-				);
-				const text = buildEmbeddingTextForArticle(embeddingArticle, finalProcessorResult);
-				if (!text || !this.env.AI) return null;
-				return generateArticleEmbedding(text, this.env.AI);
-			},
-		)) as number[] | null;
 
 		const youtubeHighlights = await prepareYoutubeHighlights(this.env, target, article, sourceType, step, readSourceDraft);
 		const articleId = (await step.do(
