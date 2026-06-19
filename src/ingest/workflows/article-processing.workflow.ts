@@ -8,7 +8,7 @@ import { isExtractablePdfFile } from '@shared/upload';
 import { syncArticleEntities } from '../domain/entities';
 import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor } from '../domain/processors';
 import { fetchOgImage } from '../platforms/web-og';
-import { generateAndSaveYouTubeHighlights } from '../platforms/youtube/highlights';
+import { prepareYouTubeHighlights, saveYouTubeHighlights, type YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
 import { deletePdfTextArtifact, extractPdfToTextArtifact, type PdfExtractionResult, readPdfTextArtifact } from './pdf-extraction';
 
 const ARTICLE_FIELDS_FOR_ARTICLES =
@@ -164,6 +164,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as number[] | null;
 
+		const youtubeHighlightsUpdate =
+			sourceType === 'youtube' && article.platform_metadata?.type === 'youtube'
+				? ((await step.do(
+						'generate-youtube-highlights',
+						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+						() => prepareYouTubeHighlights(this.env, article),
+					)) as YouTubeHighlightsUpdate | null)
+				: null;
+
 		// Full-content translation is a display artifact, not canonical ingest data.
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
 			const db = await createDbClient(this.env);
@@ -199,6 +208,20 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 						enrichments: Object.keys(finalProcessorResult.enrichments).join(', '),
 					});
 				}
+				// article_entities FKs point at public articles only.
+				if (!isUserFile && finalProcessorResult.updateData.entities?.length) {
+					await syncArticleEntities(db, article_id, finalProcessorResult.updateData.entities);
+				}
+				if (youtubeHighlightsUpdate) {
+					await saveYouTubeHighlights(db, youtubeHighlightsUpdate);
+					console.info({
+						tag: 'WORKFLOW',
+						msg: 'YouTube highlights saved',
+						article_id,
+						videoId: youtubeHighlightsUpdate.videoId,
+						count: youtubeHighlightsUpdate.count,
+					});
+				}
 			} finally {
 				await db.end();
 			}
@@ -207,30 +230,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		if (pdfExtraction?.textStorageKey) {
 			await step.do('cleanup-pdf-text-artifact', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
 				deletePdfTextArtifact(this.env, pdfExtraction.textStorageKey!),
-			);
-		}
-
-		// article_entities FKs point at public articles only.
-		if (!isUserFile && processorResult.updateData.entities?.length) {
-			await step.do(
-				'sync-entities',
-				{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
-				async () => {
-					const db = await createDbClient(this.env);
-					try {
-						await syncArticleEntities(db, article_id, processorResult.updateData.entities!);
-					} finally {
-						await db.end();
-					}
-				},
-			);
-		}
-
-		if (sourceType === 'youtube' && article.platform_metadata?.type === 'youtube') {
-			await step.do(
-				'generate-youtube-highlights',
-				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-				() => generateAndSaveYouTubeHighlights(this.env, article_id, article),
 			);
 		}
 

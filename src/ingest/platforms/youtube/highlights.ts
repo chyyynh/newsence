@@ -1,5 +1,5 @@
 import { CORE_TEXT_MODEL, generateJson } from '@shared/ai';
-import { createDbClient } from '@shared/db';
+import { createDbClient, type DbClient } from '@shared/db';
 import type { Article, Env } from '@shared/types';
 import type { TranscriptSegment } from '@shared/web';
 
@@ -12,6 +12,18 @@ interface YouTubeHighlight {
 
 interface YouTubeHighlightsResult {
 	highlights: YouTubeHighlight[];
+}
+
+export interface YouTubeHighlightsUpdate {
+	videoId: string;
+	value: {
+		version: '1.0';
+		model: string;
+		highlights: YouTubeHighlight[];
+		generatedAt: string;
+	};
+	generatedAt: string;
+	count: number;
 }
 
 const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 YouTube 影片逐字稿，找出 5-8 個最重要的主題段落。
@@ -79,11 +91,11 @@ async function generateYouTubeHighlights(
 	return result;
 }
 
-export async function generateAndSaveYouTubeHighlights(env: Env, articleId: string, article: Article): Promise<void> {
-	if (article.platform_metadata?.type !== 'youtube') return;
+export async function prepareYouTubeHighlights(env: Env, article: Article): Promise<YouTubeHighlightsUpdate | null> {
+	if (article.platform_metadata?.type !== 'youtube') return null;
 
 	const videoId = article.platform_metadata.data.videoId;
-	if (!videoId) return;
+	if (!videoId) return null;
 
 	const db = await createDbClient(env);
 	try {
@@ -92,24 +104,32 @@ export async function generateAndSaveYouTubeHighlights(env: Env, articleId: stri
 			ai_highlights: unknown;
 		}>('SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1', [videoId]);
 		const row = result.rows[0];
-		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return;
+		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
 		const highlights = await generateYouTubeHighlights(videoId, row.transcript, env.AI);
-		if (!highlights) return;
+		if (!highlights) return null;
 
 		const generatedAt = new Date().toISOString();
-		await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
-			JSON.stringify({
+		return {
+			videoId,
+			value: {
 				version: '1.0',
 				model: CORE_TEXT_MODEL,
 				highlights: highlights.highlights,
 				generatedAt,
-			}),
+			},
 			generatedAt,
-			videoId,
-		]);
-		console.info({ tag: 'WORKFLOW', msg: 'YouTube highlights saved', article_id: articleId, videoId, count: highlights.highlights.length });
+			count: highlights.highlights.length,
+		};
 	} finally {
 		await db.end();
 	}
+}
+
+export async function saveYouTubeHighlights(db: DbClient, update: YouTubeHighlightsUpdate): Promise<void> {
+	await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
+		JSON.stringify(update.value),
+		update.generatedAt,
+		update.videoId,
+	]);
 }
