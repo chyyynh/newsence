@@ -103,24 +103,23 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			},
 		)) as ProcessorResult;
 
-		if (!article.og_image_url && !processorResult.updateData.og_image_url) {
-			const ogResult = await step.do('fetch-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' }, async () =>
-				fetchOgImage(article.url),
-			);
-			if (ogResult?.ogImageUrl) {
-				processorResult.updateData.og_image_url = ogResult.ogImageUrl;
-			}
-		}
+		const fetchedOgImageUrl =
+			!article.og_image_url && !processorResult.updateData.og_image_url
+				? await step.do('fetch-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '10 seconds' }, async () => {
+						const ogResult = await fetchOgImage(article.url);
+						return ogResult?.ogImageUrl ?? null;
+					})
+				: null;
 
-		const effectiveOgImageUrl = processorResult.updateData.og_image_url ?? article.og_image_url;
-		if (effectiveOgImageUrl && !hasOgDimensions(article.platform_metadata)) {
-			const dims = await step.do('measure-og-dimensions', { retries: { limit: 1, delay: '3 seconds' }, timeout: '15 seconds' }, async () =>
-				measureImageDimensions(this.env, effectiveOgImageUrl),
-			);
-			if (dims) {
-				processorResult.ogImageDimensions = dims;
-				console.info({ tag: 'WORKFLOW', msg: 'Measured OG image dimensions', article_id, ...dims });
-			}
+		const effectiveOgImageUrl = processorResult.updateData.og_image_url ?? article.og_image_url ?? fetchedOgImageUrl;
+		const ogImageDimensions =
+			effectiveOgImageUrl && !hasOgDimensions(article.platform_metadata)
+				? await step.do('measure-og-dimensions', { retries: { limit: 1, delay: '3 seconds' }, timeout: '15 seconds' }, async () =>
+						measureImageDimensions(this.env, effectiveOgImageUrl),
+					)
+				: null;
+		if (ogImageDimensions) {
+			console.info({ tag: 'WORKFLOW', msg: 'Measured OG image dimensions', article_id, ...ogImageDimensions });
 		}
 
 		const embedding = (await step.do(
@@ -138,21 +137,33 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
 			const db = await createDbClient(this.env);
 			try {
+				const finalProcessorResult: ProcessorResult = {
+					...processorResult,
+					updateData: {
+						...processorResult.updateData,
+						...(fetchedOgImageUrl ? { og_image_url: fetchedOgImageUrl } : {}),
+					},
+					...(ogImageDimensions ? { ogImageDimensions } : {}),
+				};
 				await persistProcessorResult(
 					article_id,
 					article,
-					processorResult,
+					finalProcessorResult,
 					{
 						db,
 						table,
 					},
 					embedding,
 				);
-				const fields = Object.keys(processorResult.updateData);
+				const fields = Object.keys(finalProcessorResult.updateData);
 				if (fields.length > 0) console.info({ tag: 'WORKFLOW', msg: 'Updated fields', fields: fields.join(', ') });
 				if (embedding?.length) console.info({ tag: 'WORKFLOW', msg: 'Embedding saved', article_id });
-				if (processorResult.enrichments && Object.keys(processorResult.enrichments).length > 0) {
-					console.info({ tag: 'WORKFLOW', msg: 'Enrichments saved', enrichments: Object.keys(processorResult.enrichments).join(', ') });
+				if (finalProcessorResult.enrichments && Object.keys(finalProcessorResult.enrichments).length > 0) {
+					console.info({
+						tag: 'WORKFLOW',
+						msg: 'Enrichments saved',
+						enrichments: Object.keys(finalProcessorResult.enrichments).join(', '),
+					});
 				}
 			} finally {
 				await db.end();
