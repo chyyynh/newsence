@@ -101,10 +101,12 @@ export async function persistProcessorResult(
 	result: ProcessorResult,
 	deps: { db: DbClient; table: ProcessableTable },
 	embedding?: number[] | null,
+	metadataPatch?: Record<string, unknown>,
 ): Promise<void> {
 	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
+	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
+	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
 	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
 
 	if (Object.keys(updatePayload).length === 0) return;

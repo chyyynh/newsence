@@ -1,6 +1,5 @@
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
-import { createDbClient, USER_FILES_TABLE } from '@shared/db';
 import type { Env } from '@shared/types';
 
 // Digital PDFs with a real text layer yield plenty of characters; scanned /
@@ -8,6 +7,7 @@ import type { Env } from '@shared/types';
 // those `needs_ocr` rather than failing, so the workflow still finishes.
 const MIN_CHARS = 40;
 const MIN_CHARS_PER_PAGE = 20;
+const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
 
 export type ExtractionStatus = 'ok' | 'needs_ocr' | 'failed';
 
@@ -15,6 +15,7 @@ export interface PdfExtractionResult {
 	status: ExtractionStatus;
 	chars: number;
 	pages: number;
+	textStorageKey?: string;
 }
 
 // Pure parse output (no DB) — shared by the workflow step and the /scrape endpoint.
@@ -35,31 +36,6 @@ function ensureWasm(): void {
 	}
 }
 
-// Merge an `extraction` record into the user_files.metadata jsonb (preserving
-// sibling keys), optionally writing extracted_text in the same statement. The
-// single owner of extraction-state writes — used by both the success and the
-// hard-failure paths.
-async function recordExtraction(
-	env: Env,
-	articleId: string,
-	status: ExtractionStatus,
-	text: string | null,
-	extra?: Record<string, number>,
-): Promise<void> {
-	const meta = JSON.stringify({ extraction: { status, parser: 'liteparse', ...extra } });
-	const db = await createDbClient(env);
-	try {
-		const merge = `metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb`;
-		if (text === null) {
-			await db.query(`UPDATE ${USER_FILES_TABLE} SET ${merge} WHERE id = $2`, [meta, articleId]);
-		} else {
-			await db.query(`UPDATE ${USER_FILES_TABLE} SET extracted_text = $2, ${merge} WHERE id = $3`, [meta, text, articleId]);
-		}
-	} finally {
-		await db.end();
-	}
-}
-
 // Pure extraction — no R2, no DB. Runs LiteParse on raw PDF bytes and classifies
 // the result. Shared by extractAndPersistPdf (workflow) and the /scrape endpoint.
 // Markdown mode renders layout (headings, multi-column reflow, tables, links) onto
@@ -76,18 +52,27 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	return { text, pages, chars, status };
 }
 
-export async function extractAndPersistPdf(env: Env, articleId: string, storageKey: string): Promise<PdfExtractionResult> {
+export async function extractPdfToTextArtifact(env: Env, articleId: string, storageKey: string): Promise<PdfExtractionResult> {
 	const obj = await env.R2.get(storageKey);
 	if (!obj) throw new Error(`R2 object missing: ${storageKey}`);
 
 	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
-	await recordExtraction(env, articleId, status, text, { chars, pages });
+	const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${articleId}/${crypto.randomUUID()}.md`;
+	await env.R2.put(textStorageKey, text, {
+		httpMetadata: { contentType: 'text/markdown; charset=utf-8' },
+	});
 	console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: articleId, status, chars, pages });
-	return { status, chars, pages };
+	return { status, chars, pages, textStorageKey };
 }
 
-// Hard-failure path: extraction threw (bad bytes, R2 miss). Flag the row so it's
-// not silently empty, leaving extracted_text untouched.
-export function markExtractionFailed(env: Env, articleId: string): Promise<void> {
-	return recordExtraction(env, articleId, 'failed', null);
+export async function readPdfTextArtifact(env: Env, textStorageKey: string): Promise<string> {
+	if (!textStorageKey.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text artifact key: ${textStorageKey}`);
+	const obj = await env.R2.get(textStorageKey);
+	if (!obj) throw new Error(`PDF text artifact missing: ${textStorageKey}`);
+	return obj.text();
+}
+
+export async function deletePdfTextArtifact(env: Env, textStorageKey: string): Promise<void> {
+	if (!textStorageKey.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text artifact key: ${textStorageKey}`);
+	await env.R2.delete(textStorageKey);
 }

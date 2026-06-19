@@ -9,7 +9,7 @@ import { syncArticleEntities } from '../domain/entities';
 import { buildEmbeddingTextForArticle, type ProcessorResult, persistProcessorResult, runArticleProcessor } from '../domain/processors';
 import { fetchOgImage } from '../platforms/web-og';
 import { generateAndSaveYouTubeHighlights } from '../platforms/youtube/highlights';
-import { extractAndPersistPdf, markExtractionFailed, type PdfExtractionResult } from './pdf-extraction';
+import { deletePdfTextArtifact, extractPdfToTextArtifact, type PdfExtractionResult, readPdfTextArtifact } from './pdf-extraction';
 
 const ARTICLE_FIELDS_FOR_ARTICLES =
 	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
@@ -57,6 +57,22 @@ type WorkflowParams = {
 
 type ArticleShell = Article & { has_content?: boolean };
 
+function extractionMetadata(extraction: PdfExtractionResult | null): Record<string, unknown> | undefined {
+	if (!extraction) return undefined;
+	return {
+		extraction: {
+			status: extraction.status,
+			parser: 'liteparse',
+			...(extraction.status === 'failed' ? {} : { chars: extraction.chars, pages: extraction.pages }),
+		},
+	};
+}
+
+async function withPdfExtractionText(env: Env, article: Article, extraction: PdfExtractionResult | null): Promise<Article> {
+	if (!extraction?.textStorageKey) return article;
+	return { ...article, content: await readPdfTextArtifact(env, extraction.textStorageKey) };
+}
+
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const { article_id, target_table } = event.payload;
@@ -72,6 +88,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		)) as ArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
+		let pdfExtraction: PdfExtractionResult | null = null;
 		if (
 			isUserFile &&
 			!article.has_content &&
@@ -79,17 +96,21 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		) {
 			const storageKey = article.storage_key as string;
 			try {
-				const extracted = (await step.do(
+				pdfExtraction = (await step.do(
 					'extract-pdf-text',
 					{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-					() => extractAndPersistPdf(this.env, article_id, storageKey),
+					() => extractPdfToTextArtifact(this.env, article_id, storageKey),
 				)) as PdfExtractionResult;
-				console.info({ tag: 'WORKFLOW', msg: 'PDF extraction persisted', article_id, status: extracted.status, chars: extracted.chars });
+				console.info({
+					tag: 'WORKFLOW',
+					msg: 'PDF extraction staged',
+					article_id,
+					status: pdfExtraction.status,
+					chars: pdfExtraction.chars,
+				});
 			} catch (error) {
 				console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed, continuing without content', article_id, error: String(error) });
-				await step.do('flag-extraction-failed', { retries: { limit: 1, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
-					markExtractionFailed(this.env, article_id),
-				);
+				pdfExtraction = { status: 'failed', chars: 0, pages: 0 };
 			}
 		}
 
@@ -97,7 +118,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const processingArticle = await fetchArticle(this.env, table, article_id, articleFieldsFor(table));
+				const processingArticle = await withPdfExtractionText(
+					this.env,
+					await fetchArticle(this.env, table, article_id, articleFieldsFor(table)),
+					pdfExtraction,
+				);
 				return runArticleProcessor(processingArticle, sourceType, {
 					env: this.env,
 					table,
@@ -128,7 +153,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			'generate-embedding',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
-				const embeddingArticle = await fetchArticle(this.env, table, article_id, embeddingFieldsFor(table));
+				const embeddingArticle = await withPdfExtractionText(
+					this.env,
+					await fetchArticle(this.env, table, article_id, embeddingFieldsFor(table)),
+					pdfExtraction,
+				);
 				const text = buildEmbeddingTextForArticle(embeddingArticle, processorResult);
 				if (!text || !this.env.AI) return null;
 				return generateArticleEmbedding(text, this.env.AI);
@@ -139,10 +168,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		await step.do('update-db', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, async () => {
 			const db = await createDbClient(this.env);
 			try {
+				const extractedPdfText = pdfExtraction?.textStorageKey ? await readPdfTextArtifact(this.env, pdfExtraction.textStorageKey) : null;
 				const finalProcessorResult: ProcessorResult = {
 					...processorResult,
 					updateData: {
 						...processorResult.updateData,
+						...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
 						...(fetchedOgImageUrl ? { og_image_url: fetchedOgImageUrl } : {}),
 					},
 					...(ogImageDimensions ? { ogImageDimensions } : {}),
@@ -156,6 +187,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 						table,
 					},
 					embedding,
+					extractionMetadata(pdfExtraction),
 				);
 				const fields = Object.keys(finalProcessorResult.updateData);
 				if (fields.length > 0) console.info({ tag: 'WORKFLOW', msg: 'Updated fields', fields: fields.join(', ') });
@@ -171,6 +203,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				await db.end();
 			}
 		});
+
+		if (pdfExtraction?.textStorageKey) {
+			await step.do('cleanup-pdf-text-artifact', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
+				deletePdfTextArtifact(this.env, pdfExtraction.textStorageKey!),
+			);
+		}
 
 		// article_entities FKs point at public articles only.
 		if (!isUserFile && processorResult.updateData.entities?.length) {
