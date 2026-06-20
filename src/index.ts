@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { routeRequest } from '@entry/http';
-import { persistGeneratedImage } from '@ingest/blob-persistence';
+import { type PersistGeneratedImageResult, persistGeneratedImage } from '@ingest/blob-persistence';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -34,16 +34,13 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	// writes and workspace ownership live there.
 
 	/** Persist a generated image into the canonical user_file blob store. */
-	async storeGeneratedImage(input: { userId: string; bytes: Uint8Array; contentType: string; title: string }): Promise<{
-		userFileId: string;
-		storageKey: string;
-		assetUrl: string;
-		fileType: string;
-		fileSize: number;
-	}> {
-		const outcome = await persistGeneratedImage(this.env, input);
-		if (!outcome.ok) throw new Error(`${outcome.code}: ${outcome.message}`);
-		return outcome.result;
+	storeGeneratedImage(input: {
+		userId: string;
+		bytes: Uint8Array;
+		contentType: string;
+		title: string;
+	}): Promise<PersistGeneratedImageResult> {
+		return persistGeneratedImage(this.env, input);
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
