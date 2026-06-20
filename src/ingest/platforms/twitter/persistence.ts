@@ -4,7 +4,7 @@ import type { PlatformMetadata } from '@shared/platform-metadata';
 import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@shared/source-draft';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
-import { enqueueArticleProcess, enqueueSourceArticleProcess } from '@shared/workflow-queue';
+import { enqueueArticleProcess, startSourceArticleWorkflow } from '@shared/workflow-queue';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -52,7 +52,7 @@ async function enqueueTwitterArticle(
 	},
 ): Promise<boolean> {
 	if (await findArticleByUrl(env, data.url)) return false;
-	await enqueueSourceArticleProcess(env, {
+	await startSourceArticleWorkflow(env, {
 		article: {
 			url: data.url,
 			title: data.title,

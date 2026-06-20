@@ -5,7 +5,7 @@ import { youtubeTranscriptAttachment } from '@shared/source-draft';
 import { listSourceFeedsByType, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
-import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
+import { startSourceArticleWorkflow } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
@@ -65,7 +65,7 @@ async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo)
 		return false;
 	}
 
-	await enqueueSourceArticleProcess(env, {
+	await startSourceArticleWorkflow(env, {
 		article: {
 			url,
 			title: scraped.title,
@@ -79,7 +79,7 @@ async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo)
 		},
 		...(scraped.youtubeTranscript ? { attachments: [youtubeTranscriptAttachment(scraped.youtubeTranscript)] } : {}),
 	});
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'Queued video', channel: channel.name, title: scraped.title.slice(0, 60) });
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
 	return true;
 }
 

@@ -9,7 +9,7 @@ import type { PlatformMetadata } from '@shared/platform-metadata';
 import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
-import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
+import { startSourceArticleWorkflow } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web-scraper';
@@ -136,7 +136,7 @@ async function enqueueRssSourceArticle(env: Env, item: RSSItem, url: string, fee
 			? { type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
 			: null;
 
-	await enqueueSourceArticleProcess(env, {
+	await startSourceArticleWorkflow(env, {
 		article: {
 			url,
 			title,

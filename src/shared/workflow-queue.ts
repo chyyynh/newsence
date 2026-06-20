@@ -2,7 +2,6 @@ import { ARTICLES_TABLE, type ProcessableTable, resolveProcessableTable, USER_FI
 import {
 	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
-	isSourceArticleDraftRef,
 	type SourceArticleDraft,
 	type SourceArticleDraftRef,
 	sourceArticleDraftUrl,
@@ -14,7 +13,8 @@ export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
 	| { kind: 'source'; sourceArticle: SourceArticleDraftRef };
 
-export type QueueMessage = { type: 'workflow_process'; target: WorkflowQueueTarget };
+export type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
+export type QueueMessage = { type: 'workflow_process'; target: RowWorkflowTarget };
 type QueueResult = { count: number; created: number; existing: number; skipped: number };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
@@ -38,7 +38,7 @@ export async function enqueueArticleBatchProcess(env: Env, articleIds: string[],
 	);
 }
 
-function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): WorkflowQueueTarget {
+function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): RowWorkflowTarget {
 	return {
 		kind: 'row',
 		articleId,
@@ -46,16 +46,15 @@ function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): W
 	};
 }
 
-export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticleDraft): Promise<void> {
+export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<void> {
 	const sourceArticle = await createSourceArticleDraftRef(env, draft);
 
 	try {
-		await env.ARTICLE_QUEUE.send({
-			type: 'workflow_process',
-			target: { kind: 'source', sourceArticle },
-		});
+		const workflowId = await sourceArticleWorkflowId(sourceArticleDraftUrl(sourceArticle));
+		const result = await ensureSourceArticleWorkflow(env, workflowId, sourceArticle);
+		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, sourceArticle, result.id);
 	} catch (err) {
-		await cleanupQueuedSourceArticleDraft(env, sourceArticle, { reason: 'enqueue failed' });
+		await cleanupSourceWorkflowDraft(env, sourceArticle, { reason: 'workflow create failed' });
 		throw err;
 	}
 }
@@ -76,17 +75,14 @@ function parseQueueMessage(body: unknown): QueueMessage | null {
 	return body;
 }
 
-function isWorkflowQueueTarget(target: unknown): target is WorkflowQueueTarget {
+function isWorkflowQueueTarget(target: unknown): target is RowWorkflowTarget {
 	if (!isRecord(target)) return false;
-	if (target.kind === 'row') {
-		return (
-			typeof target.articleId === 'string' &&
-			target.articleId.length > 0 &&
-			(target.targetTable === undefined || target.targetTable === ARTICLES_TABLE || target.targetTable === USER_FILES_TABLE)
-		);
-	}
-
-	return target.kind === 'source' && isSourceArticleDraftRef(target.sourceArticle);
+	return (
+		target.kind === 'row' &&
+		typeof target.articleId === 'string' &&
+		target.articleId.length > 0 &&
+		(target.targetTable === undefined || target.targetTable === ARTICLES_TABLE || target.targetTable === USER_FILES_TABLE)
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,15 +92,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 async function ensureWorkflowForQueueTarget(
 	env: Env,
 	messageId: string,
-	target: WorkflowQueueTarget,
+	target: RowWorkflowTarget,
 ): Promise<{ id: string; created: boolean }> {
-	if (target.kind === 'source') {
-		const workflowId = await sourceArticleWorkflowId(sourceArticleDraftUrl(target.sourceArticle));
-		const result = await ensureSourceArticleWorkflow(env, workflowId, messageId, target.sourceArticle);
-		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.sourceArticle, result.id);
-		return { id: result.id, created: result.created };
-	}
-
 	const targetTable = resolveProcessableTable(target.targetTable);
 	const workflowId = articleWorkflowId(messageId, targetTable, target.articleId);
 	return ensureArticleWorkflow(env, workflowId, target.articleId, targetTable);
@@ -131,24 +120,23 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 async function ensureSourceArticleWorkflow(
 	env: Env,
 	workflowId: string,
-	messageId: string,
 	sourceArticle: SourceArticleDraftRef,
 ): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
 	const existing = await getMonitorWorkflowStatus(env, workflowId);
 	if (isReusableSourceWorkflowStatus(existing.status)) return { id: existing.id, created: false, sourceRefUsed: false };
 
-	try {
-		const id = await createMonitorWorkflow(env, workflowId, { kind: 'source', sourceArticle });
-		return { id, created: true, sourceRefUsed: true };
-	} catch {
-		const raced = await getMonitorWorkflowStatus(env, workflowId);
-		if (raced.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: false };
+	if (existing.status === 'unknown') {
+		try {
+			const id = await createMonitorWorkflow(env, workflowId, { kind: 'source', sourceArticle });
+			return { id, created: true, sourceRefUsed: true };
+		} catch {
+			const raced = await getMonitorWorkflowStatus(env, workflowId);
+			if (isReusableSourceWorkflowStatus(raced.status)) return { id: raced.id, created: false, sourceRefUsed: false };
+			if (raced.status === 'unknown') throw new Error(`Failed to create source workflow ${workflowId}`);
+		}
 	}
 
-	const retryWorkflowId = `${workflowId}-${workflowIdPart(messageId)}`;
-	const existingRetry = await getMonitorWorkflowStatus(env, retryWorkflowId);
-	if (existingRetry.status !== 'unknown') return { id: existingRetry.id, created: false, sourceRefUsed: true };
-
+	const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
 	try {
 		const id = await createMonitorWorkflow(env, retryWorkflowId, { kind: 'source', sourceArticle });
 		return { id, created: true, sourceRefUsed: true };
@@ -164,15 +152,15 @@ function isReusableSourceWorkflowStatus(status: string): boolean {
 }
 
 async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleDraftRef, workflowId: string): Promise<void> {
-	await cleanupQueuedSourceArticleDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId });
+	await cleanupSourceWorkflowDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId });
 }
 
-async function cleanupQueuedSourceArticleDraft(
+async function cleanupSourceWorkflowDraft(
 	env: Env,
 	sourceArticle: SourceArticleDraftRef,
 	context: { reason: string; workflowId?: string },
 ): Promise<void> {
-	await cleanupSourceArticleDraftRef(env, sourceArticle, { ...context, logTag: 'ARTICLE-QUEUE' });
+	await cleanupSourceArticleDraftRef(env, sourceArticle, { ...context, logTag: 'SOURCE-WORKFLOW' });
 }
 
 async function ensureArticleWorkflow(
