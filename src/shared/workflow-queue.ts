@@ -31,9 +31,7 @@ export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
 	| { kind: 'source'; sourceArticle: SourceArticleRef };
 
-export type QueueMessage =
-	| { type: 'workflow_process'; target: WorkflowQueueTarget }
-	| { type: 'batch_workflow_process'; targets: WorkflowQueueTarget[] };
+export type QueueMessage = { type: 'workflow_process'; target: WorkflowQueueTarget };
 
 export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
@@ -48,10 +46,14 @@ export async function enqueueArticleProcess(env: Env, articleId: string, targetT
 
 export async function enqueueArticleBatchProcess(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<void> {
 	if (!articleIds.length) return;
-	await env.ARTICLE_QUEUE.send({
-		type: 'batch_workflow_process',
-		targets: articleIds.map((articleId) => rowWorkflowTarget(articleId, targetTable)),
-	});
+	await env.ARTICLE_QUEUE.sendBatch(
+		articleIds.map((articleId) => ({
+			body: {
+				type: 'workflow_process',
+				target: rowWorkflowTarget(articleId, targetTable),
+			},
+		})),
+	);
 }
 
 function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): WorkflowQueueTarget {
@@ -103,28 +105,14 @@ export async function ensureWorkflowsForQueueMessage(
 	messageId: string,
 	body: QueueMessage,
 ): Promise<{ count: number; created: number; existing: number }> {
-	const targets = queueTargetsFromMessage(body);
-	let created = 0;
-	let existing = 0;
-
-	for (const [index, target] of targets.entries()) {
-		const result = await ensureWorkflowForQueueTarget(env, messageId, target, index);
-		if (result.created) created++;
-		else existing++;
-	}
-
-	return { count: targets.length, created, existing };
-}
-
-function queueTargetsFromMessage(body: QueueMessage): WorkflowQueueTarget[] {
-	return body.type === 'workflow_process' ? [body.target] : body.targets;
+	const result = await ensureWorkflowForQueueTarget(env, messageId, body.target);
+	return { count: 1, created: result.created ? 1 : 0, existing: result.created ? 0 : 1 };
 }
 
 async function ensureWorkflowForQueueTarget(
 	env: Env,
 	messageId: string,
 	target: WorkflowQueueTarget,
-	index: number,
 ): Promise<{ id: string; created: boolean }> {
 	if (target.kind === 'source') {
 		const workflowId = await sourceArticleWorkflowId(target.sourceArticle.url);
@@ -134,12 +122,12 @@ async function ensureWorkflowForQueueTarget(
 	}
 
 	const targetTable = resolveProcessableTable(target.targetTable);
-	const workflowId = articleWorkflowId(messageId, targetTable, target.articleId, index);
+	const workflowId = articleWorkflowId(messageId, targetTable, target.articleId);
 	return ensureArticleWorkflow(env, workflowId, target.articleId, targetTable);
 }
 
-function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string, index: number): string {
-	return ['article', workflowIdPart(messageId), workflowIdPart(targetTable), String(index), workflowIdPart(articleId)].join('-');
+function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string): string {
+	return ['article', workflowIdPart(messageId), workflowIdPart(targetTable), workflowIdPart(articleId)].join('-');
 }
 
 function workflowIdPart(value: string): string {
