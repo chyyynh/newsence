@@ -1,6 +1,13 @@
 import { type DbClient, USER_FILES_TABLE, withDbTransaction } from '@shared/db';
+import { extensionFromMime, isRasterImage } from '@shared/mime';
 import type { Env } from '@shared/types';
-import { assertBlobUploadQuotaTx, UploadQuotaExceededError } from '@shared/upload';
+import {
+	assertBlobUploadQuotaTx,
+	MAX_UPLOAD_BYTES,
+	storageKeyToAssetUrl,
+	UploadQuotaExceededError,
+	userGeneratedImageKey,
+} from '@shared/upload';
 
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
 
@@ -23,6 +30,23 @@ export type PersistBlobResult =
 	| { ok: true; userFileId: string }
 	| { ok: false; code: 'QUOTA_EXCEEDED' | 'INTERNAL_ERROR'; message: string };
 
+export type PersistGeneratedImageResult =
+	| {
+			ok: true;
+			result: {
+				userFileId: string;
+				storageKey: string;
+				assetUrl: string;
+				fileType: string;
+				fileSize: number;
+			};
+	  }
+	| {
+			ok: false;
+			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
+			message: string;
+	  };
+
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
 	return JSON.stringify(metadata);
@@ -35,7 +59,7 @@ function serializeMetadata(metadata: unknown | null): string | null {
  */
 export async function putUserUpload(
 	env: Env,
-	args: { storageKey: string; body: ReadableStream<Uint8Array>; contentType: string },
+	args: { storageKey: string; body: ReadableStream<Uint8Array> | Uint8Array; contentType: string },
 ): Promise<void> {
 	await env.R2.put(args.storageKey, args.body, {
 		httpMetadata: { contentType: args.contentType, cacheControl: UPLOAD_CACHE_CONTROL },
@@ -101,4 +125,57 @@ export async function persistBlobRow(env: Env, data: InsertBlobUserFileData): Pr
 		}
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'DB insert failed' };
 	}
+}
+
+export async function persistGeneratedImage(
+	env: Env,
+	args: { userId: string; bytes: Uint8Array; contentType: string; title: string },
+): Promise<PersistGeneratedImageResult> {
+	if (!args.userId) return { ok: false, code: 'BAD_REQUEST', message: 'userId is required' };
+	if (args.bytes.byteLength === 0) return { ok: false, code: 'BAD_REQUEST', message: 'image is empty' };
+	if (args.bytes.byteLength > MAX_UPLOAD_BYTES) return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'Generated image exceeds 10MB' };
+	if (!isRasterImage(args.contentType)) {
+		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported image type: ${args.contentType}` };
+	}
+
+	const storageKey = userGeneratedImageKey(args.userId, extensionFromMime(args.contentType));
+	const fileName = storageKey.split('/').pop() ?? storageKey;
+
+	try {
+		await putUserUpload(env, { storageKey, body: args.bytes, contentType: args.contentType });
+	} catch (err) {
+		console.error({ tag: 'GENERATED_IMAGE', msg: 'R2 put failed', storageKey, error: String(err) });
+		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
+	}
+
+	const persisted = await persistBlobRow(env, {
+		userId: args.userId,
+		storageKey,
+		fileSize: args.bytes.byteLength,
+		fileType: args.contentType,
+		fileName,
+		originType: 'generated',
+		title: args.title,
+		metadata: null,
+	});
+	if (!persisted.ok) return persisted;
+
+	console.info({
+		tag: 'GENERATED_IMAGE',
+		msg: 'Stored generated image',
+		userFileId: persisted.userFileId,
+		storageKey,
+		fileType: args.contentType,
+		fileSize: args.bytes.byteLength,
+	});
+	return {
+		ok: true,
+		result: {
+			userFileId: persisted.userFileId,
+			storageKey,
+			assetUrl: storageKeyToAssetUrl(storageKey),
+			fileType: args.contentType,
+			fileSize: args.bytes.byteLength,
+		},
+	};
 }
