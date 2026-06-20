@@ -1,4 +1,4 @@
-import { type DbClient, withDbClient } from '@shared/db';
+import { getSourceFeedsByType, markSourceFeedsScraped, withDbClient } from '@shared/db';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout } from '@shared/web';
 import { saveTweetGroups } from './persistence';
@@ -36,11 +36,6 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 }
 
 // -- Twitter Cron: staged pipeline --------------------------------------------
-
-async function getTwitterUsersToMonitor(db: DbClient): Promise<RSSFeed[]> {
-	const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1`, ['twitter_user']);
-	return result.rows as RSSFeed[];
-}
 
 function normalizeTwitterUsers(users: RSSFeed[]): MonitoredTwitterUser[] {
 	return users.flatMap((user) => {
@@ -132,7 +127,7 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	await withDbClient(env, async (db) => {
-		const users = await getTwitterUsersToMonitor(db);
+		const users = await getSourceFeedsByType(db, 'twitter_user');
 		if (!users.length) {
 			console.info({ tag: 'TWITTER', msg: 'No twitter_user entries in RssList' });
 			return;
@@ -164,7 +159,10 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 		// Advance scraped_at only if every batch completed — partial fetches would
 		// let the next cron skip tweets we failed to pull.
 		if (allCompleted) {
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
+			await markSourceFeedsScraped(
+				db,
+				monitoredUsers.map((u) => u.id),
+			);
 		}
 
 		console.info({

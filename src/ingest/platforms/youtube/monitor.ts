@@ -1,4 +1,4 @@
-import { type DbClient, getExistingUrls, withDbClient } from '@shared/db';
+import { type DbClient, getExistingUrls, getSourceFeedsByType, markSourceFeedScraped, withDbClient } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
@@ -103,7 +103,7 @@ async function processYouTubeChannel(db: DbClient, env: Env, channel: RSSFeed, p
 		}
 	}
 
-	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
+	await markSourceFeedScraped(db, channel.id);
 	return inserted;
 }
 
@@ -114,10 +114,7 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
 	await withDbClient(env, async (db) => {
-		const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at, avatar_url FROM "RssList" WHERE type = $1`, [
-			'youtube_channel',
-		]);
-		const channels = result.rows as RSSFeed[];
+		const channels = await getSourceFeedsByType(db, 'youtube_channel');
 		if (!channels.length) {
 			console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel entries in RssList' });
 			return;

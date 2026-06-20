@@ -1,4 +1,12 @@
-import { type DbClient, type ExistingArticleRecord, getExistingArticlesByUrl, withDbClient } from '@shared/db';
+import {
+	ARTICLES_TABLE,
+	type DbClient,
+	type ExistingArticleRecord,
+	getDefaultRssFeeds,
+	getExistingArticlesByUrl,
+	markSourceFeedScraped,
+	withDbClient,
+} from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
@@ -247,7 +255,7 @@ async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLPar
 		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed insert done', feed: feed.name, inserted, total: newItems.length });
-	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+	await markSourceFeedScraped(db, feed.id);
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -256,8 +264,7 @@ export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<v
 		const parser = new XMLParser({ ignoreAttributes: false });
 
 		// Pass 1: default sources → articles table
-		const defaultResult = await db.query(`SELECT id, name, "RSSLink", url, type FROM "RssList" WHERE is_default = true AND type = 'rss'`);
-		const feeds = defaultResult.rows as RSSFeed[];
+		const feeds = await getDefaultRssFeeds(db);
 		for (const feed of feeds) {
 			try {
 				await processFeed(db, env, feed, parser);

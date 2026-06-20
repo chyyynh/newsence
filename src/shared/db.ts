@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import type { Article, Env } from './types';
+import type { Article, Env, RSSFeed } from './types';
 import { normalizeUrl } from './web';
 export type DbClient = Client;
 
@@ -85,6 +85,27 @@ export function loadProcessableArticle(env: Env, table: ProcessableTable, articl
 
 export function loadProcessableArticleShell(env: Env, table: ProcessableTable, articleId: string): Promise<ProcessableArticleShell> {
 	return fetchProcessableArticle(env, table, articleId, articleShellFieldsFor(table));
+}
+
+const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
+
+export async function getDefaultRssFeeds(db: DbClient): Promise<RSSFeed[]> {
+	const result = await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`);
+	return result.rows;
+}
+
+export async function getSourceFeedsByType(db: DbClient, type: string): Promise<RSSFeed[]> {
+	const result = await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, [type]);
+	return result.rows;
+}
+
+export async function markSourceFeedScraped(db: DbClient, feedId: string): Promise<void> {
+	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feedId]);
+}
+
+export async function markSourceFeedsScraped(db: DbClient, feedIds: string[]): Promise<void> {
+	if (!feedIds.length) return;
+	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), feedIds]);
 }
 
 // ─────────────────────────────────────────────────────────────
