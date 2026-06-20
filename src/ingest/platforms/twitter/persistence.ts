@@ -1,13 +1,9 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing, withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
+import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@shared/source-draft';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
-import {
-	enqueueArticleProcess,
-	enqueueSourceArticleProcess,
-	type TwitterSourceEventDraft,
-	twitterSourceEventAttachment,
-} from '@shared/workflow-queue';
+import { enqueueArticleProcess, enqueueSourceArticleProcess } from '@shared/workflow-queue';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,

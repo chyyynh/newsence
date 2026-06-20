@@ -15,9 +15,6 @@ import {
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
-import type { Article, Env } from '@shared/types';
-import { isExtractablePdfFile } from '@shared/upload';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment, validateImageUrl } from '@shared/web';
 import {
 	deleteSourceArticleDraft,
 	readSourceArticleDraft,
@@ -27,8 +24,11 @@ import {
 	sourceDraftToArticle,
 	sourceDraftTwitterSourceEvent,
 	sourceDraftYoutubeTranscript,
-	type WorkflowQueueTarget,
-} from '@shared/workflow-queue';
+} from '@shared/source-draft';
+import type { Article, Env } from '@shared/types';
+import { isExtractablePdfFile } from '@shared/upload';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment, validateImageUrl } from '@shared/web';
+import type { WorkflowQueueTarget } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, buildProcessorUpdatePayload, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import {
