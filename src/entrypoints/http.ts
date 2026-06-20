@@ -61,7 +61,7 @@ const HELP_TEXT =
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162)\n' +
 	'POST /media/backfill-og-dims?cursor=:id   - Measure + store OG image dims for articles missing them (re-run with nextCursor)\n' +
-	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +
+	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
 	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset\n';
@@ -170,7 +170,10 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	}
 }
 
-function handleWorkflowStream(instanceId: string, env: Env): Response {
+async function handleWorkflowStream(request: Request, instanceId: string, env: Env): Promise<Response> {
+	const unauth = await requireAuth(request, env);
+	if (unauth) return unauth;
+
 	const { readable, writable } = new TransformStream();
 	const writer = writable.getWriter();
 	const encoder = new TextEncoder();
@@ -214,7 +217,7 @@ function handleWorkflowStream(instanceId: string, env: Env): Response {
 function routePrefixGet(request: Request, pathname: string, env: Env): Response | Promise<Response> | null {
 	if (pathname.startsWith('/stream/')) {
 		const id = pathname.slice('/stream/'.length);
-		if (id) return handleWorkflowStream(id, env);
+		if (id) return handleWorkflowStream(request, id, env);
 	}
 	const id = scrapeJobId(pathname);
 	if (id) return handleScrapeJobStatus(request, id, env);
