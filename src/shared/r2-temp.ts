@@ -15,7 +15,7 @@ function assertTempObjectKey(key: string, guard: TempObjectGuard): void {
 	}
 }
 
-export function randomTempObjectKey(prefix: string, extension: string): string {
+function randomTempObjectKey(prefix: string, extension: string): string {
 	return `${prefix}${crypto.randomUUID()}.${extension}`;
 }
 
@@ -25,8 +25,14 @@ export async function putTempText(env: Env, key: string, text: string, contentTy
 	});
 }
 
-export async function putSerializedTempJson(env: Env, key: string, json: string): Promise<void> {
+async function putSerializedTempJson(env: Env, key: string, json: string): Promise<void> {
 	await putTempText(env, key, json, JSON_TEMP_CONTENT_TYPE);
+}
+
+export async function putRandomSerializedTempJson(env: Env, prefix: string, json: string): Promise<string> {
+	const key = randomTempObjectKey(prefix, 'json');
+	await putSerializedTempJson(env, key, json);
+	return key;
 }
 
 export async function putTempBytes(env: Env, key: string, bytes: Uint8Array, contentType: string): Promise<void> {

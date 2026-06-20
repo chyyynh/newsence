@@ -9,7 +9,7 @@ import {
 	type YoutubeTranscriptRow,
 } from './db';
 import type { TwitterMedia } from './platform-metadata';
-import { deleteTempObject, putSerializedTempJson, randomTempObjectKey, readTempJson } from './r2-temp';
+import { deleteTempObject, putRandomSerializedTempJson, readTempJson } from './r2-temp';
 import type { Article, Env, Tweet } from './types';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
@@ -86,8 +86,7 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 }
 
 async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
-	const r2Key = randomTempObjectKey(SOURCE_ARTICLE_DRAFT_PREFIX, 'json');
-	await putSerializedTempJson(env, r2Key, serialized);
+	const r2Key = await putRandomSerializedTempJson(env, SOURCE_ARTICLE_DRAFT_PREFIX, serialized);
 	return { url, r2Key };
 }
 
