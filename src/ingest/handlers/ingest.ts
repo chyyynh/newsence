@@ -20,12 +20,8 @@ function ingestError(code: string, message: string, status: number, headers?: He
 	return Response.json({ success: false, error: { code, message } }, { status, headers });
 }
 
-function ingestResult<T>(result: T): Response {
-	return Response.json({ success: true, result });
-}
-
-function ingestResults<T>(results: T[]): Response {
-	return Response.json({ success: true, results });
+function ingestData<T>(data: T): Response {
+	return Response.json({ success: true, data });
 }
 
 function rateLimited(code: string, message: string): Response {
@@ -69,7 +65,7 @@ async function ingestImageUrlJson(body: IngestJsonBody, env: Env): Promise<Respo
 		userId: body.userId,
 		title: body.title ?? null,
 	});
-	if (outcome.ok) return ingestResult(outcome.result);
+	if (outcome.ok) return ingestData(outcome.result);
 
 	const status = imageUrlStatusFor(outcome.code);
 	return outcome.code === 'RATE_LIMITED' ? rateLimited(outcome.code, outcome.message) : ingestError(outcome.code, outcome.message, status);
@@ -99,7 +95,7 @@ function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
 async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response> {
 	const urls = body.urls ?? (body.url ? [body.url] : []);
 	const outcome = await ingestUrls(env, { urls, userId: body.userId });
-	if (outcome.ok) return ingestResults(outcome.results);
+	if (outcome.ok) return ingestData(outcome.results);
 
 	if (outcome.code === 'RATE_LIMITED') {
 		return rateLimited(outcome.code, outcome.message);
@@ -110,7 +106,7 @@ async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response>
 
 async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	const outcome = await ingestBlob(request, env);
-	if (outcome.ok) return ingestResult(outcome.result);
+	if (outcome.ok) return ingestData(outcome.result);
 
 	if (outcome.code === 'RATE_LIMITED') {
 		return rateLimited(outcome.code, outcome.message);

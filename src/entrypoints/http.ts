@@ -56,9 +56,9 @@ const HELP_TEXT =
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /embed                               - Generate embeddings\n' +
-	'POST /search                              - Hybrid corpus ranking (internal token) -> {results:[{id,score}]}\n' +
-	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {ids:[...]}\n' +
-	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162)\n' +
+	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
+	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
+	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162)\n' +
 	'POST /media/backfill-og-dims?cursor=:id   - Measure + store OG image dims for articles missing them (re-run with nextCursor)\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE)\n' +

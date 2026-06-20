@@ -7,7 +7,7 @@ const R2_BATCH_LIMIT = 1000;
 type DeleteMediaResult = { deleted: number; rejected: number };
 
 function deleteSuccess(result: DeleteMediaResult): Response {
-	return Response.json({ success: true, result });
+	return Response.json({ success: true, data: result });
 }
 
 function deleteFailure(message: string): Response {
