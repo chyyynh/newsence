@@ -1,6 +1,8 @@
 import {
+	getUserFileWorkflowInstanceId,
 	type InsertArticleData,
 	type ProcessableTable,
+	recordUserFileWorkflowInstanceId,
 	resolveProcessableTable,
 	USER_FILES_TABLE,
 	withDbClient,
@@ -215,7 +217,7 @@ async function ensureArticleWorkflow(
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
 	try {
-		const storedInstanceId = await getUserFileWorkflowInstanceId(env, userFileId);
+		const storedInstanceId = await withDbClient(env, (db) => getUserFileWorkflowInstanceId(db, userFileId));
 		if (storedInstanceId) {
 			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
@@ -224,7 +226,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 		const baseId = userFileWorkflowId(userFileId);
 		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
 		const instanceId = await createUserFileWorkflowInstance(env, workflowId, userFileId);
-		await recordUserFileWorkflowInstanceId(env, userFileId, instanceId);
+		await withDbClient(env, (db) => recordUserFileWorkflowInstanceId(db, userFileId, instanceId));
 		return instanceId;
 	} catch (err) {
 		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
@@ -260,30 +262,4 @@ async function createMonitorWorkflow(env: Env, workflowId: string, target: Workf
 		params: { target },
 	});
 	return instance.id;
-}
-
-async function getUserFileWorkflowInstanceId(env: Env, userFileId: string): Promise<string | null> {
-	return withDbClient(env, async (db) => {
-		const result = await db.query(
-			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
-			[userFileId],
-		);
-		const row = result.rows[0] as { instance_id?: string | null } | undefined;
-		return row?.instance_id ?? null;
-	});
-}
-
-async function recordUserFileWorkflowInstanceId(env: Env, userFileId: string, instanceId: string): Promise<void> {
-	return withDbClient(env, async (db) => {
-		const metadata = JSON.stringify({
-			workflow: {
-				monitor_instance_id: instanceId,
-				monitor_started_at: new Date().toISOString(),
-			},
-		});
-		await db.query(`UPDATE ${USER_FILES_TABLE} SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2`, [
-			metadata,
-			userFileId,
-		]);
-	});
 }

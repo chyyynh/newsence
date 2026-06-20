@@ -203,6 +203,28 @@ export async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileD
 	return { id };
 }
 
+export async function getUserFileWorkflowInstanceId(db: DbClient, userFileId: string): Promise<string | null> {
+	const result = await db.query(
+		`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
+		[userFileId],
+	);
+	const row = result.rows[0] as { instance_id?: string | null } | undefined;
+	return row?.instance_id ?? null;
+}
+
+export async function recordUserFileWorkflowInstanceId(db: DbClient, userFileId: string, instanceId: string): Promise<void> {
+	const metadata = JSON.stringify({
+		workflow: {
+			monitor_instance_id: instanceId,
+			monitor_started_at: new Date().toISOString(),
+		},
+	});
+	await db.query(`UPDATE ${USER_FILES_TABLE} SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2`, [
+		metadata,
+		userFileId,
+	]);
+}
+
 // ─────────────────────────────────────────────────────────────
 // Dedup helper
 // ─────────────────────────────────────────────────────────────
