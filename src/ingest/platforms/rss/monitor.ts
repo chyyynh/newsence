@@ -1,10 +1,10 @@
 import {
-	ARTICLES_TABLE,
 	type DbClient,
 	type ExistingArticleRecord,
 	getDefaultRssFeeds,
 	getExistingArticlesByUrl,
 	markSourceFeedScraped,
+	updateArticleSourceByUrl,
 	withDbClient,
 } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
@@ -182,27 +182,23 @@ async function upgradeExistingArticleSource(
 	if (feedPriority <= existingPriority) return;
 
 	const normalized = normalizeUrl(existing.url);
-	const updateFields: string[] = ['source = $1'];
-	const updateValues: unknown[] = [feed.name];
-	let paramIndex = 2;
+	let sourceType: string | undefined;
+	let platformMetadata: PlatformMetadata | undefined;
 
 	const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
 	if (commentsUrl) {
 		try {
 			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
 			if (hnMeta) {
-				updateFields.push(`source_type = $${paramIndex++}`);
-				updateValues.push('hackernews');
-				updateFields.push(`platform_metadata = $${paramIndex++}`);
-				updateValues.push(JSON.stringify(hnMeta));
+				sourceType = 'hackernews';
+				platformMetadata = hnMeta;
 			}
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Failed to fetch HN metadata for upgrade', url: normalized, error: String(err) });
 		}
 	}
 
-	updateValues.push(normalized);
-	await db.query(`UPDATE ${ARTICLES_TABLE} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
+	await updateArticleSourceByUrl(db, { url: normalized, source: feed.name, sourceType, platformMetadata });
 	console.info({ tag: 'RSS', msg: 'Upgraded article source', url: normalized, from: existing.source, to: feed.name });
 }
 
