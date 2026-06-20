@@ -2,7 +2,7 @@ import { getExistingUrls, listSourceFeedsByType, markSourceFeedScrapedById, with
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
-import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
+import { enqueueSourceArticleProcess, youtubeTranscriptAttachment } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
@@ -74,7 +74,7 @@ async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo)
 			ogImageUrl: scraped.ogImageUrl || null,
 			platformMetadata,
 		},
-		...(scraped.youtubeTranscript ? { youtubeTranscript: scraped.youtubeTranscript } : {}),
+		...(scraped.youtubeTranscript ? { attachments: [youtubeTranscriptAttachment(scraped.youtubeTranscript)] } : {}),
 	});
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'Queued video', channel: channel.name, title: scraped.title.slice(0, 60) });
 	return true;

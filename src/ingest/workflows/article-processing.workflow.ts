@@ -25,6 +25,8 @@ import {
 	sourceArticleDraftHasTempObject,
 	sourceArticleDraftUrl,
 	sourceDraftToArticle,
+	sourceDraftTwitterSourceEvent,
+	sourceDraftYoutubeTranscript,
 	type WorkflowQueueTarget,
 } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, buildProcessorUpdatePayload, type ProcessorResult, runArticleProcessor } from '../domain/processors';
@@ -360,11 +362,12 @@ async function prepareYoutubeHighlightsInput(
 
 	if (context.target.kind === 'source') {
 		const draft = await context.readSourceDraft();
-		if (!draft.youtubeTranscript) return null;
+		const transcript = sourceDraftYoutubeTranscript(draft);
+		if (!transcript) return null;
 		return {
 			kind: 'transcript',
 			videoId: article.platform_metadata.data.videoId,
-			segments: draft.youtubeTranscript.segments as TranscriptSegment[],
+			segments: transcript.segments as TranscriptSegment[],
 		};
 	}
 
@@ -375,21 +378,22 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
 	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
+	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertProcessedSourceArticle(db, {
 			article: finalInsert.article,
 			updatePayload: finalInsert.updatePayload,
-			youtubeTranscript: draft.youtubeTranscript,
+			youtubeTranscript: sourceDraftYoutubeTranscript(draft),
 			entities: input.result.updateData.entities,
 			youtubeHighlights: input.youtubeHighlights,
 		});
-		if (draft.twitterSourceEvent) {
-			await upsertTwitterSourceEvent(db, draft.twitterSourceEvent.tweet, {
+		if (twitterSourceEvent) {
+			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
 				articleId,
-				eventType: draft.twitterSourceEvent.eventType,
-				text: draft.twitterSourceEvent.text,
-				media: draft.twitterSourceEvent.media,
-				raw: draft.twitterSourceEvent.raw,
+				eventType: twitterSourceEvent.eventType,
+				text: twitterSourceEvent.text,
+				media: twitterSourceEvent.media,
+				raw: twitterSourceEvent.raw,
 			});
 		}
 		return articleId;

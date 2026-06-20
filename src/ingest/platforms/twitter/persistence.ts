@@ -2,7 +2,12 @@ import { getExistingArticlesByUrl, updateArticleTextForReprocessing, withDbClien
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
-import { enqueueArticleProcess, enqueueSourceArticleProcess, type SourceArticleDraft } from '@shared/workflow-queue';
+import {
+	enqueueArticleProcess,
+	enqueueSourceArticleProcess,
+	type TwitterSourceEventDraft,
+	twitterSourceEventAttachment,
+} from '@shared/workflow-queue';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -46,7 +51,7 @@ async function enqueueTwitterArticle(
 		ogImage: string | null;
 		metadata: PlatformMetadata;
 		hashTags?: string[];
-		sourceEvent?: SourceArticleDraft['twitterSourceEvent'];
+		sourceEvent?: TwitterSourceEventDraft;
 	},
 ): Promise<boolean> {
 	if (await findArticleByUrl(env, data.url)) return false;
@@ -63,7 +68,7 @@ async function enqueueTwitterArticle(
 			platformMetadata: data.metadata,
 			keywords: data.hashTags,
 		},
-		...(data.sourceEvent ? { twitterSourceEvent: data.sourceEvent } : {}),
+		...(data.sourceEvent ? { attachments: [twitterSourceEventAttachment(data.sourceEvent)] } : {}),
 	});
 	return true;
 }

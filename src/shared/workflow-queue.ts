@@ -14,17 +14,27 @@ import type { Article, Env, Tweet } from './types';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 
+export type TwitterSourceEventDraft = {
+	tweet: Tweet;
+	eventType: TwitterSourceEventType;
+	text?: string | null;
+	media?: TwitterMedia[];
+	raw?: unknown;
+};
+
+export type SourceArticleAttachment =
+	| { kind: 'youtube-transcript'; transcript: YoutubeTranscriptRow }
+	| { kind: 'twitter-source-event'; event: TwitterSourceEventDraft };
+
 export interface SourceArticleDraft {
 	article: InsertArticleData;
-	youtubeTranscript?: YoutubeTranscriptRow;
-	twitterSourceEvent?: {
-		tweet: Tweet;
-		eventType: TwitterSourceEventType;
-		text?: string | null;
-		media?: TwitterMedia[];
-		raw?: unknown;
-	};
+	attachments?: SourceArticleAttachment[];
 }
+
+type LegacySourceArticleDraft = SourceArticleDraft & {
+	youtubeTranscript?: YoutubeTranscriptRow;
+	twitterSourceEvent?: TwitterSourceEventDraft;
+};
 
 export type SourceArticleDraftRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
 
@@ -79,8 +89,38 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 	}
 }
 
+export function youtubeTranscriptAttachment(transcript: YoutubeTranscriptRow): SourceArticleAttachment {
+	return { kind: 'youtube-transcript', transcript };
+}
+
+export function twitterSourceEventAttachment(event: TwitterSourceEventDraft): SourceArticleAttachment {
+	return { kind: 'twitter-source-event', event };
+}
+
+export function sourceDraftYoutubeTranscript(draft: SourceArticleDraft): YoutubeTranscriptRow | undefined {
+	return draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
+}
+
+export function sourceDraftTwitterSourceEvent(draft: SourceArticleDraft): TwitterSourceEventDraft | undefined {
+	return draft.attachments?.find((attachment) => attachment.kind === 'twitter-source-event')?.event;
+}
+
+function normalizeSourceArticleDraft(draft: LegacySourceArticleDraft): SourceArticleDraft {
+	const attachments = [...(draft.attachments ?? [])];
+	if (draft.youtubeTranscript && !attachments.some((attachment) => attachment.kind === 'youtube-transcript')) {
+		attachments.push(youtubeTranscriptAttachment(draft.youtubeTranscript));
+	}
+	if (draft.twitterSourceEvent && !attachments.some((attachment) => attachment.kind === 'twitter-source-event')) {
+		attachments.push(twitterSourceEventAttachment(draft.twitterSourceEvent));
+	}
+	return {
+		article: draft.article,
+		...(attachments.length ? { attachments } : {}),
+	};
+}
+
 async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
-	const normalizedDraft: SourceArticleDraft = { ...draft };
+	const normalizedDraft = normalizeSourceArticleDraft(draft);
 	const serialized = JSON.stringify(normalizedDraft);
 	const url = draft.article.url;
 	return new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
@@ -106,8 +146,10 @@ export function sourceArticleDraftHasTempObject(ref: SourceArticleDraftRef): boo
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
-	if ('inline' in ref) return ref.inline;
-	return readTempJson<SourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
+	if ('inline' in ref) return normalizeSourceArticleDraft(ref.inline as LegacySourceArticleDraft);
+	return normalizeSourceArticleDraft(
+		await readTempJson<LegacySourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' }),
+	);
 }
 
 export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
