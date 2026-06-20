@@ -1,5 +1,5 @@
 import {
-	type DbClient,
+	type ArticleSourceUpdate,
 	type ExistingArticleRecord,
 	getDefaultRssFeeds,
 	getExistingArticlesByUrl,
@@ -170,16 +170,15 @@ function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
 	return entries;
 }
 
-/** Upgrade a single existing article's source/metadata when this feed outranks it. */
-async function upgradeExistingArticleSource(
-	db: DbClient,
+/** Build a source/metadata upgrade for an existing article when this feed outranks it. */
+async function prepareExistingArticleSourceUpgrade(
 	feed: RSSFeed,
 	feedPriority: number,
 	existing: ExistingArticleRecord,
 	rssItem: RSSItem | undefined,
-): Promise<void> {
+): Promise<ArticleSourceUpdate | null> {
 	const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
-	if (feedPriority <= existingPriority) return;
+	if (feedPriority <= existingPriority) return null;
 
 	const normalized = normalizeUrl(existing.url);
 	let sourceType: string | undefined;
@@ -198,11 +197,10 @@ async function upgradeExistingArticleSource(
 		}
 	}
 
-	await updateArticleSourceByUrl(db, { url: normalized, source: feed.name, sourceType, platformMetadata });
-	console.info({ tag: 'RSS', msg: 'Upgraded article source', url: normalized, from: existing.source, to: feed.name });
+	return { url: normalized, source: feed.name, sourceType, platformMetadata };
 }
 
-async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
+async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
 	let res: Response;
@@ -226,7 +224,7 @@ async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLPar
 
 	const itemUrls = extractFeedItemUrls(items);
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await getExistingArticlesByUrl(db, urls);
+	const existingRecords = await withDbClient(env, (db) => getExistingArticlesByUrl(db, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 
@@ -236,8 +234,18 @@ async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLPar
 	}
 
 	const feedPriority = SOURCE_PRIORITY[feed.name] ?? DEFAULT_FEED_PRIORITY;
+	const sourceUpgrades: Array<{ existing: ExistingArticleRecord; update: ArticleSourceUpdate }> = [];
 	for (const existing of existingRecords) {
-		await upgradeExistingArticleSource(db, feed, feedPriority, existing, urlToItem.get(normalizeUrl(existing.url)));
+		const update = await prepareExistingArticleSourceUpgrade(feed, feedPriority, existing, urlToItem.get(normalizeUrl(existing.url)));
+		if (update) sourceUpgrades.push({ existing, update });
+	}
+	if (sourceUpgrades.length) {
+		await withDbClient(env, async (db) => {
+			for (const { existing, update } of sourceUpgrades) {
+				await updateArticleSourceByUrl(db, update);
+				console.info({ tag: 'RSS', msg: 'Upgraded article source', url: update.url, from: existing.source, to: feed.name });
+			}
+		});
 	}
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
@@ -251,24 +259,20 @@ async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLPar
 		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed insert done', feed: feed.name, inserted, total: newItems.length });
-	await markSourceFeedScraped(db, feed.id);
+	await withDbClient(env, (db) => markSourceFeedScraped(db, feed.id));
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	await withDbClient(env, async (db) => {
-		const parser = new XMLParser({ ignoreAttributes: false });
-
-		// Pass 1: default sources → articles table
-		const feeds = await getDefaultRssFeeds(db);
-		for (const feed of feeds) {
-			try {
-				await processFeed(db, env, feed, parser);
-			} catch (err) {
-				console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
-			}
+	const parser = new XMLParser({ ignoreAttributes: false });
+	const feeds = await withDbClient(env, getDefaultRssFeeds);
+	for (const feed of feeds) {
+		try {
+			await processFeed(env, feed, parser);
+		} catch (err) {
+			console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
 		}
+	}
 
-		console.info({ tag: 'RSS', msg: 'end' });
-	});
+	console.info({ tag: 'RSS', msg: 'end' });
 }
