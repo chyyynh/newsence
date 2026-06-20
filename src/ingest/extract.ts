@@ -1,13 +1,15 @@
+import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
+import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@shared/mime';
+import { readTempBytes } from '@shared/r2-temp';
 import type { Env } from '@shared/types';
 import type { ScrapedContent } from '@shared/web';
 import { scrapeUrl } from './platforms/registry';
-import { type ParsedPdf, parsePdf } from './workflows/steps/pdf-extraction';
 
 // Shared extraction core: one input → one normalized shape. Wraps the existing
 // engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)
-// — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and any future
-// caller all produce identical output instead of diverging per code path.
+// — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and the core RPC
+// surface for future chat agents all produce identical output.
 
 export type ExtractInput =
 	| { kind: 'url'; url: string }
@@ -35,6 +37,15 @@ export interface NormalizedContent {
 	status: 'ok' | 'needs_ocr' | 'failed';
 }
 
+export type PdfTextStatus = 'ok' | 'needs_ocr';
+
+export interface ParsedPdf {
+	text: string;
+	status: PdfTextStatus;
+	pages: number;
+	chars: number;
+}
+
 const EMPTY_METADATA: NormalizedContent['metadata'] = {
 	author: null,
 	publishedDate: null,
@@ -42,6 +53,32 @@ const EMPTY_METADATA: NormalizedContent['metadata'] = {
 	description: null,
 	ogImageUrl: null,
 };
+
+// Digital PDFs with a real text layer yield plenty of characters; scanned or
+// image-only PDFs come back near-empty because LiteParse base does not OCR.
+const MIN_PDF_CHARS = 40;
+const MIN_PDF_CHARS_PER_PAGE = 20;
+
+// LiteParse WASM is instantiated once per isolate; the CompiledWasm wrangler
+// rule turns the import into a WebAssembly.Module.
+let pdfParserReady = false;
+function ensurePdfParser(): void {
+	if (!pdfParserReady) {
+		initSync({ module: wasmModule });
+		pdfParserReady = true;
+	}
+}
+
+export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
+	ensurePdfParser();
+	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'markdown', imageMode: 'off' });
+	const raw = (await parser.parse(bytes)) as { text?: string; pages?: unknown[] };
+	const text = (raw.text ?? '').trim();
+	const pages = raw.pages?.length ?? 0;
+	const chars = text.length;
+	const status = chars < MIN_PDF_CHARS || chars / Math.max(pages, 1) < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
+	return { text, pages, chars, status };
+}
 
 // Lossy markdown → plain text. Cheap and good enough for the `text` field; we
 // don't need a real renderer, just the words without the syntax.
@@ -124,9 +161,8 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 		case 'bytes':
 			return extractFromBytes(input.bytes, input.contentType);
 		case 'r2': {
-			const obj = await env.R2.get(input.key);
-			if (!obj) throw new Error(`R2 object missing: ${input.key}`);
-			return extractFromBytes(new Uint8Array(await obj.arrayBuffer()), obj.httpMetadata?.contentType);
+			const { bytes, contentType } = await readTempBytes(env, input.key, { label: 'extract input temp object' });
+			return extractFromBytes(bytes, contentType);
 		}
 	}
 }

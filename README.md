@@ -40,7 +40,7 @@ Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls content
 | **Xiaohongshu**      | Monitor   | Every 30 min  | Profile scraping → user notes, covers                                       |
 | **Hacker News**      | Processor | Via RSS       | Detects HN links → fetches comments via Algolia → generates editorial notes |
 | **Web**              | Scraper   | On demand     | Full content extraction (Readability + Cheerio), OG metadata                |
-| **User Submissions** | Ingestion | Real-time     | `POST /submit` — full crawl + workflow, sync response                       |
+| **User Uploads**     | Ingestion | Real-time     | `POST /ingest` — URL/image/blob ingest, returns saved resource + workflow id |
 
 All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 
@@ -49,12 +49,12 @@ All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 Each article goes through an automated workflow with independent retries:
 
 ```
-URL arrives (RSS cron / Twitter cron / YouTube cron / /submit)
+Content arrives (source monitor / user upload / retry)
   │
-  ├─ 1. Fetch Article ──────── Load article row from database
+  ├─ 1. Load Content ───────── Source draft from R2, or user_file/article row for upload/retry
   ├─ 2. AI Analysis ────────── Workers AI Qwen3 → bilingual title, summary, tags, keywords, entities
   ├─ 3. Fetch OG Image ─────── Grab OG image if missing (first 32 KB of HTML)
-  ├─ 4. Save to DB ─────────── Write all AI results in a single UPDATE
+  ├─ 4. Save to DB ─────────── Source: single final INSERT; row-based: one final UPDATE
   ├─    Sync Entities ──────── (conditional) Upsert entities, link to article
   ├─ 5. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
   └─ 7. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
@@ -70,7 +70,7 @@ Roughly 30 seconds per article. Each step retries independently with exponential
 | **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
 | **Embedding**         | BGE-M3 (1024d)   | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
-Entity extraction happens in the same LLM call as analysis — zero extra API cost.
+Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole article into fallback.
 
 ## Stack
 
@@ -122,7 +122,7 @@ AI analysis and embeddings use the Workers AI binding, so no external LLM secret
 ```bash
 wrangler secret put KAITO_API_KEY            # optional — Twitter monitoring
 wrangler secret put YOUTUBE_API_KEY          # optional — YouTube monitoring
-wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # optional — auth for /submit
+wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # auth for internal HTTP endpoints
 ```
 
 ### 5. Deploy
@@ -140,15 +140,12 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 # Health check
 curl https://your-worker.workers.dev/health
 
-# Submit a URL
-curl -X POST https://your-worker.workers.dev/submit \
+# Ingest URLs
+curl -X POST https://your-worker.workers.dev/ingest \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/article"}'
+  -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
+  -d '{"urls": ["https://example.com/article"], "userId": "user-id"}'
 
-# Generate embeddings
-curl -X POST https://your-worker.workers.dev/embed \
-  -H "Content-Type: application/json" \
-  -d '{"text": "search query"}'
 ```
 
 <details>
@@ -157,12 +154,12 @@ curl -X POST https://your-worker.workers.dev/embed \
 ```json
 {
   "success": true,
-  "results": [
+  "data": [
     {
-      "articleId": "550e8400-e29b-41d4-a716-446655440000",
-      "title": "Article Title",
-      "sourceType": "web",
-      "alreadyExists": false
+      "url": "https://example.com/article",
+      "userFileId": "550e8400-e29b-41d4-a716-446655440000",
+      "instanceId": "workflow-id",
+      "resourceKind": "url"
     }
   ]
 }
@@ -170,7 +167,7 @@ curl -X POST https://your-worker.workers.dev/embed \
 
 </details>
 
-Optional auth: `X-Internal-Token` header. Rate limiting: 20 req/60s per key (configurable via `SUBMIT_RATE_LIMIT_MAX` / `SUBMIT_RATE_LIMIT_WINDOW_SEC`).
+Auth: internal endpoints require `X-Internal-Token` or `Authorization: Bearer`. User ingest is rate-limited by the `USER_INGEST_LIMITER` binding in `wrangler.jsonc`.
 
 ## CLI & MCP
 
@@ -191,7 +188,7 @@ src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
 ├── entrypoints/          # HTTP router + scheduled + queue dispatch, health
 ├── shared/               # cross-subsystem base — used by both pipelines below
-│   ├── auth/             # /submit internal-token middleware + bearer session
+│   ├── auth/             # internal-token middleware for /ingest, /search, /media/*
 │   ├── ai.ts             # Workers AI text + JSON helpers
 │   ├── db.ts             # Hyperdrive clients + article/user_file helpers
 │   ├── embedding.ts      # BGE-M3 wrapper (Workers AI)
@@ -210,7 +207,7 @@ src/
 │   │   └── web/          # shared scraper (Readability + Cheerio + OG extraction)
 │   ├── workflows/        # Queue consumer, Workflow class, and workflow steps
 │   ├── domain/           # AI processor registry, content cleanup, entity sync
-│   ├── handlers/         # ingest / embed / workflow-status HTTP handlers
+│   ├── handlers/         # ingest / scrape HTTP handlers
 │   ├── monitors/         # cross-platform scheduled maintenance
 │   └── urls.ts · blob.ts · image-url.ts   # ingestion entrypoints (URL / blob / image)
 ├── chat/                 # ── AI chat surface ── tools, billing, editor, workspace, sessions
@@ -233,11 +230,9 @@ Secrets (via `wrangler secret put`):
 
 | Variable                       | Required | Description                              |
 | ------------------------------ | -------- | ---------------------------------------- |
-| `CORE_WORKER_INTERNAL_TOKEN`   | No       | Bearer token for `/submit` endpoint      |
+| `CORE_WORKER_INTERNAL_TOKEN`   | Yes      | Token for internal HTTP endpoints        |
 | `KAITO_API_KEY`                | No       | Enables Twitter monitoring               |
 | `YOUTUBE_API_KEY`              | No       | Enables YouTube channel monitoring       |
-| `SUBMIT_RATE_LIMIT_MAX`        | No       | Requests allowed per window (default 20) |
-| `SUBMIT_RATE_LIMIT_WINDOW_SEC` | No       | Window in seconds (default 60)           |
 
 ## Adding a Platform
 

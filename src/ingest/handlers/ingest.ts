@@ -1,4 +1,4 @@
-import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
+import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
 import { ingestUrls } from '../urls';
@@ -9,12 +9,15 @@ import { ingestUrls } from '../urls';
 const RATE_LIMIT_PERIOD_SEC = 60;
 
 type IngestJsonBody = {
-	url?: string;
 	urls?: string[];
 	imageUrl?: string;
 	userId?: string;
 	title?: string;
 };
+
+function rateLimited(code: string, message: string): Response {
+	return jsonError(code, message, 429, { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) });
+}
 
 export async function handleIngest(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env);
@@ -28,10 +31,7 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
 	if (contentType.startsWith('multipart/form-data')) {
 		return ingestMultipart(request, env);
 	}
-	return Response.json(
-		{ success: false, error: { code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported Content-Type: ${contentType || '(none)'}` } },
-		{ status: 415 },
-	);
+	return jsonError('UNSUPPORTED_MEDIA_TYPE', `Unsupported Content-Type: ${contentType || '(none)'}`, 415);
 }
 
 async function ingestJson(request: Request, env: Env): Promise<Response> {
@@ -39,12 +39,9 @@ async function ingestJson(request: Request, env: Env): Promise<Response> {
 	if (body instanceof Response) return body;
 
 	const hasImageUrl = typeof body.imageUrl === 'string' && body.imageUrl.trim().length > 0;
-	const hasUrlField = (typeof body.url === 'string' && body.url.trim().length > 0) || (Array.isArray(body.urls) && body.urls.length > 0);
+	const hasUrlField = Array.isArray(body.urls) && body.urls.length > 0;
 	if (hasImageUrl && hasUrlField) {
-		return Response.json(
-			{ success: false, error: { code: 'BAD_REQUEST', message: 'Provide imageUrl OR url/urls, not both' } },
-			{ status: 400 },
-		);
+		return jsonError('BAD_REQUEST', 'Provide imageUrl OR urls, not both', 400);
 	}
 
 	if (hasImageUrl) {
@@ -59,11 +56,10 @@ async function ingestImageUrlJson(body: IngestJsonBody, env: Env): Promise<Respo
 		userId: body.userId,
 		title: body.title ?? null,
 	});
-	if (outcome.ok) return Response.json({ success: true, result: outcome.result });
+	if (outcome.ok) return jsonData(outcome.result);
 
 	const status = imageUrlStatusFor(outcome.code);
-	const headers = outcome.code === 'RATE_LIMITED' ? { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) } : undefined;
-	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status, headers });
+	return outcome.code === 'RATE_LIMITED' ? rateLimited(outcome.code, outcome.message) : jsonError(outcome.code, outcome.message, status);
 }
 
 function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
@@ -88,29 +84,23 @@ function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
 }
 
 async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response> {
-	const urls = body.urls ?? (body.url ? [body.url] : []);
+	const urls = body.urls ?? [];
 	const outcome = await ingestUrls(env, { urls, userId: body.userId });
-	if (outcome.ok) return Response.json({ success: true, results: outcome.results });
+	if (outcome.ok) return jsonData(outcome.results);
 
 	if (outcome.code === 'RATE_LIMITED') {
-		return Response.json(
-			{ success: false, error: { code: outcome.code, message: outcome.message } },
-			{ status: 429, headers: { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) } },
-		);
+		return rateLimited(outcome.code, outcome.message);
 	}
 	const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
-	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
+	return jsonError(outcome.code, outcome.message, status);
 }
 
 async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	const outcome = await ingestBlob(request, env);
-	if (outcome.ok) return Response.json({ success: true, result: outcome.result });
+	if (outcome.ok) return jsonData(outcome.result);
 
 	if (outcome.code === 'RATE_LIMITED') {
-		return Response.json(
-			{ success: false, error: { code: outcome.code, message: outcome.message } },
-			{ status: 429, headers: { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) } },
-		);
+		return rateLimited(outcome.code, outcome.message);
 	}
 	const status =
 		outcome.code === 'PAYLOAD_TOO_LARGE'
@@ -122,5 +112,5 @@ async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 					: outcome.code === 'INTERNAL_ERROR'
 						? 500
 						: 400;
-	return Response.json({ success: false, error: { code: outcome.code, message: outcome.message } }, { status });
+	return jsonError(outcome.code, outcome.message, status);
 }

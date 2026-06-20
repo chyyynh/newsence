@@ -2,7 +2,7 @@
  * HMAC-SHA256 verify for /media/external/ URLs.
  *
  * Signing happens in the frontend at the API boundary (see
- * frontend/src/lib/r2/sign-proxy-url.ts). The worker only verifies. Sign
+ * frontend/src/lib/r2/sign-url.ts). The worker only verifies. Sign
  * input is `encodedUrl + ":" + exp`; the `{options}` segment (w/q) is
  * intentionally NOT signed so Next.js can request multiple widths from one
  * stored URL without per-render re-signing. The proxy handler must keep a
@@ -34,18 +34,11 @@ function hexToBytes(hex: string): Uint8Array | null {
 
 interface ProxySigningEnv {
 	IMAGE_PROXY_SECRET?: string;
-	CORE_WORKER_PUBLIC_URL?: string;
-}
-
-export interface ProxySigningConfig {
-	secret: string;
-	origin: string;
 }
 
 /** Returns null when the worker isn't configured to sign — caller decides between no-op and 503. */
-export function getProxySigningConfig(env: ProxySigningEnv): ProxySigningConfig | null {
-	if (!env.IMAGE_PROXY_SECRET || !env.CORE_WORKER_PUBLIC_URL) return null;
-	return { secret: env.IMAGE_PROXY_SECRET, origin: env.CORE_WORKER_PUBLIC_URL.replace(/\/$/, '') };
+export function getProxySigningSecret(env: ProxySigningEnv): string | null {
+	return env.IMAGE_PROXY_SECRET || null;
 }
 
 async function verifyHmacSig(buildSignInput: (expNum: number) => string, sig: string, exp: string, secret: string): Promise<boolean> {

@@ -1,9 +1,9 @@
-import { parseJsonBody, requireAuth } from '@shared/auth/middleware';
-import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
+import { parseJsonBody, requireAuth } from '@shared/auth';
+import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
+import { deleteScrapeInputTemp, putScrapeInputTemp } from '@shared/r2-temp';
 import type { Env } from '@shared/types';
 import { MAX_UPLOAD_BYTES } from '@shared/upload';
 import { extractSource } from '../extract';
-import { TMP_SCRAPE_PREFIX } from '../workflows/scrape.workflow';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
 // same wildcard CORS and 10 MB body cap. The actual extraction lives in
@@ -51,8 +51,13 @@ export async function handleScrapeJobCreate(request: Request, env: Env): Promise
 		const params = await buildJobParams(request, env);
 		if (params instanceof Response) return params;
 
-		const instance = await env.SCRAPE_WORKFLOW.create({ params });
-		return Response.json({ jobId: instance.id, status: 'queued' }, { status: 202, headers: CORS_HEADERS });
+		try {
+			const instance = await env.SCRAPE_WORKFLOW.create({ params });
+			return Response.json({ jobId: instance.id, status: 'queued' }, { status: 202, headers: CORS_HEADERS });
+		} catch (error) {
+			await cleanupStagedScrapeInput(env, params);
+			throw error;
+		}
 	} catch (error) {
 		console.error({ tag: 'SCRAPE_JOB', msg: 'create failed', error: String(error) });
 		return Response.json(
@@ -94,9 +99,16 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 	const sniffed = sniffMediaType(input.bytes.subarray(0, MAGIC_SNIFF_BYTES));
 	if (!sniffed) return Response.json({ error: 'Unrecognized file type' }, { status: 415, headers: CORS_HEADERS });
 
-	const key = `${TMP_SCRAPE_PREFIX}${crypto.randomUUID()}.${extensionFromMime(sniffed)}`;
-	await env.R2.put(key, input.bytes, { httpMetadata: { contentType: sniffed } });
-	return { kind: 'r2', key };
+	return putScrapeInputTemp(env, input.bytes, sniffed);
+}
+
+async function cleanupStagedScrapeInput(env: Env, params: { kind: 'url'; url: string } | { kind: 'r2'; key: string }): Promise<void> {
+	if (params.kind !== 'r2') return;
+	try {
+		await deleteScrapeInputTemp(env, params.key);
+	} catch (error) {
+		console.warn({ tag: 'SCRAPE_JOB', msg: 'Failed to cleanup staged scrape input', key: params.key, error: String(error) });
+	}
 }
 
 // GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent

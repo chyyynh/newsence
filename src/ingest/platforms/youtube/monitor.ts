@@ -1,7 +1,11 @@
-import { createDbClient, enqueueArticleProcess, getExistingUrls, insertArticle, upsertYoutubeTranscript } from '@shared/db';
+import { getExistingUrls } from '@shared/article-store';
+import { withDbClient } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
+import { youtubeTranscriptAttachment } from '@shared/source-draft';
+import { listSourceFeedsByType, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
+import { startSourceArticleWorkflow } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
@@ -42,12 +46,7 @@ async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<
 }
 
 /** Returns true on insert, false on skip/failure. */
-async function processYouTubeVideo(
-	db: Awaited<ReturnType<typeof createDbClient>>,
-	env: Env,
-	channel: RSSFeed,
-	video: FeedVideo,
-): Promise<boolean> {
+async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo): Promise<boolean> {
 	const { videoId, url } = video;
 	const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '');
 	const youtubeMetadata: YouTubeMetadata = {
@@ -66,55 +65,53 @@ async function processYouTubeVideo(
 		return false;
 	}
 
-	const articleId = await insertArticle(db, {
-		url,
-		title: scraped.title,
-		source: channel.name,
-		publishedDate: scraped.publishedDate || new Date().toISOString(),
-		summary: scraped.summary || '',
-		sourceType: 'youtube',
-		content: scraped.content || null,
-		ogImageUrl: scraped.ogImageUrl || null,
-		platformMetadata,
+	await startSourceArticleWorkflow(env, {
+		article: {
+			url,
+			title: scraped.title,
+			source: channel.name,
+			publishedDate: scraped.publishedDate || new Date().toISOString(),
+			summary: scraped.summary || '',
+			sourceType: 'youtube',
+			content: scraped.content || null,
+			ogImageUrl: scraped.ogImageUrl || null,
+			platformMetadata,
+		},
+		...(scraped.youtubeTranscript ? { attachments: [youtubeTranscriptAttachment(scraped.youtubeTranscript)] } : {}),
 	});
-	if (!articleId) return false;
-
-	if (scraped.youtubeTranscript) await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-	await enqueueArticleProcess(env, articleId);
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'Inserted video', channel: channel.name, title: scraped.title.slice(0, 60) });
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
 	return true;
 }
 
-async function processYouTubeChannel(
-	db: Awaited<ReturnType<typeof createDbClient>>,
-	env: Env,
-	channel: RSSFeed,
-	parser: XMLParser,
-): Promise<number> {
+async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLParser): Promise<number> {
 	if (!channel.RSSLink) return 0;
 	const videos = await fetchChannelVideos(channel, parser);
-	if (!videos?.length) return 0;
-
-	const videoUrls = videos.map(({ url }) => url);
-	const existingSet = await getExistingUrls(db, videoUrls);
-	const newVideos = videos.filter(({ url }) => !existingSet.has(url));
-
-	if (!newVideos.length) {
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
+	if (videos === null) return 0;
+	if (videos.length === 0) {
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
+		await markSourceFeedScrapedById(env, channel.id);
 		return 0;
 	}
 
-	let inserted = 0;
-	for (const video of newVideos) {
-		try {
-			if (await processYouTubeVideo(db, env, channel, video)) inserted++;
-		} catch (err) {
-			console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
+	const videoUrls = videos.map(({ url }) => url);
+	const existingSet = await withDbClient(env, (db) => getExistingUrls(db, videoUrls));
+	const newVideos = videos.filter(({ url }) => !existingSet.has(url));
+
+	let queued = 0;
+	if (newVideos.length) {
+		for (const video of newVideos) {
+			try {
+				if (await processYouTubeVideo(env, channel, video)) queued++;
+			} catch (err) {
+				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
+			}
 		}
+	} else {
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 	}
 
-	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
-	return inserted;
+	await markSourceFeedScrapedById(env, channel.id);
+	return queued;
 }
 
 export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -123,28 +120,20 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const db = await createDbClient(env);
-	try {
-		const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at, avatar_url FROM "RssList" WHERE type = $1`, [
-			'youtube_channel',
-		]);
-		const channels = result.rows as RSSFeed[];
-		if (!channels.length) {
-			console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel entries in RssList' });
-			return;
-		}
-
-		const parser = new XMLParser({ ignoreAttributes: false });
-		let totalInserted = 0;
-		for (const channel of channels) {
-			try {
-				totalInserted += await processYouTubeChannel(db, env, channel, parser);
-			} catch (err) {
-				console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
-			}
-		}
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'end', inserted: totalInserted, channels: channels.length });
-	} finally {
-		await db.end();
+	const channels = await listSourceFeedsByType(env, 'youtube_channel');
+	if (!channels.length) {
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel source feeds configured' });
+		return;
 	}
+
+	const parser = new XMLParser({ ignoreAttributes: false });
+	let totalQueued = 0;
+	for (const channel of channels) {
+		try {
+			totalQueued += await processYouTubeChannel(env, channel, parser);
+		} catch (err) {
+			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
+		}
+	}
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
 }

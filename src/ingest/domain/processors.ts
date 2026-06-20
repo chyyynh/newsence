@@ -1,4 +1,3 @@
-import { type DbClient, type ProcessableTable, USER_FILES_TABLE } from '@shared/db';
 import { prepareArticleTextForEmbedding } from '@shared/embedding';
 import { type PlatformEnrichments, type PlatformMetadata, withOgDimensions } from '@shared/platform-metadata';
 import type { Article } from '@shared/types';
@@ -78,52 +77,18 @@ export async function runArticleProcessor(
 	return getProcessor(sourceType).process(article, deps);
 }
 
-// `user_files` carries the same editorial fields as `articles` but with a few
-// different column names (content/extracted_text, url/source_url, etc.). The
-// processor emits keys that match `articles` column names; remap them when
-// the target table is user_files.
-const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
-	content: 'extracted_text',
-	url: 'source_url',
-	source: 'site_name',
-	platform_metadata: 'metadata',
-	scraped_date: 'created_at',
-};
-
-function mapColumnForTable(column: string, table: ProcessableTable): string {
-	if (table !== USER_FILES_TABLE) return column;
-	return ARTICLES_TO_USER_FILES_COLUMN_MAP[column] ?? column;
-}
-
-export async function persistProcessorResult(
-	articleId: string,
+export function buildProcessorUpdatePayload(
 	article: Article,
 	result: ProcessorResult,
-	deps: { db: DbClient; table: ProcessableTable },
-): Promise<void> {
+	embedding?: number[] | null,
+	metadataPatch?: Record<string, unknown>,
+): Record<string, unknown> {
 	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
-
-	if (Object.keys(updatePayload).length === 0) return;
-
-	const columns = Object.keys(updatePayload);
-	const setClauses = columns.map((col, i) => `${mapColumnForTable(col, deps.table)} = $${i + 1}`).join(', ');
-	const values = columns.map((col) => {
-		const val = updatePayload[col];
-		// JSON columns (objects/arrays that aren't native pg arrays for tags/keywords)
-		if (val !== null && typeof val === 'object' && col !== 'tags' && col !== 'keywords') {
-			return JSON.stringify(val);
-		}
-		return val;
-	});
-	values.push(articleId);
-
-	const sql = `UPDATE ${deps.table} SET ${setClauses} WHERE id = $${values.length}`;
-	const queryResult = await deps.db.query(sql, values);
-	if (queryResult.rowCount === 0) {
-		throw new Error(`Failed to update article ${articleId}: no rows matched`);
-	}
+	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
+	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
+	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
+	return updatePayload;
 }
 
 export function buildEmbeddingTextForArticle(

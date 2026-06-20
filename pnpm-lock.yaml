@@ -12,8 +12,8 @@ importers:
         specifier: ^1.10.0
         version: 1.10.0
       '@llamaindex/liteparse-wasm':
-        specifier: ^2.0.4
-        version: 2.0.4
+        specifier: ^2.1.1
+        version: 2.1.1
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -484,8 +484,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@llamaindex/liteparse-wasm@2.0.4':
-    resolution: {integrity: sha512-hrJiOe7b0sBXAq0+8meF6x7muMwThssDJ3M1WVky0057vjgNWszKLRUV0goLFSL2X7EC1RjSQM9pwcUfG193yQ==}
+  '@llamaindex/liteparse-wasm@2.1.1':
+    resolution: {integrity: sha512-vOoBPgD4v0mvvvWZ7zDkr3A8Td2RhmWRD0etl+Jrl13WPvD2tRfeDUbiyU+LxZedpzv3MzCY6dPSJuf++qkbJQ==}
     engines: {node: '>=18.0.0'}
 
   '@mixmark-io/domino@2.2.0':
@@ -1062,7 +1062,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@llamaindex/liteparse-wasm@2.0.4': {}
+  '@llamaindex/liteparse-wasm@2.1.1': {}
 
   '@mixmark-io/domino@2.2.0': {}
 
