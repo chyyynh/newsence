@@ -34,7 +34,7 @@ export type WorkflowQueueTarget =
 
 export type QueueMessage = { type: 'workflow_process'; target: WorkflowQueueTarget };
 
-export const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
+const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
@@ -97,8 +97,12 @@ export function sourceArticleDraftUrl(ref: SourceArticleDraftRef): string {
 	return ref.url;
 }
 
-export function sourceArticleDraftR2Key(ref: SourceArticleDraftRef): string | null {
+function sourceArticleDraftR2Key(ref: SourceArticleDraftRef): string | null {
 	return 'r2Key' in ref ? ref.r2Key : null;
+}
+
+export function sourceArticleDraftHasTempObject(ref: SourceArticleDraftRef): boolean {
+	return sourceArticleDraftR2Key(ref) !== null;
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {

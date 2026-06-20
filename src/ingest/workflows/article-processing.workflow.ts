@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { measureImageDimensions } from '@media/dimensions';
 import {
 	ARTICLES_TABLE,
-	insertFinalSourceArticle,
+	insertProcessedSourceArticle,
 	loadProcessableArticle,
 	loadProcessableArticleShell,
 	type ProcessableArticleShell,
@@ -11,7 +11,6 @@ import {
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
-	upsertYoutubeTranscript,
 	withDbTransaction,
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
@@ -23,7 +22,8 @@ import {
 	deleteSourceArticleDraft,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
-	sourceArticleDraftR2Key,
+	sourceArticleDraftHasTempObject,
+	sourceArticleDraftUrl,
 	sourceDraftToArticle,
 	type WorkflowQueueTarget,
 } from '@shared/workflow-queue';
@@ -376,10 +376,13 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	const fullArticle = await context.readSourceArticle();
 	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
 	return withDbTransaction(env, 'source article', async (db) => {
-		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
-		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
-		if (input.result.updateData.entities?.length) await syncArticleEntities(db, articleId, input.result.updateData.entities);
-		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
+		const articleId = await insertProcessedSourceArticle(db, {
+			article: finalInsert.article,
+			updatePayload: finalInsert.updatePayload,
+			youtubeTranscript: draft.youtubeTranscript,
+			entities: input.result.updateData.entities,
+			youtubeHighlights: input.youtubeHighlights,
+		});
 		if (draft.twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, draft.twitterSourceEvent.tweet, {
 				articleId,
@@ -439,8 +442,8 @@ async function cleanupTargetTemps(
 	step: WorkflowStep,
 ): Promise<void> {
 	const { target } = context;
-	const sourceDraftKey = target.kind === 'source' ? sourceArticleDraftR2Key(target.sourceArticle) : null;
-	if (!pdfTextTemp?.textStorageKey && !sourceDraftKey) return;
+	const hasSourceDraftTemp = target.kind === 'source' && sourceArticleDraftHasTempObject(target.sourceArticle);
+	if (!pdfTextTemp?.textStorageKey && !hasSourceDraftTemp) return;
 
 	await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
 		cleanupWorkflowTempObjects(env, context, pdfTextTemp),
@@ -463,8 +466,11 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 	}
 
 	if (target.kind === 'source') {
-		const sourceDraftKey = sourceArticleDraftR2Key(target.sourceArticle);
-		if (sourceDraftKey) await deleteTemp('source_draft', sourceDraftKey, () => deleteSourceArticleDraft(env, target.sourceArticle));
+		if (sourceArticleDraftHasTempObject(target.sourceArticle)) {
+			await deleteTemp('source_draft', sourceArticleDraftUrl(target.sourceArticle), () =>
+				deleteSourceArticleDraft(env, target.sourceArticle),
+			);
+		}
 	}
 
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });

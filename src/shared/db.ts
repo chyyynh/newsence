@@ -423,6 +423,22 @@ export async function insertFinalSourceArticle(
 	return articleId;
 }
 
+export type ProcessedSourceArticleInsert = {
+	article: InsertArticleData;
+	updatePayload: ProcessedArticleUpdate;
+	youtubeTranscript?: YoutubeTranscriptRow;
+	entities?: Array<{ name: string; name_cn: string; type: string }>;
+	youtubeHighlights?: YoutubeHighlightsUpdateData | null;
+};
+
+export async function insertProcessedSourceArticle(db: DbClient, data: ProcessedSourceArticleInsert): Promise<string> {
+	const articleId = await insertFinalSourceArticle(db, data.article, data.updatePayload);
+	if (data.youtubeTranscript) await upsertYoutubeTranscript(db, data.youtubeTranscript);
+	if (data.entities?.length) await syncArticleEntities(db, articleId, data.entities);
+	if (data.youtubeHighlights) await saveYouTubeHighlights(db, data.youtubeHighlights);
+	return articleId;
+}
+
 export async function syncArticleEntities(
 	db: DbClient,
 	articleId: string,
