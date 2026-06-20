@@ -8,8 +8,8 @@ import { scrapeUrl } from './platforms/registry';
 
 // Shared extraction core: one input → one normalized shape. Wraps the existing
 // engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)
-// — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and any future
-// caller all produce identical output instead of diverging per code path.
+// — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and the core RPC
+// surface for future chat agents all produce identical output.
 
 export type ExtractInput =
 	| { kind: 'url'; url: string }

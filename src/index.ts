@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { routeRequest } from '@entry/http';
 import { type PersistGeneratedImageResult, persistGeneratedImage } from '@ingest/blob-persistence';
+import { extractSource, type NormalizedContent } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -46,6 +47,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
 	searchArticles(query: string, opts?: { daysAgo?: number; limit?: number }): Promise<ArticleSummary[]> {
 		return searchCorpusArticles(this.env, query, opts);
+	}
+
+	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
+	scrapeUrl(url: string): Promise<NormalizedContent> {
+		return extractSource(this.env, { kind: 'url', url });
 	}
 
 	/** Read article/collection/url resources from the core corpus (documents are read via Vercel). */
