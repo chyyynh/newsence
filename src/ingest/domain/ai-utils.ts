@@ -65,33 +65,42 @@ const ExtractedEntitySchema = z.object({
 	type: z.enum(ENTITY_TYPES),
 });
 
-const ArticleAnalysisSchema = z.object({
-	tags: z.array(z.string().min(1)).min(1),
-	keywords: z.array(z.string().min(1)).min(1),
-	entities: z.array(ExtractedEntitySchema),
+const ArticleTranslationSchema = z.object({
 	title_en: z.string().min(1),
 	title_cn: z.string().min(1),
 	summary_en: z.string().min(1),
 	summary_cn: z.string().min(1),
+});
+
+const ArticleClassificationSchema = z.object({
+	tags: z.array(z.string().min(1)).min(1),
+	keywords: z.array(z.string().min(1)).min(1),
+	entities: z.array(ExtractedEntitySchema),
 	category: z.enum(ARTICLE_CATEGORIES),
 });
 
-type ArticleAnalysisObject = z.infer<typeof ArticleAnalysisSchema>;
+type ArticleTranslationObject = z.infer<typeof ArticleTranslationSchema>;
+type ArticleClassificationObject = z.infer<typeof ArticleClassificationSchema>;
 
-const ARTICLE_ANALYSIS_SYSTEM_PROMPT = `你是專業的新聞分析師和翻譯師。請輸出符合 schema 的結構化分析。
+const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
 
 任務：
-- 產生 tags、keywords、category
 - 翻譯 title_en / title_cn
 - 產生 summary_en / summary_cn
-- 擷取重要 named entities
 
 翻譯要求：
 - title_en: 將標題翻譯成自然流暢的英文
 - title_cn: 將標題翻譯成自然流暢的繁體中文
 - summary_en: 用英文寫 1-2 句簡潔摘要
 - summary_cn: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
-- 所有文字都不要使用 Markdown
+- 如果原文已是目標語言，保留自然表達，不要硬改寫
+- 所有文字都不要使用 Markdown。`;
+
+const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
+
+任務：
+- 產生 tags、keywords、category
+- 擷取重要 named entities
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, NLP, ComputerVision, LLM, GenerativeAI
@@ -107,7 +116,7 @@ const ARTICLE_ANALYSIS_SYSTEM_PROMPT = `你是專業的新聞分析師和翻譯�
 
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
-function buildArticleAnalysisPrompt(article: Article): string {
+function buildArticleContextPrompt(article: Article): string {
 	const content = article.content || article.summary || article.title;
 	return `文章資訊:
 標題: ${article.title}
@@ -117,44 +126,73 @@ function buildArticleAnalysisPrompt(article: Article): string {
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
 
-function createFallbackResult(article: Article): AIAnalysisResult {
+function createFallbackTranslation(article: Article): ArticleTranslationObject {
 	return {
-		tags: ['Other'],
-		keywords: article.title.split(' ').slice(0, 5),
 		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
 		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
 		title_en: article.title,
 		title_cn: article.title_cn ?? article.title,
+	};
+}
+
+function createFallbackClassification(article: Article): ArticleClassificationObject {
+	return {
+		tags: ['Other'],
+		keywords: article.title.split(' ').slice(0, 5),
 		category: 'Other',
 		entities: [],
 	};
+}
+
+async function generateArticleTranslation(article: Article, ai: Env['AI']): Promise<ArticleTranslationObject> {
+	const result = await generateObject<ArticleTranslationObject>(ai, buildArticleContextPrompt(article), {
+		schema: ArticleTranslationSchema,
+		schemaName: 'article translation',
+		task: AI_TASKS.articleTranslation,
+		maxTokens: 700,
+		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
+	});
+	return result ?? createFallbackTranslation(article);
+}
+
+async function generateArticleClassification(article: Article, ai: Env['AI']): Promise<ArticleClassificationObject> {
+	const result = await generateObject<ArticleClassificationObject>(ai, buildArticleContextPrompt(article), {
+		schema: ArticleClassificationSchema,
+		schemaName: 'article classification',
+		task: AI_TASKS.articleClassification,
+		maxTokens: 500,
+		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
+	});
+	return result ?? createFallbackClassification(article);
 }
 
 export async function generateArticleAnalysis(article: Article, ai: Env['AI']): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
-		const result = await generateObject<ArticleAnalysisObject>(ai, buildArticleAnalysisPrompt(article), {
-			schema: ArticleAnalysisSchema,
-			schemaName: 'article analysis',
-			task: AI_TASKS.articleAnalysis,
-			maxTokens: 1000,
-			systemPrompt: ARTICLE_ANALYSIS_SYSTEM_PROMPT,
-		});
-		if (!result) throw new Error('Invalid structured response');
+		const [translation, classification] = await Promise.all([
+			generateArticleTranslation(article, ai).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
+				return createFallbackTranslation(article);
+			}),
+			generateArticleClassification(article, ai).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
+				return createFallbackClassification(article);
+			}),
+		]);
 
 		return {
-			tags: result.tags.slice(0, 5),
-			keywords: result.keywords.slice(0, 8),
-			summary_en: result.summary_en,
-			summary_cn: result.summary_cn,
-			title_en: result.title_en,
-			title_cn: result.title_cn,
-			category: result.category ?? 'Other',
-			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
+			tags: classification.tags.slice(0, 5),
+			keywords: classification.keywords.slice(0, 8),
+			summary_en: translation.summary_en,
+			summary_cn: translation.summary_cn,
+			title_en: translation.title_en,
+			title_cn: translation.title_cn,
+			category: classification.category,
+			entities: classification.entities.slice(0, 10),
 		};
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Parse failed', error: String(error) });
-		return createFallbackResult(article);
+		return { ...createFallbackTranslation(article), ...createFallbackClassification(article) };
 	}
 }

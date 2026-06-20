@@ -13,7 +13,8 @@ export interface AiTask {
 }
 
 export const AI_TASKS = {
-	articleAnalysis: { name: 'article-analysis', version: '1' },
+	articleTranslation: { name: 'article-translation', version: '1' },
+	articleClassification: { name: 'article-classification', version: '1' },
 	tweetAnalysis: { name: 'tweet-analysis', version: '1' },
 	youtubeHighlights: { name: 'youtube-highlights', version: '1' },
 	hnEditorialCn: { name: 'hn-editorial-cn', version: '1' },
