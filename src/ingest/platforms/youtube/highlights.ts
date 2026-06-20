@@ -1,5 +1,5 @@
 import { CORE_TEXT_MODEL, generateObject } from '@shared/ai';
-import { type DbClient, withDbClient } from '@shared/db';
+import { getYoutubeTranscriptForHighlights, withDbClient } from '@shared/db';
 import type { Article, Env } from '@shared/types';
 import type { TranscriptSegment } from '@shared/web';
 import { z } from 'zod';
@@ -86,11 +86,7 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 	if (!videoId) return null;
 
 	return withDbClient(env, async (db) => {
-		const result = await db.query<{
-			transcript: Array<{ startTime: number; endTime: number; text: string }> | null;
-			ai_highlights: unknown;
-		}>('SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1', [videoId]);
-		const row = result.rows[0];
+		const row = await getYoutubeTranscriptForHighlights(db, videoId);
 		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
 		return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
@@ -117,12 +113,4 @@ export async function prepareYouTubeHighlightsFromTranscript(
 		generatedAt,
 		count: highlights.highlights.length,
 	};
-}
-
-export async function saveYouTubeHighlights(db: DbClient, update: YouTubeHighlightsUpdate): Promise<void> {
-	await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
-		JSON.stringify(update.value),
-		update.generatedAt,
-		update.videoId,
-	]);
 }

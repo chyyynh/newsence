@@ -7,6 +7,7 @@ import {
 	loadProcessableArticleShell,
 	type ProcessableArticleShell,
 	type ProcessableTable,
+	saveYouTubeHighlights,
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
@@ -31,7 +32,6 @@ import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
-	saveYouTubeHighlights,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
 import { createPdfTextTemp, deletePdfTextTemp, type PdfTextTempResult, readPdfTextTemp } from './pdf-text-temp';
