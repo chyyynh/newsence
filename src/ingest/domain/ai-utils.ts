@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject } from '@shared/ai';
-import type { ProcessableTable } from '@shared/db';
+import type { ProcessableTable } from '@shared/article-store';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
 import { z } from 'zod';

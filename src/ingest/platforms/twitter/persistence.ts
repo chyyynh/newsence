@@ -1,4 +1,5 @@
-import { getExistingArticlesByUrl, updateArticleTextForReprocessing, withDbClient } from '@shared/db';
+import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@shared/article-store';
+import { withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@shared/source-draft';
 import type { Env, Tweet } from '@shared/types';

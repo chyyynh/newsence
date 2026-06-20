@@ -1,4 +1,5 @@
-import { type DbClient, USER_FILES_TABLE, withDbClient } from './db';
+import { USER_FILES_TABLE } from './article-store';
+import { type DbClient, withDbClient } from './db';
 import type { Env } from './types';
 
 type UserFileWorkflowMetadataPatch = Record<string, string>;

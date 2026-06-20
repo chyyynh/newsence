@@ -1,5 +1,6 @@
+import { USER_FILES_TABLE } from '@shared/article-store';
 import { requireAuth } from '@shared/auth';
-import { createDbClient, type DbClient, USER_FILES_TABLE } from '@shared/db';
+import { createDbClient, type DbClient } from '@shared/db';
 import type { Env } from '@shared/types';
 
 // All user-file blobs live under this prefix (ingest + chat-generated images).

@@ -4,8 +4,8 @@ import {
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
-	withDbTransaction,
-} from '@shared/db';
+} from '@shared/article-store';
+import { withDbTransaction } from '@shared/db';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@shared/source-draft';
 import type { Article, Env } from '@shared/types';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';

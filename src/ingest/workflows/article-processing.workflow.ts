@@ -7,7 +7,7 @@ import {
 	type ProcessableArticleShell,
 	type ProcessableTable,
 	USER_FILES_TABLE,
-} from '@shared/db';
+} from '@shared/article-store';
 import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
 import {

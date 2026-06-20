@@ -1,4 +1,5 @@
-import { type DbClient, USER_FILES_TABLE } from '@shared/db';
+import { USER_FILES_TABLE } from '@shared/article-store';
+import type { DbClient } from '@shared/db';
 import { normalizeUrl } from '@shared/web';
 
 export interface InsertUrlUserFileData {

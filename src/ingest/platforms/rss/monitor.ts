@@ -3,8 +3,8 @@ import {
 	type ExistingArticleRecord,
 	getExistingArticlesByUrl,
 	updateArticleSourceByUrl,
-	withDbClient,
-} from '@shared/db';
+} from '@shared/article-store';
+import { withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';

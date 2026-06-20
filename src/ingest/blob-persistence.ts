@@ -1,4 +1,5 @@
-import { type DbClient, USER_FILES_TABLE, withDbTransaction } from '@shared/db';
+import { USER_FILES_TABLE } from '@shared/article-store';
+import { type DbClient, withDbTransaction } from '@shared/db';
 import { extensionFromMime, isRasterImage } from '@shared/mime';
 import type { Env } from '@shared/types';
 import {

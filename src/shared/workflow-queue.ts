@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './db';
+import { ARTICLES_TABLE, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './article-store';
 import {
 	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
