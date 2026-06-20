@@ -10,7 +10,7 @@ import {
 } from './db';
 import type { TwitterMedia } from './platform-metadata';
 import { deleteTempObject, putTempText, readTempText } from './r2-temp';
-import type { Env, Tweet } from './types';
+import type { Article, Env, Tweet } from './types';
 import { validateImageUrl } from './web';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
@@ -95,6 +95,27 @@ export async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): P
 	if ('inline' in ref) return ref.inline;
 	const text = await readTempText(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 	return JSON.parse(text) as SourceArticleDraft;
+}
+
+export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
+	const data = draft.article;
+	return {
+		id: data.url,
+		title: data.title,
+		title_cn: null,
+		summary: data.summary || null,
+		summary_cn: null,
+		content: data.content,
+		content_cn: null,
+		url: data.url,
+		source: data.source,
+		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+		tags: data.tags ?? [],
+		keywords: data.keywords ?? [],
+		source_type: data.sourceType,
+		og_image_url: data.ogImageUrl,
+		platform_metadata: data.platformMetadata as Article['platform_metadata'],
+	};
 }
 
 export async function deleteSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<void> {

@@ -22,6 +22,7 @@ import {
 	deleteSourceArticleDraft,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
+	sourceDraftToArticle,
 	type WorkflowQueueTarget,
 } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, buildProcessorUpdatePayload, type ProcessorResult, runArticleProcessor } from '../domain/processors';
@@ -179,7 +180,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): Workfl
 		table: targetTable(target),
 		readSourceDraft,
 		readSourceArticle: () => {
-			article ??= readSourceDraft().then(articleFromSourceDraft);
+			article ??= readSourceDraft().then(sourceDraftToArticle);
 			return article;
 		},
 	};
@@ -189,27 +190,6 @@ function targetLogContext(context: WorkflowRunContext, article: Article): Record
 	return context.target.kind === 'row'
 		? { article_id: context.target.articleId, table: context.table }
 		: { url: article.url, table: context.table };
-}
-
-function articleFromSourceDraft(draft: SourceArticleDraft): Article {
-	const data = draft.article;
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		og_image_url: data.ogImageUrl,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
 }
 
 async function loadTargetArticle(env: Env, context: WorkflowRunContext): Promise<Article> {
