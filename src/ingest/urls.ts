@@ -6,13 +6,12 @@ import {
 	upsertYoutubeTranscript,
 	withDbClient,
 } from '@shared/db';
-import { extensionFromMime, PDF_MIME } from '@shared/mime';
+import { PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
-import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
 import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
-import { persistBlobRow, putUserUpload } from './blob-persistence';
+import { persistSavedUrlBlob } from './blob-persistence';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 
 const INGEST_MAX_BATCH_SIZE = 20;
@@ -121,46 +120,20 @@ async function insertScrapedBlob(
 	userId: string,
 ): Promise<InsertOutcome> {
 	try {
-		// Reject before piping if upstream is honest about being oversized.
-		if (blob.contentLength !== null && blob.contentLength > MAX_UPLOAD_BYTES) {
-			await blob.body.cancel();
-			return { error: `Resource exceeds ${MAX_UPLOAD_BYTES} bytes (declared ${blob.contentLength})` };
-		}
-
-		const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
-		const storageKey = userUploadKey(userId, ext);
-
-		// On overrun the transform errors, `putUserUpload` rejects, and R2 doesn't
-		// commit a partial object.
-		const limited = streamWithByteLimit(blob.body, MAX_UPLOAD_BYTES);
-		try {
-			await putUserUpload(env, { storageKey, body: limited.stream, contentType: blob.contentType });
-		} catch (err) {
-			console.error({ tag: 'INGEST', msg: 'R2 put failed', url, storageKey, error: String(err) });
-			return { error: 'R2 put failed' };
-		}
-
-		const fileSize = limited.getBytesSeen();
-		const title = deriveFileTitle(blob.suggestedFilename);
-		const metadata = buildPdfMetadata({ fileType: blob.contentType, fileName: blob.suggestedFilename, fileSize });
-
-		const persisted = await persistBlobRow(env, {
+		const persisted = await persistSavedUrlBlob(env, {
 			userId,
-			storageKey,
-			fileSize,
-			fileType: blob.contentType,
-			fileName: blob.suggestedFilename,
-			originType: 'saved_url',
-			title,
+			body: blob.body,
+			contentLength: blob.contentLength,
+			contentType: blob.contentType,
+			suggestedFilename: blob.suggestedFilename,
 			sourceUrl: blob.sourceUrl,
 			normalizedSourceUrl: url,
-			metadata,
 		});
 		if (!persisted.ok) return { error: persisted.message };
 		console.info({
 			tag: 'INGEST',
 			msg: 'Saved blob from URL',
-			title: title.slice(0, 50),
+			title: persisted.title.slice(0, 50),
 			userFileId: persisted.userFileId,
 			contentType: blob.contentType,
 		});

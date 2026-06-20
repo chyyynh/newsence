@@ -3,10 +3,15 @@ import { extensionFromMime, isRasterImage } from '@shared/mime';
 import type { Env } from '@shared/types';
 import {
 	assertBlobUploadQuotaTx,
+	buildPdfMetadata,
+	deriveFileTitle,
 	MAX_UPLOAD_BYTES,
+	PayloadTooLargeError,
 	storageKeyToAssetUrl,
+	streamWithByteLimit,
 	UploadQuotaExceededError,
 	userGeneratedImageKey,
+	userUploadKey,
 } from '@shared/upload';
 
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
@@ -46,6 +51,10 @@ export type PersistGeneratedImageResult =
 			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
 			message: string;
 	  };
+
+export type PersistSavedUrlBlobResult =
+	| { ok: true; userFileId: string; fileType: string; fileSize: number; title: string }
+	| { ok: false; code: 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'INTERNAL_ERROR'; message: string };
 
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
@@ -125,6 +134,60 @@ export async function persistBlobRow(env: Env, data: InsertBlobUserFileData): Pr
 		}
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'DB insert failed' };
 	}
+}
+
+export async function persistSavedUrlBlob(
+	env: Env,
+	args: {
+		userId: string;
+		body: ReadableStream<Uint8Array>;
+		contentLength: number | null;
+		contentType: string;
+		suggestedFilename: string;
+		sourceUrl: string;
+		normalizedSourceUrl: string;
+	},
+): Promise<PersistSavedUrlBlobResult> {
+	if (args.contentLength !== null && args.contentLength > MAX_UPLOAD_BYTES) {
+		await args.body.cancel();
+		return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: `Resource exceeds ${MAX_UPLOAD_BYTES} bytes (declared ${args.contentLength})` };
+	}
+
+	const storageKey = userUploadKey(args.userId, extensionFromMime(args.contentType, args.suggestedFilename));
+	const limited = streamWithByteLimit(args.body, MAX_UPLOAD_BYTES);
+	try {
+		await putUserUpload(env, { storageKey, body: limited.stream, contentType: args.contentType });
+	} catch (err) {
+		if (err instanceof PayloadTooLargeError) {
+			return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: `Resource exceeds ${MAX_UPLOAD_BYTES} bytes` };
+		}
+		console.error({
+			tag: 'PERSIST_BLOB',
+			msg: 'R2 put failed for saved URL blob',
+			url: args.normalizedSourceUrl,
+			storageKey,
+			error: String(err),
+		});
+		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
+	}
+
+	const fileSize = limited.getBytesSeen();
+	const title = deriveFileTitle(args.suggestedFilename);
+	const persisted = await persistBlobRow(env, {
+		userId: args.userId,
+		storageKey,
+		fileSize,
+		fileType: args.contentType,
+		fileName: args.suggestedFilename,
+		originType: 'saved_url',
+		title,
+		sourceUrl: args.sourceUrl,
+		normalizedSourceUrl: args.normalizedSourceUrl,
+		metadata: buildPdfMetadata({ fileType: args.contentType, fileName: args.suggestedFilename, fileSize }),
+	});
+	if (!persisted.ok) return persisted;
+
+	return { ok: true, userFileId: persisted.userFileId, fileType: args.contentType, fileSize, title };
 }
 
 export async function persistGeneratedImage(
