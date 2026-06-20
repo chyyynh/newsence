@@ -1,11 +1,4 @@
-import {
-	type ExistingUserFileByUrl,
-	getUserFileByNormalizedSourceUrl,
-	type InsertUserFileResult,
-	insertUserFile,
-	upsertYoutubeTranscript,
-	withDbClient,
-} from '@shared/db';
+import { upsertYoutubeTranscript, withDbClient } from '@shared/db';
 import { PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
@@ -13,6 +6,12 @@ import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl
 import { createUserFileWorkflow } from '@shared/workflow-queue';
 import { persistSavedUrlBlob } from './blob-persistence';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
+import {
+	type ExistingUrlUserFile,
+	getUrlUserFileByNormalizedSourceUrl,
+	type InsertUrlUserFileResult,
+	insertUrlUserFile,
+} from './url-user-files';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
@@ -38,12 +37,12 @@ type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNA
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
 
 type InsertOutcome =
-	| { kind: 'page'; row: InsertUserFileResult }
+	| { kind: 'page'; row: InsertUrlUserFileResult }
 	| { kind: 'blob'; userFileId: string; fileType: string }
 	| { error: string };
 
 type UserFileUrlResultRow = Pick<
-	ExistingUserFileByUrl,
+	ExistingUrlUserFile,
 	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
 >;
 
@@ -67,7 +66,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 					}
 				: null;
 
-			const userFile = await insertUserFile(db, {
+			const userFile = await insertUrlUserFile(db, {
 				url,
 				normalizedUrl: url,
 				title: scraped.title,
@@ -172,11 +171,11 @@ function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instance
 	};
 }
 
-function isWorkflowComplete(row: ExistingUserFileByUrl): boolean {
+function isWorkflowComplete(row: ExistingUrlUserFile): boolean {
 	return !!row.title_cn && !!row.summary_cn && row.has_embedding;
 }
 
-async function returnExisting(url: string, row: ExistingUserFileByUrl, env: Env): Promise<IngestResult> {
+async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
 	if (row.resource_kind === 'blob') {
 		const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
 		return {
@@ -201,7 +200,7 @@ async function returnExisting(url: string, row: ExistingUserFileByUrl, env: Env)
 async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
-	const existingRow = await withDbClient(env, (db) => getUserFileByNormalizedSourceUrl(db, userId, url));
+	const existingRow = await withDbClient(env, (db) => getUrlUserFileByNormalizedSourceUrl(db, userId, url));
 	if (existingRow) {
 		return returnExisting(url, existingRow, env);
 	}
