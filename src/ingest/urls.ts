@@ -1,4 +1,11 @@
-import { type InsertUserFileResult, insertUserFile, USER_FILES_TABLE, upsertYoutubeTranscript, withDbClient } from '@shared/db';
+import {
+	type ExistingUserFileByUrl,
+	getUserFileByNormalizedSourceUrl,
+	type InsertUserFileResult,
+	insertUserFile,
+	upsertYoutubeTranscript,
+	withDbClient,
+} from '@shared/db';
 import { extensionFromMime, PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
@@ -8,22 +15,8 @@ import { createUserFileWorkflow } from '@shared/workflow-queue';
 import { persistBlobRow, putUserUpload } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 
-const EXIST_COLS =
-	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
-
-type ExistingUserFileRow = {
-	id: string;
-	title: string;
-	title_cn: string | null;
-	summary_cn: string | null;
-	tags: string[] | null;
-	platform_type: string | null;
-	og_image_url: string | null;
-	resource_kind: string;
-	has_embedding: boolean;
-};
 
 type IngestResult = {
 	url: string;
@@ -51,7 +44,7 @@ type InsertOutcome =
 	| { error: string };
 
 type UserFileUrlResultRow = Pick<
-	ExistingUserFileRow,
+	ExistingUserFileByUrl,
 	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
 >;
 
@@ -205,11 +198,11 @@ function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instance
 	};
 }
 
-function isWorkflowComplete(row: ExistingUserFileRow): boolean {
+function isWorkflowComplete(row: ExistingUserFileByUrl): boolean {
 	return !!row.title_cn && !!row.summary_cn && row.has_embedding;
 }
 
-async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<IngestResult> {
+async function returnExisting(url: string, row: ExistingUserFileByUrl, env: Env): Promise<IngestResult> {
 	if (row.resource_kind === 'blob') {
 		const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
 		return {
@@ -234,16 +227,7 @@ async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): 
 async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
-	const existingRow = await withDbClient(env, async (db) => {
-		const existing = await db.query<ExistingUserFileRow>(
-			`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE}
-			 WHERE user_id = $1
-			   AND normalized_source_url = $2
-			 LIMIT 1`,
-			[userId, url],
-		);
-		return existing.rows[0] ?? null;
-	});
+	const existingRow = await withDbClient(env, (db) => getUserFileByNormalizedSourceUrl(db, userId, url));
 	if (existingRow) {
 		return returnExisting(url, existingRow, env);
 	}

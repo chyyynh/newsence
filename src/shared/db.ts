@@ -123,6 +123,21 @@ export type InsertUserFileResult = {
 	og_image_url: string | null;
 };
 
+export type ExistingUserFileByUrl = {
+	id: string;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[] | null;
+	platform_type: string | null;
+	og_image_url: string | null;
+	resource_kind: string;
+	has_embedding: boolean;
+};
+
+const EXISTING_USER_FILE_BY_URL_FIELDS =
+	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
+
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
 	return JSON.stringify(metadata);
@@ -192,6 +207,21 @@ export async function insertUserFile(db: DbClient, data: InsertUserFileData): Pr
 	);
 	const row = result.rows[0] as InsertUserFileResult | undefined;
 	return row ?? null;
+}
+
+export async function getUserFileByNormalizedSourceUrl(
+	db: DbClient,
+	userId: string,
+	normalizedUrl: string,
+): Promise<ExistingUserFileByUrl | null> {
+	const existing = await db.query<ExistingUserFileByUrl>(
+		`SELECT ${EXISTING_USER_FILE_BY_URL_FIELDS} FROM ${USER_FILES_TABLE}
+		 WHERE user_id = $1
+		   AND normalized_source_url = $2
+		 LIMIT 1`,
+		[userId, normalizedUrl],
+	);
+	return existing.rows[0] ?? null;
 }
 
 /**
