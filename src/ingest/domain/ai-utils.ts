@@ -66,7 +66,6 @@ const ExtractedEntitySchema = z.object({
 });
 
 const ArticleTranslationSchema = z.object({
-	title_en: z.string().min(1),
 	title_cn: z.string().min(1),
 	summary_en: z.string().min(1),
 	summary_cn: z.string().min(1),
@@ -85,11 +84,10 @@ type ArticleClassificationObject = z.infer<typeof ArticleClassificationSchema>;
 const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
 
 任務：
-- 翻譯 title_en / title_cn
+- 翻譯 title_cn
 - 產生 summary_en / summary_cn
 
 翻譯要求：
-- title_en: 將標題翻譯成自然流暢的英文
 - title_cn: 將標題翻譯成自然流暢的繁體中文
 - summary_en: 用英文寫 1-2 句簡潔摘要
 - summary_cn: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
@@ -130,7 +128,6 @@ function createFallbackTranslation(article: Article): ArticleTranslationObject {
 	return {
 		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
 		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
-		title_en: article.title,
 		title_cn: article.title_cn ?? article.title,
 	};
 }
@@ -186,7 +183,6 @@ export async function generateArticleAnalysis(article: Article, ai: Env['AI']): 
 			keywords: classification.keywords.slice(0, 8),
 			summary_en: translation.summary_en,
 			summary_cn: translation.summary_cn,
-			title_en: translation.title_en,
 			title_cn: translation.title_cn,
 			category: classification.category,
 			entities: classification.entities.slice(0, 10),

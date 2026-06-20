@@ -59,7 +59,6 @@ export interface AIAnalysisResult {
 	keywords: string[];
 	summary_en: string;
 	summary_cn: string;
-	title_en?: string;
 	title_cn?: string;
 	category: string;
 	entities?: ExtractedEntity[];
