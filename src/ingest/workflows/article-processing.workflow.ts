@@ -11,10 +11,9 @@ import {
 import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
 import {
-	deleteSourceArticleDraft,
+	cleanupSourceArticleDraftRef,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
-	sourceArticleDraftUrl,
 	sourceDraftToArticle,
 	sourceDraftYoutubeTranscript,
 } from '@shared/source-draft';
@@ -377,9 +376,7 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 	}
 
 	if (target.kind === 'source') {
-		await deleteTemp('source_draft', sourceArticleDraftUrl(target.sourceArticle), () =>
-			deleteSourceArticleDraft(env, target.sourceArticle),
-		);
+		await cleanupSourceArticleDraftRef(env, target.sourceArticle, { reason: 'workflow completed', logTag: 'WORKFLOW' });
 	}
 
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });

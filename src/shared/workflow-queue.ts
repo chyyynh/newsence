@@ -2,6 +2,7 @@ import { ARTICLES_TABLE, type ProcessableTable, resolveProcessableTable, USER_FI
 import {
 	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
+	isSourceArticleDraftRef,
 	type SourceArticleDraft,
 	type SourceArticleDraftRef,
 	sourceArticleDraftUrl,
@@ -86,11 +87,6 @@ function isWorkflowQueueTarget(target: unknown): target is WorkflowQueueTarget {
 	}
 
 	return target.kind === 'source' && isSourceArticleDraftRef(target.sourceArticle);
-}
-
-function isSourceArticleDraftRef(ref: unknown): ref is SourceArticleDraftRef {
-	if (!isRecord(ref) || typeof ref.url !== 'string' || ref.url.length === 0) return false;
-	return typeof ref.r2Key === 'string' && ref.r2Key.length > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
