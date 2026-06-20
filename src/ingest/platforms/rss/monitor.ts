@@ -217,7 +217,11 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	if (!res.ok) return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
 
 	let items = extractItemsFromFeed(parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES)));
-	if (!items.length) return;
+	if (!items.length) {
+		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
+		await markSourceFeedScrapedById(env, feed.id);
+		return;
+	}
 
 	const config = getFeedConfig(feed.name);
 	if (items.length > 30) items = items.slice(0, 30);

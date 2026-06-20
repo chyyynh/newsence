@@ -90,18 +90,17 @@ async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLPars
 	const existingSet = await withDbClient(env, (db) => getExistingUrls(db, videoUrls));
 	const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 
-	if (!newVideos.length) {
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
-		return 0;
-	}
-
 	let queued = 0;
-	for (const video of newVideos) {
-		try {
-			if (await processYouTubeVideo(env, channel, video)) queued++;
-		} catch (err) {
-			console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
+	if (newVideos.length) {
+		for (const video of newVideos) {
+			try {
+				if (await processYouTubeVideo(env, channel, video)) queued++;
+			} catch (err) {
+				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
+			}
 		}
+	} else {
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 	}
 
 	await markSourceFeedScrapedById(env, channel.id);
