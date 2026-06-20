@@ -1,7 +1,6 @@
-import { withDbClient } from '@shared/db';
+import { type DbClient, withDbClient } from '@shared/db';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout } from '@shared/web';
-import type { Client } from 'pg';
 import { saveTweetGroups } from './persistence';
 import { normalizeRetweet } from './source-events';
 
@@ -38,7 +37,7 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 
 // -- Twitter Cron: staged pipeline --------------------------------------------
 
-async function getTwitterUsersToMonitor(db: Client): Promise<RSSFeed[]> {
+async function getTwitterUsersToMonitor(db: DbClient): Promise<RSSFeed[]> {
 	const result = await db.query(`SELECT id, name, "RSSLink", url, type, scraped_at FROM "RssList" WHERE type = $1`, ['twitter_user']);
 	return result.rows as RSSFeed[];
 }

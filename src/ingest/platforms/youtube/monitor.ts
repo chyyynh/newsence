@@ -1,4 +1,4 @@
-import { getExistingUrls, withDbClient } from '@shared/db';
+import { type DbClient, getExistingUrls, withDbClient } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
@@ -80,12 +80,7 @@ async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo)
 	return true;
 }
 
-async function processYouTubeChannel(
-	db: Awaited<ReturnType<typeof createDbClient>>,
-	env: Env,
-	channel: RSSFeed,
-	parser: XMLParser,
-): Promise<number> {
+async function processYouTubeChannel(db: DbClient, env: Env, channel: RSSFeed, parser: XMLParser): Promise<number> {
 	if (!channel.RSSLink) return 0;
 	const videos = await fetchChannelVideos(channel, parser);
 	if (!videos?.length) return 0;

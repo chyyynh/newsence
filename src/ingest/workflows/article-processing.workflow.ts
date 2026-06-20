@@ -173,7 +173,7 @@ function extractMetaName(html: string, name: string): string | null {
 }
 
 async function syncArticleEntities(
-	db: Client,
+	db: DbClient,
 	articleId: string,
 	entities: Array<{ name: string; name_cn: string; type: string }>,
 ): Promise<void> {

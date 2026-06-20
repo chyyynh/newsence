@@ -1,9 +1,8 @@
-import { ARTICLES_TABLE } from '@shared/db';
+import { ARTICLES_TABLE, type DbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
 import { enqueueArticleProcess, enqueueSourceArticleProcess, type SourceArticleDraft } from '@shared/workflow-queue';
-import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -19,7 +18,7 @@ import {
 } from './scraper';
 import { upsertTwitterSourceEvent } from './source-events';
 
-async function findArticleByUrl(db: Client, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
+async function findArticleByUrl(db: DbClient, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
 	const result = await db.query<{ id: string; summary_cn: string | null }>(
 		`SELECT id, summary_cn FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`,
 		[url],
@@ -33,7 +32,7 @@ async function enqueueMissingTwitterTranslation(env: Env, article: { id: string;
 }
 
 async function enqueueTwitterArticle(
-	db: Client,
+	db: DbClient,
 	env: Env,
 	data: {
 		url: string;
@@ -67,7 +66,7 @@ async function enqueueTwitterArticle(
 	return true;
 }
 
-async function handleTwitterArticle(tweet: Tweet, db: Client, env: Env, expandedUrls: string[]): Promise<boolean> {
+async function handleTwitterArticle(tweet: Tweet, db: DbClient, env: Env, expandedUrls: string[]): Promise<boolean> {
 	const articleUrl = findTwitterArticleUrl(expandedUrls);
 	if (!articleUrl) return false;
 
@@ -121,7 +120,7 @@ async function handleFollowLink(
 	tweet: Tweet,
 	textWithoutUrls: string,
 	externalUrl: string,
-	db: Client,
+	db: DbClient,
 	env: Env,
 ): Promise<FollowLinkResult> {
 	const resolvedUrl = await resolveUrl(externalUrl).catch((err) => {
@@ -177,7 +176,7 @@ async function handleFollowLink(
 	return queued ? { status: 'inserted' } : { status: 'skipped', resolvedUrl, scraped };
 }
 
-async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
+async function saveTweet(tweet: Tweet, db: DbClient, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
 	const expandedUrls = extractExpandedUrls(tweet);
 	const externalUrl = findExternalUrl(expandedUrls);
@@ -240,7 +239,7 @@ async function saveTweet(tweet: Tweet, db: Client, env: Env): Promise<boolean> {
 	return queued;
 }
 
-async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolean> {
+async function saveThread(tweets: Tweet[], db: DbClient, env: Env): Promise<boolean> {
 	const sorted = tweets.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 	const first = sorted[0];
 	const firstUrl = normalizeUrl(first.url);
@@ -297,7 +296,7 @@ async function saveThread(tweets: Tweet[], db: Client, env: Env): Promise<boolea
 	return queued;
 }
 
-export async function saveTweetGroups(db: Client, env: Env, groups: Tweet[][]): Promise<number> {
+export async function saveTweetGroups(db: DbClient, env: Env, groups: Tweet[][]): Promise<number> {
 	let count = 0;
 	for (const group of groups) {
 		try {

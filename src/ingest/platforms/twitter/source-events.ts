@@ -1,6 +1,6 @@
+import type { DbClient } from '@shared/db';
 import type { RetweetedByData, TwitterMedia } from '@shared/platform-metadata';
 import type { Tweet } from '@shared/types';
-import type { Client } from 'pg';
 import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
@@ -42,7 +42,7 @@ function publicMetricsFor(tweet: Tweet): Record<string, number | undefined> {
 }
 
 export async function upsertTwitterSourceEvent(
-	db: Client,
+	db: DbClient,
 	tweet: Tweet,
 	options: {
 		articleId: string | null;
