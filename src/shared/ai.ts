@@ -35,7 +35,11 @@ interface GenerateJsonOptions extends GenerateTextOptions {
 interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
 	schemaName?: string;
+	maxAttempts?: number;
 }
+
+const DEFAULT_STRUCTURED_ATTEMPTS = 2;
+const STRUCTURED_RETRY_SUFFIX = `再次確認：只輸出符合 JSON Schema 的 JSON 物件。不要 Markdown、不要解釋、不要包在 code fence。`;
 
 function buildMessages(prompt: string, systemPrompt?: string): Array<{ role: 'system' | 'user'; content: string }> {
 	return systemPrompt
@@ -125,19 +129,37 @@ export async function generateJson<T>(ai: AiBinding, prompt: string, options: Ge
 }
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
-	const { schema, schemaName = 'AI structured output', ...generationOptions } = options;
+	const { schema, schemaName = 'AI structured output', maxAttempts = DEFAULT_STRUCTURED_ATTEMPTS, ...generationOptions } = options;
 	const jsonSchema = z.toJSONSchema(schema, { target: 'draft-7' }) as JsonSchema;
-	const result = await generateJson<unknown>(ai, prompt, { ...generationOptions, schema: jsonSchema });
-	const parsed = schema.safeParse(result);
-	if (!parsed.success) {
-		console.error({
-			tag: 'AI',
-			msg: 'Workers AI structured output validation failed',
-			schema: schemaName,
-			task: generationOptions.task,
-			error: z.prettifyError(parsed.error),
-		});
-		return null;
+	const attempts = Math.max(1, Math.trunc(maxAttempts));
+	let lastError = 'unknown validation error';
+
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		const attemptPrompt = attempt === 1 ? prompt : `${prompt}\n\n${STRUCTURED_RETRY_SUFFIX}`;
+		const result = await generateJson<unknown>(ai, attemptPrompt, { ...generationOptions, schema: jsonSchema });
+		const parsed = schema.safeParse(result);
+		if (parsed.success) return parsed.data;
+
+		lastError = z.prettifyError(parsed.error);
+		if (attempt < attempts) {
+			console.warn({
+				tag: 'AI',
+				msg: 'Workers AI structured output validation failed; retrying',
+				schema: schemaName,
+				task: generationOptions.task,
+				attempt,
+				error: lastError,
+			});
+		}
 	}
-	return parsed.data;
+
+	console.error({
+		tag: 'AI',
+		msg: 'Workers AI structured output validation failed',
+		schema: schemaName,
+		task: generationOptions.task,
+		attempts,
+		error: lastError,
+	});
+	return null;
 }
