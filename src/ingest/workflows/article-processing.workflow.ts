@@ -2,16 +2,11 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { measureImageDimensions } from '@media/dimensions';
 import {
 	ARTICLES_TABLE,
-	insertProcessedSourceArticle,
 	loadProcessableArticle,
 	loadProcessableArticleShell,
 	type ProcessableArticleShell,
 	type ProcessableTable,
-	saveYouTubeHighlights,
-	syncArticleEntities,
 	USER_FILES_TABLE,
-	updateProcessedArticle,
-	withDbTransaction,
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
@@ -22,21 +17,19 @@ import {
 	sourceArticleDraftHasTempObject,
 	sourceArticleDraftUrl,
 	sourceDraftToArticle,
-	sourceDraftTwitterSourceEvent,
 	sourceDraftYoutubeTranscript,
 } from '@shared/source-draft';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
-import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment, validateImageUrl } from '@shared/web';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
 import type { WorkflowQueueTarget } from '@shared/workflow-queue';
-import { buildEmbeddingTextForArticle, buildProcessorUpdatePayload, type ProcessorResult, runArticleProcessor } from '../domain/processors';
-import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
+import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
+import { persistWorkflowTarget, recordWorkflowFailure } from './article-persistence';
 import { createPdfTextTemp, deletePdfTextTemp, type PdfTextTempResult, readPdfTextTemp } from './pdf-text-temp';
 
 const OG_FETCH_TIMEOUT_MS = 6_000;
@@ -46,7 +39,6 @@ type WorkflowParams = {
 	target: WorkflowQueueTarget;
 };
 
-type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 type WorkflowRunContext = {
 	target: WorkflowQueueTarget;
 	table: ProcessableTable;
@@ -63,23 +55,11 @@ type OgImagePatch = {
 	ogImageUrl: string | null;
 	ogImageDimensions: OgImageDimensions | null;
 };
-type SourceFinalInsert = {
-	article: SourceArticleDraft['article'];
-	updatePayload: Record<string, unknown>;
-};
-type WorkflowPersistenceInput = {
-	article: Article;
-	result: ProcessorResult;
-	embedding: number[] | null;
-	pdfTextTemp: PdfTextTempResult | null;
-	youtubeHighlights: YouTubeHighlightsUpdate | null;
-};
 type YoutubeHighlightsInput =
 	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
 	| { kind: 'article'; article: Article };
 
 const EMPTY_OG_IMAGE_PATCH: OgImagePatch = { ogImageUrl: null, ogImageDimensions: null };
-const OG_IMAGE_UPDATE_KEY = 'og_image_url';
 
 async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 	try {
@@ -212,17 +192,6 @@ async function loadTargetArticle(env: Env, context: WorkflowRunContext): Promise
 async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ProcessableArticleShell> {
 	if (context.target.kind !== 'source') return loadProcessableArticleShell(env, context.table, context.target.articleId);
 	return { ...(await context.readSourceArticle()), content: null };
-}
-
-function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {
-	if (!pdfTextTemp) return undefined;
-	return {
-		extraction: {
-			status: pdfTextTemp.status,
-			parser: 'liteparse',
-			...(pdfTextTemp.status === 'failed' ? {} : { chars: pdfTextTemp.chars, pages: pdfTextTemp.pages }),
-		},
-	};
 }
 
 async function withPdfTextTemp(env: Env, article: Article, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
@@ -379,86 +348,6 @@ async function prepareYoutubeHighlightsInput(
 	return sourceType === 'youtube' ? { kind: 'article', article } : null;
 }
 
-async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
-	const draft = await context.readSourceDraft();
-	const fullArticle = await context.readSourceArticle();
-	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
-	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
-	return withDbTransaction(env, 'source article', async (db) => {
-		const articleId = await insertProcessedSourceArticle(db, {
-			article: finalInsert.article,
-			updatePayload: finalInsert.updatePayload,
-			youtubeTranscript: sourceDraftYoutubeTranscript(draft),
-			entities: input.result.updateData.entities,
-			youtubeHighlights: input.youtubeHighlights,
-		});
-		if (twitterSourceEvent) {
-			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
-				articleId,
-				eventType: twitterSourceEvent.eventType,
-				text: twitterSourceEvent.text,
-				media: twitterSourceEvent.media,
-				raw: twitterSourceEvent.raw,
-			});
-		}
-		return articleId;
-	});
-}
-
-async function prepareSourceFinalInsert(
-	base: SourceArticleDraft['article'],
-	article: Article,
-	result: ProcessorResult,
-	embedding: number[] | null,
-): Promise<SourceFinalInsert> {
-	const updatePayload = buildProcessorUpdatePayload(article, result, embedding);
-	const hasPayloadOgImage = Object.hasOwn(updatePayload, OG_IMAGE_UPDATE_KEY);
-	const candidate = hasPayloadOgImage ? updatePayload[OG_IMAGE_UPDATE_KEY] : base.ogImageUrl;
-	const validated = await validateImageUrl(typeof candidate === 'string' ? candidate : null);
-	if (hasPayloadOgImage) return { article: base, updatePayload: { ...updatePayload, [OG_IMAGE_UPDATE_KEY]: validated } };
-	return { article: { ...base, ogImageUrl: validated }, updatePayload };
-}
-
-async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableTable, input: WorkflowPersistenceInput): Promise<string> {
-	const extractedPdfText = input.pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, input.pdfTextTemp.textStorageKey) : null;
-	const finalResult: ProcessorResult = {
-		...input.result,
-		updateData: {
-			...input.result.updateData,
-			...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
-		},
-	};
-	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, extractionMetadata(input.pdfTextTemp));
-
-	return withDbTransaction(env, 'row workflow', async (db) => {
-		await updateProcessedArticle(db, table, target.articleId, updatePayload);
-		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
-		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
-			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
-		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
-		return target.articleId;
-	});
-}
-
-async function recordWorkflowFailure(env: Env, context: WorkflowRunContext, error: unknown): Promise<void> {
-	if (context.target.kind !== 'row' || context.table !== USER_FILES_TABLE) return;
-	try {
-		await recordUserFileWorkflowFailed(env, context.target.articleId, String(error));
-	} catch (metadataError) {
-		console.warn({
-			tag: 'WORKFLOW',
-			msg: 'Failed to record user_file workflow failure',
-			article_id: context.target.articleId,
-			error: String(metadataError),
-		});
-	}
-}
-
-async function persistTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
-	if (context.target.kind === 'source') return persistSourceTarget(env, context, input);
-	return persistRowTarget(env, context.target, context.table, input);
-}
-
 async function cleanupTargetTemps(
 	env: Env,
 	context: WorkflowRunContext,
@@ -537,7 +426,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() =>
-					persistTarget(this.env, context, {
+					persistWorkflowTarget(this.env, context, {
 						article,
 						result: finalProcessorResult,
 						embedding,
