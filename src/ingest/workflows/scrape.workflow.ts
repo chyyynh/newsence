@@ -1,11 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { deleteScrapeInputTemp, isScrapeInputTempKey } from '@shared/r2-temp';
 import type { Env } from '@shared/types';
 import { type ExtractInput, extractSource, type NormalizedContent } from '../extract';
-
-// R2 prefix for uploads staged by POST /scrape/jobs. Objects here are ephemeral:
-// the workflow deletes them after extraction (there is no R2 TTL convention in
-// this repo). A lifecycle rule on `tmp/` is a belt-and-suspenders backstop.
-export const TMP_SCRAPE_PREFIX = 'tmp/scrape/';
 
 // Bytes can't fit Workflow params, so the job path only ever passes a URL or a
 // staged R2 key — never inline bytes.
@@ -24,8 +20,10 @@ export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ScrapeWorkflowParams
 			() => extractSource(this.env, input),
 		)) as NormalizedContent;
 
-		if (input.kind === 'r2' && input.key.startsWith(TMP_SCRAPE_PREFIX)) {
-			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () => this.env.R2.delete(input.key));
+		if (input.kind === 'r2' && isScrapeInputTempKey(input.key)) {
+			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
+				deleteScrapeInputTemp(this.env, input.key),
+			);
 		}
 
 		console.info({ tag: 'SCRAPE_WORKFLOW', msg: 'Completed', kind: input.kind, status: result.status, chars: result.metadata.chars });

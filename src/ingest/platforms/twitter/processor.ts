@@ -2,8 +2,9 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { generateJson } from '@shared/ai';
+import { AI_TASKS, generateObject } from '@shared/ai';
 import type { AIAnalysisResult, Article } from '@shared/types';
+import { z } from 'zod';
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
@@ -11,7 +12,7 @@ import {
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
-import { scrapeWebPage } from '../web/scraper';
+import { scrapeWebPage } from '../web-scraper';
 
 type UpdateData = ProcessorResult['updateData'];
 
@@ -97,6 +98,7 @@ export class TwitterProcessor implements ArticleProcessor {
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
 		const analysis = await translateTweet(tweetText, ctx.env.AI);
+		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80) || article.title;
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (!article.tags?.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
@@ -116,64 +118,49 @@ interface TweetAnalysis {
 }
 
 const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [], entities: [] };
-const TWEET_ANALYSIS_SCHEMA = {
-	type: 'object',
-	properties: {
-		summary_cn: { type: 'string' },
-		tags: { type: 'array', items: { type: 'string' } },
-		keywords: { type: 'array', items: { type: 'string' } },
-		entities: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					name: { type: 'string' },
-					name_cn: { type: 'string' },
-					type: { type: 'string', enum: ['person', 'organization', 'product', 'technology', 'event'] },
-				},
-				required: ['name', 'name_cn', 'type'],
-			},
-		},
-	},
-	required: ['summary_cn', 'tags', 'keywords', 'entities'],
-};
+const TweetAnalysisSchema = z.object({
+	summary_cn: z.string().min(1),
+	tags: z.array(z.string().min(1)),
+	keywords: z.array(z.string().min(1)),
+	entities: z.array(
+		z.object({
+			name: z.string().min(1),
+			name_cn: z.string().min(1),
+			type: z.enum(['person', 'organization', 'product', 'technology', 'event']),
+		}),
+	),
+});
 
-async function translateTweet(tweetText: string, ai: ProcessorContext['env']['AI']): Promise<TweetAnalysis> {
-	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
-
-	const prompt = `請將以下推文直接翻譯成繁體中文，並提供標籤和關鍵字。
+const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，並提供 tags、keywords、entities。
 
 翻譯規則：
 - 直接翻譯原文，保持原文的第一人稱或語氣，不要改寫成第三人稱描述
 - 不要用「這則推文」、「作者認為」、「該推文提到」等第三角度描述
-- 不要使用任何 Markdown 格式（不要用 **粗體**、- 列表、# 標題等）
-- 純文字翻譯，忠實呈現原文意思即可
-
-推文內容：
-${tweetText}
-
-請以JSON格式回答：
-{
-  "summary_cn": "繁體中文直接翻譯",
-  "tags": ["標籤1", "標籤2", "標籤3"],
-  "keywords": ["關鍵字1", "關鍵字2", "關鍵字3"],
-  "entities": [{"name": "English Name", "name_cn": "繁體中文名稱", "type": "person|organization|product|technology|event"}]
-}
+- 不要使用任何 Markdown 格式
+- summary_cn 是忠實翻譯，不是評論或摘要
 
 實體擷取規則：
-- 從推文中提取重要的具名實體（人物、組織、產品、技術、事件）
-- name 用英文, name_cn 用繁體中文
+- 提取重要的具名實體（人物、組織、產品、技術、事件）
+- type 只能是 person, organization, product, technology, event
+- name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
 - 產品相關: Coding, Robotics, SoftwareDevelopment, API
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
-- 事件類型: ProductLaunch, Research, Partnership, Announcement
+- 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-請只回傳JSON，不要其他文字。`;
+async function translateTweet(tweetText: string, ai: ProcessorContext['env']['AI']): Promise<TweetAnalysis> {
+	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 
 	try {
-		const result = await generateJson<TweetAnalysis>(ai, prompt, { schema: TWEET_ANALYSIS_SCHEMA, maxTokens: 600 });
+		const result = await generateObject<TweetAnalysis>(ai, `推文內容：\n${tweetText}`, {
+			schema: TweetAnalysisSchema,
+			schemaName: 'tweet analysis',
+			task: AI_TASKS.tweetAnalysis,
+			maxTokens: 600,
+			systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
+		});
 		if (!result) throw new Error('No JSON found');
 
 		return {

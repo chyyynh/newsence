@@ -36,7 +36,7 @@
  */
 
 import type { Env, ExecutionContext } from '@shared/types';
-import { getProxySigningConfig, verifyProxySignature } from './sign-url';
+import { getProxySigningSecret, verifyProxySignature } from './sign-url';
 
 // Routing-only — these hosts serve byte-range video streams, so we always
 // passthrough with Range forwarding regardless of request options. Not an
@@ -190,14 +190,14 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 	}
 	if (parsed.protocol !== 'https:') return new Response('Only https upstreams allowed', { status: 403 });
 
-	const signing = getProxySigningConfig(env);
-	if (!signing) return new Response('Proxy signing not configured', { status: 503 });
+	const signingSecret = getProxySigningSecret(env);
+	if (!signingSecret) return new Response('Proxy signing not configured', { status: 503 });
 
 	const sig = requestUrl.searchParams.get('sig');
 	const exp = requestUrl.searchParams.get('exp');
 	if (!sig || !exp) return new Response('Signature required', { status: 403 });
 
-	const ok = await verifyProxySignature(encodedUrl, sig, exp, signing.secret);
+	const ok = await verifyProxySignature(encodedUrl, sig, exp, signingSecret);
 	if (!ok) return new Response('Invalid or expired signature', { status: 403 });
 
 	try {

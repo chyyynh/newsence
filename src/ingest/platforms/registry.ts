@@ -10,7 +10,7 @@ import {
 } from '@shared/web';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
-import { scrapeHtmlFromResponse } from './web/scraper';
+import { scrapeHtmlFromResponse } from './web-scraper';
 import { scrapeYouTube } from './youtube/scraper';
 
 export interface ScrapeOptions {

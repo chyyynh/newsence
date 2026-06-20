@@ -16,7 +16,7 @@
  */
 
 import type { Env, ExecutionContext } from '@shared/types';
-import { getProxySigningConfig, verifyR2KeySignature } from './sign-url';
+import { getProxySigningSecret, verifyR2KeySignature } from './sign-url';
 
 const CONTENT_TYPE_FALLBACKS: Record<string, string> = {
 	png: 'image/png',
@@ -168,14 +168,14 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 	}
 	if (!storageKey) return new Response('Missing key', { status: 400 });
 
-	const signing = getProxySigningConfig(env);
-	if (!signing) return new Response('Proxy signing not configured', { status: 503 });
+	const signingSecret = getProxySigningSecret(env);
+	if (!signingSecret) return new Response('Proxy signing not configured', { status: 503 });
 
 	const sig = requestUrl.searchParams.get('sig');
 	const exp = requestUrl.searchParams.get('exp');
 	if (!sig || !exp) return new Response('Signature required', { status: 403 });
 
-	const ok = await verifyR2KeySignature(storageKey, sig, exp, signing.secret);
+	const ok = await verifyR2KeySignature(storageKey, sig, exp, signingSecret);
 	if (!ok) return new Response('Invalid or expired signature', { status: 403 });
 
 	const range = parseRange(request.headers.get('Range'));

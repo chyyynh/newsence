@@ -2,10 +2,11 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import { generateJson } from '@shared/ai';
-import type { ProcessableTable } from '@shared/db';
+import { AI_TASKS, generateObject } from '@shared/ai';
+import type { ProcessableTable } from '@shared/article-store';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
+import { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -55,114 +56,139 @@ export function isEmpty(value: string | null | undefined): boolean {
 // ─────────────────────────────────────────────────────────────
 
 const MAX_CONTENT_LENGTH = 10000;
-const ARTICLE_ANALYSIS_SCHEMA = {
-	type: 'object',
-	properties: {
-		tags: { type: 'array', items: { type: 'string' } },
-		keywords: { type: 'array', items: { type: 'string' } },
-		entities: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					name: { type: 'string' },
-					name_cn: { type: 'string' },
-					type: { type: 'string', enum: ['person', 'organization', 'product', 'technology', 'event'] },
-				},
-				required: ['name', 'name_cn', 'type'],
-			},
-		},
-		title_en: { type: 'string' },
-		title_cn: { type: 'string' },
-		summary_en: { type: 'string' },
-		summary_cn: { type: 'string' },
-		category: { type: 'string', enum: ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] },
-	},
-	required: ['tags', 'keywords', 'summary_en', 'summary_cn', 'category'],
-};
+const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event'] as const;
+const ARTICLE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
-function createFallbackResult(article: Article): AIAnalysisResult {
-	return {
-		tags: ['Other'],
-		keywords: article.title.split(' ').slice(0, 5),
-		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
-		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
-		title_en: article.title,
-		title_cn: article.title_cn ?? article.title,
-		category: 'Other',
-		entities: [],
-	};
-}
+const ExtractedEntitySchema = z.object({
+	name: z.string().min(1),
+	name_cn: z.string().min(1),
+	type: z.enum(ENTITY_TYPES),
+});
 
-export async function generateArticleAnalysis(article: Article, ai: Env['AI']): Promise<AIAnalysisResult> {
-	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
+const ArticleTranslationSchema = z.object({
+	title_cn: z.string().min(1),
+	summary_en: z.string().min(1),
+	summary_cn: z.string().min(1),
+});
 
-	const content = article.content || article.summary || article.title;
-	const prompt = `作為一個專業的新聞分析師和翻譯師,請分析以下新聞文章並提供結構化的分析結果,包含英文和中文版本。
-文章資訊:
-標題: ${article.title}
-來源: ${article.source}
-摘要: ${article.summary || article.summary_cn || '無摘要'}
-內容: ${content.substring(0, MAX_CONTENT_LENGTH)}...
+const ArticleClassificationSchema = z.object({
+	tags: z.array(z.string().min(1)).min(1),
+	keywords: z.array(z.string().min(1)).min(1),
+	entities: z.array(ExtractedEntitySchema),
+	category: z.enum(ARTICLE_CATEGORIES),
+});
 
-請以JSON格式回答,包含以下欄位:
-{
-"tags": ["標籤1", "標籤2", "標籤3"],
-"keywords": ["關鍵字1", "關鍵字2", "關鍵字3", "關鍵字4", "關鍵字5"],
-"entities": [{"name": "English Name", "name_cn": "繁體中文名稱", "type": "person|organization|product|technology|event"}],
-"title_en": "英文標題翻譯",
-"title_cn": "繁體中文標題翻譯",
-"summary_en": "English summary in 1-2 sentences",
-"summary_cn": "用繁體中文寫1-2句話的新聞摘要",
-"category": "新聞分類"
-}
+type ArticleTranslationObject = z.infer<typeof ArticleTranslationSchema>;
+type ArticleClassificationObject = z.infer<typeof ArticleClassificationSchema>;
 
-翻譯要求:
-- title_en: 將標題翻譯成自然流暢的英文
+const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
+
+任務：
+- 翻譯 title_cn
+- 產生 summary_en / summary_cn
+
+翻譯要求：
 - title_cn: 將標題翻譯成自然流暢的繁體中文
-- summary_en: 用英文寫簡潔的摘要
-- summary_cn: 用繁體中文直接翻譯摘要，保持原文語氣和人稱，不要改寫成第三人稱描述
-- 所有翻譯結果不要使用 Markdown 格式（不要用 **粗體**、- 列表、# 標題等），純文字即可
+- summary_en: 用英文寫 1-2 句簡潔摘要
+- summary_cn: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
+- 如果原文已是目標語言，保留自然表達，不要硬改寫
+- 所有文字都不要使用 Markdown。`;
 
-標籤規則:
+const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
+
+任務：
+- 產生 tags、keywords、category
+- 擷取重要 named entities
+
+標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, NLP, ComputerVision, LLM, GenerativeAI
 - 產品相關: Coding, VR, AR, Robotics, Automation, SoftwareDevelopment, API
 - 產業應用: Tech, Finance, Healthcare, Education, Gaming, Enterprise, Creative
 - 事件類型: Funding, IPO, Acquisition, ProductLaunch, Research, Partnership
 - 新聞性質: Review, Opinion, Analysis, Feature, Interview, Tutorial, Announcement
 
-實體擷取規則:
-- 從文章中提取 3-8 個最重要的具名實體
-- type 必須是以下之一:
-  person: 人物 (如 Jensen Huang / 黃仁勳)
-  organization: 公司/組織/機構 (如 NVIDIA / 輝達, MIT, 歐盟)
-  product: 產品/服務/平台 (如 ChatGPT, Claude Code, GitHub)
-  technology: 技術/框架/語言/概念 (如 Transformer, Rust, RAG, RLHF)
-  event: 具體事件 (如 Claude Code source code leak, CES 2026, Series B funding)
-- name 用英文, name_cn 用繁體中文（若無慣用中文名則與 name 相同）
+實體擷取規則：
+- 提取 3-8 個最重要的具名實體；如果文章太短，可以少於 3 個
+- type 只能是 person, organization, product, technology, event
+- name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
 
-分類選項: AI, Tech, Finance, Research, Business, Other
+分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
-請只回傳JSON,不要其他文字。`;
+function buildArticleContextPrompt(article: Article): string {
+	const content = article.content || article.summary || article.title;
+	return `文章資訊:
+標題: ${article.title}
+來源: ${article.source}
+摘要: ${article.summary || article.summary_cn || '無摘要'}
+內容:
+${content.substring(0, MAX_CONTENT_LENGTH)}`;
+}
+
+function createFallbackTranslation(article: Article): ArticleTranslationObject {
+	return {
+		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
+		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
+		title_cn: article.title_cn ?? article.title,
+	};
+}
+
+function createFallbackClassification(article: Article): ArticleClassificationObject {
+	return {
+		tags: ['Other'],
+		keywords: article.title.split(' ').slice(0, 5),
+		category: 'Other',
+		entities: [],
+	};
+}
+
+async function generateArticleTranslation(article: Article, ai: Env['AI']): Promise<ArticleTranslationObject> {
+	const result = await generateObject<ArticleTranslationObject>(ai, buildArticleContextPrompt(article), {
+		schema: ArticleTranslationSchema,
+		schemaName: 'article translation',
+		task: AI_TASKS.articleTranslation,
+		maxTokens: 700,
+		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
+	});
+	return result ?? createFallbackTranslation(article);
+}
+
+async function generateArticleClassification(article: Article, ai: Env['AI']): Promise<ArticleClassificationObject> {
+	const result = await generateObject<ArticleClassificationObject>(ai, buildArticleContextPrompt(article), {
+		schema: ArticleClassificationSchema,
+		schemaName: 'article classification',
+		task: AI_TASKS.articleClassification,
+		maxTokens: 500,
+		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
+	});
+	return result ?? createFallbackClassification(article);
+}
+
+export async function generateArticleAnalysis(article: Article, ai: Env['AI']): Promise<AIAnalysisResult> {
+	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
-		const result = await generateJson<AIAnalysisResult>(ai, prompt, { schema: ARTICLE_ANALYSIS_SCHEMA, maxTokens: 1000 });
-		if (!result || !Array.isArray(result.tags) || !Array.isArray(result.keywords) || !result.summary_en || !result.summary_cn) {
-			throw new Error('Invalid response format');
-		}
+		const [translation, classification] = await Promise.all([
+			generateArticleTranslation(article, ai).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
+				return createFallbackTranslation(article);
+			}),
+			generateArticleClassification(article, ai).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
+				return createFallbackClassification(article);
+			}),
+		]);
 
 		return {
-			tags: result.tags.slice(0, 5),
-			keywords: result.keywords.slice(0, 8),
-			summary_en: result.summary_en,
-			summary_cn: result.summary_cn,
-			title_en: result.title_en,
-			title_cn: result.title_cn,
-			category: result.category ?? 'Other',
-			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
+			tags: classification.tags.slice(0, 5),
+			keywords: classification.keywords.slice(0, 8),
+			summary_en: translation.summary_en,
+			summary_cn: translation.summary_cn,
+			title_cn: translation.title_cn,
+			category: classification.category,
+			entities: classification.entities.slice(0, 10),
 		};
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Parse failed', error: String(error) });
-		return createFallbackResult(article);
+		return { ...createFallbackTranslation(article), ...createFallbackClassification(article) };
 	}
 }

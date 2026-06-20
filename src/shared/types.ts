@@ -1,5 +1,4 @@
 import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
-import type { ProcessableTable } from './db';
 import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
 
 /**
@@ -60,7 +59,6 @@ export interface AIAnalysisResult {
 	keywords: string[];
 	summary_en: string;
 	summary_cn: string;
-	title_en?: string;
 	title_cn?: string;
 	category: string;
 	entities?: ExtractedEntity[];
@@ -116,11 +114,6 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 	retweetedBy?: RetweetedByData;
 }
-
-// Queue message types
-export type QueueMessage =
-	| { type: 'article_process'; article_id: string; target_table?: ProcessableTable }
-	| { type: 'batch_process'; article_ids: string[]; triggered_by: string; target_table?: ProcessableTable };
 
 // Exported handlers
 export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };

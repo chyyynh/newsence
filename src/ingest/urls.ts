@@ -1,35 +1,21 @@
-import {
-	createDbClient,
-	createUserFileWorkflow,
-	type InsertUserFileResult,
-	insertUserFile,
-	USER_FILES_TABLE,
-	upsertYoutubeTranscript,
-} from '@shared/db';
-import { extensionFromMime, PDF_MIME } from '@shared/mime';
+import { withDbClient } from '@shared/db';
+import { PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
-import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
-import { detectPlatformType, normalizeUrl, type ScrapedContent } from '@shared/web';
-import { persistBlobRow, putUserUpload } from './blob';
+import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@shared/web';
+import { createUserFileWorkflow } from '@shared/workflow-queue';
+import { upsertYoutubeTranscript } from '@shared/youtube-transcripts';
+import { persistSavedUrlBlob } from './blob-persistence';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
+import {
+	type ExistingUrlUserFile,
+	getUrlUserFileByNormalizedSourceUrl,
+	type InsertUrlUserFileResult,
+	insertUrlUserFile,
+} from './url-user-files';
 
-const EXIST_COLS =
-	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
-
-type ExistingUserFileRow = {
-	id: string;
-	title: string;
-	title_cn: string | null;
-	summary_cn: string | null;
-	tags: string[] | null;
-	platform_type: string | null;
-	og_image_url: string | null;
-	resource_kind: string;
-	has_embedding: boolean;
-};
 
 type IngestResult = {
 	url: string;
@@ -52,9 +38,14 @@ type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNA
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
 
 type InsertOutcome =
-	| { kind: 'page'; row: InsertUserFileResult }
+	| { kind: 'page'; row: InsertUrlUserFileResult }
 	| { kind: 'blob'; userFileId: string; fileType: string }
 	| { error: string };
+
+type UserFileUrlResultRow = Pick<
+	ExistingUrlUserFile,
+	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
+>;
 
 async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env, userId: string): Promise<InsertOutcome> {
 	const platformType = detectPlatformType(url);
@@ -64,61 +55,61 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 		return { error: 'Content too short' };
 	}
 
-	const db = await createDbClient(env);
 	try {
-		const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
-		const platformMetadataToStore = normalizedPlatformMetadata
-			? {
-					...normalizedPlatformMetadata,
-					ogImageWidth: scraped.ogImageWidth ?? null,
-					ogImageHeight: scraped.ogImageHeight ?? null,
-				}
-			: null;
+		const ogImageUrl = await validateImageUrl(scraped.ogImageUrl);
+		return await withDbClient(env, async (db) => {
+			const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
+			const platformMetadataToStore = normalizedPlatformMetadata
+				? {
+						...normalizedPlatformMetadata,
+						ogImageWidth: scraped.ogImageWidth ?? null,
+						ogImageHeight: scraped.ogImageHeight ?? null,
+					}
+				: null;
 
-		const userFile = await insertUserFile(db, {
-			url,
-			normalizedUrl: url,
-			title: scraped.title,
-			source: scraped.siteName || 'External',
-			publishedDate: scraped.publishedDate || new Date().toISOString(),
-			summary: scraped.summary || '',
-			platformType,
-			content: scraped.content || null,
-			ogImageUrl: scraped.ogImageUrl || null,
-			platformMetadata: platformMetadataToStore,
-			userId,
-		});
+			const userFile = await insertUrlUserFile(db, {
+				url,
+				normalizedUrl: url,
+				title: scraped.title,
+				source: scraped.siteName || 'External',
+				publishedDate: scraped.publishedDate || new Date().toISOString(),
+				summary: scraped.summary || '',
+				platformType,
+				content: scraped.content || null,
+				ogImageUrl,
+				platformMetadata: platformMetadataToStore,
+				userId,
+			});
 
-		if (!userFile) {
-			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
-			return { error: 'DB insert failed' };
-		}
-
-		// ON CONFLICT path: row pre-existed, skip post-insert side effects.
-		if (!userFile.created) {
-			return { kind: 'page', row: userFile };
-		}
-
-		if (scraped.youtubeTranscript) {
-			try {
-				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-			} catch (transcriptErr) {
-				console.error({
-					tag: 'YOUTUBE',
-					msg: 'Failed to save transcript',
-					videoId: scraped.youtubeTranscript.videoId,
-					error: String(transcriptErr),
-				});
+			if (!userFile) {
+				console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
+				return { error: 'DB insert failed' };
 			}
-		}
 
-		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
-		return { kind: 'page', row: userFile };
+			// ON CONFLICT path: row pre-existed, skip post-insert side effects.
+			if (!userFile.created) {
+				return { kind: 'page', row: userFile };
+			}
+
+			if (scraped.youtubeTranscript) {
+				try {
+					await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
+				} catch (transcriptErr) {
+					console.error({
+						tag: 'YOUTUBE',
+						msg: 'Failed to save transcript',
+						videoId: scraped.youtubeTranscript.videoId,
+						error: String(transcriptErr),
+					});
+				}
+			}
+
+			console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
+			return { kind: 'page', row: userFile };
+		});
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
 		return { error: 'DB insert failed' };
-	} finally {
-		await db.end();
 	}
 }
 
@@ -129,46 +120,20 @@ async function insertScrapedBlob(
 	userId: string,
 ): Promise<InsertOutcome> {
 	try {
-		// Reject before piping if upstream is honest about being oversized.
-		if (blob.contentLength !== null && blob.contentLength > MAX_UPLOAD_BYTES) {
-			await blob.body.cancel();
-			return { error: `Resource exceeds ${MAX_UPLOAD_BYTES} bytes (declared ${blob.contentLength})` };
-		}
-
-		const ext = extensionFromMime(blob.contentType, blob.suggestedFilename);
-		const storageKey = userUploadKey(userId, ext);
-
-		// On overrun the transform errors, `putUserUpload` rejects, and R2 doesn't
-		// commit a partial object.
-		const limited = streamWithByteLimit(blob.body, MAX_UPLOAD_BYTES);
-		try {
-			await putUserUpload(env, { storageKey, body: limited.stream, contentType: blob.contentType });
-		} catch (err) {
-			console.error({ tag: 'INGEST', msg: 'R2 put failed', url, storageKey, error: String(err) });
-			return { error: 'R2 put failed' };
-		}
-
-		const fileSize = limited.getBytesSeen();
-		const title = deriveFileTitle(blob.suggestedFilename);
-		const metadata = buildPdfMetadata({ fileType: blob.contentType, fileName: blob.suggestedFilename, fileSize });
-
-		const persisted = await persistBlobRow(env, {
+		const persisted = await persistSavedUrlBlob(env, {
 			userId,
-			storageKey,
-			fileSize,
-			fileType: blob.contentType,
-			fileName: blob.suggestedFilename,
-			originType: 'saved_url',
-			title,
+			body: blob.body,
+			contentLength: blob.contentLength,
+			contentType: blob.contentType,
+			suggestedFilename: blob.suggestedFilename,
 			sourceUrl: blob.sourceUrl,
 			normalizedSourceUrl: url,
-			metadata,
 		});
 		if (!persisted.ok) return { error: persisted.message };
 		console.info({
 			tag: 'INGEST',
 			msg: 'Saved blob from URL',
-			title: title.slice(0, 50),
+			title: persisted.title.slice(0, 50),
 			userFileId: persisted.userFileId,
 			contentType: blob.contentType,
 		});
@@ -190,47 +155,55 @@ async function scrapeAndInsert(url: string, env: Env, userId: string): Promise<I
 	return insertScrapedBlob(result, url, env, userId);
 }
 
-function buildExistingResult(url: string, row: ExistingUserFileRow, instanceId: string | undefined): IngestResult {
-	const isBlob = row.resource_kind === 'blob';
+function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instanceId?: string; alreadyExists: boolean }): IngestResult {
 	return {
 		url,
 		userFileId: row.id,
-		instanceId,
-		resourceKind: isBlob ? 'blob' : 'url',
+		instanceId: args.instanceId,
+		resourceKind: 'url',
 		originType: 'saved_url',
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
-		platformType: isBlob ? undefined : row.platform_type || 'web',
-		alreadyExists: true,
+		platformType: row.platform_type || 'web',
+		alreadyExists: args.alreadyExists,
 	};
 }
 
-async function returnExisting(url: string, row: ExistingUserFileRow, env: Env): Promise<IngestResult> {
-	const isProcessed = !!row.title_cn && !!row.summary_cn && row.has_embedding;
-	const instanceId = isProcessed ? undefined : await createUserFileWorkflow(env, row.id);
-	return buildExistingResult(url, row, instanceId);
+function isWorkflowComplete(row: ExistingUrlUserFile): boolean {
+	return !!row.title_cn && !!row.summary_cn && row.has_embedding;
+}
+
+async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
+	if (row.resource_kind === 'blob') {
+		const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
+		return {
+			url,
+			userFileId: row.id,
+			instanceId,
+			resourceKind: 'blob',
+			originType: 'saved_url',
+			title: row.title,
+			titleCn: row.title_cn || undefined,
+			summaryCn: row.summary_cn || undefined,
+			tags: row.tags ?? undefined,
+			ogImageUrl: row.og_image_url,
+			alreadyExists: true,
+		};
+	}
+
+	const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
+	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
 }
 
 async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
-	const db = await createDbClient(env);
-	try {
-		const existing = await db.query<ExistingUserFileRow>(
-			`SELECT ${EXIST_COLS} FROM ${USER_FILES_TABLE}
-			 WHERE user_id = $1
-			   AND normalized_source_url = $2
-			 LIMIT 1`,
-			[userId, url],
-		);
-		if (existing.rows.length > 0) {
-			return returnExisting(url, existing.rows[0], env);
-		}
-	} finally {
-		await db.end();
+	const existingRow = await withDbClient(env, (db) => getUrlUserFileByNormalizedSourceUrl(db, userId, url));
+	if (existingRow) {
+		return returnExisting(url, existingRow, env);
 	}
 
 	let result: InsertOutcome;
@@ -262,20 +235,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	// `created=false`: ON CONFLICT race — a concurrent submit already triggered
 	//   the workflow on the existing row, skip.
 	const instanceId = row.created ? await createUserFileWorkflow(env, row.id) : undefined;
-	return {
-		url,
-		userFileId: row.id,
-		instanceId,
-		resourceKind: 'url',
-		originType: 'saved_url',
-		title: row.title,
-		titleCn: row.title_cn || undefined,
-		summaryCn: row.summary_cn || undefined,
-		tags: row.tags?.length ? row.tags : undefined,
-		ogImageUrl: row.og_image_url,
-		platformType: row.platform_type || 'web',
-		alreadyExists: !row.created,
-	};
+	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 
 export async function ingestUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<IngestUrlsOutcome> {
@@ -283,7 +243,7 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
 	}
 	if (args.urls.length === 0) {
-		return { ok: false, code: 'BAD_REQUEST', message: 'Missing url or urls field' };
+		return { ok: false, code: 'BAD_REQUEST', message: 'Missing urls field' };
 	}
 	if (args.urls.length > INGEST_MAX_BATCH_SIZE) {
 		return {

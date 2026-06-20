@@ -1,11 +1,18 @@
-import { ARTICLES_TABLE, createDbClient, enqueueArticleProcess, insertArticle } from '@shared/db';
+import {
+	type ArticleSourceUpdate,
+	type ExistingArticleRecord,
+	getExistingArticlesByUrl,
+	updateArticleSourceByUrl,
+} from '@shared/article-store';
+import { withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
+import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
+import { startSourceArticleWorkflow } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
-import type { Client } from 'pg';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
-import { scrapeWebPage } from '../web/scraper';
+import { scrapeWebPage } from '../web-scraper';
 import {
 	extractImageFromItem,
 	extractItemsFromFeed,
@@ -107,7 +114,7 @@ async function detectHnSource(
 	return { sourceType: 'rss', platformMetadata: null };
 }
 
-async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
+async function enqueueRssSourceArticle(env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const { sourceType, platformMetadata } = await detectHnSource(toPlainText(item.comments) || undefined, feed.name);
 
 	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
@@ -129,23 +136,19 @@ async function processAndInsertArticle(db: Client, env: Env, item: RSSItem, url:
 			? { type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
 			: null;
 
-	const articleId = await insertArticle(db, {
-		url,
-		title,
-		source,
-		publishedDate,
-		summary,
-		sourceType,
-		content,
-		ogImageUrl,
-		platformMetadata: metadataToStore,
+	await startSourceArticleWorkflow(env, {
+		article: {
+			url,
+			title,
+			source,
+			publishedDate,
+			summary,
+			sourceType,
+			content,
+			ogImageUrl,
+			platformMetadata: metadataToStore,
+		},
 	});
-
-	if (!articleId) {
-		return console.info({ tag: 'RSS', msg: 'Insert skipped (duplicate URL)', feed: feed.name, url });
-	}
-
-	await enqueueArticleProcess(env, articleId);
 }
 
 // Source priorities for the upgrade-on-duplicate flow: RSS feeds default to 10
@@ -155,7 +158,6 @@ const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
 const DEFAULT_FEED_PRIORITY = 10;
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 
-type ExistingRecord = { url: string; source: string; source_type: string };
 type FeedItemWithUrl = { item: RSSItem; url: string };
 
 function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
@@ -167,54 +169,37 @@ function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
 	return entries;
 }
 
-async function fetchExistingRecords(db: Client, urls: string[]): Promise<ExistingRecord[]> {
-	const dedupBatchSize = 50;
-	const out: ExistingRecord[] = [];
-	for (let i = 0; i < urls.length; i += dedupBatchSize) {
-		const batch = urls.slice(i, i + dedupBatchSize);
-		const result = await db.query(`SELECT url, source, source_type FROM ${ARTICLES_TABLE} WHERE url = ANY($1)`, [batch]);
-		out.push(...(result.rows as ExistingRecord[]));
-	}
-	return out;
-}
-
-/** Upgrade a single existing article's source/metadata when this feed outranks it. */
-async function upgradeExistingArticleSource(
-	db: Client,
+/** Build a source/metadata upgrade for an existing article when this feed outranks it. */
+async function prepareExistingArticleSourceUpgrade(
 	feed: RSSFeed,
 	feedPriority: number,
-	existing: ExistingRecord,
+	existing: ExistingArticleRecord,
 	rssItem: RSSItem | undefined,
-): Promise<void> {
+): Promise<ArticleSourceUpdate | null> {
 	const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
-	if (feedPriority <= existingPriority) return;
+	if (feedPriority <= existingPriority) return null;
 
 	const normalized = normalizeUrl(existing.url);
-	const updateFields: string[] = ['source = $1'];
-	const updateValues: unknown[] = [feed.name];
-	let paramIndex = 2;
+	let sourceType: string | undefined;
+	let platformMetadata: PlatformMetadata | undefined;
 
 	const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
 	if (commentsUrl) {
 		try {
 			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
 			if (hnMeta) {
-				updateFields.push(`source_type = $${paramIndex++}`);
-				updateValues.push('hackernews');
-				updateFields.push(`platform_metadata = $${paramIndex++}`);
-				updateValues.push(JSON.stringify(hnMeta));
+				sourceType = 'hackernews';
+				platformMetadata = hnMeta;
 			}
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Failed to fetch HN metadata for upgrade', url: normalized, error: String(err) });
 		}
 	}
 
-	updateValues.push(normalized);
-	await db.query(`UPDATE ${ARTICLES_TABLE} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
-	console.info({ tag: 'RSS', msg: 'Upgraded article source', url: normalized, from: existing.source, to: feed.name });
+	return { url: normalized, source: feed.name, sourceType, platformMetadata };
 }
 
-async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
+async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
 	let res: Response;
@@ -231,14 +216,18 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	if (!res.ok) return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
 
 	let items = extractItemsFromFeed(parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES)));
-	if (!items.length) return;
+	if (!items.length) {
+		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
+		await markSourceFeedScrapedById(env, feed.id);
+		return;
+	}
 
 	const config = getFeedConfig(feed.name);
 	if (items.length > 30) items = items.slice(0, 30);
 
 	const itemUrls = extractFeedItemUrls(items);
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await fetchExistingRecords(db, urls);
+	const existingRecords = await withDbClient(env, (db) => getExistingArticlesByUrl(db, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 
@@ -248,43 +237,45 @@ async function processFeed(db: Client, env: Env, feed: RSSFeed, parser: XMLParse
 	}
 
 	const feedPriority = SOURCE_PRIORITY[feed.name] ?? DEFAULT_FEED_PRIORITY;
+	const sourceUpgrades: Array<{ existing: ExistingArticleRecord; update: ArticleSourceUpdate }> = [];
 	for (const existing of existingRecords) {
-		await upgradeExistingArticleSource(db, feed, feedPriority, existing, urlToItem.get(normalizeUrl(existing.url)));
+		const update = await prepareExistingArticleSourceUpgrade(feed, feedPriority, existing, urlToItem.get(normalizeUrl(existing.url)));
+		if (update) sourceUpgrades.push({ existing, update });
+	}
+	if (sourceUpgrades.length) {
+		await withDbClient(env, async (db) => {
+			for (const { existing, update } of sourceUpgrades) {
+				await updateArticleSourceByUrl(db, update);
+				console.info({ tag: 'RSS', msg: 'Upgraded article source', url: update.url, from: existing.source, to: feed.name });
+			}
+		});
 	}
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
-	let inserted = 0;
+	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			await processAndInsertArticle(db, env, item, url, feed, config);
-			inserted++;
+			await enqueueRssSourceArticle(env, item, url, feed, config);
+			queued++;
 		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Item insert failed, skipping', feed: feed.name, url, error: String(err) });
+			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });
 		}
 	}
-	console.info({ tag: 'RSS', msg: 'Feed insert done', feed: feed.name, inserted, total: newItems.length });
-	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
+	await markSourceFeedScrapedById(env, feed.id);
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const db = await createDbClient(env);
-	try {
-		const parser = new XMLParser({ ignoreAttributes: false });
-
-		// Pass 1: default sources → articles table
-		const defaultResult = await db.query(`SELECT id, name, "RSSLink", url, type FROM "RssList" WHERE is_default = true AND type = 'rss'`);
-		const feeds = defaultResult.rows as RSSFeed[];
-		for (const feed of feeds) {
-			try {
-				await processFeed(db, env, feed, parser);
-			} catch (err) {
-				console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
-			}
+	const parser = new XMLParser({ ignoreAttributes: false });
+	const feeds = await listDefaultRssSourceFeeds(env);
+	for (const feed of feeds) {
+		try {
+			await processFeed(env, feed, parser);
+		} catch (err) {
+			console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
 		}
-
-		console.info({ tag: 'RSS', msg: 'end' });
-	} finally {
-		await db.end();
 	}
+
+	console.info({ tag: 'RSS', msg: 'end' });
 }
