@@ -2,7 +2,7 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import { generateObject } from '@shared/ai';
+import { AI_TASKS, generateObject } from '@shared/ai';
 import type { ProcessableTable } from '@shared/db';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
@@ -137,6 +137,7 @@ export async function generateArticleAnalysis(article: Article, ai: Env['AI']): 
 		const result = await generateObject<ArticleAnalysisObject>(ai, buildArticleAnalysisPrompt(article), {
 			schema: ArticleAnalysisSchema,
 			schemaName: 'article analysis',
+			task: AI_TASKS.articleAnalysis,
 			maxTokens: 1000,
 			systemPrompt: ARTICLE_ANALYSIS_SYSTEM_PROMPT,
 		});

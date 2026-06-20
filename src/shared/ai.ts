@@ -7,11 +7,25 @@ type AiBinding = Env['AI'];
 type AiTextModel = typeof CORE_TEXT_MODEL;
 type JsonSchema = Record<string, unknown>;
 
+export interface AiTask {
+	name: string;
+	version: string;
+}
+
+export const AI_TASKS = {
+	articleAnalysis: { name: 'article-analysis', version: '1' },
+	tweetAnalysis: { name: 'tweet-analysis', version: '1' },
+	youtubeHighlights: { name: 'youtube-highlights', version: '1' },
+	hnEditorialCn: { name: 'hn-editorial-cn', version: '1' },
+	hnEditorialEn: { name: 'hn-editorial-en', version: '1' },
+} as const satisfies Record<string, AiTask>;
+
 interface GenerateTextOptions {
 	model?: AiTextModel;
 	maxTokens?: number;
 	temperature?: number;
 	systemPrompt?: string;
+	task?: AiTask;
 }
 
 interface GenerateJsonOptions extends GenerateTextOptions {
@@ -30,6 +44,29 @@ function buildMessages(prompt: string, systemPrompt?: string): Array<{ role: 'sy
 				{ role: 'user', content: prompt },
 			]
 		: [{ role: 'user', content: prompt }];
+}
+
+function buildTextGenerationInput(
+	options: GenerateTextOptions,
+	prompt: string,
+	responseFormat?: { type: 'json_schema'; json_schema: JsonSchema },
+) {
+	const { maxTokens, temperature = 0.3, systemPrompt } = options;
+	return {
+		messages: buildMessages(prompt, systemPrompt),
+		...(maxTokens != null && { max_tokens: maxTokens }),
+		temperature,
+		...(responseFormat && { response_format: responseFormat }),
+	};
+}
+
+function sanitizeAiTag(value: string): string {
+	return value.replace(/[^A-Za-z0-9:./@-]/g, '-').slice(0, 50);
+}
+
+function buildRunOptions(task?: AiTask): { tags: string[] } | undefined {
+	if (!task) return undefined;
+	return { tags: ['newsence', sanitizeAiTag(`task:${task.name}`), sanitizeAiTag(`version:${task.version}`)] };
 }
 
 function extractResponse(result: unknown): unknown {
@@ -56,38 +93,33 @@ function parseJsonResponse<T>(result: unknown): T | null {
 }
 
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
-	const { model = CORE_TEXT_MODEL, maxTokens, temperature = 0.3, systemPrompt } = options;
+	const { model = CORE_TEXT_MODEL, task } = options;
 
 	try {
-		const result = await ai.run(model, {
-			messages: buildMessages(prompt, systemPrompt),
-			...(maxTokens != null && { max_tokens: maxTokens }),
-			temperature,
-		});
+		const result = await ai.run(model, buildTextGenerationInput(options, prompt), buildRunOptions(task));
 		const response = extractResponse(result);
 		return typeof response === 'string' && response.trim() ? response : null;
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Workers AI text generation failed', model, error: String(error) });
+		console.error({ tag: 'AI', msg: 'Workers AI text generation failed', model, task, error: String(error) });
 		return null;
 	}
 }
 
 export async function generateJson<T>(ai: AiBinding, prompt: string, options: GenerateJsonOptions): Promise<T | null> {
-	const { model = CORE_TEXT_MODEL, maxTokens, temperature = 0.3, systemPrompt, schema } = options;
+	const { model = CORE_TEXT_MODEL, task, schema } = options;
 
 	try {
-		const result = await ai.run(model, {
-			messages: buildMessages(prompt, systemPrompt),
-			...(maxTokens != null && { max_tokens: maxTokens }),
-			temperature,
-			response_format: {
+		const result = await ai.run(
+			model,
+			buildTextGenerationInput(options, prompt, {
 				type: 'json_schema',
 				json_schema: schema,
-			},
-		});
+			}),
+			buildRunOptions(task),
+		);
 		return parseJsonResponse<T>(result);
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Workers AI JSON generation failed', model, error: String(error) });
+		console.error({ tag: 'AI', msg: 'Workers AI JSON generation failed', model, task, error: String(error) });
 		return null;
 	}
 }
@@ -102,6 +134,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 			tag: 'AI',
 			msg: 'Workers AI structured output validation failed',
 			schema: schemaName,
+			task: generationOptions.task,
 			error: z.prettifyError(parsed.error),
 		});
 		return null;

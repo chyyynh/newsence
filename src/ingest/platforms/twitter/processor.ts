@@ -2,7 +2,7 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { generateObject } from '@shared/ai';
+import { AI_TASKS, generateObject } from '@shared/ai';
 import type { AIAnalysisResult, Article } from '@shared/types';
 import { z } from 'zod';
 import {
@@ -157,6 +157,7 @@ async function translateTweet(tweetText: string, ai: ProcessorContext['env']['AI
 		const result = await generateObject<TweetAnalysis>(ai, `推文內容：\n${tweetText}`, {
 			schema: TweetAnalysisSchema,
 			schemaName: 'tweet analysis',
+			task: AI_TASKS.tweetAnalysis,
 			maxTokens: 600,
 			systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
 		});
