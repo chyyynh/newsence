@@ -243,7 +243,7 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
 	}
 	if (args.urls.length === 0) {
-		return { ok: false, code: 'BAD_REQUEST', message: 'Missing url or urls field' };
+		return { ok: false, code: 'BAD_REQUEST', message: 'Missing urls field' };
 	}
 	if (args.urls.length > INGEST_MAX_BATCH_SIZE) {
 		return {

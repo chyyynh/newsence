@@ -140,11 +140,11 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 # Health check
 curl https://your-worker.workers.dev/health
 
-# Ingest a URL
+# Ingest URLs
 curl -X POST https://your-worker.workers.dev/ingest \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
-  -d '{"url": "https://example.com/article", "userId": "user-id"}'
+  -d '{"urls": ["https://example.com/article"], "userId": "user-id"}'
 
 ```
 

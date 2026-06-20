@@ -9,7 +9,6 @@ import { ingestUrls } from '../urls';
 const RATE_LIMIT_PERIOD_SEC = 60;
 
 type IngestJsonBody = {
-	url?: string;
 	urls?: string[];
 	imageUrl?: string;
 	userId?: string;
@@ -40,9 +39,9 @@ async function ingestJson(request: Request, env: Env): Promise<Response> {
 	if (body instanceof Response) return body;
 
 	const hasImageUrl = typeof body.imageUrl === 'string' && body.imageUrl.trim().length > 0;
-	const hasUrlField = (typeof body.url === 'string' && body.url.trim().length > 0) || (Array.isArray(body.urls) && body.urls.length > 0);
+	const hasUrlField = Array.isArray(body.urls) && body.urls.length > 0;
 	if (hasImageUrl && hasUrlField) {
-		return jsonError('BAD_REQUEST', 'Provide imageUrl OR url/urls, not both', 400);
+		return jsonError('BAD_REQUEST', 'Provide imageUrl OR urls, not both', 400);
 	}
 
 	if (hasImageUrl) {
@@ -85,7 +84,7 @@ function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
 }
 
 async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response> {
-	const urls = body.urls ?? (body.url ? [body.url] : []);
+	const urls = body.urls ?? [];
 	const outcome = await ingestUrls(env, { urls, userId: body.userId });
 	if (outcome.ok) return jsonData(outcome.results);
 

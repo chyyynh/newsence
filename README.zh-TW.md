@@ -140,11 +140,11 @@ pnpm run deploy
 # 健康檢查
 curl https://your-worker.workers.dev/health
 
-# Ingest URL
+# Ingest URLs
 curl -X POST https://your-worker.workers.dev/ingest \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
-  -d '{"url": "https://example.com/article", "userId": "user-id"}'
+  -d '{"urls": ["https://example.com/article"], "userId": "user-id"}'
 
 ```
 
