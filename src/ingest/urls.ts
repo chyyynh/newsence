@@ -12,7 +12,7 @@ import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
 import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
-import { persistBlobRow, putUserUpload } from './blob';
+import { persistBlobRow, putUserUpload } from './blob-persistence';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 
 const INGEST_MAX_BATCH_SIZE = 20;

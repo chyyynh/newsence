@@ -261,58 +261,6 @@ export async function getUserFileByNormalizedSourceUrl(
 	return existing.rows[0] ?? null;
 }
 
-/**
- * Insert a blob-backed user_file row. The DB CHECK
- * `user_files_resource_shape_check` requires storage_key + file_size NOT NULL
- * for blob rows.
- *
- *   - originType='upload'     → user-uploaded multipart file (PDF / image)
- *   - originType='saved_url'  → blob URL the worker fetched into R2 (PDF / image link)
- *   - originType='generated'  → AI-generated blob (out of scope here)
- *
- * URL-as-text ingests still go through `insertUserFile` (resource_kind='url').
- */
-export interface InsertBlobUserFileData {
-	userId: string;
-	storageKey: string;
-	fileSize: number;
-	fileType: string;
-	fileName: string;
-	originType: 'upload' | 'saved_url' | 'generated';
-	title?: string | null;
-	/** Set for `saved_url` to enable per-user URL dedup. */
-	sourceUrl?: string | null;
-	normalizedSourceUrl?: string | null;
-	/** PlatformMetadata envelope ({ type, fetchedAt, data, ... }) or null. */
-	metadata?: unknown | null;
-}
-
-export async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileData): Promise<{ id: string }> {
-	const title = data.title ? data.title.slice(0, 200) : null;
-	const result = await db.query(
-		`INSERT INTO ${USER_FILES_TABLE}
-			(file_name, file_type, file_size, storage_key, resource_kind, origin_type, platform_type,
-			 source_url, normalized_source_url, title, metadata, user_id)
-		 VALUES ($1, $2, $3, $4, 'blob', $5, NULL, $6, $7, $8, $9, $10)
-		 RETURNING id`,
-		[
-			data.fileName,
-			data.fileType,
-			data.fileSize,
-			data.storageKey,
-			data.originType,
-			data.sourceUrl ?? null,
-			data.normalizedSourceUrl ?? null,
-			title,
-			serializeMetadata(data.metadata ?? null),
-			data.userId,
-		],
-	);
-	const id = result.rows[0]?.id as string | undefined;
-	if (!id) throw new Error('insertBlobUserFile returned no id');
-	return { id };
-}
-
 export type ProcessedArticleUpdate = Record<string, unknown>;
 
 // `user_files` carries the same editorial fields as `articles` but with a few
