@@ -68,6 +68,13 @@ type SourceFinalInsert = {
 	article: SourceArticleDraft['article'];
 	updatePayload: Record<string, unknown>;
 };
+type WorkflowPersistenceInput = {
+	article: Article;
+	result: ProcessorResult;
+	embedding: number[] | null;
+	pdfTextTemp: PdfTextTempResult | null;
+	youtubeHighlights: YouTubeHighlightsUpdate | null;
+};
 type YoutubeHighlightsInput =
 	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
 	| { kind: 'article'; article: Article };
@@ -364,21 +371,15 @@ async function prepareYoutubeHighlightsInput(
 	return sourceType === 'youtube' ? { kind: 'article', article } : null;
 }
 
-async function persistSourceTarget(
-	env: Env,
-	context: WorkflowRunContext,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	youtubeHighlights: YouTubeHighlightsUpdate | null,
-): Promise<string> {
+async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
-	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, result, embedding);
+	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
-		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
-		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
+		if (input.result.updateData.entities?.length) await syncArticleEntities(db, articleId, input.result.updateData.entities);
+		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		if (draft.twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, draft.twitterSourceEvent.tweet, {
 				articleId,
@@ -406,46 +407,29 @@ async function prepareSourceFinalInsert(
 	return { article: { ...base, ogImageUrl: validated }, updatePayload };
 }
 
-async function persistRowTarget(
-	env: Env,
-	target: RowTarget,
-	table: ProcessableTable,
-	article: Article,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	pdfTextTemp: PdfTextTempResult | null,
-	youtubeHighlights: YouTubeHighlightsUpdate | null,
-): Promise<string> {
-	const extractedPdfText = pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, pdfTextTemp.textStorageKey) : null;
+async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableTable, input: WorkflowPersistenceInput): Promise<string> {
+	const extractedPdfText = input.pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, input.pdfTextTemp.textStorageKey) : null;
 	const finalResult: ProcessorResult = {
-		...result,
+		...input.result,
 		updateData: {
-			...result.updateData,
+			...input.result.updateData,
 			...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
 		},
 	};
-	const updatePayload = buildProcessorUpdatePayload(article, finalResult, embedding, extractionMetadata(pdfTextTemp));
+	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, extractionMetadata(input.pdfTextTemp));
 
 	return withDbTransaction(env, 'row workflow', async (db) => {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
-		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
+		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		return target.articleId;
 	});
 }
 
-async function persistTarget(
-	env: Env,
-	context: WorkflowRunContext,
-	article: Article,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	pdfTextTemp: PdfTextTempResult | null,
-	youtubeHighlights: YouTubeHighlightsUpdate | null,
-): Promise<string> {
-	if (context.target.kind === 'source') return persistSourceTarget(env, context, result, embedding, youtubeHighlights);
-	return persistRowTarget(env, context.target, context.table, article, result, embedding, pdfTextTemp, youtubeHighlights);
+async function persistTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
+	if (context.target.kind === 'source') return persistSourceTarget(env, context, input);
+	return persistRowTarget(env, context.target, context.table, input);
 }
 
 async function cleanupTargetTemps(
@@ -518,7 +502,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 		const articleId = (await step.do(
 			context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => persistTarget(this.env, context, article, finalProcessorResult, embedding, pdfTextTemp, youtubeHighlights),
+			() =>
+				persistTarget(this.env, context, {
+					article,
+					result: finalProcessorResult,
+					embedding,
+					pdfTextTemp,
+					youtubeHighlights,
+				}),
 		)) as string;
 
 		await cleanupTargetTemps(this.env, context, pdfTextTemp, step);
