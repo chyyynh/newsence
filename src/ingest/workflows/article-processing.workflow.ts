@@ -17,7 +17,7 @@ import { generateArticleEmbedding } from '@shared/embedding';
 import { hasOgDimensions } from '@shared/platform-metadata';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment, validateImageUrl } from '@shared/web';
 import {
 	deleteSourceArticleDraft,
 	readSourceArticleDraft,
@@ -68,6 +68,7 @@ type YoutubeHighlightsInput =
 	| { kind: 'article'; article: Article };
 
 const EMPTY_OG_IMAGE_PATCH: OgImagePatch = { ogImageUrl: null, ogImageDimensions: null };
+const OG_IMAGE_UPDATE_KEY = 'og_image_url';
 
 async function fetchOgImage(url: string): Promise<OgImageResult | null> {
 	try {
@@ -367,8 +368,9 @@ async function persistSourceTarget(
 ): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
+	const updatePayload = buildProcessorUpdatePayload(fullArticle, result, embedding);
+	await validateSourceFinalOgImage(draft.article, updatePayload);
 	return withDbTransaction(env, 'source article', async (db) => {
-		const updatePayload = buildProcessorUpdatePayload(fullArticle, result, embedding);
 		const articleId = await insertFinalSourceArticle(db, draft.article, updatePayload);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
 		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
@@ -384,6 +386,14 @@ async function persistSourceTarget(
 		}
 		return articleId;
 	});
+}
+
+async function validateSourceFinalOgImage(base: SourceArticleDraft['article'], updatePayload: Record<string, unknown>): Promise<void> {
+	const hasPayloadOgImage = Object.hasOwn(updatePayload, OG_IMAGE_UPDATE_KEY);
+	const candidate = hasPayloadOgImage ? updatePayload[OG_IMAGE_UPDATE_KEY] : base.ogImageUrl;
+	const validated = await validateImageUrl(typeof candidate === 'string' ? candidate : null);
+	if (hasPayloadOgImage) updatePayload[OG_IMAGE_UPDATE_KEY] = validated;
+	else base.ogImageUrl = validated;
 }
 
 async function persistRowTarget(

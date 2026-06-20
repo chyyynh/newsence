@@ -11,7 +11,6 @@ import {
 import type { TwitterMedia } from './platform-metadata';
 import { deleteTempObject, putSerializedTempJson, randomTempObjectKey, readTempJson } from './r2-temp';
 import type { Article, Env, Tweet } from './types';
-import { validateImageUrl } from './web';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 
@@ -67,13 +66,9 @@ function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): W
 }
 
 export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticleDraft): Promise<void> {
-	const article = {
-		...draft.article,
-		ogImageUrl: await validateImageUrl(draft.article.ogImageUrl),
-	};
-	const normalizedDraft: SourceArticleDraft = { ...draft, article };
+	const normalizedDraft: SourceArticleDraft = { ...draft };
 	const serialized = JSON.stringify(normalizedDraft);
-	const url = article.url;
+	const url = draft.article.url;
 	const sourceArticle: SourceArticleRef =
 		new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
 			? { url, inline: normalizedDraft }
