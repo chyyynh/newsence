@@ -63,6 +63,10 @@ type ArticleAnalysisStepResult = {
 	processorResult: ProcessorResult;
 	embedding: number[] | null;
 };
+type SourceFinalInsert = {
+	article: SourceArticleDraft['article'];
+	updatePayload: Record<string, unknown>;
+};
 type YoutubeHighlightsInput =
 	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
 	| { kind: 'article'; article: Article };
@@ -368,10 +372,9 @@ async function persistSourceTarget(
 ): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
-	const updatePayload = buildProcessorUpdatePayload(fullArticle, result, embedding);
-	await validateSourceFinalOgImage(draft.article, updatePayload);
+	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, result, embedding);
 	return withDbTransaction(env, 'source article', async (db) => {
-		const articleId = await insertFinalSourceArticle(db, draft.article, updatePayload);
+		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
 		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
@@ -388,12 +391,18 @@ async function persistSourceTarget(
 	});
 }
 
-async function validateSourceFinalOgImage(base: SourceArticleDraft['article'], updatePayload: Record<string, unknown>): Promise<void> {
+async function prepareSourceFinalInsert(
+	base: SourceArticleDraft['article'],
+	article: Article,
+	result: ProcessorResult,
+	embedding: number[] | null,
+): Promise<SourceFinalInsert> {
+	const updatePayload = buildProcessorUpdatePayload(article, result, embedding);
 	const hasPayloadOgImage = Object.hasOwn(updatePayload, OG_IMAGE_UPDATE_KEY);
 	const candidate = hasPayloadOgImage ? updatePayload[OG_IMAGE_UPDATE_KEY] : base.ogImageUrl;
 	const validated = await validateImageUrl(typeof candidate === 'string' ? candidate : null);
-	if (hasPayloadOgImage) updatePayload[OG_IMAGE_UPDATE_KEY] = validated;
-	else base.ogImageUrl = validated;
+	if (hasPayloadOgImage) return { article: base, updatePayload: { ...updatePayload, [OG_IMAGE_UPDATE_KEY]: validated } };
+	return { article: { ...base, ogImageUrl: validated }, updatePayload };
 }
 
 async function persistRowTarget(
