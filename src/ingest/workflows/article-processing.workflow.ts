@@ -14,7 +14,6 @@ import {
 	deleteSourceArticleDraft,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
-	sourceArticleDraftHasTempObject,
 	sourceArticleDraftUrl,
 	sourceDraftToArticle,
 	sourceDraftYoutubeTranscript,
@@ -355,8 +354,7 @@ async function cleanupTargetTemps(
 	step: WorkflowStep,
 ): Promise<void> {
 	const { target } = context;
-	const hasSourceDraftTemp = target.kind === 'source' && sourceArticleDraftHasTempObject(target.sourceArticle);
-	if (!pdfTextTemp?.textStorageKey && !hasSourceDraftTemp) return;
+	if (!pdfTextTemp?.textStorageKey && target.kind !== 'source') return;
 
 	await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
 		cleanupWorkflowTempObjects(env, context, pdfTextTemp),
@@ -379,11 +377,9 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 	}
 
 	if (target.kind === 'source') {
-		if (sourceArticleDraftHasTempObject(target.sourceArticle)) {
-			await deleteTemp('source_draft', sourceArticleDraftUrl(target.sourceArticle), () =>
-				deleteSourceArticleDraft(env, target.sourceArticle),
-			);
-		}
+		await deleteTemp('source_draft', sourceArticleDraftUrl(target.sourceArticle), () =>
+			deleteSourceArticleDraft(env, target.sourceArticle),
+		);
 	}
 
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });

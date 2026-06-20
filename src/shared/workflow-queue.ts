@@ -90,7 +90,7 @@ function isWorkflowQueueTarget(target: unknown): target is WorkflowQueueTarget {
 
 function isSourceArticleDraftRef(ref: unknown): ref is SourceArticleDraftRef {
 	if (!isRecord(ref) || typeof ref.url !== 'string' || ref.url.length === 0) return false;
-	return (isRecord(ref.inline) && isRecord(ref.inline.article)) || typeof ref.r2Key === 'string';
+	return typeof ref.r2Key === 'string' && ref.r2Key.length > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

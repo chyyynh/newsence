@@ -27,10 +27,9 @@ type LegacySourceArticleDraft = SourceArticleDraft & {
 	twitterSourceEvent?: TwitterSourceEventDraft;
 };
 
-export type SourceArticleDraftRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
+export type SourceArticleDraftRef = { url: string; r2Key: string };
 
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
-const MAX_INLINE_SOURCE_ARTICLE_BYTES = 110_000;
 
 export function youtubeTranscriptAttachment(transcript: YoutubeTranscriptRow): SourceArticleAttachment {
 	return { kind: 'youtube-transcript', transcript };
@@ -65,10 +64,7 @@ function normalizeSourceArticleDraft(draft: LegacySourceArticleDraft): SourceArt
 export async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
 	const normalizedDraft = normalizeSourceArticleDraft(draft);
 	const serialized = JSON.stringify(normalizedDraft);
-	const url = draft.article.url;
-	return new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
-		? { url, inline: normalizedDraft }
-		: writeSourceArticleDraft(env, url, serialized);
+	return writeSourceArticleDraft(env, draft.article.url, serialized);
 }
 
 async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleDraftRef> {
@@ -80,16 +76,7 @@ export function sourceArticleDraftUrl(ref: SourceArticleDraftRef): string {
 	return ref.url;
 }
 
-function sourceArticleDraftR2Key(ref: SourceArticleDraftRef): string | null {
-	return 'r2Key' in ref ? ref.r2Key : null;
-}
-
-export function sourceArticleDraftHasTempObject(ref: SourceArticleDraftRef): boolean {
-	return sourceArticleDraftR2Key(ref) !== null;
-}
-
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
-	if ('inline' in ref) return normalizeSourceArticleDraft(ref.inline as LegacySourceArticleDraft);
 	return normalizeSourceArticleDraft(
 		await readTempJson<LegacySourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' }),
 	);
@@ -117,9 +104,7 @@ export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
 }
 
 export async function deleteSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<void> {
-	const r2Key = sourceArticleDraftR2Key(ref);
-	if (!r2Key) return;
-	await deleteTempObject(env, r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
+	await deleteTempObject(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 }
 
 export async function cleanupSourceArticleDraftRef(
@@ -127,7 +112,6 @@ export async function cleanupSourceArticleDraftRef(
 	ref: SourceArticleDraftRef,
 	context: { reason: string; workflowId?: string; logTag?: string },
 ): Promise<void> {
-	if (!sourceArticleDraftHasTempObject(ref)) return;
 	try {
 		await deleteSourceArticleDraft(env, ref);
 	} catch (err) {
