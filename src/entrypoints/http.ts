@@ -6,7 +6,6 @@ import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import { parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
-import { recordUserFileWorkflowTimeoutByInstanceId } from '@shared/user-file-workflow-state';
 import { rankCorpusArticleIds, relatedCorpusArticleIds } from '../corpus';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
@@ -205,13 +204,6 @@ function handleWorkflowStream(instanceId: string, env: Env): Response {
 	const encoder = new TextEncoder();
 	const writeEvent = (data: object) => writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-	const recordTimeout = async () => {
-		try {
-			await recordUserFileWorkflowTimeoutByInstanceId(env, instanceId);
-		} catch (error) {
-			console.warn({ tag: 'WORKFLOW_STREAM', msg: 'Failed to record workflow timeout', instanceId, error: String(error) });
-		}
-	};
 
 	(async () => {
 		try {
@@ -229,7 +221,6 @@ function handleWorkflowStream(instanceId: string, env: Env): Response {
 				if (isTerminal) return;
 				await sleep(3000);
 			}
-			await recordTimeout();
 			await writeEvent({ status: 'timeout' });
 		} catch (err) {
 			await writeEvent({ status: 'error', error: String(err) });

@@ -55,25 +55,3 @@ export async function recordUserFileWorkflowFailed(env: Env, userFileId: string,
 		}),
 	);
 }
-
-export async function recordUserFileWorkflowTimeoutByInstanceId(env: Env, instanceId: string): Promise<void> {
-	await withDbClient(env, (db) =>
-		db.query(
-			`UPDATE ${USER_FILES_TABLE}
-			 SET metadata = jsonb_set(
-			   COALESCE(metadata, '{}'::jsonb),
-			   '{workflow}',
-			   COALESCE(metadata->'workflow', '{}'::jsonb) || $1::jsonb,
-			   TRUE
-			 )
-			 WHERE metadata->'workflow'->>'monitor_instance_id' = $2`,
-			[
-				JSON.stringify({
-					monitor_status: 'timeout',
-					monitor_timed_out_at: new Date().toISOString(),
-				}),
-				instanceId,
-			],
-		),
-	);
-}
