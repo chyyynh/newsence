@@ -72,7 +72,7 @@ export async function ensureWorkflowsForQueueMessage(env: Env, messageId: string
 
 function parseQueueMessage(body: unknown): QueueMessage | null {
 	if (!isRecord(body) || body.type !== 'workflow_process' || !isWorkflowQueueTarget(body.target)) return null;
-	return body;
+	return { type: 'workflow_process', target: body.target };
 }
 
 function isWorkflowQueueTarget(target: unknown): target is RowWorkflowTarget {
@@ -218,9 +218,19 @@ async function createUserFileWorkflowInstance(env: Env, workflowId: string, user
 }
 
 async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {
-	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
-	const status = await instance.status();
-	return { id: instance.id, status: status.status };
+	try {
+		const instance = await env.MONITOR_WORKFLOW.get(workflowId);
+		const status = await instance.status();
+		return { id: instance.id, status: status.status };
+	} catch {
+		// `MONITOR_WORKFLOW.get()` throws when the instance ID was never created (or
+		// has aged out of retention). Every caller treats `'unknown'` as "not a live
+		// workflow", so normalize the not-found throw to that — otherwise the very
+		// first status check for a brand-new article aborts the ensure/create path
+		// and the queue message retries forever. A real existing instance is still
+		// surfaced via the create-conflict retry, so a transient get error is not lost.
+		return { id: workflowId, status: 'unknown' };
+	}
 }
 
 async function createMonitorWorkflow(env: Env, workflowId: string, target: WorkflowQueueTarget): Promise<string> {

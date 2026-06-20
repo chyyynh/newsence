@@ -1,4 +1,4 @@
-import type { Env } from '../types';
+import type { Env } from './types';
 
 export function jsonData<T>(data: T, headers?: HeadersInit): Response {
 	return Response.json({ success: true, data }, { headers });
