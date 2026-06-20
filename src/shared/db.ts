@@ -207,6 +207,30 @@ export async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileD
 // Dedup helper
 // ─────────────────────────────────────────────────────────────
 
+export type ExistingArticleRecord = {
+	id: string;
+	url: string;
+	source: string;
+	source_type: string;
+	summary_cn: string | null;
+};
+
+export async function getExistingArticlesByUrl(db: DbClient, urls: string[], batchSize = 50): Promise<ExistingArticleRecord[]> {
+	const records: ExistingArticleRecord[] = [];
+	if (urls.length === 0) return records;
+
+	for (let i = 0; i < urls.length; i += batchSize) {
+		const batch = urls.slice(i, i + batchSize);
+		const result = await db.query<ExistingArticleRecord>(
+			`SELECT id, url, source, source_type, summary_cn FROM ${ARTICLES_TABLE} WHERE url = ANY($1)`,
+			[batch],
+		);
+		records.push(...result.rows);
+	}
+
+	return records;
+}
+
 /**
  * Return the set of URLs (normalized) that already exist in `table`.
  * Batches the IN clause at `batchSize` to stay within Postgres parameter limits.

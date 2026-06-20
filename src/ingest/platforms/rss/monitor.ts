@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, type DbClient, withDbClient } from '@shared/db';
+import { type DbClient, type ExistingArticleRecord, getExistingArticlesByUrl, withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
@@ -151,7 +151,6 @@ const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
 const DEFAULT_FEED_PRIORITY = 10;
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 
-type ExistingRecord = { url: string; source: string; source_type: string };
 type FeedItemWithUrl = { item: RSSItem; url: string };
 
 function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
@@ -163,23 +162,12 @@ function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
 	return entries;
 }
 
-async function fetchExistingRecords(db: DbClient, urls: string[]): Promise<ExistingRecord[]> {
-	const dedupBatchSize = 50;
-	const out: ExistingRecord[] = [];
-	for (let i = 0; i < urls.length; i += dedupBatchSize) {
-		const batch = urls.slice(i, i + dedupBatchSize);
-		const result = await db.query(`SELECT url, source, source_type FROM ${ARTICLES_TABLE} WHERE url = ANY($1)`, [batch]);
-		out.push(...(result.rows as ExistingRecord[]));
-	}
-	return out;
-}
-
 /** Upgrade a single existing article's source/metadata when this feed outranks it. */
 async function upgradeExistingArticleSource(
 	db: DbClient,
 	feed: RSSFeed,
 	feedPriority: number,
-	existing: ExistingRecord,
+	existing: ExistingArticleRecord,
 	rssItem: RSSItem | undefined,
 ): Promise<void> {
 	const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
@@ -234,7 +222,7 @@ async function processFeed(db: DbClient, env: Env, feed: RSSFeed, parser: XMLPar
 
 	const itemUrls = extractFeedItemUrls(items);
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await fetchExistingRecords(db, urls);
+	const existingRecords = await getExistingArticlesByUrl(db, urls);
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 

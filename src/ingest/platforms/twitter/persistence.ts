@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, type DbClient } from '@shared/db';
+import { ARTICLES_TABLE, type DbClient, getExistingArticlesByUrl } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
@@ -19,11 +19,8 @@ import {
 import { upsertTwitterSourceEvent } from './source-events';
 
 async function findArticleByUrl(db: DbClient, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
-	const result = await db.query<{ id: string; summary_cn: string | null }>(
-		`SELECT id, summary_cn FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`,
-		[url],
-	);
-	return result.rows[0] ?? null;
+	const [article] = await getExistingArticlesByUrl(db, [url]);
+	return article ? { id: article.id, summary_cn: article.summary_cn } : null;
 }
 
 async function enqueueMissingTwitterTranslation(env: Env, article: { id: string; summary_cn: string | null }): Promise<void> {
