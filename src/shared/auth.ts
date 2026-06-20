@@ -1,5 +1,13 @@
 import type { Env } from '../types';
 
+export function jsonData<T>(data: T, headers?: HeadersInit): Response {
+	return Response.json({ success: true, data }, { headers });
+}
+
+export function jsonError(code: string, message: string, status: number, headers?: HeadersInit): Response {
+	return Response.json({ success: false, error: { code, message } }, { status, headers });
+}
+
 function getInternalToken(request: Request): string | null {
 	return request.headers.get('x-internal-token') ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? null;
 }
@@ -34,10 +42,7 @@ export async function isInternalRequestAuthorized(request: Request, env: Env): P
  */
 export async function requireAuth(request: Request, env: Env, extraHeaders?: HeadersInit): Promise<Response | null> {
 	if (await isInternalRequestAuthorized(request, env)) return null;
-	return Response.json(
-		{ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' } },
-		{ status: 401, headers: extraHeaders },
-	);
+	return jsonError('UNAUTHORIZED', 'Missing or invalid internal token', 401, extraHeaders);
 }
 
 /**
@@ -48,9 +53,6 @@ export async function parseJsonBody<T>(request: Request, extraHeaders?: HeadersI
 	try {
 		return (await request.json()) as T;
 	} catch {
-		return Response.json(
-			{ success: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } },
-			{ status: 400, headers: extraHeaders },
-		);
+		return jsonError('BAD_REQUEST', 'Invalid JSON body', 400, extraHeaders);
 	}
 }

@@ -3,7 +3,7 @@ import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ing
 import { handleDeleteAsset } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
-import { parseJsonBody, requireAuth } from '@shared/auth';
+import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { rankCorpusArticleIds, relatedCorpusArticleIds } from '../corpus';
 
@@ -73,22 +73,16 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
 
 	const query = body.query?.trim();
 	if (!query) {
-		return Response.json({ success: true, data: { results: [] } }, { headers: INTERNAL_CORS_HEADERS });
+		return jsonData({ results: [] }, INTERNAL_CORS_HEADERS);
 	}
 	const limit = Math.min(Math.max(Math.trunc(body.limit ?? 100), 1), SEARCH_LIMIT_MAX);
 
 	try {
 		const results = await rankCorpusArticleIds(env, query, limit);
-		return Response.json(
-			{ success: true, data: { results } },
-			{ headers: { ...INTERNAL_CORS_HEADERS, 'Content-Type': 'application/json' } },
-		);
+		return jsonData({ results }, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'hybrid search failed', error: error instanceof Error ? error.message : String(error) });
-		return Response.json(
-			{ success: false, error: { code: 'SEARCH_FAILED', message: 'Search failed' } },
-			{ status: 500, headers: INTERNAL_CORS_HEADERS },
-		);
+		return jsonError('SEARCH_FAILED', 'Search failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 
@@ -104,23 +98,17 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	const id = body.id?.trim();
 	const type = body.type === 'user_file' ? 'user_file' : 'article';
 	if (!id) {
-		return Response.json(
-			{ success: false, error: { code: 'BAD_REQUEST', message: 'Missing seed id' } },
-			{ status: 400, headers: INTERNAL_CORS_HEADERS },
-		);
+		return jsonError('BAD_REQUEST', 'Missing seed id', 400, INTERNAL_CORS_HEADERS);
 	}
 	const limit = Math.min(Math.max(Math.trunc(body.limit ?? 12), 1), SEARCH_LIMIT_MAX);
 	const offset = Math.max(Math.trunc(body.offset ?? 0), 0);
 
 	try {
 		const ids = await relatedCorpusArticleIds(env, { id, type }, limit, offset);
-		return Response.json({ success: true, data: { ids } }, { headers: { ...INTERNAL_CORS_HEADERS, 'Content-Type': 'application/json' } });
+		return jsonData({ ids }, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
-		return Response.json(
-			{ success: false, error: { code: 'SEARCH_FAILED', message: 'Related search failed' } },
-			{ status: 500, headers: INTERNAL_CORS_HEADERS },
-		);
+		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

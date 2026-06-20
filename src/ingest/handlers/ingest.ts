@@ -1,4 +1,4 @@
-import { parseJsonBody, requireAuth } from '@shared/auth';
+import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
 import { ingestUrls } from '../urls';
@@ -16,16 +16,8 @@ type IngestJsonBody = {
 	title?: string;
 };
 
-function ingestError(code: string, message: string, status: number, headers?: HeadersInit): Response {
-	return Response.json({ success: false, error: { code, message } }, { status, headers });
-}
-
-function ingestData<T>(data: T): Response {
-	return Response.json({ success: true, data });
-}
-
 function rateLimited(code: string, message: string): Response {
-	return ingestError(code, message, 429, { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) });
+	return jsonError(code, message, 429, { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) });
 }
 
 export async function handleIngest(request: Request, env: Env): Promise<Response> {
@@ -40,7 +32,7 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
 	if (contentType.startsWith('multipart/form-data')) {
 		return ingestMultipart(request, env);
 	}
-	return ingestError('UNSUPPORTED_MEDIA_TYPE', `Unsupported Content-Type: ${contentType || '(none)'}`, 415);
+	return jsonError('UNSUPPORTED_MEDIA_TYPE', `Unsupported Content-Type: ${contentType || '(none)'}`, 415);
 }
 
 async function ingestJson(request: Request, env: Env): Promise<Response> {
@@ -50,7 +42,7 @@ async function ingestJson(request: Request, env: Env): Promise<Response> {
 	const hasImageUrl = typeof body.imageUrl === 'string' && body.imageUrl.trim().length > 0;
 	const hasUrlField = (typeof body.url === 'string' && body.url.trim().length > 0) || (Array.isArray(body.urls) && body.urls.length > 0);
 	if (hasImageUrl && hasUrlField) {
-		return ingestError('BAD_REQUEST', 'Provide imageUrl OR url/urls, not both', 400);
+		return jsonError('BAD_REQUEST', 'Provide imageUrl OR url/urls, not both', 400);
 	}
 
 	if (hasImageUrl) {
@@ -65,10 +57,10 @@ async function ingestImageUrlJson(body: IngestJsonBody, env: Env): Promise<Respo
 		userId: body.userId,
 		title: body.title ?? null,
 	});
-	if (outcome.ok) return ingestData(outcome.result);
+	if (outcome.ok) return jsonData(outcome.result);
 
 	const status = imageUrlStatusFor(outcome.code);
-	return outcome.code === 'RATE_LIMITED' ? rateLimited(outcome.code, outcome.message) : ingestError(outcome.code, outcome.message, status);
+	return outcome.code === 'RATE_LIMITED' ? rateLimited(outcome.code, outcome.message) : jsonError(outcome.code, outcome.message, status);
 }
 
 function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
@@ -95,18 +87,18 @@ function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
 async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response> {
 	const urls = body.urls ?? (body.url ? [body.url] : []);
 	const outcome = await ingestUrls(env, { urls, userId: body.userId });
-	if (outcome.ok) return ingestData(outcome.results);
+	if (outcome.ok) return jsonData(outcome.results);
 
 	if (outcome.code === 'RATE_LIMITED') {
 		return rateLimited(outcome.code, outcome.message);
 	}
 	const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
-	return ingestError(outcome.code, outcome.message, status);
+	return jsonError(outcome.code, outcome.message, status);
 }
 
 async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	const outcome = await ingestBlob(request, env);
-	if (outcome.ok) return ingestData(outcome.result);
+	if (outcome.ok) return jsonData(outcome.result);
 
 	if (outcome.code === 'RATE_LIMITED') {
 		return rateLimited(outcome.code, outcome.message);
@@ -121,5 +113,5 @@ async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 					: outcome.code === 'INTERNAL_ERROR'
 						? 500
 						: 400;
-	return ingestError(outcome.code, outcome.message, status);
+	return jsonError(outcome.code, outcome.message, status);
 }
