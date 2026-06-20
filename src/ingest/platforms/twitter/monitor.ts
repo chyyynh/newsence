@@ -1,4 +1,4 @@
-import { getSourceFeedsByType, markSourceFeedsScraped, withDbClient } from '@shared/db';
+import { listSourceFeedsByType, markSourceFeedsScrapedByIds, withDbClient } from '@shared/db';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout } from '@shared/web';
 import { saveTweetGroups } from './persistence';
@@ -126,16 +126,16 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
-	const users = await withDbClient(env, (db) => getSourceFeedsByType(db, 'twitter_user'));
+	const users = await listSourceFeedsByType(env, 'twitter_user');
 	if (!users.length) {
-		console.info({ tag: 'TWITTER', msg: 'No twitter_user entries in RssList' });
+		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
 		return;
 	}
 
 	const monitoredUsers = normalizeTwitterUsers(users);
 	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
 	if (userNames.length === 0) {
-		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in RssList', users: users.length });
+		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
 		return;
 	}
 	const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
@@ -146,30 +146,28 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 
 	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
 
-	let total = 0;
+	let processed = 0;
 	let allCompleted = true;
 	for (const batch of batches) {
 		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY || '', batch, sinceTime);
 		if (!completed) allCompleted = false;
 		const groups = groupTweetsIntoThreads(tweets);
-		total += await withDbClient(env, (db) => saveTweetGroups(db, env, groups));
+		processed += await withDbClient(env, (db) => saveTweetGroups(db, env, groups));
 	}
 
 	// Advance scraped_at only if every batch completed — partial fetches would
 	// let the next cron skip tweets we failed to pull.
 	if (allCompleted) {
-		await withDbClient(env, (db) =>
-			markSourceFeedsScraped(
-				db,
-				monitoredUsers.map((u) => u.id),
-			),
+		await markSourceFeedsScrapedByIds(
+			env,
+			monitoredUsers.map((u) => u.id),
 		);
 	}
 
 	console.info({
 		tag: 'TWITTER',
 		msg: 'end',
-		inserted: total,
+		processed,
 		users: users.length,
 		validUsers: monitoredUsers.length,
 		batches: batches.length,

@@ -1,9 +1,9 @@
 import {
 	type ArticleSourceUpdate,
 	type ExistingArticleRecord,
-	getDefaultRssFeeds,
 	getExistingArticlesByUrl,
-	markSourceFeedScraped,
+	listDefaultRssSourceFeeds,
+	markSourceFeedScrapedById,
 	updateArticleSourceByUrl,
 	withDbClient,
 } from '@shared/db';
@@ -115,7 +115,7 @@ async function detectHnSource(
 	return { sourceType: 'rss', platformMetadata: null };
 }
 
-async function processAndInsertArticle(env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
+async function enqueueRssSourceArticle(env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
 	const { sourceType, platformMetadata } = await detectHnSource(toPlainText(item.comments) || undefined, feed.name);
 
 	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
@@ -249,23 +249,23 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	}
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
-	let inserted = 0;
+	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			await processAndInsertArticle(env, item, url, feed, config);
-			inserted++;
+			await enqueueRssSourceArticle(env, item, url, feed, config);
+			queued++;
 		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Item insert failed, skipping', feed: feed.name, url, error: String(err) });
+			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });
 		}
 	}
-	console.info({ tag: 'RSS', msg: 'Feed insert done', feed: feed.name, inserted, total: newItems.length });
-	await withDbClient(env, (db) => markSourceFeedScraped(db, feed.id));
+	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
+	await markSourceFeedScrapedById(env, feed.id);
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const parser = new XMLParser({ ignoreAttributes: false });
-	const feeds = await withDbClient(env, getDefaultRssFeeds);
+	const feeds = await listDefaultRssSourceFeeds(env);
 	for (const feed of feeds) {
 		try {
 			await processFeed(env, feed, parser);

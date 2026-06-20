@@ -1,4 +1,4 @@
-import { getExistingUrls, getSourceFeedsByType, markSourceFeedScraped, withDbClient } from '@shared/db';
+import { getExistingUrls, listSourceFeedsByType, markSourceFeedScrapedById, withDbClient } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
@@ -94,17 +94,17 @@ async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLPars
 		return 0;
 	}
 
-	let inserted = 0;
+	let queued = 0;
 	for (const video of newVideos) {
 		try {
-			if (await processYouTubeVideo(env, channel, video)) inserted++;
+			if (await processYouTubeVideo(env, channel, video)) queued++;
 		} catch (err) {
 			console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
 		}
 	}
 
-	await withDbClient(env, (db) => markSourceFeedScraped(db, channel.id));
-	return inserted;
+	await markSourceFeedScrapedById(env, channel.id);
+	return queued;
 }
 
 export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -113,20 +113,20 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const channels = await withDbClient(env, (db) => getSourceFeedsByType(db, 'youtube_channel'));
+	const channels = await listSourceFeedsByType(env, 'youtube_channel');
 	if (!channels.length) {
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel entries in RssList' });
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel source feeds configured' });
 		return;
 	}
 
 	const parser = new XMLParser({ ignoreAttributes: false });
-	let totalInserted = 0;
+	let totalQueued = 0;
 	for (const channel of channels) {
 		try {
-			totalInserted += await processYouTubeChannel(env, channel, parser);
+			totalQueued += await processYouTubeChannel(env, channel, parser);
 		} catch (err) {
 			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
 		}
 	}
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', inserted: totalInserted, channels: channels.length });
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
 }
