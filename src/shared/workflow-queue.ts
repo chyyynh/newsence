@@ -1,10 +1,9 @@
 import { type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './db';
 import {
+	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
-	deleteSourceArticleDraft,
 	type SourceArticleDraft,
 	type SourceArticleDraftRef,
-	sourceArticleDraftHasTempObject,
 	sourceArticleDraftUrl,
 } from './source-draft';
 import type { Env } from './types';
@@ -54,7 +53,7 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 			target: { kind: 'source', sourceArticle },
 		});
 	} catch (err) {
-		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'enqueue failed' });
+		await cleanupQueuedSourceArticleDraft(env, sourceArticle, { reason: 'enqueue failed' });
 		throw err;
 	}
 }
@@ -139,27 +138,15 @@ function isReusableSourceWorkflowStatus(status: string): boolean {
 }
 
 async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleDraftRef, workflowId: string): Promise<void> {
-	await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow already exists', workflowId });
+	await cleanupQueuedSourceArticleDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId });
 }
 
-async function cleanupSourceArticleDraftRef(
+async function cleanupQueuedSourceArticleDraft(
 	env: Env,
 	sourceArticle: SourceArticleDraftRef,
 	context: { reason: string; workflowId?: string },
 ): Promise<void> {
-	if (!sourceArticleDraftHasTempObject(sourceArticle)) return;
-	try {
-		await deleteSourceArticleDraft(env, sourceArticle);
-	} catch (err) {
-		console.warn({
-			tag: 'ARTICLE-QUEUE',
-			msg: 'Failed to cleanup source article draft',
-			reason: context.reason,
-			workflowId: context.workflowId,
-			sourceUrl: sourceArticleDraftUrl(sourceArticle),
-			error: String(err),
-		});
-	}
+	await cleanupSourceArticleDraftRef(env, sourceArticle, { ...context, logTag: 'ARTICLE-QUEUE' });
 }
 
 async function ensureArticleWorkflow(

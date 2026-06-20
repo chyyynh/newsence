@@ -121,3 +121,23 @@ export async function deleteSourceArticleDraft(env: Env, ref: SourceArticleDraft
 	if (!r2Key) return;
 	await deleteTempObject(env, r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 }
+
+export async function cleanupSourceArticleDraftRef(
+	env: Env,
+	ref: SourceArticleDraftRef,
+	context: { reason: string; workflowId?: string; logTag?: string },
+): Promise<void> {
+	if (!sourceArticleDraftHasTempObject(ref)) return;
+	try {
+		await deleteSourceArticleDraft(env, ref);
+	} catch (err) {
+		console.warn({
+			tag: context.logTag ?? 'SOURCE-DRAFT',
+			msg: 'Failed to cleanup source article draft',
+			reason: context.reason,
+			workflowId: context.workflowId,
+			sourceUrl: sourceArticleDraftUrl(ref),
+			error: String(err),
+		});
+	}
+}
