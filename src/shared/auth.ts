@@ -13,7 +13,7 @@ async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
 	return crypto.subtle.timingSafeEqual(hashA, hashB);
 }
 
-export async function isSubmitAuthorized(request: Request, env: Env): Promise<boolean> {
+export async function isInternalRequestAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
 		// Fail closed: a missing server secret must never make the protected
@@ -33,7 +33,7 @@ export async function isSubmitAuthorized(request: Request, env: Env): Promise<bo
  * 401 Response. Callers do `const unauth = await requireAuth(req, env); if (unauth) return unauth;`.
  */
 export async function requireAuth(request: Request, env: Env, extraHeaders?: HeadersInit): Promise<Response | null> {
-	if (await isSubmitAuthorized(request, env)) return null;
+	if (await isInternalRequestAuthorized(request, env)) return null;
 	return Response.json(
 		{ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' } },
 		{ status: 401, headers: extraHeaders },
