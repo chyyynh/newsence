@@ -462,6 +462,38 @@ export async function getExistingUrls(db: DbClient, urls: string[], table: strin
 	return existing;
 }
 
+export type IncompleteWorkflowTargetIds = {
+	articleIds: string[];
+	userFileIds: string[];
+};
+
+export async function getIncompleteWorkflowTargetIds(db: DbClient, since: Date | string): Promise<IncompleteWorkflowTargetIds> {
+	const articleResult = await db.query<{ id: string }>(
+		`SELECT id FROM ${ARTICLES_TABLE} WHERE scraped_date >= $1 AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL)`,
+		[since],
+	);
+
+	const userFileResult = await db.query<{ id: string }>(
+		`SELECT id FROM ${USER_FILES_TABLE}
+		 WHERE created_at >= $1
+		   AND (
+		     (resource_kind = 'url' AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL))
+		     OR (
+		       resource_kind = 'blob'
+		       AND file_type = 'application/pdf'
+		       AND (metadata->'extraction'->>'status') IS DISTINCT FROM 'failed'
+		       AND (extracted_text IS NULL OR embedding IS NULL)
+		     )
+		   )`,
+		[since],
+	);
+
+	return {
+		articleIds: [...new Set(articleResult.rows.map((row) => row.id))],
+		userFileIds: [...new Set(userFileResult.rows.map((row) => row.id))],
+	};
+}
+
 // ─────────────────────────────────────────────────────────────
 // YouTube transcript upsert
 // ─────────────────────────────────────────────────────────────

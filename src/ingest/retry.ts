@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, USER_FILES_TABLE, withDbClient } from '@shared/db';
+import { getIncompleteWorkflowTargetIds, USER_FILES_TABLE, withDbClient } from '@shared/db';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 
@@ -11,31 +11,8 @@ const RETRY_BATCH_SIZE = 20;
 export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RETRY', msg: 'start' });
 	await withDbClient(env, async (db) => {
-		const table = ARTICLES_TABLE;
 		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-
-		const articleResult = await db.query(
-			`SELECT id FROM ${table} WHERE scraped_date >= $1 AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL)`,
-			[since],
-		);
-
-		const userFileResult = await db.query(
-			`SELECT id FROM ${USER_FILES_TABLE}
-			 WHERE created_at >= $1
-			   AND (
-			     (resource_kind = 'url' AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL))
-			     OR (
-			       resource_kind = 'blob'
-			       AND file_type = 'application/pdf'
-			       AND (metadata->'extraction'->>'status') IS DISTINCT FROM 'failed'
-			       AND (extracted_text IS NULL OR embedding IS NULL)
-			     )
-			   )`,
-			[since],
-		);
-
-		const articleIds = [...new Set((articleResult.rows as Array<{ id: string }>).map((r) => r.id))];
-		const userFileIds = [...new Set((userFileResult.rows as Array<{ id: string }>).map((r) => r.id))];
+		const { articleIds, userFileIds } = await getIncompleteWorkflowTargetIds(db, since);
 		const total = articleIds.length + userFileIds.length;
 
 		if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
