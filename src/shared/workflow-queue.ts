@@ -9,7 +9,7 @@ import {
 	type YoutubeTranscriptRow,
 } from './db';
 import type { TwitterMedia } from './platform-metadata';
-import { deleteTempObject, putTempText, readTempText } from './r2-temp';
+import { deleteTempObject, putSerializedTempJson, randomTempObjectKey, readTempJson } from './r2-temp';
 import type { Article, Env, Tweet } from './types';
 import { validateImageUrl } from './web';
 
@@ -86,15 +86,14 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 }
 
 async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
-	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
-	await putTempText(env, r2Key, serialized, 'application/json; charset=utf-8');
+	const r2Key = randomTempObjectKey(SOURCE_ARTICLE_DRAFT_PREFIX, 'json');
+	await putSerializedTempJson(env, r2Key, serialized);
 	return { url, r2Key };
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<SourceArticleDraft> {
 	if ('inline' in ref) return ref.inline;
-	const text = await readTempText(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
-	return JSON.parse(text) as SourceArticleDraft;
+	return readTempJson<SourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 }
 
 export function sourceDraftToArticle(draft: SourceArticleDraft): Article {

@@ -7,6 +7,7 @@ type TempObjectGuard = {
 };
 
 const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
+const JSON_TEMP_CONTENT_TYPE = 'application/json; charset=utf-8';
 
 function assertTempObjectKey(key: string, guard: TempObjectGuard): void {
 	if (guard.prefix && !key.startsWith(guard.prefix)) {
@@ -14,10 +15,18 @@ function assertTempObjectKey(key: string, guard: TempObjectGuard): void {
 	}
 }
 
+export function randomTempObjectKey(prefix: string, extension: string): string {
+	return `${prefix}${crypto.randomUUID()}.${extension}`;
+}
+
 export async function putTempText(env: Env, key: string, text: string, contentType: string): Promise<void> {
 	await env.R2.put(key, text, {
 		httpMetadata: { contentType },
 	});
+}
+
+export async function putSerializedTempJson(env: Env, key: string, json: string): Promise<void> {
+	await putTempText(env, key, json, JSON_TEMP_CONTENT_TYPE);
 }
 
 export async function putTempBytes(env: Env, key: string, bytes: Uint8Array, contentType: string): Promise<void> {
@@ -31,6 +40,10 @@ export async function readTempText(env: Env, key: string, guard: TempObjectGuard
 	const obj = await env.R2.get(key);
 	if (!obj) throw new Error(`${guard.label} missing: ${key}`);
 	return obj.text();
+}
+
+export async function readTempJson<T>(env: Env, key: string, guard: TempObjectGuard): Promise<T> {
+	return JSON.parse(await readTempText(env, key, guard)) as T;
 }
 
 export async function readTempBytes(env: Env, key: string, guard: TempObjectGuard): Promise<{ bytes: Uint8Array; contentType?: string }> {
@@ -49,7 +62,7 @@ export async function deleteTempObject(env: Env, key: string, guard: TempObjectG
 }
 
 export async function putScrapeInputTemp(env: Env, bytes: Uint8Array, contentType: string): Promise<{ kind: 'r2'; key: string }> {
-	const key = `${SCRAPE_INPUT_TEMP_PREFIX}${crypto.randomUUID()}.${extensionFromMime(contentType)}`;
+	const key = randomTempObjectKey(SCRAPE_INPUT_TEMP_PREFIX, extensionFromMime(contentType));
 	await putTempBytes(env, key, bytes, contentType);
 	return { kind: 'r2', key };
 }
