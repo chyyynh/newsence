@@ -79,10 +79,15 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 			? { url, inline: normalizedDraft }
 			: await writeSourceArticleDraft(env, url, serialized);
 
-	await env.ARTICLE_QUEUE.send({
-		type: 'workflow_process',
-		target: { kind: 'source', sourceArticle },
-	});
+	try {
+		await env.ARTICLE_QUEUE.send({
+			type: 'workflow_process',
+			target: { kind: 'source', sourceArticle },
+		});
+	} catch (err) {
+		await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'enqueue failed' });
+		throw err;
+	}
 }
 
 async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
@@ -202,14 +207,23 @@ function isReusableSourceWorkflowStatus(status: string): boolean {
 }
 
 async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleRef, workflowId: string): Promise<void> {
+	await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId });
+}
+
+async function cleanupSourceArticleDraft(
+	env: Env,
+	sourceArticle: SourceArticleRef,
+	context: { reason: string; workflowId?: string },
+): Promise<void> {
 	if (!('r2Key' in sourceArticle)) return;
 	try {
 		await deleteSourceArticleDraft(env, sourceArticle);
 	} catch (err) {
 		console.warn({
 			tag: 'ARTICLE-QUEUE',
-			msg: 'Failed to cleanup unused source article draft',
-			workflowId,
+			msg: 'Failed to cleanup source article draft',
+			reason: context.reason,
+			workflowId: context.workflowId,
 			r2Key: sourceArticle.r2Key,
 			error: String(err),
 		});
