@@ -209,11 +209,11 @@ function handleWorkflowStream(instanceId: string, env: Env): Response {
 		try {
 			for (let i = 0; i < 40; i++) {
 				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
-				const { status, error } = await instance.status();
+				const { status, error, output } = await instance.status();
 				const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
 
 				if (status === 'complete') {
-					await writeEvent({ status: 'complete' });
+					await writeEvent({ status: 'complete', output });
 					return;
 				}
 
