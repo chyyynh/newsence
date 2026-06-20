@@ -57,11 +57,11 @@ type WorkflowParams = {
 };
 
 type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
-type SourceDraftReader = () => Promise<SourceArticleDraft>;
 type WorkflowRunContext = {
 	target: WorkflowQueueTarget;
 	table: ProcessableTable;
-	readSourceDraft: SourceDraftReader;
+	readSourceDraft(): Promise<SourceArticleDraft>;
+	readSourceArticle(): Promise<Article>;
 };
 type ArticleShell = Article & { has_content?: boolean };
 type OgImageResult = {
@@ -217,7 +217,28 @@ function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 }
 
 function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): WorkflowRunContext {
-	return { target, table: targetTable(target), readSourceDraft: createSourceDraftReader(env, target) };
+	let draft: Promise<SourceArticleDraft> | undefined;
+	let article: Promise<Article> | undefined;
+
+	const readSourceDraft = () => {
+		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
+		draft ??= readSourceArticleDraft(env, target.sourceArticle).catch((error) => {
+			draft = undefined;
+			article = undefined;
+			throw error;
+		});
+		return draft;
+	};
+
+	return {
+		target,
+		table: targetTable(target),
+		readSourceDraft,
+		readSourceArticle: () => {
+			article ??= readSourceDraft().then(articleFromSourceDraft);
+			return article;
+		},
+	};
 }
 
 function targetLogContext(context: WorkflowRunContext, article: Article): Record<string, string> {
@@ -247,18 +268,6 @@ function articleFromSourceDraft(draft: SourceArticleDraft): Article {
 	};
 }
 
-function createSourceDraftReader(env: Env, target: WorkflowQueueTarget): SourceDraftReader {
-	let cached: Promise<SourceArticleDraft> | undefined;
-	return async () => {
-		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
-		cached ??= readSourceArticleDraft(env, target.sourceArticle).catch((error) => {
-			cached = undefined;
-			throw error;
-		});
-		return cached;
-	};
-}
-
 async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
 	return withDbClient(env, async (db) => {
 		const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [articleId]);
@@ -268,14 +277,14 @@ async function fetchArticle(env: Env, table: ProcessableTable, articleId: string
 }
 
 async function loadTargetArticle(env: Env, context: WorkflowRunContext): Promise<Article> {
-	if (context.target.kind === 'source') return articleFromSourceDraft(await context.readSourceDraft());
+	if (context.target.kind === 'source') return context.readSourceArticle();
 	return fetchArticle(env, context.table, context.target.articleId, articleFieldsFor(context.table));
 }
 
 async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ArticleShell> {
 	const article =
 		context.target.kind === 'source'
-			? articleFromSourceDraft(await context.readSourceDraft())
+			? await context.readSourceArticle()
 			: await fetchArticle(env, context.table, context.target.articleId, articleShellFieldsFor(context.table));
 	return { ...article, content: null };
 }
@@ -489,7 +498,7 @@ async function persistSourceTarget(
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
 	const draft = await context.readSourceDraft();
-	const fullArticle = articleFromSourceDraft(draft);
+	const fullArticle = await context.readSourceArticle();
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, draft.article, fullArticle, result, embedding);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
