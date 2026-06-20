@@ -15,18 +15,9 @@ const INTERNAL_CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
 
-const EMBED_CORS_HEADERS: Record<string, string> = {
-	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type',
-};
-
-const EMBEDDING_MODEL = '@cf/baai/bge-m3';
-const EMBED_MAX_TEXT = 8000;
 const SEARCH_LIMIT_MAX = 500;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/embed': (req, env) => handleEmbed(req, env),
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
@@ -36,7 +27,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 };
 
 const OPTIONS_ROUTES: Record<string, RouteHandler> = {
-	'/embed': (req, env) => handleEmbed(req, env),
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
@@ -51,7 +41,6 @@ const HELP_TEXT =
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
-	'POST /embed                               - Generate embeddings\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
@@ -71,35 +60,6 @@ function health(): Response {
 		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
-}
-
-async function handleEmbed(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: EMBED_CORS_HEADERS });
-
-	const body = await parseJsonBody<{ text?: string; texts?: string[] }>(request, EMBED_CORS_HEADERS);
-	if (body instanceof Response) return body;
-	const input = body.texts || (body.text ? [body.text] : []);
-	if (input.length === 0) {
-		return Response.json({ error: 'No text provided' }, { status: 400, headers: EMBED_CORS_HEADERS });
-	}
-
-	const sanitized = input.map((t) => t.trim().slice(0, EMBED_MAX_TEXT));
-
-	try {
-		const result = (await env.AI.run(EMBEDDING_MODEL as Parameters<Ai['run']>[0], { text: sanitized })) as {
-			data: number[][];
-		};
-		return Response.json(
-			{ embeddings: result.data, model: EMBEDDING_MODEL, dimensions: 1024 },
-			{ headers: { ...EMBED_CORS_HEADERS, 'Content-Type': 'application/json' } },
-		);
-	} catch (error) {
-		console.error({ tag: 'EMBED', msg: 'Generation failed', error: String(error) });
-		return Response.json(
-			{ error: 'Embedding generation failed', details: error instanceof Error ? error.message : 'Unknown error' },
-			{ status: 500, headers: EMBED_CORS_HEADERS },
-		);
-	}
 }
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {

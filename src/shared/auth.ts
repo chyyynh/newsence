@@ -17,7 +17,7 @@ export async function isInternalRequestAuthorized(request: Request, env: Env): P
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
 		// Fail closed: a missing server secret must never make the protected
-		// surface (/ingest, /embed, /search, /media/*) world-writable. The token is
+		// surface (/ingest, /search, /media/*) world-writable. The token is
 		// set in all deployed envs; an empty value is a misconfiguration, so we
 		// reject and log loudly rather than silently opening the door.
 		console.error({ tag: 'AUTH', msg: 'CORE_WORKER_INTERNAL_TOKEN is not set — rejecting internal-token request' });

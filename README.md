@@ -146,10 +146,6 @@ curl -X POST https://your-worker.workers.dev/ingest \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
   -d '{"url": "https://example.com/article", "userId": "user-id"}'
 
-# Generate embeddings
-curl -X POST https://your-worker.workers.dev/embed \
-  -H "Content-Type: application/json" \
-  -d '{"text": "search query"}'
 ```
 
 <details>
@@ -211,7 +207,7 @@ src/
 │   │   └── web/          # shared scraper (Readability + Cheerio + OG extraction)
 │   ├── workflows/        # Queue consumer, Workflow class, and workflow steps
 │   ├── domain/           # AI processor registry, content cleanup, entity sync
-│   ├── handlers/         # ingest / embed / workflow-status HTTP handlers
+│   ├── handlers/         # ingest / scrape HTTP handlers
 │   ├── monitors/         # cross-platform scheduled maintenance
 │   └── urls.ts · blob.ts · image-url.ts   # ingestion entrypoints (URL / blob / image)
 ├── chat/                 # ── AI chat surface ── tools, billing, editor, workspace, sessions

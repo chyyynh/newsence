@@ -146,10 +146,6 @@ curl -X POST https://your-worker.workers.dev/ingest \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
   -d '{"url": "https://example.com/article", "userId": "user-id"}'
 
-# 生成 Embedding
-curl -X POST https://your-worker.workers.dev/embed \
-  -H "Content-Type: application/json" \
-  -d '{"text": "搜尋關鍵字"}'
 ```
 
 <details>
@@ -211,7 +207,7 @@ src/
 │   │   └── web/          # 共用爬蟲（Readability + Cheerio + OG 擷取）
 │   ├── workflows/        # Queue consumer、Workflow class、workflow steps
 │   ├── domain/           # AI processor registry、內容清理、實體同步
-│   ├── handlers/         # ingest / embed / workflow-status HTTP handlers
+│   ├── handlers/         # ingest / scrape HTTP handlers
 │   ├── monitors/         # 跨平台排程維護
 │   └── urls.ts · blob.ts · image-url.ts   # 入庫進入點（URL / blob / 圖片）
 ├── chat/                 # ── AI chat 介面 ── tools、billing、editor、workspace、sessions
