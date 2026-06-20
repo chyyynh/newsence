@@ -1,4 +1,4 @@
-import { listSourceFeedsByType, markSourceFeedsScrapedByIds, withDbClient } from '@shared/db';
+import { listSourceFeedsByType, markSourceFeedsScrapedByIds } from '@shared/db';
 import type { Env, ExecutionContext, RSSFeed, Tweet } from '@shared/types';
 import { fetchJsonWithTimeout } from '@shared/web';
 import { saveTweetGroups } from './persistence';
@@ -152,7 +152,7 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY || '', batch, sinceTime);
 		if (!completed) allCompleted = false;
 		const groups = groupTweetsIntoThreads(tweets);
-		processed += await withDbClient(env, (db) => saveTweetGroups(db, env, groups));
+		processed += await saveTweetGroups(env, groups);
 	}
 
 	// Advance scraped_at only if every batch completed — partial fetches would

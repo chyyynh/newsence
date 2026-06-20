@@ -1,4 +1,4 @@
-import { type DbClient, getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@shared/db';
+import { getExistingArticlesByUrl, updateArticleTextForReprocessing, withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
@@ -18,9 +18,15 @@ import {
 } from './scraper';
 import { upsertTwitterSourceEvent } from './source-events';
 
-async function findArticleByUrl(db: DbClient, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
-	const [article] = await getExistingArticlesByUrl(db, [url]);
+type TwitterSourceEventInput = Parameters<typeof upsertTwitterSourceEvent>[2];
+
+async function findArticleByUrl(env: Env, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
+	const [article] = await withDbClient(env, (db) => getExistingArticlesByUrl(db, [url]));
 	return article ? { id: article.id, summary_cn: article.summary_cn } : null;
+}
+
+async function recordTwitterSourceEvent(env: Env, tweet: Tweet, event: TwitterSourceEventInput): Promise<void> {
+	await withDbClient(env, (db) => upsertTwitterSourceEvent(db, tweet, event));
 }
 
 async function enqueueMissingTwitterTranslation(env: Env, article: { id: string; summary_cn: string | null }): Promise<void> {
@@ -29,7 +35,6 @@ async function enqueueMissingTwitterTranslation(env: Env, article: { id: string;
 }
 
 async function enqueueTwitterArticle(
-	db: DbClient,
 	env: Env,
 	data: {
 		url: string;
@@ -44,7 +49,7 @@ async function enqueueTwitterArticle(
 		sourceEvent?: SourceArticleDraft['twitterSourceEvent'];
 	},
 ): Promise<boolean> {
-	if (await findArticleByUrl(db, data.url)) return false;
+	if (await findArticleByUrl(env, data.url)) return false;
 	await enqueueSourceArticleProcess(env, {
 		article: {
 			url: data.url,
@@ -63,7 +68,7 @@ async function enqueueTwitterArticle(
 	return true;
 }
 
-async function handleTwitterArticle(tweet: Tweet, db: DbClient, env: Env, expandedUrls: string[]): Promise<boolean> {
+async function handleTwitterArticle(tweet: Tweet, env: Env, expandedUrls: string[]): Promise<boolean> {
 	const articleUrl = findTwitterArticleUrl(expandedUrls);
 	if (!articleUrl) return false;
 
@@ -79,7 +84,7 @@ async function handleTwitterArticle(tweet: Tweet, db: DbClient, env: Env, expand
 
 	const meta = scraped.metadata;
 	const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
-	const queued = await enqueueTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(env, {
 		url: normalizeUrl(tweet.url),
 		title: scraped.title,
 		source: tweet.author?.name || 'Twitter',
@@ -113,13 +118,7 @@ type FollowLinkResult =
 	| { status: 'handled' }
 	| { status: 'skipped'; resolvedUrl?: string; scraped?: ScrapedContent | null };
 
-async function handleFollowLink(
-	tweet: Tweet,
-	textWithoutUrls: string,
-	externalUrl: string,
-	db: DbClient,
-	env: Env,
-): Promise<FollowLinkResult> {
+async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalUrl: string, env: Env): Promise<FollowLinkResult> {
 	const resolvedUrl = await resolveUrl(externalUrl).catch((err) => {
 		console.warn({ tag: 'TWITTER', msg: 'Failed to resolve shared link', url: externalUrl, error: String(err) });
 		return null;
@@ -130,9 +129,9 @@ async function handleFollowLink(
 		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
 		return { status: 'skipped', resolvedUrl };
 	}
-	const existingArticle = await findArticleByUrl(db, resolvedUrl);
+	const existingArticle = await findArticleByUrl(env, resolvedUrl);
 	if (existingArticle) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls });
+		await recordTwitterSourceEvent(env, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls });
 		await enqueueMissingTwitterTranslation(env, existingArticle);
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 		return { status: 'handled' };
@@ -149,7 +148,7 @@ async function handleFollowLink(
 		return { status: 'skipped', resolvedUrl, scraped };
 	}
 
-	const queued = await enqueueTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(env, {
 		url: resolvedUrl,
 		title: scraped.title || 'Shared Article',
 		source: tweet.author?.name || 'Twitter',
@@ -173,15 +172,15 @@ async function handleFollowLink(
 	return queued ? { status: 'inserted' } : { status: 'skipped', resolvedUrl, scraped };
 }
 
-async function saveTweet(tweet: Tweet, db: DbClient, env: Env): Promise<boolean> {
+async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
 	const expandedUrls = extractExpandedUrls(tweet);
 	const externalUrl = findExternalUrl(expandedUrls);
 	const textWithoutUrls = stripTweetUrls(tweet.text);
 
-	const existingTweetArticle = await findArticleByUrl(db, tweetUrl);
+	const existingTweetArticle = await findArticleByUrl(env, tweetUrl);
 	if (existingTweetArticle) {
-		await upsertTwitterSourceEvent(db, tweet, {
+		await recordTwitterSourceEvent(env, tweet, {
 			articleId: existingTweetArticle.id,
 			eventType: externalUrl ? 'share' : 'tweet',
 			text: textWithoutUrls,
@@ -190,11 +189,11 @@ async function saveTweet(tweet: Tweet, db: DbClient, env: Env): Promise<boolean>
 		return false;
 	}
 
-	if (await handleTwitterArticle(tweet, db, env, expandedUrls)) return true;
+	if (await handleTwitterArticle(tweet, env, expandedUrls)) return true;
 
 	let linkFallback: Extract<FollowLinkResult, { status: 'skipped' }> | null = null;
 	if (externalUrl) {
-		const linkResult = await handleFollowLink(tweet, textWithoutUrls, externalUrl, db, env);
+		const linkResult = await handleFollowLink(tweet, textWithoutUrls, externalUrl, env);
 		if (linkResult.status === 'inserted') return true;
 		if (linkResult.status === 'handled') return false;
 		linkFallback = linkResult;
@@ -217,7 +216,7 @@ async function saveTweet(tweet: Tweet, db: DbClient, env: Env): Promise<boolean>
 	);
 	const media = metadata.data.media ?? [];
 
-	const queued = await enqueueTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(env, {
 		url: tweetUrl,
 		title: buildTweetTitle(tweet),
 		source: tweet.author?.name || 'Twitter',
@@ -236,12 +235,12 @@ async function saveTweet(tweet: Tweet, db: DbClient, env: Env): Promise<boolean>
 	return queued;
 }
 
-async function saveThread(tweets: Tweet[], db: DbClient, env: Env): Promise<boolean> {
+async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
 	const sorted = tweets.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 	const first = sorted[0];
 	const firstUrl = normalizeUrl(first.url);
 
-	const existing = await findArticleByUrl(db, firstUrl);
+	const existing = await findArticleByUrl(env, firstUrl);
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
 	for (const t of sorted.slice(0, 10)) {
@@ -258,20 +257,22 @@ async function saveThread(tweets: Tweet[], db: DbClient, env: Env): Promise<bool
 
 	if (existing) {
 		const existingId = existing.id;
-		await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
-		await enqueueArticleProcess(env, existingId);
-		await upsertTwitterSourceEvent(db, first, {
-			articleId: existingId,
-			eventType: 'thread',
-			text: combinedText,
-			media: allMedia,
-			raw: { tweets: sorted },
+		await withDbClient(env, async (db) => {
+			await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
+			await upsertTwitterSourceEvent(db, first, {
+				articleId: existingId,
+				eventType: 'thread',
+				text: combinedText,
+				media: allMedia,
+				raw: { tweets: sorted },
+			});
 		});
+		await enqueueArticleProcess(env, existingId);
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
 
-	const queued = await enqueueTwitterArticle(db, env, {
+	const queued = await enqueueTwitterArticle(env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
@@ -290,14 +291,14 @@ async function saveThread(tweets: Tweet[], db: DbClient, env: Env): Promise<bool
 	return queued;
 }
 
-export async function saveTweetGroups(db: DbClient, env: Env, groups: Tweet[][]): Promise<number> {
+export async function saveTweetGroups(env: Env, groups: Tweet[][]): Promise<number> {
 	let count = 0;
 	for (const group of groups) {
 		try {
 			if (group.length >= 2) {
-				if (await saveThread(group, db, env)) count++;
+				if (await saveThread(group, env)) count++;
 			} else {
-				if (await saveTweet(group[0], db, env)) count++;
+				if (await saveTweet(group[0], env)) count++;
 			}
 		} catch (err) {
 			console.error({ tag: 'TWITTER', msg: 'Save failed', url: group[0]?.url, error: String(err) });
