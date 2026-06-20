@@ -7,13 +7,10 @@ import {
 	loadProcessableArticleShell,
 	type ProcessableArticleShell,
 	type ProcessableTable,
-	recordUserFileWorkflowComplete,
-	recordUserFileWorkflowFailed,
 	saveYouTubeHighlights,
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
-	withDbClient,
 	withDbTransaction,
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
@@ -30,6 +27,7 @@ import {
 } from '@shared/source-draft';
 import type { Article, Env } from '@shared/types';
 import { isExtractablePdfFile } from '@shared/upload';
+import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment, validateImageUrl } from '@shared/web';
 import type { WorkflowQueueTarget } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, buildProcessorUpdatePayload, type ProcessorResult, runArticleProcessor } from '../domain/processors';
@@ -445,7 +443,7 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 async function recordWorkflowFailure(env: Env, context: WorkflowRunContext, error: unknown): Promise<void> {
 	if (context.target.kind !== 'row' || context.table !== USER_FILES_TABLE) return;
 	try {
-		await withDbClient(env, (db) => recordUserFileWorkflowFailed(db, context.target.articleId, String(error)));
+		await recordUserFileWorkflowFailed(env, context.target.articleId, String(error));
 	} catch (metadataError) {
 		console.warn({
 			tag: 'WORKFLOW',

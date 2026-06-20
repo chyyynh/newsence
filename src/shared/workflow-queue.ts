@@ -1,11 +1,4 @@
-import {
-	getUserFileWorkflowInstanceId,
-	type ProcessableTable,
-	recordUserFileWorkflowInstanceId,
-	resolveProcessableTable,
-	USER_FILES_TABLE,
-	withDbClient,
-} from './db';
+import { type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './db';
 import {
 	createSourceArticleDraftRef,
 	deleteSourceArticleDraft,
@@ -15,6 +8,7 @@ import {
 	sourceArticleDraftUrl,
 } from './source-draft';
 import type { Env } from './types';
+import { getUserFileWorkflowInstanceId, recordUserFileWorkflowInstanceId } from './user-file-workflow-state';
 
 export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
@@ -189,7 +183,7 @@ async function ensureArticleWorkflow(
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
 	try {
-		const storedInstanceId = await withDbClient(env, (db) => getUserFileWorkflowInstanceId(db, userFileId));
+		const storedInstanceId = await getUserFileWorkflowInstanceId(env, userFileId);
 		if (storedInstanceId) {
 			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
@@ -198,7 +192,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 		const baseId = userFileWorkflowId(userFileId);
 		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
 		const instanceId = await createUserFileWorkflowInstance(env, workflowId, userFileId);
-		await withDbClient(env, (db) => recordUserFileWorkflowInstanceId(db, userFileId, instanceId));
+		await recordUserFileWorkflowInstanceId(env, userFileId, instanceId);
 		return instanceId;
 	} catch (err) {
 		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
