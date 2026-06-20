@@ -62,10 +62,6 @@ type OgImagePatch = {
 	ogImageUrl: string | null;
 	ogImageDimensions: OgImageDimensions | null;
 };
-type ArticleAnalysisStepResult = {
-	processorResult: ProcessorResult;
-	embedding: number[] | null;
-};
 type SourceFinalInsert = {
 	article: SourceArticleDraft['article'];
 	updatePayload: Record<string, unknown>;
@@ -233,16 +229,24 @@ async function withPdfTextTemp(env: Env, article: Article, pdfTextTemp: PdfTextT
 	return { ...article, content: await readPdfTextTemp(env, pdfTextTemp.textStorageKey) };
 }
 
-async function analyzeArticleAndGenerateEmbedding(
+async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
+	return withPdfTextTemp(env, await loadTargetArticle(env, context), pdfTextTemp);
+}
+
+async function analyzeArticle(env: Env, context: WorkflowRunContext, sourceType: string, pdfTextTemp: PdfTextTempResult | null) {
+	const article = await loadFullTargetArticle(env, context, pdfTextTemp);
+	return runArticleProcessor(article, sourceType, { env, table: context.table });
+}
+
+async function generateWorkflowEmbedding(
 	env: Env,
-	article: Article,
-	sourceType: string,
-	table: ProcessableTable,
-): Promise<ArticleAnalysisStepResult> {
-	const processorResult = await runArticleProcessor(article, sourceType, { env, table });
+	context: WorkflowRunContext,
+	processorResult: ProcessorResult,
+	pdfTextTemp: PdfTextTempResult | null,
+): Promise<number[] | null> {
+	const article = await loadFullTargetArticle(env, context, pdfTextTemp);
 	const text = buildEmbeddingTextForArticle(article, processorResult);
-	const embedding = text && env.AI ? await generateArticleEmbedding(text, env.AI) : null;
-	return { processorResult, embedding };
+	return text && env.AI ? generateArticleEmbedding(text, env.AI) : null;
 }
 
 async function stagePdfExtraction(
@@ -494,14 +498,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 		const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
 
-		const { processorResult, embedding } = (await step.do(
+		const processorResult = (await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-			async () => {
-				const fullArticle = await withPdfTextTemp(this.env, await loadTargetArticle(this.env, context), pdfTextTemp);
-				return analyzeArticleAndGenerateEmbedding(this.env, fullArticle, sourceType, context.table);
-			},
-		)) as ArticleAnalysisStepResult;
+			() => analyzeArticle(this.env, context, sourceType, pdfTextTemp),
+		)) as ProcessorResult;
+
+		const embedding = (await step.do(
+			'generate-embedding',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			() => generateWorkflowEmbedding(this.env, context, processorResult, pdfTextTemp),
+		)) as number[] | null;
 
 		const finalProcessorResult = mergeProcessorResult(
 			processorResult,
