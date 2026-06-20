@@ -5,7 +5,6 @@ import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
-import { ingestUrls as ingestUrlsForUser } from '@ingest/urls';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@shared/types';
@@ -29,22 +28,10 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 		await handleArticleQueue(batch, this.env);
 	}
 
-	// ── Service-binding RPC for the chat worker (split Phase 4) ──────────────
-	// Thin delegates to the domain facades — the same in-process calls the chat
-	// tools made before chat moved to its own worker. The chat worker binds this
-	// worker as `CORE` and calls these as `env.CORE.ingestUrls(...)`.
-
-	/** Crawl + save external URLs to a user's library; returns created user_file IDs. */
-	async ingestUrls(urls: string[], userId: string): Promise<string[]> {
-		if (urls.length === 0) return [];
-		try {
-			const outcome = await ingestUrlsForUser(this.env, { urls, userId });
-			return outcome.ok ? outcome.results.map((r) => r.userFileId).filter((id): id is string => !!id) : [];
-		} catch (err) {
-			console.error({ tag: 'CORE', msg: 'ingestUrls failed', error: String(err) });
-			return [];
-		}
-	}
+	// ── Service-binding RPC for the chat worker ──────────────────────────────
+	// Thin delegates to core-owned domain facades. URL add-resource ingestion is
+	// intentionally handled by the frontend document endpoint because citation
+	// writes and workspace ownership live there.
 
 	/** Persist a generated image into the canonical user_file blob store. */
 	async storeGeneratedImage(input: { userId: string; bytes: Uint8Array; contentType: string; title: string }): Promise<{
