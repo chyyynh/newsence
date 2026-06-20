@@ -70,8 +70,8 @@ async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env: Env): 
 
 	for (const message of batch.messages) {
 		try {
-			const { count, created, existing } = await ensureWorkflowsForQueueMessage(env, message.id, message.body);
-			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count, created, existing });
+			const { count, created, existing, skipped } = await ensureWorkflowsForQueueMessage(env, message.id, message.body);
+			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count, created, existing, skipped });
 			message.ack();
 		} catch (err) {
 			console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling message, retrying', error: String(err) });

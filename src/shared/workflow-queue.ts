@@ -1,4 +1,4 @@
-import { type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './db';
+import { ARTICLES_TABLE, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './db';
 import {
 	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
@@ -14,6 +14,7 @@ export type WorkflowQueueTarget =
 	| { kind: 'source'; sourceArticle: SourceArticleDraftRef };
 
 export type QueueMessage = { type: 'workflow_process'; target: WorkflowQueueTarget };
+type QueueResult = { count: number; created: number; existing: number; skipped: number };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
@@ -58,13 +59,42 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 	}
 }
 
-export async function ensureWorkflowsForQueueMessage(
-	env: Env,
-	messageId: string,
-	body: QueueMessage,
-): Promise<{ count: number; created: number; existing: number }> {
-	const result = await ensureWorkflowForQueueTarget(env, messageId, body.target);
-	return { count: 1, created: result.created ? 1 : 0, existing: result.created ? 0 : 1 };
+export async function ensureWorkflowsForQueueMessage(env: Env, messageId: string, body: unknown): Promise<QueueResult> {
+	const message = parseQueueMessage(body);
+	if (!message) {
+		console.warn({ tag: 'ARTICLE-QUEUE', msg: 'Skipping invalid queue message', messageId });
+		return { count: 0, created: 0, existing: 0, skipped: 1 };
+	}
+
+	const result = await ensureWorkflowForQueueTarget(env, messageId, message.target);
+	return { count: 1, created: result.created ? 1 : 0, existing: result.created ? 0 : 1, skipped: 0 };
+}
+
+function parseQueueMessage(body: unknown): QueueMessage | null {
+	if (!isRecord(body) || body.type !== 'workflow_process' || !isWorkflowQueueTarget(body.target)) return null;
+	return body;
+}
+
+function isWorkflowQueueTarget(target: unknown): target is WorkflowQueueTarget {
+	if (!isRecord(target)) return false;
+	if (target.kind === 'row') {
+		return (
+			typeof target.articleId === 'string' &&
+			target.articleId.length > 0 &&
+			(target.targetTable === undefined || target.targetTable === ARTICLES_TABLE || target.targetTable === USER_FILES_TABLE)
+		);
+	}
+
+	return target.kind === 'source' && isSourceArticleDraftRef(target.sourceArticle);
+}
+
+function isSourceArticleDraftRef(ref: unknown): ref is SourceArticleDraftRef {
+	if (!isRecord(ref) || typeof ref.url !== 'string' || ref.url.length === 0) return false;
+	return (isRecord(ref.inline) && isRecord(ref.inline.article)) || typeof ref.r2Key === 'string';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 async function ensureWorkflowForQueueTarget(
