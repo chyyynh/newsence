@@ -22,6 +22,7 @@ import {
 	deleteSourceArticleDraft,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
+	sourceArticleDraftR2Key,
 	sourceDraftToArticle,
 	type WorkflowQueueTarget,
 } from '@shared/workflow-queue';
@@ -454,7 +455,8 @@ async function cleanupTargetTemps(
 	step: WorkflowStep,
 ): Promise<void> {
 	const { target } = context;
-	if (!pdfTextTemp?.textStorageKey && !(target.kind === 'source' && 'r2Key' in target.sourceArticle)) return;
+	const sourceDraftKey = target.kind === 'source' ? sourceArticleDraftR2Key(target.sourceArticle) : null;
+	if (!pdfTextTemp?.textStorageKey && !sourceDraftKey) return;
 
 	await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
 		cleanupWorkflowTempObjects(env, context, pdfTextTemp),
@@ -476,8 +478,9 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 		await deleteTemp('pdf_text', pdfTextTemp.textStorageKey, () => deletePdfTextTemp(env, pdfTextTemp.textStorageKey!));
 	}
 
-	if (target.kind === 'source' && 'r2Key' in target.sourceArticle) {
-		await deleteTemp('source_draft', target.sourceArticle.r2Key, () => deleteSourceArticleDraft(env, target.sourceArticle));
+	if (target.kind === 'source') {
+		const sourceDraftKey = sourceArticleDraftR2Key(target.sourceArticle);
+		if (sourceDraftKey) await deleteTemp('source_draft', sourceDraftKey, () => deleteSourceArticleDraft(env, target.sourceArticle));
 	}
 
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });

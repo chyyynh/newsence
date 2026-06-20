@@ -26,11 +26,11 @@ export interface SourceArticleDraft {
 	};
 }
 
-export type SourceArticleRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
+export type SourceArticleDraftRef = { url: string; inline: SourceArticleDraft } | { url: string; r2Key: string };
 
 export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
-	| { kind: 'source'; sourceArticle: SourceArticleRef };
+	| { kind: 'source'; sourceArticle: SourceArticleDraftRef };
 
 export type QueueMessage = { type: 'workflow_process'; target: WorkflowQueueTarget };
 
@@ -66,13 +66,7 @@ function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): W
 }
 
 export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticleDraft): Promise<void> {
-	const normalizedDraft: SourceArticleDraft = { ...draft };
-	const serialized = JSON.stringify(normalizedDraft);
-	const url = draft.article.url;
-	const sourceArticle: SourceArticleRef =
-		new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
-			? { url, inline: normalizedDraft }
-			: await writeSourceArticleDraft(env, url, serialized);
+	const sourceArticle = await createSourceArticleDraftRef(env, draft);
 
 	try {
 		await env.ARTICLE_QUEUE.send({
@@ -80,17 +74,34 @@ export async function enqueueSourceArticleProcess(env: Env, draft: SourceArticle
 			target: { kind: 'source', sourceArticle },
 		});
 	} catch (err) {
-		await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'enqueue failed' });
+		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'enqueue failed' });
 		throw err;
 	}
 }
 
-async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleRef> {
+async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
+	const normalizedDraft: SourceArticleDraft = { ...draft };
+	const serialized = JSON.stringify(normalizedDraft);
+	const url = draft.article.url;
+	return new TextEncoder().encode(serialized).byteLength <= MAX_INLINE_SOURCE_ARTICLE_BYTES
+		? { url, inline: normalizedDraft }
+		: writeSourceArticleDraft(env, url, serialized);
+}
+
+async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleDraftRef> {
 	const r2Key = await putRandomSerializedTempJson(env, SOURCE_ARTICLE_DRAFT_PREFIX, serialized);
 	return { url, r2Key };
 }
 
-export async function readSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<SourceArticleDraft> {
+export function sourceArticleDraftUrl(ref: SourceArticleDraftRef): string {
+	return ref.url;
+}
+
+export function sourceArticleDraftR2Key(ref: SourceArticleDraftRef): string | null {
+	return 'r2Key' in ref ? ref.r2Key : null;
+}
+
+export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
 	if ('inline' in ref) return ref.inline;
 	return readTempJson<SourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 }
@@ -116,9 +127,10 @@ export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
 	};
 }
 
-export async function deleteSourceArticleDraft(env: Env, ref: SourceArticleRef): Promise<void> {
-	if (!('r2Key' in ref)) return;
-	await deleteTempObject(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
+export async function deleteSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<void> {
+	const r2Key = sourceArticleDraftR2Key(ref);
+	if (!r2Key) return;
+	await deleteTempObject(env, r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
 }
 
 export async function ensureWorkflowsForQueueMessage(
@@ -136,7 +148,7 @@ async function ensureWorkflowForQueueTarget(
 	target: WorkflowQueueTarget,
 ): Promise<{ id: string; created: boolean }> {
 	if (target.kind === 'source') {
-		const workflowId = await sourceArticleWorkflowId(target.sourceArticle.url);
+		const workflowId = await sourceArticleWorkflowId(sourceArticleDraftUrl(target.sourceArticle));
 		const result = await ensureSourceArticleWorkflow(env, workflowId, messageId, target.sourceArticle);
 		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, target.sourceArticle, result.id);
 		return { id: result.id, created: result.created };
@@ -169,7 +181,7 @@ async function ensureSourceArticleWorkflow(
 	env: Env,
 	workflowId: string,
 	messageId: string,
-	sourceArticle: SourceArticleRef,
+	sourceArticle: SourceArticleDraftRef,
 ): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
 	const existing = await getMonitorWorkflowStatus(env, workflowId);
 	if (isReusableSourceWorkflowStatus(existing.status)) return { id: existing.id, created: false, sourceRefUsed: false };
@@ -200,16 +212,17 @@ function isReusableSourceWorkflowStatus(status: string): boolean {
 	return status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(status);
 }
 
-async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleRef, workflowId: string): Promise<void> {
-	await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId });
+async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleDraftRef, workflowId: string): Promise<void> {
+	await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow already exists', workflowId });
 }
 
-async function cleanupSourceArticleDraft(
+async function cleanupSourceArticleDraftRef(
 	env: Env,
-	sourceArticle: SourceArticleRef,
+	sourceArticle: SourceArticleDraftRef,
 	context: { reason: string; workflowId?: string },
 ): Promise<void> {
-	if (!('r2Key' in sourceArticle)) return;
+	const r2Key = sourceArticleDraftR2Key(sourceArticle);
+	if (!r2Key) return;
 	try {
 		await deleteSourceArticleDraft(env, sourceArticle);
 	} catch (err) {
@@ -218,7 +231,7 @@ async function cleanupSourceArticleDraft(
 			msg: 'Failed to cleanup source article draft',
 			reason: context.reason,
 			workflowId: context.workflowId,
-			r2Key: sourceArticle.r2Key,
+			r2Key,
 			error: String(err),
 		});
 	}
