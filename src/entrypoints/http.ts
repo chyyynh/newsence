@@ -203,12 +203,11 @@ function handleWorkflowStream(instanceId: string, env: Env): Response {
 	const writer = writable.getWriter();
 	const encoder = new TextEncoder();
 	const writeEvent = (data: object) => writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 	(async () => {
 		try {
 			for (let i = 0; i < 40; i++) {
-				await new Promise((r) => setTimeout(r, 3000));
-
 				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
 				const { status, error } = await instance.status();
 				const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
@@ -220,7 +219,9 @@ function handleWorkflowStream(instanceId: string, env: Env): Response {
 
 				await writeEvent({ status, error });
 				if (isTerminal) return;
+				await sleep(3000);
 			}
+			await writeEvent({ status: 'timeout' });
 		} catch (err) {
 			await writeEvent({ status: 'error', error: String(err) });
 		} finally {
