@@ -130,5 +130,5 @@ export async function handleBackfillOgDims(request: Request, env: Env): Promise<
 	}
 
 	console.info({ tag: 'BACKFILL_OG_DIMS', msg: 'done', ...summary });
-	return Response.json({ success: true, result: summary });
+	return Response.json({ success: true, data: summary });
 }

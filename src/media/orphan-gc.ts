@@ -104,5 +104,5 @@ export async function handleOrphanGc(request: Request, env: Env): Promise<Respon
 	}
 
 	console.info({ tag: 'ORPHAN_GC', msg: 'done', ...summary });
-	return Response.json({ success: true, result: summary });
+	return Response.json({ success: true, data: summary });
 }

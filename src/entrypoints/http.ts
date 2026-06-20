@@ -59,8 +59,8 @@ const HELP_TEXT =
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
-	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162)\n' +
-	'POST /media/backfill-og-dims?cursor=:id   - Measure + store OG image dims for articles missing them (re-run with nextCursor)\n' +
+	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162) -> {success,data}\n' +
+	'POST /media/backfill-og-dims?cursor=:id   - Measure + store OG image dims for articles missing them -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
