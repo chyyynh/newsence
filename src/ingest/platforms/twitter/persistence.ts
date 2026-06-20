@@ -1,4 +1,4 @@
-import { ARTICLES_TABLE, type DbClient, getExistingArticlesByUrl } from '@shared/db';
+import { type DbClient, getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import type { Env, Tweet } from '@shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@shared/web';
@@ -241,7 +241,7 @@ async function saveThread(tweets: Tweet[], db: DbClient, env: Env): Promise<bool
 	const first = sorted[0];
 	const firstUrl = normalizeUrl(first.url);
 
-	const existing = await db.query(`SELECT id, content FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [firstUrl]);
+	const existing = await findArticleByUrl(db, firstUrl);
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
 	for (const t of sorted.slice(0, 10)) {
@@ -256,12 +256,9 @@ async function saveThread(tweets: Tweet[], db: DbClient, env: Env): Promise<bool
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
 	const metadata = buildTweetPlatformMetadata(first, { media: allMedia, quotedTweet });
 
-	if (existing.rows.length > 0) {
-		const existingId = existing.rows[0].id;
-		await db.query(
-			`UPDATE ${ARTICLES_TABLE} SET summary = $1, content = $2, platform_metadata = $3, summary_cn = NULL, content_cn = NULL, title_cn = NULL, embedding = NULL WHERE id = $4`,
-			[combinedText, combinedText, JSON.stringify(metadata), existingId],
-		);
+	if (existing) {
+		const existingId = existing.id;
+		await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
 		await enqueueArticleProcess(env, existingId);
 		await upsertTwitterSourceEvent(db, first, {
 			articleId: existingId,

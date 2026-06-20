@@ -491,6 +491,31 @@ export async function updateArticleSourceByUrl(db: DbClient, update: ArticleSour
 	await db.query(`UPDATE ${ARTICLES_TABLE} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
 }
 
+export type ArticleReprocessingTextUpdate = {
+	summary: string;
+	content: string;
+	platformMetadata: unknown;
+};
+
+export async function updateArticleTextForReprocessing(
+	db: DbClient,
+	articleId: string,
+	update: ArticleReprocessingTextUpdate,
+): Promise<void> {
+	await db.query(
+		`UPDATE ${ARTICLES_TABLE}
+		 SET summary = $1,
+		     content = $2,
+		     platform_metadata = $3,
+		     summary_cn = NULL,
+		     content_cn = NULL,
+		     title_cn = NULL,
+		     embedding = NULL
+		 WHERE id = $4`,
+		[update.summary, update.content, JSON.stringify(update.platformMetadata), articleId],
+	);
+}
+
 /**
  * Return the set of URLs (normalized) that already exist in `table`.
  * Batches the IN clause at `batchSize` to stay within Postgres parameter limits.
