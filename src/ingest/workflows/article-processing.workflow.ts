@@ -415,17 +415,17 @@ async function persistRowTarget(
 	pdfTextTemp: PdfTextTempResult | null,
 	youtubeHighlights: YouTubeHighlightsUpdate | null,
 ): Promise<string> {
-	return withDbTransaction(env, 'row workflow', async (db) => {
-		const extractedPdfText = pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, pdfTextTemp.textStorageKey) : null;
-		const finalResult: ProcessorResult = {
-			...result,
-			updateData: {
-				...result.updateData,
-				...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
-			},
-		};
+	const extractedPdfText = pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, pdfTextTemp.textStorageKey) : null;
+	const finalResult: ProcessorResult = {
+		...result,
+		updateData: {
+			...result.updateData,
+			...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
+		},
+	};
+	const updatePayload = buildProcessorUpdatePayload(article, finalResult, embedding, extractionMetadata(pdfTextTemp));
 
-		const updatePayload = buildProcessorUpdatePayload(article, finalResult, embedding, extractionMetadata(pdfTextTemp));
+	return withDbTransaction(env, 'row workflow', async (db) => {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
