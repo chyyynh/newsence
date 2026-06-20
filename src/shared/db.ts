@@ -225,6 +225,125 @@ export async function recordUserFileWorkflowInstanceId(db: DbClient, userFileId:
 	]);
 }
 
+export type ProcessedArticleUpdate = Record<string, unknown>;
+
+// `user_files` carries the same editorial fields as `articles` but with a few
+// different column names (content/extracted_text, url/source_url, etc.).
+const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
+	content: 'extracted_text',
+	url: 'source_url',
+	source: 'site_name',
+	platform_metadata: 'metadata',
+	scraped_date: 'created_at',
+};
+
+function mapProcessedArticleColumn(column: string, table: ProcessableTable): string {
+	if (table !== USER_FILES_TABLE) return column;
+	return ARTICLES_TO_USER_FILES_COLUMN_MAP[column] ?? column;
+}
+
+function serializeProcessedArticleValue(column: string, value: unknown): unknown {
+	if (value !== null && typeof value === 'object' && column !== 'tags' && column !== 'keywords') {
+		return JSON.stringify(value);
+	}
+	return value;
+}
+
+export async function updateProcessedArticle(
+	db: DbClient,
+	table: ProcessableTable,
+	articleId: string,
+	updatePayload: ProcessedArticleUpdate,
+): Promise<void> {
+	const columns = Object.keys(updatePayload);
+	if (columns.length === 0) return;
+
+	const setClauses = columns.map((col, i) => `${mapProcessedArticleColumn(col, table)} = $${i + 1}`).join(', ');
+	const values = columns.map((col) => serializeProcessedArticleValue(col, updatePayload[col]));
+	values.push(articleId);
+
+	const sql = `UPDATE ${table} SET ${setClauses} WHERE id = $${values.length}`;
+	const queryResult = await db.query(sql, values);
+	if (queryResult.rowCount === 0) {
+		throw new Error(`Failed to update article ${articleId}: no rows matched`);
+	}
+}
+
+export async function insertFinalSourceArticle(
+	db: DbClient,
+	base: InsertArticleData,
+	updatePayload: ProcessedArticleUpdate,
+): Promise<string> {
+	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
+	const entities = updatePayload.entities ?? null;
+	const inserted = await db.query<{ id: string }>(
+		`INSERT INTO ${ARTICLES_TABLE} (
+			url, title, title_cn, source, published_date, scraped_date, keywords, tags, tokens,
+			summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, entities, embedding
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18)
+		ON CONFLICT (url) DO NOTHING
+		RETURNING id`,
+		[
+			base.url,
+			base.title,
+			updatePayload.title_cn ?? null,
+			base.source,
+			base.publishedDate,
+			new Date(),
+			updatePayload.keywords ?? base.keywords ?? [],
+			updatePayload.tags ?? base.tags ?? [],
+			[],
+			updatePayload.summary ?? base.summary,
+			updatePayload.summary_cn ?? null,
+			base.sourceType,
+			updatePayload.content ?? base.content,
+			updatePayload.content_cn ?? null,
+			updatePayload.og_image_url ?? base.ogImageUrl,
+			platformMetadata ? JSON.stringify(platformMetadata) : null,
+			entities ? JSON.stringify(entities) : null,
+			updatePayload.embedding ?? null,
+		],
+	);
+	const articleId =
+		inserted.rows[0]?.id ??
+		(await db.query<{ id: string }>(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [base.url])).rows[0]?.id;
+	if (!articleId) throw new Error(`Failed to insert finalized article for ${base.url}`);
+	return articleId;
+}
+
+export async function syncArticleEntities(
+	db: DbClient,
+	articleId: string,
+	entities: Array<{ name: string; name_cn: string; type: string }>,
+): Promise<void> {
+	if (!entities.length) return;
+
+	for (const entity of entities) {
+		const canonical = entity.name.toLowerCase().trim();
+		if (!canonical) continue;
+
+		try {
+			const result = await db.query(
+				`INSERT INTO entities (canonical_name, name, name_cn, type)
+				 VALUES ($1, $2, $3, $4)
+				 ON CONFLICT (canonical_name) DO UPDATE SET
+				   updated_at = NOW()
+				 RETURNING id`,
+				[canonical, entity.name, entity.name_cn, entity.type],
+			);
+			const entityId = result.rows[0]?.id;
+			if (!entityId) continue;
+
+			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
+		} catch (err) {
+			console.error({ tag: 'ENTITIES', msg: 'Failed to sync entity', entity: entity.name, error: String(err) });
+		}
+	}
+
+	console.info({ tag: 'ENTITIES', msg: 'Synced', articleId, count: entities.length });
+}
+
 // ─────────────────────────────────────────────────────────────
 // Dedup helper
 // ─────────────────────────────────────────────────────────────

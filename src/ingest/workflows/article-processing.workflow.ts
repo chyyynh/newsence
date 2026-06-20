@@ -2,10 +2,11 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { measureImageDimensions } from '@media/dimensions';
 import {
 	ARTICLES_TABLE,
-	type DbClient,
-	type InsertArticleData,
+	insertFinalSourceArticle,
 	type ProcessableTable,
+	syncArticleEntities,
 	USER_FILES_TABLE,
+	updateProcessedArticle,
 	upsertYoutubeTranscript,
 	withDbClient,
 	withDbTransaction,
@@ -21,13 +22,7 @@ import {
 	type SourceArticleDraft,
 	type WorkflowQueueTarget,
 } from '@shared/workflow-queue';
-import {
-	buildEmbeddingTextForArticle,
-	buildProcessorUpdatePayload,
-	type ProcessorResult,
-	persistProcessorResult,
-	runArticleProcessor,
-} from '../domain/processors';
+import { buildEmbeddingTextForArticle, buildProcessorUpdatePayload, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import {
 	prepareYouTubeHighlights,
@@ -170,38 +165,6 @@ function extractMetaName(html: string, name: string): string | null {
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
 	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
 	return raw ? decodeHtmlEntities(raw).trim() || null : null;
-}
-
-async function syncArticleEntities(
-	db: DbClient,
-	articleId: string,
-	entities: Array<{ name: string; name_cn: string; type: string }>,
-): Promise<void> {
-	if (!entities.length) return;
-
-	for (const entity of entities) {
-		const canonical = entity.name.toLowerCase().trim();
-		if (!canonical) continue;
-
-		try {
-			const result = await db.query(
-				`INSERT INTO entities (canonical_name, name, name_cn, type)
-				 VALUES ($1, $2, $3, $4)
-				 ON CONFLICT (canonical_name) DO UPDATE SET
-				   updated_at = NOW()
-				 RETURNING id`,
-				[canonical, entity.name, entity.name_cn, entity.type],
-			);
-			const entityId = result.rows[0]?.id;
-			if (!entityId) continue;
-
-			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
-		} catch (err) {
-			console.error({ tag: 'ENTITIES', msg: 'Failed to sync entity', entity: entity.name, error: String(err) });
-		}
-	}
-
-	console.info({ tag: 'ENTITIES', msg: 'Synced', articleId, count: entities.length });
 }
 
 function articleFieldsFor(table: ProcessableTable): string {
@@ -445,51 +408,6 @@ async function prepareYoutubeHighlightsInput(
 	return sourceType === 'youtube' ? { kind: 'article', article } : null;
 }
 
-async function insertFinalSourceArticle(
-	db: DbClient,
-	base: InsertArticleData,
-	article: Article,
-	result: ProcessorResult,
-	embedding: number[] | null,
-): Promise<string> {
-	const updatePayload = buildProcessorUpdatePayload(article, result, embedding);
-	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
-	const entities = updatePayload.entities ?? null;
-	const inserted = await db.query<{ id: string }>(
-		`INSERT INTO articles (
-			url, title, title_cn, source, published_date, scraped_date, keywords, tags, tokens,
-			summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, entities, embedding
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18)
-		ON CONFLICT (url) DO NOTHING
-		RETURNING id`,
-		[
-			base.url,
-			base.title,
-			updatePayload.title_cn ?? null,
-			base.source,
-			base.publishedDate,
-			new Date(),
-			updatePayload.keywords ?? base.keywords ?? [],
-			updatePayload.tags ?? base.tags ?? [],
-			[],
-			updatePayload.summary ?? base.summary,
-			updatePayload.summary_cn ?? null,
-			base.sourceType,
-			updatePayload.content ?? base.content,
-			updatePayload.content_cn ?? null,
-			updatePayload.og_image_url ?? base.ogImageUrl,
-			platformMetadata ? JSON.stringify(platformMetadata) : null,
-			entities ? JSON.stringify(entities) : null,
-			updatePayload.embedding ?? null,
-		],
-	);
-	const articleId =
-		inserted.rows[0]?.id ?? (await db.query<{ id: string }>('SELECT id FROM articles WHERE url = $1 LIMIT 1', [base.url])).rows[0]?.id;
-	if (!articleId) throw new Error(`Failed to insert finalized article for ${base.url}`);
-	return articleId;
-}
-
 async function persistSourceTarget(
 	env: Env,
 	context: WorkflowRunContext,
@@ -500,7 +418,8 @@ async function persistSourceTarget(
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
 	return withDbTransaction(env, 'source article', async (db) => {
-		const articleId = await insertFinalSourceArticle(db, draft.article, fullArticle, result, embedding);
+		const updatePayload = buildProcessorUpdatePayload(fullArticle, result, embedding);
+		const articleId = await insertFinalSourceArticle(db, draft.article, updatePayload);
 		if (draft.youtubeTranscript) await upsertYoutubeTranscript(db, draft.youtubeTranscript);
 		if (result.updateData.entities?.length) await syncArticleEntities(db, articleId, result.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
@@ -537,7 +456,8 @@ async function persistRowTarget(
 			},
 		};
 
-		await persistProcessorResult(target.articleId, article, finalResult, { db, table }, embedding, extractionMetadata(pdfTextTemp));
+		const updatePayload = buildProcessorUpdatePayload(article, finalResult, embedding, extractionMetadata(pdfTextTemp));
+		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
 		if (youtubeHighlights) await saveYouTubeHighlights(db, youtubeHighlights);
