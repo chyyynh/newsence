@@ -3,12 +3,14 @@ import { measureImageDimensions } from '@media/dimensions';
 import {
 	ARTICLES_TABLE,
 	insertFinalSourceArticle,
+	loadProcessableArticle,
+	loadProcessableArticleShell,
+	type ProcessableArticleShell,
 	type ProcessableTable,
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
 	upsertYoutubeTranscript,
-	withDbClient,
 	withDbTransaction,
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
@@ -35,18 +37,6 @@ import { createPdfTextTemp, deletePdfTextTemp, type PdfTextTempResult, readPdfTe
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
 
-const ARTICLE_FIELDS_FOR_ARTICLES =
-	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
-
-const ARTICLE_FIELDS_FOR_USER_FILES =
-	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
-
-const ARTICLE_SHELL_FIELDS_FOR_ARTICLES =
-	'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
-
-const ARTICLE_SHELL_FIELDS_FOR_USER_FILES =
-	'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
-
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
 };
@@ -58,7 +48,6 @@ type WorkflowRunContext = {
 	readSourceDraft(): Promise<SourceArticleDraft>;
 	readSourceArticle(): Promise<Article>;
 };
-type ArticleShell = Article & { has_content?: boolean };
 type OgImageResult = {
 	ogImageUrl: string | null;
 	ogImageWidth: number | null;
@@ -167,14 +156,6 @@ function extractMetaName(html: string, name: string): string | null {
 	return raw ? decodeHtmlEntities(raw).trim() || null : null;
 }
 
-function articleFieldsFor(table: ProcessableTable): string {
-	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
-}
-
-function articleShellFieldsFor(table: ProcessableTable): string {
-	return table === USER_FILES_TABLE ? ARTICLE_SHELL_FIELDS_FOR_USER_FILES : ARTICLE_SHELL_FIELDS_FOR_ARTICLES;
-}
-
 function targetTable(target: WorkflowQueueTarget): ProcessableTable {
 	return target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE;
 }
@@ -231,25 +212,14 @@ function articleFromSourceDraft(draft: SourceArticleDraft): Article {
 	};
 }
 
-async function fetchArticle(env: Env, table: ProcessableTable, articleId: string, fields: string): Promise<Article> {
-	return withDbClient(env, async (db) => {
-		const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [articleId]);
-		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-		return result.rows[0] as Article;
-	});
-}
-
 async function loadTargetArticle(env: Env, context: WorkflowRunContext): Promise<Article> {
 	if (context.target.kind === 'source') return context.readSourceArticle();
-	return fetchArticle(env, context.table, context.target.articleId, articleFieldsFor(context.table));
+	return loadProcessableArticle(env, context.table, context.target.articleId);
 }
 
-async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ArticleShell> {
-	const article =
-		context.target.kind === 'source'
-			? await context.readSourceArticle()
-			: await fetchArticle(env, context.table, context.target.articleId, articleShellFieldsFor(context.table));
-	return { ...article, content: null };
+async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ProcessableArticleShell> {
+	if (context.target.kind !== 'source') return loadProcessableArticleShell(env, context.table, context.target.articleId);
+	return { ...(await context.readSourceArticle()), content: null };
 }
 
 function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {
@@ -283,7 +253,7 @@ async function analyzeArticleAndGenerateEmbedding(
 async function stagePdfExtraction(
 	env: Env,
 	context: WorkflowRunContext,
-	article: ArticleShell,
+	article: ProcessableArticleShell,
 	step: WorkflowStep,
 ): Promise<PdfTextTempResult | null> {
 	const { target, table } = context;
@@ -521,7 +491,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			() => loadTargetShell(this.env, context),
-		)) as ArticleShell;
+		)) as ProcessableArticleShell;
 		const sourceType = article.source_type ?? 'default';
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });

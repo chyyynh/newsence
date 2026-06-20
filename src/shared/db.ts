@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import type { Env } from './types';
+import type { Article, Env } from './types';
 import { normalizeUrl, validateImageUrl } from './web';
 export type DbClient = Client;
 
@@ -42,6 +42,49 @@ export function resolveProcessableTable(table?: string | null): ProcessableTable
 	if (!table) return ARTICLES_TABLE;
 	if (table === ARTICLES_TABLE || table === USER_FILES_TABLE) return table;
 	throw new Error(`Unsupported workflow target table: ${table}`);
+}
+
+export type ProcessableArticleShell = Article & { has_content?: boolean };
+
+const ARTICLE_FIELDS_FOR_ARTICLES =
+	'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
+
+const ARTICLE_FIELDS_FOR_USER_FILES =
+	'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
+
+const ARTICLE_SHELL_FIELDS_FOR_ARTICLES =
+	'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities';
+
+const ARTICLE_SHELL_FIELDS_FOR_USER_FILES =
+	'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type';
+
+function articleFieldsFor(table: ProcessableTable): string {
+	return table === USER_FILES_TABLE ? ARTICLE_FIELDS_FOR_USER_FILES : ARTICLE_FIELDS_FOR_ARTICLES;
+}
+
+function articleShellFieldsFor(table: ProcessableTable): string {
+	return table === USER_FILES_TABLE ? ARTICLE_SHELL_FIELDS_FOR_USER_FILES : ARTICLE_SHELL_FIELDS_FOR_ARTICLES;
+}
+
+async function fetchProcessableArticle<T extends Article>(
+	env: Env,
+	table: ProcessableTable,
+	articleId: string,
+	fields: string,
+): Promise<T> {
+	return withDbClient(env, async (db) => {
+		const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [articleId]);
+		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		return result.rows[0] as T;
+	});
+}
+
+export function loadProcessableArticle(env: Env, table: ProcessableTable, articleId: string): Promise<Article> {
+	return fetchProcessableArticle(env, table, articleId, articleFieldsFor(table));
+}
+
+export function loadProcessableArticleShell(env: Env, table: ProcessableTable, articleId: string): Promise<ProcessableArticleShell> {
+	return fetchProcessableArticle(env, table, articleId, articleShellFieldsFor(table));
 }
 
 // ─────────────────────────────────────────────────────────────
