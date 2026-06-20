@@ -322,17 +322,44 @@ export async function getUserFileWorkflowInstanceId(db: DbClient, userFileId: st
 	return row?.instance_id ?? null;
 }
 
+type UserFileWorkflowMetadataPatch = Record<string, string>;
+
+async function patchUserFileWorkflowMetadata(db: DbClient, userFileId: string, patch: UserFileWorkflowMetadataPatch): Promise<void> {
+	await db.query(
+		`UPDATE ${USER_FILES_TABLE}
+		 SET metadata = jsonb_set(
+		   COALESCE(metadata, '{}'::jsonb),
+		   '{workflow}',
+		   COALESCE(metadata->'workflow', '{}'::jsonb) || $1::jsonb,
+		   TRUE
+		 )
+		 WHERE id = $2`,
+		[JSON.stringify(patch), userFileId],
+	);
+}
+
 export async function recordUserFileWorkflowInstanceId(db: DbClient, userFileId: string, instanceId: string): Promise<void> {
-	const metadata = JSON.stringify({
-		workflow: {
-			monitor_instance_id: instanceId,
-			monitor_started_at: new Date().toISOString(),
-		},
+	await patchUserFileWorkflowMetadata(db, userFileId, {
+		monitor_instance_id: instanceId,
+		monitor_status: 'running',
+		monitor_started_at: new Date().toISOString(),
 	});
-	await db.query(`UPDATE ${USER_FILES_TABLE} SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2`, [
-		metadata,
-		userFileId,
-	]);
+}
+
+export async function recordUserFileWorkflowComplete(db: DbClient, userFileId: string, articleId: string): Promise<void> {
+	await patchUserFileWorkflowMetadata(db, userFileId, {
+		monitor_status: 'complete',
+		monitor_completed_at: new Date().toISOString(),
+		article_id: articleId,
+	});
+}
+
+export async function recordUserFileWorkflowFailed(db: DbClient, userFileId: string, error: string): Promise<void> {
+	await patchUserFileWorkflowMetadata(db, userFileId, {
+		monitor_status: 'failed',
+		monitor_failed_at: new Date().toISOString(),
+		error: error.slice(0, 500),
+	});
 }
 
 export type ProcessedArticleUpdate = Record<string, unknown>;

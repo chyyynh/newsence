@@ -7,10 +7,13 @@ import {
 	loadProcessableArticleShell,
 	type ProcessableArticleShell,
 	type ProcessableTable,
+	recordUserFileWorkflowComplete,
+	recordUserFileWorkflowFailed,
 	saveYouTubeHighlights,
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
+	withDbClient,
 	withDbTransaction,
 } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
@@ -431,11 +434,26 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 
 	return withDbTransaction(env, 'row workflow', async (db) => {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
+		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
 		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
 			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		return target.articleId;
 	});
+}
+
+async function recordWorkflowFailure(env: Env, context: WorkflowRunContext, error: unknown): Promise<void> {
+	if (context.target.kind !== 'row' || context.table !== USER_FILES_TABLE) return;
+	try {
+		await withDbClient(env, (db) => recordUserFileWorkflowFailed(db, context.target.articleId, String(error)));
+	} catch (metadataError) {
+		console.warn({
+			tag: 'WORKFLOW',
+			msg: 'Failed to record user_file workflow failure',
+			article_id: context.target.articleId,
+			error: String(metadataError),
+		});
+	}
 }
 
 async function persistTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
@@ -487,51 +505,56 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const context = createWorkflowRunContext(this.env, event.payload.target);
-		const article = (await step.do(
-			context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => loadTargetShell(this.env, context),
-		)) as ProcessableArticleShell;
-		const sourceType = article.source_type ?? 'default';
+		try {
+			const article = (await step.do(
+				context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => loadTargetShell(this.env, context),
+			)) as ProcessableArticleShell;
+			const sourceType = article.source_type ?? 'default';
 
-		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });
+			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });
 
-		const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
+			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
 
-		const processorResult = (await step.do(
-			'ai-analysis',
-			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-			() => analyzeArticle(this.env, context, sourceType, pdfTextTemp),
-		)) as ProcessorResult;
+			const processorResult = (await step.do(
+				'ai-analysis',
+				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
+				() => analyzeArticle(this.env, context, sourceType, pdfTextTemp),
+			)) as ProcessorResult;
 
-		const embedding = (await step.do(
-			'generate-embedding',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			() => generateWorkflowEmbedding(this.env, context, processorResult, pdfTextTemp),
-		)) as number[] | null;
+			const embedding = (await step.do(
+				'generate-embedding',
+				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+				() => generateWorkflowEmbedding(this.env, context, processorResult, pdfTextTemp),
+			)) as number[] | null;
 
-		const finalProcessorResult = mergeProcessorResult(
-			processorResult,
-			await resolveWorkflowOgImagePatch(this.env, article, processorResult, step),
-		);
+			const finalProcessorResult = mergeProcessorResult(
+				processorResult,
+				await resolveWorkflowOgImagePatch(this.env, article, processorResult, step),
+			);
 
-		const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, sourceType, step);
-		const articleId = (await step.do(
-			context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() =>
-				persistTarget(this.env, context, {
-					article,
-					result: finalProcessorResult,
-					embedding,
-					pdfTextTemp,
-					youtubeHighlights,
-				}),
-		)) as string;
+			const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, sourceType, step);
+			const articleId = (await step.do(
+				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() =>
+					persistTarget(this.env, context, {
+						article,
+						result: finalProcessorResult,
+						embedding,
+						pdfTextTemp,
+						youtubeHighlights,
+					}),
+			)) as string;
 
-		await cleanupTargetTemps(this.env, context, pdfTextTemp, step);
+			await cleanupTargetTemps(this.env, context, pdfTextTemp, step);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(context, article) });
-		return { success: true, article_id: articleId };
+			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(context, article) });
+			return { success: true, article_id: articleId };
+		} catch (error) {
+			await recordWorkflowFailure(this.env, context, error);
+			throw error;
+		}
 	}
 }
