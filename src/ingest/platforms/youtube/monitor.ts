@@ -1,6 +1,7 @@
-import { getExistingUrls, listSourceFeedsByType, markSourceFeedScrapedById, withDbClient } from '@shared/db';
+import { getExistingUrls, withDbClient } from '@shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@shared/platform-metadata';
 import { youtubeTranscriptAttachment } from '@shared/source-draft';
+import { listSourceFeedsByType, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@shared/web';
 import { enqueueSourceArticleProcess } from '@shared/workflow-queue';

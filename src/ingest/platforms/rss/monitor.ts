@@ -2,12 +2,11 @@ import {
 	type ArticleSourceUpdate,
 	type ExistingArticleRecord,
 	getExistingArticlesByUrl,
-	listDefaultRssSourceFeeds,
-	markSourceFeedScrapedById,
 	updateArticleSourceByUrl,
 	withDbClient,
 } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
+import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@shared/source-feed-state';
 import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
 import { enqueueSourceArticleProcess } from '@shared/workflow-queue';
