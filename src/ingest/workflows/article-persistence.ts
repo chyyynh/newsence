@@ -1,7 +1,6 @@
 import {
-	insertProcessedSourceArticle,
+	insertFinalSourceArticle,
 	type ProcessableTable,
-	saveYouTubeHighlights,
 	syncArticleEntities,
 	USER_FILES_TABLE,
 	updateProcessedArticle,
@@ -12,6 +11,7 @@ import type { Article, Env } from '@shared/types';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';
 import { validateImageUrl } from '@shared/web';
 import type { WorkflowQueueTarget } from '@shared/workflow-queue';
+import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@shared/youtube-transcripts';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
@@ -70,14 +70,12 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	const fullArticle = await context.readSourceArticle();
 	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
 	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
+	const youtubeTranscript = sourceDraftYoutubeTranscript(draft);
 	return withDbTransaction(env, 'source article', async (db) => {
-		const articleId = await insertProcessedSourceArticle(db, {
-			article: finalInsert.article,
-			updatePayload: finalInsert.updatePayload,
-			youtubeTranscript: sourceDraftYoutubeTranscript(draft),
-			entities: input.result.updateData.entities,
-			youtubeHighlights: input.youtubeHighlights,
-		});
+		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
+		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
+		if (input.result.updateData.entities?.length) await syncArticleEntities(db, articleId, input.result.updateData.entities);
+		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		if (twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
 				articleId,

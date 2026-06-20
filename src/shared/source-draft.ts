@@ -1,7 +1,8 @@
-import type { InsertArticleData, YoutubeTranscriptRow } from './db';
+import type { InsertArticleData } from './db';
 import type { TwitterMedia } from './platform-metadata';
 import { deleteTempObject, putRandomSerializedTempJson, readTempJson } from './r2-temp';
 import type { Article, Env, Tweet } from './types';
+import type { YoutubeTranscriptRow } from './youtube-transcripts';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 

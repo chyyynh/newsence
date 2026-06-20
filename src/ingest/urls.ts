@@ -1,9 +1,10 @@
-import { upsertYoutubeTranscript, withDbClient } from '@shared/db';
+import { withDbClient } from '@shared/db';
 import { PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
 import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
+import { upsertYoutubeTranscript } from '@shared/youtube-transcripts';
 import { persistSavedUrlBlob } from './blob-persistence';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 import {

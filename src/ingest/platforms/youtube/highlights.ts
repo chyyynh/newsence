@@ -1,7 +1,8 @@
 import { AI_TASKS, CORE_TEXT_MODEL, generateObject } from '@shared/ai';
-import { getYoutubeTranscriptForHighlights, withDbClient } from '@shared/db';
+import { withDbClient } from '@shared/db';
 import type { Article, Env } from '@shared/types';
 import type { TranscriptSegment } from '@shared/web';
+import { getYoutubeTranscriptForHighlights } from '@shared/youtube-transcripts';
 import { z } from 'zod';
 
 interface YouTubeHighlight {
