@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import type { Article, Env } from './types';
-import { normalizeUrl, validateImageUrl } from './web';
+import { normalizeUrl } from './web';
 export type DbClient = Client;
 
 export async function createDbClient(env: Env): Promise<Client> {
@@ -163,7 +163,6 @@ function serializeMetadata(metadata: unknown | null): string | null {
  */
 export async function insertUserFile(db: DbClient, data: InsertUserFileData): Promise<InsertUserFileResult | null> {
 	const normalizedUrl = data.normalizedUrl ?? normalizeUrl(data.url);
-	const ogImageUrl = await validateImageUrl(data.ogImageUrl);
 	const result = await db.query(
 		`WITH inserted AS (
 			INSERT INTO ${USER_FILES_TABLE}
@@ -198,7 +197,7 @@ export async function insertUserFile(db: DbClient, data: InsertUserFileData): Pr
 			data.publishedDate,
 			data.summary,
 			data.content,
-			ogImageUrl,
+			data.ogImageUrl,
 			data.keywords ?? [],
 			data.tags ?? [],
 			serializeMetadata(data.platformMetadata),

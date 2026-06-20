@@ -10,7 +10,7 @@ import { extensionFromMime, PDF_MIME } from '@shared/mime';
 import { parsePlatformMetadata } from '@shared/platform-metadata';
 import type { Env } from '@shared/types';
 import { buildPdfMetadata, deriveFileTitle, MAX_UPLOAD_BYTES, streamWithByteLimit, userUploadKey } from '@shared/upload';
-import { detectPlatformType, normalizeUrl, type ScrapedContent } from '@shared/web';
+import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
 import { persistBlobRow, putUserUpload } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
@@ -57,6 +57,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 	}
 
 	try {
+		const ogImageUrl = await validateImageUrl(scraped.ogImageUrl);
 		return await withDbClient(env, async (db) => {
 			const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
 			const platformMetadataToStore = normalizedPlatformMetadata
@@ -76,7 +77,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 				summary: scraped.summary || '',
 				platformType,
 				content: scraped.content || null,
-				ogImageUrl: scraped.ogImageUrl || null,
+				ogImageUrl,
 				platformMetadata: platformMetadataToStore,
 				userId,
 			});
