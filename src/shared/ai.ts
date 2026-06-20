@@ -1,3 +1,4 @@
+import { type ZodType, z } from 'zod';
 import type { Env } from './types';
 
 export const CORE_TEXT_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
@@ -15,6 +16,11 @@ interface GenerateTextOptions {
 
 interface GenerateJsonOptions extends GenerateTextOptions {
 	schema: JsonSchema;
+}
+
+interface GenerateObjectOptions<T> extends GenerateTextOptions {
+	schema: ZodType<T>;
+	schemaName?: string;
 }
 
 function buildMessages(prompt: string, systemPrompt?: string): Array<{ role: 'system' | 'user'; content: string }> {
@@ -84,4 +90,21 @@ export async function generateJson<T>(ai: AiBinding, prompt: string, options: Ge
 		console.error({ tag: 'AI', msg: 'Workers AI JSON generation failed', model, error: String(error) });
 		return null;
 	}
+}
+
+export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
+	const { schema, schemaName = 'AI structured output', ...generationOptions } = options;
+	const jsonSchema = z.toJSONSchema(schema, { target: 'draft-7' }) as JsonSchema;
+	const result = await generateJson<unknown>(ai, prompt, { ...generationOptions, schema: jsonSchema });
+	const parsed = schema.safeParse(result);
+	if (!parsed.success) {
+		console.error({
+			tag: 'AI',
+			msg: 'Workers AI structured output validation failed',
+			schema: schemaName,
+			error: z.prettifyError(parsed.error),
+		});
+		return null;
+	}
+	return parsed.data;
 }

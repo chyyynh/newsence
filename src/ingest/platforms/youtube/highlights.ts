@@ -1,7 +1,8 @@
-import { CORE_TEXT_MODEL, generateJson } from '@shared/ai';
+import { CORE_TEXT_MODEL, generateObject } from '@shared/ai';
 import { type DbClient, withDbClient } from '@shared/db';
 import type { Article, Env } from '@shared/types';
 import type { TranscriptSegment } from '@shared/web';
+import { z } from 'zod';
 
 interface YouTubeHighlight {
 	title: string;
@@ -35,34 +36,20 @@ const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 
 4. 時間戳記要準確對應討論內容的起止
 5. 所有文字使用繁體中文
 
-回傳 JSON 格式：
-{
-  "highlights": [
-    { "title": "段落標題", "summary": "1-2句摘要", "startTime": 0, "endTime": 60 }
-  ]
-}
+只回傳符合 schema 的資料。`;
 
-只回傳 JSON，不要其他文字。`;
-
-const YOUTUBE_HIGHLIGHTS_SCHEMA = {
-	type: 'object',
-	properties: {
-		highlights: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					title: { type: 'string' },
-					summary: { type: 'string' },
-					startTime: { type: 'number' },
-					endTime: { type: 'number' },
-				},
-				required: ['title', 'summary', 'startTime', 'endTime'],
-			},
-		},
-	},
-	required: ['highlights'],
-};
+const YouTubeHighlightsSchema = z.object({
+	highlights: z
+		.array(
+			z.object({
+				title: z.string().min(1),
+				summary: z.string().min(1),
+				startTime: z.number().nonnegative(),
+				endTime: z.number().nonnegative(),
+			}),
+		)
+		.min(1),
+});
 
 async function generateYouTubeHighlights(
 	videoId: string,
@@ -75,8 +62,9 @@ async function generateYouTubeHighlights(
 	const last = transcript[transcript.length - 1];
 	const duration = Math.ceil(last.endTime);
 
-	const result = await generateJson<YouTubeHighlightsResult>(ai, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
-		schema: YOUTUBE_HIGHLIGHTS_SCHEMA,
+	const result = await generateObject<YouTubeHighlightsResult>(ai, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+		schema: YouTubeHighlightsSchema,
+		schemaName: 'youtube highlights',
 		maxTokens: 2000,
 		temperature: 0.3,
 		systemPrompt: HIGHLIGHTS_SYSTEM_PROMPT,
