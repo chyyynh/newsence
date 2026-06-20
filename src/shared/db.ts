@@ -362,6 +362,26 @@ export async function recordUserFileWorkflowFailed(db: DbClient, userFileId: str
 	});
 }
 
+export async function recordUserFileWorkflowTimeoutByInstanceId(db: DbClient, instanceId: string): Promise<void> {
+	await db.query(
+		`UPDATE ${USER_FILES_TABLE}
+		 SET metadata = jsonb_set(
+		   COALESCE(metadata, '{}'::jsonb),
+		   '{workflow}',
+		   COALESCE(metadata->'workflow', '{}'::jsonb) || $1::jsonb,
+		   TRUE
+		 )
+		 WHERE metadata->'workflow'->>'monitor_instance_id' = $2`,
+		[
+			JSON.stringify({
+				monitor_status: 'timeout',
+				monitor_timed_out_at: new Date().toISOString(),
+			}),
+			instanceId,
+		],
+	);
+}
+
 export type ProcessedArticleUpdate = Record<string, unknown>;
 
 // `user_files` carries the same editorial fields as `articles` but with a few
