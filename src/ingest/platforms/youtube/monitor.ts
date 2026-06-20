@@ -84,7 +84,12 @@ async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo)
 async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLParser): Promise<number> {
 	if (!channel.RSSLink) return 0;
 	const videos = await fetchChannelVideos(channel, parser);
-	if (!videos?.length) return 0;
+	if (videos === null) return 0;
+	if (videos.length === 0) {
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
+		await markSourceFeedScrapedById(env, channel.id);
+		return 0;
+	}
 
 	const videoUrls = videos.map(({ url }) => url);
 	const existingSet = await withDbClient(env, (db) => getExistingUrls(db, videoUrls));
