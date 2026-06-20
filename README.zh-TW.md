@@ -40,7 +40,7 @@
 | **小紅書**      | 監控   | 每 30 分鐘 | 用戶主頁抓取 → 筆記、封面                        |
 | **Hacker News** | 處理器 | 經由 RSS   | 偵測 HN 連結 → Algolia 取評論 → 生成編輯筆記     |
 | **網頁**        | 爬蟲   | 按需       | 全文擷取（Readability + Cheerio）、OG metadata   |
-| **用戶投稿**    | 入口   | 即時       | `POST /submit` — 完整抓取 + workflow，同步回應   |
+| **用戶上傳**    | 入口   | 即時       | `POST /ingest` — URL / 圖片 / blob ingest，回傳資源與 workflow id |
 
 所有平台輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
 
@@ -49,12 +49,12 @@
 每篇文章經過自動化 workflow，各步驟獨立重試：
 
 ```
-URL 進入（RSS 排程 / Twitter 排程 / YouTube 排程 / /submit）
+內容進入（source monitor / user upload / retry）
   │
-  ├─ 1. 讀取文章 ─────────── 從資料庫載入文章列
+  ├─ 1. 讀取內容 ─────────── source draft 從 R2 載入；upload/retry 則讀既有 row
   ├─ 2. AI 分析 ──────────── Workers AI Qwen3 → 中英標題、摘要、標籤、關鍵字、實體
   ├─ 3. 抓取 OG 圖片 ──────── 若缺少圖片則輕量抓取（僅前 32 KB）
-  ├─ 4. 存入資料庫 ────────── 單次 UPDATE 寫入所有 AI 結果
+  ├─ 4. 存入資料庫 ────────── source 單次 final INSERT；row-based 單次 final UPDATE
   ├─    同步實體 ─────────── （條件性）將實體寫入正規化表格，建立關聯
   ├─ 5. YouTube 精華 ─────── （僅 YouTube）從字幕生成 AI 精華段落
   └─ 7. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文 + 實體名稱）
@@ -70,7 +70,7 @@ URL 進入（RSS 排程 / Twitter 排程 / YouTube 排程 / /submit）
 | **實體提取** | Workers AI Qwen3 | 文章 → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
 | **向量生成** | BGE-M3（1024 維） | 標題 + 摘要 + 全文 + 實體名稱 → 語意向量（HNSW 索引）       |
 
-實體提取與分析在同一次 LLM 呼叫中完成 — 零額外 API 成本。
+翻譯/摘要與分類/實體是分開的 structured calls，避免其中一個 schema 失敗就讓整篇文章落入 fallback。
 
 ## 技術棧
 
@@ -122,7 +122,7 @@ AI 分析與向量生成都走 Workers AI binding，不需要外部 LLM secret�
 ```bash
 wrangler secret put KAITO_API_KEY            # 可選 — Twitter 監控
 wrangler secret put YOUTUBE_API_KEY          # 可選 — YouTube 監控
-wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # 可選 — /submit 驗證
+wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # internal HTTP endpoints 驗證
 ```
 
 ### 5. 部署
@@ -140,10 +140,11 @@ pnpm run deploy
 # 健康檢查
 curl https://your-worker.workers.dev/health
 
-# 提交 URL
-curl -X POST https://your-worker.workers.dev/submit \
+# Ingest URL
+curl -X POST https://your-worker.workers.dev/ingest \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/article"}'
+  -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
+  -d '{"url": "https://example.com/article", "userId": "user-id"}'
 
 # 生成 Embedding
 curl -X POST https://your-worker.workers.dev/embed \
@@ -157,12 +158,12 @@ curl -X POST https://your-worker.workers.dev/embed \
 ```json
 {
   "success": true,
-  "results": [
+  "data": [
     {
-      "articleId": "550e8400-e29b-41d4-a716-446655440000",
-      "title": "Article Title",
-      "sourceType": "web",
-      "alreadyExists": false
+      "url": "https://example.com/article",
+      "userFileId": "550e8400-e29b-41d4-a716-446655440000",
+      "instanceId": "workflow-id",
+      "resourceKind": "url"
     }
   ]
 }
@@ -170,7 +171,7 @@ curl -X POST https://your-worker.workers.dev/embed \
 
 </details>
 
-可選驗證：`X-Internal-Token` header。內建限流：每 key 20 次/60 秒（可透過 `SUBMIT_RATE_LIMIT_MAX` / `SUBMIT_RATE_LIMIT_WINDOW_SEC` 調整）。
+驗證：internal endpoints 需要 `X-Internal-Token` 或 `Authorization: Bearer`。用戶 ingest 由 `wrangler.jsonc` 的 `USER_INGEST_LIMITER` binding 限流。
 
 ## CLI 與 MCP 伺服器
 
@@ -191,7 +192,7 @@ src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
 ├── entrypoints/          # HTTP router + scheduled + queue dispatch、health
 ├── shared/               # 跨子系統共用基礎 — 下面兩條 pipeline 都用
-│   ├── auth/             # /submit internal-token middleware + bearer session
+│   ├── auth/             # /ingest、/search、/media/* internal-token middleware
 │   ├── ai.ts             # Workers AI 文字 + JSON helpers
 │   ├── db.ts             # Hyperdrive clients + article/user_file helpers
 │   ├── embedding.ts      # BGE-M3 wrapper（Workers AI）
@@ -233,11 +234,9 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 | 變數                           | 必要 | 說明                          |
 | ------------------------------ | ---- | ----------------------------- |
-| `CORE_WORKER_INTERNAL_TOKEN`   | 否   | `/submit` 端點的 bearer token |
+| `CORE_WORKER_INTERNAL_TOKEN`   | 是   | internal HTTP endpoints token |
 | `KAITO_API_KEY`                | 否   | 啟用 Twitter 監控             |
 | `YOUTUBE_API_KEY`              | 否   | 啟用 YouTube 頻道監控         |
-| `SUBMIT_RATE_LIMIT_MAX`        | 否   | 限流次數上限（預設 20）       |
-| `SUBMIT_RATE_LIMIT_WINDOW_SEC` | 否   | 限流視窗秒數（預設 60）       |
 
 ## 新增平台
 

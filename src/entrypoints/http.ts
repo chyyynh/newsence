@@ -1,8 +1,6 @@
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
-import { handleBackfillOgDims } from '@media/backfill-og-dims';
 import { handleDeleteAsset } from '@media/delete';
-import { handleOrphanGc } from '@media/orphan-gc';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import { parseJsonBody, requireAuth } from '@shared/auth';
@@ -35,8 +33,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
-	'/media/gc': (req, env) => handleOrphanGc(req, env),
-	'/media/backfill-og-dims': (req, env) => handleBackfillOgDims(req, env),
 };
 
 const OPTIONS_ROUTES: Record<string, RouteHandler> = {
@@ -59,8 +55,6 @@ const HELP_TEXT =
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
-	'POST /media/gc                            - On-demand reference-nowhere R2 orphan sweep (#162) -> {success,data}\n' +
-	'POST /media/backfill-og-dims?cursor=:id   - Measure + store OG image dims for articles missing them -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
