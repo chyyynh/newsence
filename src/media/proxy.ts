@@ -3,7 +3,7 @@
  *
  * Auth: every request must carry an HMAC-signed `(encodedUrl, exp)` pair via
  * `?sig=&exp=`. The frontend signs at the API boundary (see
- * frontend/src/lib/r2/sign-article-media.ts), so the worker doesn't need a
+ * frontend/src/lib/r2/sign-url.ts), so the worker doesn't need a
  * trusted-host allowlist. Unsigned requests are rejected with 403 — there is
  * no fallback. The signature is intentionally options-independent so Next.js
  * can request multiple widths from one stored URL.
