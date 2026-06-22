@@ -11,7 +11,7 @@ export type { ProcessorResult } from './ai-utils';
 
 class DefaultProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const analysis = await generateArticleAnalysis(article, ctx.env.AI);
+		const analysis = await generateArticleAnalysis(article, ctx.env);
 		const updateData: ProcessorResult['updateData'] = {};
 
 		const allTags = [...new Set([...analysis.tags, analysis.category])];

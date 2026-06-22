@@ -158,6 +158,9 @@
 	 *   conversion (POST /api/internal/lexical), authed by CORE_WORKER_INTERNAL_TOKEN.
 	 *   Local dev: override to http://localhost:3000 via `.dev.vars`.
 	 *
+	 * `AI_GATEWAY_NAME` — AI Gateway name used by Gemini text generation via
+	 *   Unified Billing. `default` is auto-created by Cloudflare on first use.
+	 *
 	 * Secret (set via `wrangler secret put`):
 	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
 	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
@@ -165,6 +168,7 @@
 	"vars": {
 		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
 		"APP_BASE_URL": "https://www.newsence.app",
+		"AI_GATEWAY_NAME": "default",
 		"POSTHOG_HOST": "https://us.i.posthog.com"
 	}
 }

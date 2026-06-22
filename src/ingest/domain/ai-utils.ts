@@ -141,38 +141,40 @@ function createFallbackClassification(article: Article): ArticleClassificationOb
 	};
 }
 
-async function generateArticleTranslation(article: Article, ai: Env['AI']): Promise<ArticleTranslationObject> {
-	const result = await generateObject<ArticleTranslationObject>(ai, buildArticleContextPrompt(article), {
+async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject> {
+	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleTranslationSchema,
 		schemaName: 'article translation',
 		task: AI_TASKS.articleTranslation,
+		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 700,
 		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
 	});
 	return result ?? createFallbackTranslation(article);
 }
 
-async function generateArticleClassification(article: Article, ai: Env['AI']): Promise<ArticleClassificationObject> {
-	const result = await generateObject<ArticleClassificationObject>(ai, buildArticleContextPrompt(article), {
+async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject> {
+	const result = await generateObject<ArticleClassificationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleClassificationSchema,
 		schemaName: 'article classification',
 		task: AI_TASKS.articleClassification,
+		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 500,
 		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
 	});
 	return result ?? createFallbackClassification(article);
 }
 
-export async function generateArticleAnalysis(article: Article, ai: Env['AI']): Promise<AIAnalysisResult> {
+export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
 		const [translation, classification] = await Promise.all([
-			generateArticleTranslation(article, ai).catch((error) => {
+			generateArticleTranslation(article, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
 				return createFallbackTranslation(article);
 			}),
-			generateArticleClassification(article, ai).catch((error) => {
+			generateArticleClassification(article, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
 				return createFallbackClassification(article);
 			}),

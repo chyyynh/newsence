@@ -1,11 +1,18 @@
 import { type ZodType, z } from 'zod';
 import type { Env } from './types';
 
-export const CORE_TEXT_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
+export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
 
 type AiBinding = Env['AI'];
-type AiTextModel = typeof CORE_TEXT_MODEL;
+type AiTextModel = string;
 type JsonSchema = Record<string, unknown>;
+interface AiGatewayRunOptions {
+	gateway: { id: string };
+	tags?: string[];
+}
+interface AiGatewayTextBinding {
+	run(model: string, input: Record<string, unknown>, options: AiGatewayRunOptions): Promise<unknown>;
+}
 
 export interface AiTask {
 	name: string;
@@ -23,6 +30,7 @@ export const AI_TASKS = {
 
 interface GenerateTextOptions {
 	model?: AiTextModel;
+	gatewayId?: string;
 	maxTokens?: number;
 	temperature?: number;
 	systemPrompt?: string;
@@ -36,32 +44,53 @@ interface GenerateJsonOptions extends GenerateTextOptions {
 interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
 	schemaName?: string;
-	maxAttempts?: number;
 }
 
-const DEFAULT_STRUCTURED_ATTEMPTS = 2;
-const STRUCTURED_RETRY_SUFFIX = `再次確認：只輸出符合 JSON Schema 的 JSON 物件。不要 Markdown、不要解釋、不要包在 code fence。`;
+const DEFAULT_AI_GATEWAY_ID = 'default';
+const GEMINI_JSON_SCHEMA_KEYS = new Set([
+	'$anchor',
+	'$defs',
+	'$id',
+	'$ref',
+	'additionalProperties',
+	'anyOf',
+	'description',
+	'enum',
+	'format',
+	'items',
+	'maxItems',
+	'maximum',
+	'minItems',
+	'minimum',
+	'oneOf',
+	'prefixItems',
+	'properties',
+	'propertyOrdering',
+	'required',
+	'title',
+	'type',
+]);
 
-function buildMessages(prompt: string, systemPrompt?: string): Array<{ role: 'system' | 'user'; content: string }> {
-	return systemPrompt
-		? [
-				{ role: 'system', content: systemPrompt },
-				{ role: 'user', content: prompt },
-			]
-		: [{ role: 'user', content: prompt }];
+function buildGeminiContent(text: string): { role: 'user'; parts: Array<{ text: string }> } {
+	return { role: 'user', parts: [{ text }] };
 }
 
-function buildTextGenerationInput(
-	options: GenerateTextOptions,
-	prompt: string,
-	responseFormat?: { type: 'json_schema'; json_schema: JsonSchema },
-) {
+function buildTextGenerationInput(options: GenerateTextOptions, prompt: string, responseSchema?: JsonSchema): Record<string, unknown> {
 	const { maxTokens, temperature = 0.3, systemPrompt } = options;
-	return {
-		messages: buildMessages(prompt, systemPrompt),
-		...(maxTokens != null && { max_tokens: maxTokens }),
+	const generationConfig: Record<string, unknown> = {
 		temperature,
-		...(responseFormat && { response_format: responseFormat }),
+		thinkingConfig: { thinkingBudget: 0 },
+		...(maxTokens != null && { maxOutputTokens: maxTokens }),
+		...(responseSchema && {
+			responseMimeType: 'application/json',
+			responseSchema,
+		}),
+	};
+
+	return {
+		contents: [buildGeminiContent(prompt)],
+		generationConfig,
+		...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
 	};
 }
 
@@ -69,9 +98,20 @@ function sanitizeAiTag(value: string): string {
 	return value.replace(/[^A-Za-z0-9:./@-]/g, '-').slice(0, 50);
 }
 
-function buildRunOptions(task?: AiTask): { tags: string[] } | undefined {
-	if (!task) return undefined;
-	return { tags: ['newsence', sanitizeAiTag(`task:${task.name}`), sanitizeAiTag(`version:${task.version}`)] };
+function buildRunOptions(task?: AiTask, gatewayId?: string): AiGatewayRunOptions {
+	return {
+		gateway: { id: gatewayId?.trim() || DEFAULT_AI_GATEWAY_ID },
+		...(task && { tags: ['newsence', sanitizeAiTag(`task:${task.name}`), sanitizeAiTag(`version:${task.version}`)] }),
+	};
+}
+
+function runGatewayModel(
+	ai: AiBinding,
+	model: AiTextModel,
+	input: Record<string, unknown>,
+	options: AiGatewayRunOptions,
+): Promise<unknown> {
+	return (ai as AiGatewayTextBinding).run(model, input, options);
 }
 
 function extractResponse(result: unknown): unknown {
@@ -79,88 +119,99 @@ function extractResponse(result: unknown): unknown {
 	return 'response' in result ? result.response : result;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function extractGeminiText(result: unknown): string | null {
+	const response = extractResponse(result);
+	if (typeof response === 'string') return response.trim() ? response : null;
+	if (!isRecord(response)) return null;
+
+	const [candidate] = Array.isArray(response.candidates) ? response.candidates : [];
+	if (isRecord(candidate) && isRecord(candidate.content) && Array.isArray(candidate.content.parts)) {
+		const text = candidate.content.parts
+			.map((part) => (isRecord(part) && typeof part.text === 'string' ? part.text : ''))
+			.join('')
+			.trim();
+		return text || null;
+	}
+
+	const [choice] = Array.isArray(response.choices) ? response.choices : [];
+	if (!isRecord(choice) || !isRecord(choice.message) || typeof choice.message.content !== 'string') return null;
+	const text = choice.message.content.trim();
+	return text || null;
+}
+
 function parseJsonResponse<T>(result: unknown): T | null {
 	const response = extractResponse(result);
-	if (response && typeof response === 'object') return response as T;
-	if (typeof response !== 'string') return null;
+	if (isRecord(response) && !('candidates' in response) && !('choices' in response)) return response as T;
 
+	const text = extractGeminiText(result);
+	if (!text) return null;
 	try {
-		return JSON.parse(response) as T;
+		return JSON.parse(text) as T;
 	} catch {
-		const match = response.match(/\{[\s\S]*\}/);
-		if (!match) return null;
-		try {
-			return JSON.parse(match[0]) as T;
-		} catch {
-			return null;
-		}
+		return null;
 	}
 }
 
+function buildGeminiJsonSchema(schema: ZodType): JsonSchema {
+	return sanitizeGeminiJsonSchema(z.toJSONSchema(schema, { target: 'draft-7' }));
+}
+
+function sanitizeGeminiJsonSchema(value: unknown, parentKey?: string): JsonSchema {
+	if (!isRecord(value)) return {};
+
+	return Object.fromEntries(
+		Object.entries(value).flatMap(([key, childValue]) => {
+			if (parentKey !== 'properties' && parentKey !== '$defs' && !GEMINI_JSON_SCHEMA_KEYS.has(key)) return [];
+			if (isRecord(childValue)) return [[key, sanitizeGeminiJsonSchema(childValue, key)]];
+			if (Array.isArray(childValue)) {
+				return [[key, childValue.map((item) => (isRecord(item) ? sanitizeGeminiJsonSchema(item, key) : item))]];
+			}
+			return [[key, childValue]];
+		}),
+	);
+}
+
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
-	const { model = CORE_TEXT_MODEL, task } = options;
+	const { model = CORE_TEXT_MODEL, task, gatewayId } = options;
 
 	try {
-		const result = await ai.run(model, buildTextGenerationInput(options, prompt), buildRunOptions(task));
-		const response = extractResponse(result);
-		return typeof response === 'string' && response.trim() ? response : null;
+		const result = await runGatewayModel(ai, model, buildTextGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
+		return extractGeminiText(result);
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Workers AI text generation failed', model, task, error: String(error) });
+		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model, task, error: String(error) });
 		return null;
 	}
 }
 
 export async function generateJson<T>(ai: AiBinding, prompt: string, options: GenerateJsonOptions): Promise<T | null> {
-	const { model = CORE_TEXT_MODEL, task, schema } = options;
+	const { model = CORE_TEXT_MODEL, task, schema, gatewayId } = options;
 
 	try {
-		const result = await ai.run(
-			model,
-			buildTextGenerationInput(options, prompt, {
-				type: 'json_schema',
-				json_schema: schema,
-			}),
-			buildRunOptions(task),
-		);
+		const result = await runGatewayModel(ai, model, buildTextGenerationInput(options, prompt, schema), buildRunOptions(task, gatewayId));
 		return parseJsonResponse<T>(result);
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Workers AI JSON generation failed', model, task, error: String(error) });
+		console.error({ tag: 'AI', msg: 'AI Gateway JSON generation failed', model, task, error: String(error) });
 		return null;
 	}
 }
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
-	const { schema, schemaName = 'AI structured output', maxAttempts = DEFAULT_STRUCTURED_ATTEMPTS, ...generationOptions } = options;
-	const jsonSchema = z.toJSONSchema(schema, { target: 'draft-7' }) as JsonSchema;
-	const attempts = Math.max(1, Math.trunc(maxAttempts));
-	let lastError = 'unknown validation error';
-
-	for (let attempt = 1; attempt <= attempts; attempt++) {
-		const attemptPrompt = attempt === 1 ? prompt : `${prompt}\n\n${STRUCTURED_RETRY_SUFFIX}`;
-		const result = await generateJson<unknown>(ai, attemptPrompt, { ...generationOptions, schema: jsonSchema });
-		const parsed = schema.safeParse(result);
-		if (parsed.success) return parsed.data;
-
-		lastError = z.prettifyError(parsed.error);
-		if (attempt < attempts) {
-			console.warn({
-				tag: 'AI',
-				msg: 'Workers AI structured output validation failed; retrying',
-				schema: schemaName,
-				task: generationOptions.task,
-				attempt,
-				error: lastError,
-			});
-		}
-	}
+	const { schema, schemaName = 'AI structured output', ...generationOptions } = options;
+	const jsonSchema = buildGeminiJsonSchema(schema);
+	const result = await generateJson<unknown>(ai, prompt, { ...generationOptions, schema: jsonSchema });
+	const parsed = schema.safeParse(result);
+	if (parsed.success) return parsed.data;
 
 	console.error({
 		tag: 'AI',
-		msg: 'Workers AI structured output validation failed',
+		msg: 'AI Gateway structured output validation failed',
 		schema: schemaName,
 		task: generationOptions.task,
-		attempts,
-		error: lastError,
+		error: z.prettifyError(parsed.error),
 	});
 	return null;
 }

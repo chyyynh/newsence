@@ -55,7 +55,7 @@ export class TwitterProcessor implements ArticleProcessor {
 
 		if (hasFullContent) {
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
-			const analysis = await generateArticleAnalysis(article, ctx.env.AI);
+			const analysis = await generateArticleAnalysis(article, ctx.env);
 			applyArticleAnalysis(article, analysis, updateData);
 			return { updateData };
 		}
@@ -86,7 +86,7 @@ export class TwitterProcessor implements ArticleProcessor {
 			updateData.content = linked.content;
 			const analysis = await generateArticleAnalysis(
 				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-				ctx.env.AI,
+				ctx.env,
 			);
 			applyArticleAnalysis(article, analysis, updateData);
 			return true;
@@ -97,7 +97,7 @@ export class TwitterProcessor implements ArticleProcessor {
 	}
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
-		const analysis = await translateTweet(tweetText, ctx.env.AI);
+		const analysis = await translateTweet(tweetText, ctx.env);
 		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80) || article.title;
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
 		if (!article.tags?.length) updateData.tags = analysis.tags;
@@ -150,14 +150,15 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, ai: ProcessorContext['env']['AI']): Promise<TweetAnalysis> {
+async function translateTweet(tweetText: string, env: ProcessorContext['env']): Promise<TweetAnalysis> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 
 	try {
-		const result = await generateObject<TweetAnalysis>(ai, `推文內容：\n${tweetText}`, {
+		const result = await generateObject<TweetAnalysis>(env.AI, `推文內容：\n${tweetText}`, {
 			schema: TweetAnalysisSchema,
 			schemaName: 'tweet analysis',
 			task: AI_TASKS.tweetAnalysis,
+			gatewayId: env.AI_GATEWAY_NAME,
 			maxTokens: 600,
 			systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
 		});
