@@ -75,11 +75,19 @@ function buildGeminiContent(text: string): { role: 'user'; parts: Array<{ text: 
 	return { role: 'user', parts: [{ text }] };
 }
 
+function buildGeminiThinkingConfig(model: AiTextModel): Record<string, unknown> | undefined {
+	if (!model.includes('gemini')) return undefined;
+	if (model.includes('gemini-3')) return { thinkingLevel: 'minimal' };
+	return { thinkingBudget: 0 };
+}
+
 function buildTextGenerationInput(options: GenerateTextOptions, prompt: string, responseSchema?: JsonSchema): Record<string, unknown> {
 	const { maxTokens, temperature = 0.3, systemPrompt } = options;
+	const model = options.model ?? CORE_TEXT_MODEL;
+	const thinkingConfig = buildGeminiThinkingConfig(model);
 	const generationConfig: Record<string, unknown> = {
 		temperature,
-		thinkingConfig: { thinkingBudget: 0 },
+		...(thinkingConfig && { thinkingConfig }),
 		...(maxTokens != null && { maxOutputTokens: maxTokens }),
 		...(responseSchema && {
 			responseMimeType: 'application/json',
