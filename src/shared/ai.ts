@@ -4,7 +4,6 @@ import type { Env } from './types';
 export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
 
 type AiBinding = Env['AI'];
-type AiTextModel = string;
 type JsonSchema = Record<string, unknown>;
 interface AiGatewayRunOptions {
 	gateway: { id: string };
@@ -29,7 +28,6 @@ export const AI_TASKS = {
 } as const satisfies Record<string, AiTask>;
 
 interface GenerateTextOptions {
-	model?: AiTextModel;
 	gatewayId?: string;
 	maxTokens?: number;
 	temperature?: number;
@@ -75,38 +73,24 @@ function buildGeminiContent(text: string): { role: 'user'; parts: Array<{ text: 
 	return { role: 'user', parts: [{ text }] };
 }
 
-function buildGeminiThinkingConfig(model: AiTextModel): Record<string, unknown> | undefined {
-	if (!model.includes('gemini')) return undefined;
-	if (model.includes('gemini-3')) return { thinkingLevel: 'minimal' };
-	return { thinkingBudget: 0 };
-}
-
-function buildGeminiStructuredOutputConfig(model: AiTextModel, schema?: JsonSchema): Record<string, unknown> | undefined {
+function buildGeminiStructuredOutputConfig(schema?: JsonSchema): Record<string, unknown> | undefined {
 	if (!schema) return undefined;
-	if (model.includes('gemini-3')) {
-		return {
-			responseFormat: {
-				text: {
-					mimeType: 'application/json',
-					schema,
-				},
-			},
-		};
-	}
 	return {
-		responseMimeType: 'application/json',
-		responseSchema: schema,
+		responseFormat: {
+			text: {
+				mimeType: 'application/json',
+				schema,
+			},
+		},
 	};
 }
 
 function buildTextGenerationInput(options: GenerateTextOptions, prompt: string, responseSchema?: JsonSchema): Record<string, unknown> {
 	const { maxTokens, temperature = 0.3, systemPrompt } = options;
-	const model = options.model ?? CORE_TEXT_MODEL;
-	const thinkingConfig = buildGeminiThinkingConfig(model);
-	const structuredOutputConfig = buildGeminiStructuredOutputConfig(model, responseSchema);
+	const structuredOutputConfig = buildGeminiStructuredOutputConfig(responseSchema);
 	const generationConfig: Record<string, unknown> = {
 		temperature,
-		...(thinkingConfig && { thinkingConfig }),
+		thinkingConfig: { thinkingLevel: 'minimal' },
 		...(maxTokens != null && { maxOutputTokens: maxTokens }),
 		...(structuredOutputConfig && structuredOutputConfig),
 	};
@@ -129,13 +113,8 @@ function buildRunOptions(task?: AiTask, gatewayId?: string): AiGatewayRunOptions
 	};
 }
 
-function runGatewayModel(
-	ai: AiBinding,
-	model: AiTextModel,
-	input: Record<string, unknown>,
-	options: AiGatewayRunOptions,
-): Promise<unknown> {
-	return (ai as AiGatewayTextBinding).run(model, input, options);
+function runGatewayModel(ai: AiBinding, input: Record<string, unknown>, options: AiGatewayRunOptions): Promise<unknown> {
+	return (ai as AiGatewayTextBinding).run(CORE_TEXT_MODEL, input, options);
 }
 
 function extractResponse(result: unknown): unknown {
@@ -200,25 +179,25 @@ function sanitizeGeminiJsonSchema(value: unknown, parentKey?: string): JsonSchem
 }
 
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
-	const { model = CORE_TEXT_MODEL, task, gatewayId } = options;
+	const { task, gatewayId } = options;
 
 	try {
-		const result = await runGatewayModel(ai, model, buildTextGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
+		const result = await runGatewayModel(ai, buildTextGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
 		return extractGeminiText(result);
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model, task, error: String(error) });
+		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
 		return null;
 	}
 }
 
 export async function generateJson<T>(ai: AiBinding, prompt: string, options: GenerateJsonOptions): Promise<T | null> {
-	const { model = CORE_TEXT_MODEL, task, schema, gatewayId } = options;
+	const { task, schema, gatewayId } = options;
 
 	try {
-		const result = await runGatewayModel(ai, model, buildTextGenerationInput(options, prompt, schema), buildRunOptions(task, gatewayId));
+		const result = await runGatewayModel(ai, buildTextGenerationInput(options, prompt, schema), buildRunOptions(task, gatewayId));
 		return parseJsonResponse<T>(result);
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'AI Gateway JSON generation failed', model, task, error: String(error) });
+		console.error({ tag: 'AI', msg: 'AI Gateway JSON generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
 		return null;
 	}
 }
