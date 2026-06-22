@@ -81,18 +81,34 @@ function buildGeminiThinkingConfig(model: AiTextModel): Record<string, unknown> 
 	return { thinkingBudget: 0 };
 }
 
+function buildGeminiStructuredOutputConfig(model: AiTextModel, schema?: JsonSchema): Record<string, unknown> | undefined {
+	if (!schema) return undefined;
+	if (model.includes('gemini-3')) {
+		return {
+			responseFormat: {
+				text: {
+					mimeType: 'application/json',
+					schema,
+				},
+			},
+		};
+	}
+	return {
+		responseMimeType: 'application/json',
+		responseSchema: schema,
+	};
+}
+
 function buildTextGenerationInput(options: GenerateTextOptions, prompt: string, responseSchema?: JsonSchema): Record<string, unknown> {
 	const { maxTokens, temperature = 0.3, systemPrompt } = options;
 	const model = options.model ?? CORE_TEXT_MODEL;
 	const thinkingConfig = buildGeminiThinkingConfig(model);
+	const structuredOutputConfig = buildGeminiStructuredOutputConfig(model, responseSchema);
 	const generationConfig: Record<string, unknown> = {
 		temperature,
 		...(thinkingConfig && { thinkingConfig }),
 		...(maxTokens != null && { maxOutputTokens: maxTokens }),
-		...(responseSchema && {
-			responseMimeType: 'application/json',
-			responseSchema,
-		}),
+		...(structuredOutputConfig && structuredOutputConfig),
 	};
 
 	return {
