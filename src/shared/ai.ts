@@ -2,6 +2,7 @@ import { type ZodType, z } from 'zod';
 import type { Env } from './types';
 
 export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
+export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiBinding = Env['AI'];
 type JsonSchema = Record<string, unknown>;
@@ -91,14 +92,23 @@ function buildTextGenerationInput(options: GenerateTextOptions, prompt: string):
 function buildJsonGenerationInput(options: GenerateJsonOptions, prompt: string): Record<string, unknown> {
 	const { maxTokens, temperature = 0.3, systemPrompt, schema } = options;
 	return {
-		messages: [...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []), { role: 'user', content: prompt }],
+		messages: [
+			...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+			{ role: 'user', content: withJsonSchemaPrompt(prompt, schema) },
+		],
 		temperature,
 		...(maxTokens != null && { max_tokens: maxTokens }),
 		response_format: {
-			type: 'json_schema',
-			schema,
+			type: 'json_object',
 		},
 	};
+}
+
+function withJsonSchemaPrompt(prompt: string, schema: JsonSchema): string {
+	return `${prompt}
+
+Return only a JSON object that matches this JSON Schema:
+${JSON.stringify(schema)}`;
 }
 
 function sanitizeAiTag(value: string): string {
@@ -112,8 +122,8 @@ function buildRunOptions(task?: AiTask, gatewayId?: string): AiGatewayRunOptions
 	};
 }
 
-function runGatewayModel(ai: AiBinding, input: Record<string, unknown>, options: AiGatewayRunOptions): Promise<unknown> {
-	return (ai as AiGatewayTextBinding).run(CORE_TEXT_MODEL, input, options);
+function runGatewayModel(ai: AiBinding, model: string, input: Record<string, unknown>, options: AiGatewayRunOptions): Promise<unknown> {
+	return (ai as AiGatewayTextBinding).run(model, input, options);
 }
 
 function extractResponse(result: unknown): unknown {
@@ -154,11 +164,54 @@ function parseJsonResponse<T>(result: unknown): T | null {
 
 	const text = extractGeminiText(result);
 	if (!text) return null;
+	return parseJsonText<T>(text);
+}
+
+function parseJsonText<T>(text: string): T | null {
+	const trimmed = text.trim();
+	const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+	const candidate = fenced?.[1]?.trim() || extractJsonCandidate(trimmed) || trimmed;
 	try {
-		return JSON.parse(text) as T;
+		return JSON.parse(candidate) as T;
 	} catch {
 		return null;
 	}
+}
+
+function extractJsonCandidate(text: string): string | null {
+	const objectStart = text.indexOf('{');
+	const arrayStart = text.indexOf('[');
+	const starts = [objectStart, arrayStart].filter((index) => index >= 0);
+	const start = starts.length ? Math.min(...starts) : -1;
+	if (start < 0) return null;
+
+	const opener = text[start];
+	const closer = opener === '{' ? '}' : ']';
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+
+	for (let i = start; i < text.length; i++) {
+		const char = text[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === '\\') {
+			escaped = inString;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (char === opener) depth++;
+		if (char === closer) depth--;
+		if (depth === 0) return text.slice(start, i + 1);
+	}
+
+	return null;
 }
 
 function buildGeminiJsonSchema(schema: ZodType): JsonSchema {
@@ -184,7 +237,7 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 	const { task, gatewayId } = options;
 
 	try {
-		const result = await runGatewayModel(ai, buildTextGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
+		const result = await runGatewayModel(ai, CORE_TEXT_MODEL, buildTextGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
 		return extractGeminiText(result);
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
@@ -196,10 +249,10 @@ export async function generateJson<T>(ai: AiBinding, prompt: string, options: Ge
 	const { task, gatewayId } = options;
 
 	try {
-		const result = await runGatewayModel(ai, buildJsonGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
+		const result = await runGatewayModel(ai, CORE_JSON_MODEL, buildJsonGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
 		return parseJsonResponse<T>(result);
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'AI Gateway JSON generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
+		console.error({ tag: 'AI', msg: 'AI Gateway JSON generation failed', model: CORE_JSON_MODEL, task, error: String(error) });
 		return null;
 	}
 }
@@ -211,12 +264,18 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 	const parsed = schema.safeParse(result);
 	if (parsed.success) return parsed.data;
 
+	const fallbackText = await generateText(ai, withJsonSchemaPrompt(prompt, jsonSchema), generationOptions);
+	const fallbackJson = fallbackText ? parseJsonText<unknown>(fallbackText) : null;
+	const fallbackParsed = schema.safeParse(fallbackJson);
+	if (fallbackParsed.success) return fallbackParsed.data;
+
 	console.error({
 		tag: 'AI',
 		msg: 'AI Gateway structured output validation failed',
 		schema: schemaName,
 		task: generationOptions.task,
-		error: z.prettifyError(parsed.error),
+		error: z.prettifyError(fallbackParsed.error),
+		primaryError: z.prettifyError(parsed.error),
 	});
 	return null;
 }
