@@ -73,29 +73,31 @@ function buildGeminiContent(text: string): { role: 'user'; parts: Array<{ text: 
 	return { role: 'user', parts: [{ text }] };
 }
 
-function buildGeminiStructuredOutputConfig(schema?: JsonSchema): Record<string, unknown> | undefined {
-	if (!schema) return undefined;
-	return {
-		responseFormat: {
-			text: { schema },
-		},
-	};
-}
-
-function buildTextGenerationInput(options: GenerateTextOptions, prompt: string, responseSchema?: JsonSchema): Record<string, unknown> {
+function buildTextGenerationInput(options: GenerateTextOptions, prompt: string): Record<string, unknown> {
 	const { maxTokens, temperature = 0.3, systemPrompt } = options;
-	const structuredOutputConfig = buildGeminiStructuredOutputConfig(responseSchema);
 	const generationConfig: Record<string, unknown> = {
 		temperature,
 		thinkingConfig: { thinkingLevel: 'minimal' },
 		...(maxTokens != null && { maxOutputTokens: maxTokens }),
-		...(structuredOutputConfig && structuredOutputConfig),
 	};
 
 	return {
 		contents: [buildGeminiContent(prompt)],
 		generationConfig,
 		...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
+	};
+}
+
+function buildJsonGenerationInput(options: GenerateJsonOptions, prompt: string): Record<string, unknown> {
+	const { maxTokens, temperature = 0.3, systemPrompt, schema } = options;
+	return {
+		messages: [...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []), { role: 'user', content: prompt }],
+		temperature,
+		...(maxTokens != null && { max_tokens: maxTokens }),
+		response_format: {
+			type: 'json_schema',
+			schema,
+		},
 	};
 }
 
@@ -147,6 +149,9 @@ function parseJsonResponse<T>(result: unknown): T | null {
 	const response = extractResponse(result);
 	if (isRecord(response) && !('candidates' in response) && !('choices' in response)) return response as T;
 
+	const [choice] = isRecord(response) && Array.isArray(response.choices) ? response.choices : [];
+	if (isRecord(choice) && isRecord(choice.message) && choice.message.parsed != null) return choice.message.parsed as T;
+
 	const text = extractGeminiText(result);
 	if (!text) return null;
 	try {
@@ -188,10 +193,10 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 }
 
 export async function generateJson<T>(ai: AiBinding, prompt: string, options: GenerateJsonOptions): Promise<T | null> {
-	const { task, schema, gatewayId } = options;
+	const { task, gatewayId } = options;
 
 	try {
-		const result = await runGatewayModel(ai, buildTextGenerationInput(options, prompt, schema), buildRunOptions(task, gatewayId));
+		const result = await runGatewayModel(ai, buildJsonGenerationInput(options, prompt), buildRunOptions(task, gatewayId));
 		return parseJsonResponse<T>(result);
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'AI Gateway JSON generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
