@@ -77,10 +77,7 @@ function buildGeminiStructuredOutputConfig(schema?: JsonSchema): Record<string, 
 	if (!schema) return undefined;
 	return {
 		responseFormat: {
-			text: {
-				mimeType: 'application/json',
-				schema,
-			},
+			text: { schema },
 		},
 	};
 }
