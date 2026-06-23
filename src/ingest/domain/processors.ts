@@ -14,13 +14,13 @@ class DefaultProcessor implements ArticleProcessor {
 		const analysis = await generateArticleAnalysis(article, ctx.env);
 		const updateData: ProcessorResult['updateData'] = {};
 
-		const allTags = [...new Set([...analysis.tags, analysis.category])];
+		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
 
-		if (!article.tags?.length) updateData.tags = allTags;
-		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-		if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
-		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
+		if (!article.tags?.length && allTags.length) updateData.tags = allTags;
+		if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
+		if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+		if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
+		if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData };

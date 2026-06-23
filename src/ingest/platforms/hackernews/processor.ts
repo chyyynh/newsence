@@ -234,13 +234,13 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		// 4. 用外部文章（若有）做分析，品質更好
 		const articleForAnalysis = externalPageContent ? { ...article, content: externalPageContent, summary: null } : article;
 		const analysis = await generateArticleAnalysis(articleForAnalysis, ctx.env);
-		const allTags = [...new Set([...analysis.tags, analysis.category, 'HackerNews'])];
+		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), 'HackerNews'])];
 
 		if (!article.tags?.length) updateData.tags = allTags;
-		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-		updateData.summary = analysis.summary_en;
-		updateData.summary_cn = analysis.summary_cn;
+		if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
+		if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+		if (analysis.summary_en) updateData.summary = analysis.summary_en;
+		if (analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData, enrichments };

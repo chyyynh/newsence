@@ -55,12 +55,12 @@ export interface ExtractedEntity {
 }
 
 export interface AIAnalysisResult {
-	tags: string[];
-	keywords: string[];
-	summary_en: string;
-	summary_cn: string;
+	tags?: string[];
+	keywords?: string[];
+	summary_en?: string;
+	summary_cn?: string;
 	title_cn?: string;
-	category: string;
+	category?: string;
 	entities?: ExtractedEntity[];
 }
 

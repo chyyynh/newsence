@@ -124,24 +124,7 @@ function buildArticleContextPrompt(article: Article): string {
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
 
-function createFallbackTranslation(article: Article): ArticleTranslationObject {
-	return {
-		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
-		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
-		title_cn: article.title_cn ?? article.title,
-	};
-}
-
-function createFallbackClassification(article: Article): ArticleClassificationObject {
-	return {
-		tags: ['Other'],
-		keywords: article.title.split(' ').slice(0, 5),
-		category: 'Other',
-		entities: [],
-	};
-}
-
-async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject> {
+async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
 	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleTranslationSchema,
 		schemaName: 'article translation',
@@ -150,10 +133,10 @@ async function generateArticleTranslation(article: Article, env: Env): Promise<A
 		maxTokens: 700,
 		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
 	});
-	return result ?? createFallbackTranslation(article);
+	return result;
 }
 
-async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject> {
+async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject | null> {
 	const result = await generateObject<ArticleClassificationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleClassificationSchema,
 		schemaName: 'article classification',
@@ -162,7 +145,7 @@ async function generateArticleClassification(article: Article, env: Env): Promis
 		maxTokens: 500,
 		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
 	});
-	return result ?? createFallbackClassification(article);
+	return result;
 }
 
 export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
@@ -172,25 +155,29 @@ export async function generateArticleAnalysis(article: Article, env: Env): Promi
 		const [translation, classification] = await Promise.all([
 			generateArticleTranslation(article, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
-				return createFallbackTranslation(article);
+				return null;
 			}),
 			generateArticleClassification(article, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
-				return createFallbackClassification(article);
+				return null;
 			}),
 		]);
 
-		return {
-			tags: classification.tags.slice(0, 5),
-			keywords: classification.keywords.slice(0, 8),
-			summary_en: translation.summary_en,
-			summary_cn: translation.summary_cn,
-			title_cn: translation.title_cn,
-			category: classification.category,
-			entities: classification.entities.slice(0, 10),
-		};
+		const analysis: AIAnalysisResult = {};
+		if (translation) {
+			analysis.summary_en = translation.summary_en;
+			analysis.summary_cn = translation.summary_cn;
+			analysis.title_cn = translation.title_cn;
+		}
+		if (classification) {
+			analysis.tags = classification.tags.slice(0, 5);
+			analysis.keywords = classification.keywords.slice(0, 8);
+			analysis.category = classification.category;
+			analysis.entities = classification.entities.slice(0, 10);
+		}
+		return analysis;
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Parse failed', error: String(error) });
-		return { ...createFallbackTranslation(article), ...createFallbackClassification(article) };
+		return {};
 	}
 }
