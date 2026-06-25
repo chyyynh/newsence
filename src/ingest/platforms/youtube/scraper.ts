@@ -94,6 +94,19 @@ function redactSecret(message: string, secret: string): string {
 	return secret ? message.replaceAll(secret, '[redacted]') : message;
 }
 
+function transcriptToMarkdown(segments: TranscriptSegment[]): string {
+	return segments
+		.map((segment) => segment.text.trim())
+		.filter(Boolean)
+		.join('\n');
+}
+
+function buildYouTubeContent(description: string, transcript: TranscriptSegment[]): string {
+	const transcriptMarkdown = transcriptToMarkdown(transcript);
+	if (transcriptMarkdown) return transcriptMarkdown;
+	return description.trim();
+}
+
 async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Promise<YouTubeVideosResponse> {
 	const url = new URL('https://www.googleapis.com/youtube/v3/videos');
 	url.searchParams.set('id', videoId);
@@ -217,12 +230,13 @@ export async function scrapeYouTube(
 		});
 	}
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
+	const content = buildYouTubeContent(snippet.description, transcript);
 
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
 		title: snippet.title,
-		content: '',
+		content,
 		summary: snippet.description.substring(0, 500) || undefined,
 		ogImageUrl: thumbnailUrl,
 		siteName: 'YouTube',
