@@ -2,7 +2,7 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateObject } from '@shared/ai';
+import { AI_TASKS, generateObject, generateText } from '@shared/ai';
 import type { ProcessableTable } from '@shared/article-store';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
@@ -56,6 +56,8 @@ export function isEmpty(value: string | null | undefined): boolean {
 // ─────────────────────────────────────────────────────────────
 
 const MAX_CONTENT_LENGTH = 10000;
+const MAX_CONTENT_TRANSLATION_LENGTH = 12000;
+const MIN_CONTENT_TRANSLATION_LENGTH = 120;
 const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event'] as const;
 const ARTICLE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
@@ -94,6 +96,15 @@ const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要�
 - 如果原文已是目標語言，保留自然表達，不要硬改寫
 - 所有文字都不要使用 Markdown。`;
 
+const ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文翻譯編輯。請將原文完整翻譯成自然流暢的繁體中文。
+
+規則：
+- 忠實翻譯原文，不要摘要、不要評論、不要新增資訊
+- 保留 Markdown 結構、標題層級、列表、引用、連結和程式碼區塊
+- 專有名詞保留常見英文名稱；必要時可在中文後保留英文
+- 若原文已是繁體中文，直接保留原文
+- 直接輸出翻譯後的 Markdown，不要包 code block。`;
+
 const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
 任務：
@@ -124,6 +135,20 @@ function buildArticleContextPrompt(article: Article): string {
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
 
+function cjkRatio(text: string): number {
+	const letters = text.match(/[A-Za-z\u3400-\u9FFF]/g)?.length ?? 0;
+	if (!letters) return 0;
+	const cjk = text.match(/[\u3400-\u9FFF]/g)?.length ?? 0;
+	return cjk / letters;
+}
+
+function shouldTranslateArticleContent(article: Article): boolean {
+	const content = article.content?.trim();
+	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
+	if (!isEmpty(article.content_cn)) return false;
+	return cjkRatio(content) < 0.6;
+}
+
 async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
 	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleTranslationSchema,
@@ -148,17 +173,33 @@ async function generateArticleClassification(article: Article, env: Env): Promis
 	return result;
 }
 
+async function generateArticleContentTranslation(article: Article, env: Env): Promise<string | null> {
+	if (!shouldTranslateArticleContent(article)) return null;
+	const content = article.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH);
+	return generateText(env.AI, `原文 Markdown:\n${content}`, {
+		task: AI_TASKS.articleContentTranslation,
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 6000,
+		temperature: 0.2,
+		systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
+	});
+}
+
 export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
-		const [translation, classification] = await Promise.all([
+		const [translation, classification, contentTranslation] = await Promise.all([
 			generateArticleTranslation(article, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
 				return null;
 			}),
 			generateArticleClassification(article, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
+				return null;
+			}),
+			generateArticleContentTranslation(article, env).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
 				return null;
 			}),
 		]);
@@ -168,6 +209,9 @@ export async function generateArticleAnalysis(article: Article, env: Env): Promi
 			analysis.summary_en = translation.summary_en;
 			analysis.summary_cn = translation.summary_cn;
 			analysis.title_cn = translation.title_cn;
+		}
+		if (contentTranslation?.trim()) {
+			analysis.content_cn = contentTranslation.trim();
 		}
 		if (classification) {
 			analysis.tags = classification.tags.slice(0, 5);
