@@ -21,6 +21,7 @@ export interface AiTask {
 
 export const AI_TASKS = {
 	articleTranslation: { name: 'article-translation', version: '1' },
+	articleContentCleanup: { name: 'article-content-cleanup', version: '1' },
 	articleContentTranslation: { name: 'article-content-translation', version: '1' },
 	articleClassification: { name: 'article-classification', version: '1' },
 	tweetAnalysis: { name: 'tweet-analysis', version: '1' },

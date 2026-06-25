@@ -56,6 +56,8 @@ export function isEmpty(value: string | null | undefined): boolean {
 // ─────────────────────────────────────────────────────────────
 
 const MAX_CONTENT_LENGTH = 10000;
+const MAX_CONTENT_CLEANUP_LENGTH = 12000;
+const MIN_CONTENT_CLEANUP_LENGTH = 800;
 const MAX_CONTENT_TRANSLATION_LENGTH = 12000;
 const MIN_CONTENT_TRANSLATION_LENGTH = 120;
 const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event'] as const;
@@ -105,6 +107,23 @@ const ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文�
 - 若原文已是繁體中文，直接保留原文
 - 直接輸出翻譯後的 Markdown，不要包 code block。`;
 
+const ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理編輯。請清理抽取出的原文 Markdown，只移除非正文內容。
+
+移除：
+- 廣告、贊助、活動宣傳、newsletter/subscribe CTA、cookie/privacy banner
+- 導航、頁尾、作者 bio、社群分享提示、推薦閱讀、熱門文章、相關文章列表
+- 重複標題、重複段落、圖片版權雜訊、無關的 UI 文案
+
+保留：
+- 原文語言，不要翻譯
+- 正文內容、必要的小標、列表、引用、連結、程式碼區塊
+- 與文章主題直接相關的圖片 markdown
+
+規則：
+- 不要摘要、不要改寫、不要新增資訊
+- 若內容已乾淨，直接原樣輸出
+- 直接輸出清理後 Markdown，不要包 code block，不要解釋。`;
+
 const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
 任務：
@@ -149,6 +168,31 @@ function shouldTranslateArticleContent(article: Article): boolean {
 	return cjkRatio(content) < 0.6;
 }
 
+function shouldCleanArticleContent(article: Article): boolean {
+	const content = article.content?.trim();
+	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH) return false;
+	return article.source_type !== 'youtube' && article.source_type !== 'hackernews';
+}
+
+function normalizeComparableContent(content: string): string {
+	return content.replace(/\s+/g, ' ').trim();
+}
+
+function looksLikeModelExplanation(content: string): boolean {
+	return /^(以下是|這是|Here is|I've cleaned|I cleaned|清理後|已清理)/i.test(content.trim());
+}
+
+function validateCleanedContent(original: string, cleaned: string | null): string | null {
+	const trimmed = cleaned?.trim();
+	if (!trimmed || looksLikeModelExplanation(trimmed)) return null;
+	const originalComparable = normalizeComparableContent(original);
+	const cleanedComparable = normalizeComparableContent(trimmed);
+	if (!cleanedComparable || cleanedComparable === originalComparable) return null;
+	if (cleanedComparable.length < Math.max(300, originalComparable.length * 0.25)) return null;
+	if (cleanedComparable.length > originalComparable.length * 1.15) return null;
+	return trimmed;
+}
+
 async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
 	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleTranslationSchema,
@@ -173,6 +217,19 @@ async function generateArticleClassification(article: Article, env: Env): Promis
 	return result;
 }
 
+async function generateArticleContentCleanup(article: Article, env: Env): Promise<string | null> {
+	if (!shouldCleanArticleContent(article)) return null;
+	const content = article.content!.trim().slice(0, MAX_CONTENT_CLEANUP_LENGTH);
+	const cleaned = await generateText(env.AI, `原文 Markdown:\n${content}`, {
+		task: AI_TASKS.articleContentCleanup,
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 6000,
+		temperature: 0.1,
+		systemPrompt: ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT,
+	});
+	return validateCleanedContent(content, cleaned);
+}
+
 async function generateArticleContentTranslation(article: Article, env: Env): Promise<string | null> {
 	if (!shouldTranslateArticleContent(article)) return null;
 	const content = article.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH);
@@ -189,22 +246,30 @@ export async function generateArticleAnalysis(article: Article, env: Env): Promi
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
+		const cleanedContent = await generateArticleContentCleanup(article, env).catch((error) => {
+			console.error({ tag: 'AI', msg: 'Article content cleanup failed', error: String(error) });
+			return null;
+		});
+		const articleForAnalysis = cleanedContent ? { ...article, content: cleanedContent } : article;
 		const [translation, classification, contentTranslation] = await Promise.all([
-			generateArticleTranslation(article, env).catch((error) => {
+			generateArticleTranslation(articleForAnalysis, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
 				return null;
 			}),
-			generateArticleClassification(article, env).catch((error) => {
+			generateArticleClassification(articleForAnalysis, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
 				return null;
 			}),
-			generateArticleContentTranslation(article, env).catch((error) => {
+			generateArticleContentTranslation(articleForAnalysis, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
 				return null;
 			}),
 		]);
 
 		const analysis: AIAnalysisResult = {};
+		if (cleanedContent) {
+			analysis.content = cleanedContent;
+		}
 		if (translation) {
 			analysis.summary_en = translation.summary_en;
 			analysis.summary_cn = translation.summary_cn;

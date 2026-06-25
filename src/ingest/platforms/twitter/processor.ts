@@ -20,6 +20,7 @@ function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, upda
 	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
 	if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
 	if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
+	if (analysis.content) updateData.content = analysis.content;
 	if (isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
 	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
