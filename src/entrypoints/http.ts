@@ -1,10 +1,13 @@
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
+import { handleRetryCron } from '@ingest/retry';
 import { handleDeleteAsset } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
+import { USER_FILES_TABLE } from '@shared/article-store';
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
+import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import { rankCorpusArticleIds, relatedCorpusArticleIds } from '../corpus';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
@@ -21,6 +24,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
+	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
@@ -38,6 +42,7 @@ const HELP_TEXT =
 	'HTTP endpoints (frontend):\n' +
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
+	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
@@ -110,6 +115,28 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
 	}
+}
+
+async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ articleIds?: string[]; userFileIds?: string[] }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	const articleIds = body.articleIds?.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) ?? [];
+	const userFileIds = body.userFileIds?.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) ?? [];
+
+	if (articleIds.length || userFileIds.length) {
+		if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
+		if (userFileIds.length) await enqueueArticleBatchProcess(env, userFileIds, USER_FILES_TABLE);
+		return jsonData({ articles: articleIds.length, userFiles: userFileIds.length }, INTERNAL_CORS_HEADERS);
+	}
+
+	ctx.waitUntil(handleRetryCron(env, ctx));
+	return jsonData({ queued: true }, INTERNAL_CORS_HEADERS);
 }
 
 async function handleWorkflowStream(request: Request, instanceId: string, env: Env): Promise<Response> {

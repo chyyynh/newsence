@@ -48,7 +48,7 @@ async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<
 /** Returns true on insert, false on skip/failure. */
 async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo): Promise<boolean> {
 	const { videoId, url } = video;
-	const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '');
+	const scraped = await scrapeYouTube(videoId, env.YOUTUBE_API_KEY || '', { minDurationSecondsForTranscript: SHORTS_MAX_SECONDS });
 	const youtubeMetadata: YouTubeMetadata = {
 		...scraped.metadata,
 		videoId,

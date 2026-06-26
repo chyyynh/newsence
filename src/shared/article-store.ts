@@ -281,7 +281,14 @@ export type IncompleteWorkflowTargetIds = {
 
 export async function getIncompleteWorkflowTargetIds(db: DbClient, since: Date | string): Promise<IncompleteWorkflowTargetIds> {
 	const articleResult = await db.query<{ id: string }>(
-		`SELECT id FROM ${ARTICLES_TABLE} WHERE scraped_date >= $1 AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL)`,
+		`SELECT id FROM ${ARTICLES_TABLE}
+		 WHERE scraped_date >= $1
+		   AND (
+		     title_cn IS NULL
+		     OR summary_cn IS NULL
+		     OR embedding IS NULL
+		     OR (content IS NOT NULL AND length(content) >= 120 AND content_cn IS NULL)
+		   )`,
 		[since],
 	);
 
@@ -289,12 +296,21 @@ export async function getIncompleteWorkflowTargetIds(db: DbClient, since: Date |
 		`SELECT id FROM ${USER_FILES_TABLE}
 		 WHERE created_at >= $1
 		   AND (
-		     (resource_kind = 'url' AND (title_cn IS NULL OR summary_cn IS NULL OR embedding IS NULL))
+		     (resource_kind = 'url' AND (
+		       title_cn IS NULL
+		       OR summary_cn IS NULL
+		       OR embedding IS NULL
+		       OR (extracted_text IS NOT NULL AND length(extracted_text) >= 120 AND content_cn IS NULL)
+		     ))
 		     OR (
 		       resource_kind = 'blob'
 		       AND file_type = 'application/pdf'
 		       AND (metadata->'extraction'->>'status') IS DISTINCT FROM 'failed'
-		       AND (extracted_text IS NULL OR embedding IS NULL)
+		       AND (
+		         extracted_text IS NULL
+		         OR embedding IS NULL
+		         OR (extracted_text IS NOT NULL AND length(extracted_text) >= 120 AND content_cn IS NULL)
+		       )
 		     )
 		   )`,
 		[since],

@@ -55,7 +55,7 @@ const YouTubeHighlightsSchema = z.object({
 async function generateYouTubeHighlights(
 	videoId: string,
 	transcript: TranscriptSegment[],
-	ai: Env['AI'],
+	env: Env,
 ): Promise<YouTubeHighlightsResult | null> {
 	console.info({ tag: 'AI', msg: 'Generating YouTube highlights', videoId });
 
@@ -63,10 +63,11 @@ async function generateYouTubeHighlights(
 	const last = transcript[transcript.length - 1];
 	const duration = Math.ceil(last.endTime);
 
-	const result = await generateObject<YouTubeHighlightsResult>(ai, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+	const result = await generateObject<YouTubeHighlightsResult>(env.AI, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
 		schema: YouTubeHighlightsSchema,
 		schemaName: 'youtube highlights',
 		task: AI_TASKS.youtubeHighlights,
+		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 2000,
 		temperature: 0.3,
 		systemPrompt: HIGHLIGHTS_SYSTEM_PROMPT,
@@ -100,7 +101,7 @@ export async function prepareYouTubeHighlightsFromTranscript(
 	videoId: string,
 	transcript: TranscriptSegment[],
 ): Promise<YouTubeHighlightsUpdate | null> {
-	const highlights = await generateYouTubeHighlights(videoId, transcript, env.AI);
+	const highlights = await generateYouTubeHighlights(videoId, transcript, env);
 	if (!highlights) return null;
 
 	const generatedAt = new Date().toISOString();

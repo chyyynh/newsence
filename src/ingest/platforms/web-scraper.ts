@@ -7,7 +7,6 @@ import { BROWSER_UA, fetchWithTimeout, readTextWithLimit, type ScrapedContent } 
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
-import { cleanExtractedContent } from '../domain/content-cleanup';
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -217,8 +216,7 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 	const $ = cheerio.load(html);
 	const metadata = extractMetadata($, finalUrl);
 
-	const rawContent = extractContentReadability(html, finalUrl) ?? extractContentCheerio($, metadata.title, finalUrl);
-	const content = cleanExtractedContent(rawContent);
+	const content = extractContentReadability(html, finalUrl) ?? extractContentCheerio($, metadata.title, finalUrl);
 
 	return {
 		title: metadata.title,

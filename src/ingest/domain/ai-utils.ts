@@ -2,7 +2,7 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateObject } from '@shared/ai';
+import { AI_TASKS, generateObject, generateText } from '@shared/ai';
 import type { ProcessableTable } from '@shared/article-store';
 import type { PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
@@ -56,6 +56,10 @@ export function isEmpty(value: string | null | undefined): boolean {
 // ─────────────────────────────────────────────────────────────
 
 const MAX_CONTENT_LENGTH = 10000;
+const MAX_CONTENT_CLEANUP_LENGTH = 12000;
+const MIN_CONTENT_CLEANUP_LENGTH = 800;
+const MAX_CONTENT_TRANSLATION_LENGTH = 12000;
+const MIN_CONTENT_TRANSLATION_LENGTH = 120;
 const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event'] as const;
 const ARTICLE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
@@ -94,6 +98,32 @@ const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要�
 - 如果原文已是目標語言，保留自然表達，不要硬改寫
 - 所有文字都不要使用 Markdown。`;
 
+const ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文翻譯編輯。請將原文完整翻譯成自然流暢的繁體中文。
+
+規則：
+- 忠實翻譯原文，不要摘要、不要評論、不要新增資訊
+- 保留 Markdown 結構、標題層級、列表、引用、連結和程式碼區塊
+- 專有名詞保留常見英文名稱；必要時可在中文後保留英文
+- 若原文已是繁體中文，直接保留原文
+- 直接輸出翻譯後的 Markdown，不要包 code block。`;
+
+const ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理編輯。請清理抽取出的原文 Markdown，只移除非正文內容。
+
+移除：
+- 廣告、贊助、活動宣傳、newsletter/subscribe CTA、cookie/privacy banner
+- 導航、頁尾、作者 bio、社群分享提示、推薦閱讀、熱門文章、相關文章列表
+- 重複標題、重複段落、圖片版權雜訊、無關的 UI 文案
+
+保留：
+- 原文語言，不要翻譯
+- 正文內容、必要的小標、列表、引用、連結、程式碼區塊
+- 與文章主題直接相關的圖片 markdown
+
+規則：
+- 不要摘要、不要改寫、不要新增資訊
+- 若內容已乾淨，直接原樣輸出
+- 直接輸出清理後 Markdown，不要包 code block，不要解釋。`;
+
 const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
 任務：
@@ -124,71 +154,139 @@ function buildArticleContextPrompt(article: Article): string {
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
 
-function createFallbackTranslation(article: Article): ArticleTranslationObject {
-	return {
-		summary_en: article.summary ?? `${article.title.substring(0, 100)}...`,
-		summary_cn: article.summary_cn ?? article.summary ?? `${article.title.substring(0, 100)}...`,
-		title_cn: article.title_cn ?? article.title,
-	};
+function cjkRatio(text: string): number {
+	const letters = text.match(/[A-Za-z\u3400-\u9FFF]/g)?.length ?? 0;
+	if (!letters) return 0;
+	const cjk = text.match(/[\u3400-\u9FFF]/g)?.length ?? 0;
+	return cjk / letters;
 }
 
-function createFallbackClassification(article: Article): ArticleClassificationObject {
-	return {
-		tags: ['Other'],
-		keywords: article.title.split(' ').slice(0, 5),
-		category: 'Other',
-		entities: [],
-	};
+function shouldTranslateArticleContent(article: Article): boolean {
+	const content = article.content?.trim();
+	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
+	if (!isEmpty(article.content_cn)) return false;
+	return cjkRatio(content) < 0.6;
 }
 
-async function generateArticleTranslation(article: Article, ai: Env['AI']): Promise<ArticleTranslationObject> {
-	const result = await generateObject<ArticleTranslationObject>(ai, buildArticleContextPrompt(article), {
+function shouldCleanArticleContent(article: Article): boolean {
+	const content = article.content?.trim();
+	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH) return false;
+	return article.source_type !== 'youtube' && article.source_type !== 'hackernews';
+}
+
+function normalizeComparableContent(content: string): string {
+	return content.replace(/\s+/g, ' ').trim();
+}
+
+function looksLikeModelExplanation(content: string): boolean {
+	return /^(以下是|這是|Here is|I've cleaned|I cleaned|清理後|已清理)/i.test(content.trim());
+}
+
+function validateCleanedContent(original: string, cleaned: string | null): string | null {
+	const trimmed = cleaned?.trim();
+	if (!trimmed || looksLikeModelExplanation(trimmed)) return null;
+	const originalComparable = normalizeComparableContent(original);
+	const cleanedComparable = normalizeComparableContent(trimmed);
+	if (!cleanedComparable || cleanedComparable === originalComparable) return null;
+	if (cleanedComparable.length < Math.max(300, originalComparable.length * 0.25)) return null;
+	if (cleanedComparable.length > originalComparable.length * 1.15) return null;
+	return trimmed;
+}
+
+async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
+	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleTranslationSchema,
 		schemaName: 'article translation',
 		task: AI_TASKS.articleTranslation,
+		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 700,
 		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
 	});
-	return result ?? createFallbackTranslation(article);
+	return result;
 }
 
-async function generateArticleClassification(article: Article, ai: Env['AI']): Promise<ArticleClassificationObject> {
-	const result = await generateObject<ArticleClassificationObject>(ai, buildArticleContextPrompt(article), {
+async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject | null> {
+	const result = await generateObject<ArticleClassificationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleClassificationSchema,
 		schemaName: 'article classification',
 		task: AI_TASKS.articleClassification,
+		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 500,
 		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
 	});
-	return result ?? createFallbackClassification(article);
+	return result;
 }
 
-export async function generateArticleAnalysis(article: Article, ai: Env['AI']): Promise<AIAnalysisResult> {
+async function generateArticleContentCleanup(article: Article, env: Env): Promise<string | null> {
+	if (!shouldCleanArticleContent(article)) return null;
+	const content = article.content!.trim().slice(0, MAX_CONTENT_CLEANUP_LENGTH);
+	const cleaned = await generateText(env.AI, `原文 Markdown:\n${content}`, {
+		task: AI_TASKS.articleContentCleanup,
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 6000,
+		temperature: 0.1,
+		systemPrompt: ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT,
+	});
+	return validateCleanedContent(content, cleaned);
+}
+
+async function generateArticleContentTranslation(article: Article, env: Env): Promise<string | null> {
+	if (!shouldTranslateArticleContent(article)) return null;
+	const content = article.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH);
+	return generateText(env.AI, `原文 Markdown:\n${content}`, {
+		task: AI_TASKS.articleContentTranslation,
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 6000,
+		temperature: 0.2,
+		systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
+	});
+}
+
+export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
-		const [translation, classification] = await Promise.all([
-			generateArticleTranslation(article, ai).catch((error) => {
+		const cleanedContent = await generateArticleContentCleanup(article, env).catch((error) => {
+			console.error({ tag: 'AI', msg: 'Article content cleanup failed', error: String(error) });
+			return null;
+		});
+		const articleForAnalysis = cleanedContent ? { ...article, content: cleanedContent } : article;
+		const [translation, classification, contentTranslation] = await Promise.all([
+			generateArticleTranslation(articleForAnalysis, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
-				return createFallbackTranslation(article);
+				return null;
 			}),
-			generateArticleClassification(article, ai).catch((error) => {
+			generateArticleClassification(articleForAnalysis, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
-				return createFallbackClassification(article);
+				return null;
+			}),
+			generateArticleContentTranslation(articleForAnalysis, env).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
+				return null;
 			}),
 		]);
 
-		return {
-			tags: classification.tags.slice(0, 5),
-			keywords: classification.keywords.slice(0, 8),
-			summary_en: translation.summary_en,
-			summary_cn: translation.summary_cn,
-			title_cn: translation.title_cn,
-			category: classification.category,
-			entities: classification.entities.slice(0, 10),
-		};
+		const analysis: AIAnalysisResult = {};
+		if (cleanedContent) {
+			analysis.content = cleanedContent;
+		}
+		if (translation) {
+			analysis.summary_en = translation.summary_en;
+			analysis.summary_cn = translation.summary_cn;
+			analysis.title_cn = translation.title_cn;
+		}
+		if (contentTranslation?.trim()) {
+			analysis.content_cn = contentTranslation.trim();
+		}
+		if (classification) {
+			analysis.tags = classification.tags.slice(0, 5);
+			analysis.keywords = classification.keywords.slice(0, 8);
+			analysis.category = classification.category;
+			analysis.entities = classification.entities.slice(0, 10);
+		}
+		return analysis;
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Parse failed', error: String(error) });
-		return { ...createFallbackTranslation(article), ...createFallbackClassification(article) };
+		return {};
 	}
 }

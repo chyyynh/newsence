@@ -152,7 +152,7 @@ ${rulesBlock}`;
 }
 
 async function generateHnEditorial(
-	ai: Env['AI'],
+	env: Env,
 	title: string,
 	hnText: string,
 	comments: HnCollectedComment[],
@@ -172,8 +172,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		generateText(ai, cnPrompt.user, { systemPrompt: cnPrompt.system, task: AI_TASKS.hnEditorialCn }),
-		generateText(ai, enPrompt.user, { systemPrompt: enPrompt.system, task: AI_TASKS.hnEditorialEn }),
+		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: AI_TASKS.hnEditorialCn, gatewayId: env.AI_GATEWAY_NAME }),
+		generateText(env.AI, enPrompt.user, { systemPrompt: enPrompt.system, task: AI_TASKS.hnEditorialEn, gatewayId: env.AI_GATEWAY_NAME }),
 	]);
 
 	return { en, cn };
@@ -208,7 +208,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 
 		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
 		if (hnData) {
-			const editorial = await generateHnEditorial(ctx.env.AI, article.title, hnData.text || '', comments, externalPageContent);
+			const editorial = await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments, externalPageContent);
 			if (editorial.cn) {
 				updateData.content_cn = editorial.cn;
 				console.info({ tag: 'HN-PROCESSOR', msg: 'Generated editorial content_cn', chars: editorial.cn.length });
@@ -233,14 +233,14 @@ export class HackerNewsProcessor implements ArticleProcessor {
 
 		// 4. 用外部文章（若有）做分析，品質更好
 		const articleForAnalysis = externalPageContent ? { ...article, content: externalPageContent, summary: null } : article;
-		const analysis = await generateArticleAnalysis(articleForAnalysis, ctx.env.AI);
-		const allTags = [...new Set([...analysis.tags, analysis.category, 'HackerNews'])];
+		const analysis = await generateArticleAnalysis(articleForAnalysis, ctx.env);
+		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), 'HackerNews'])];
 
 		if (!article.tags?.length) updateData.tags = allTags;
-		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
-		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-		updateData.summary = analysis.summary_en;
-		updateData.summary_cn = analysis.summary_cn;
+		if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
+		if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+		if (analysis.summary_en) updateData.summary = analysis.summary_en;
+		if (analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
 		return { updateData, enrichments };
