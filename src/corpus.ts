@@ -98,7 +98,8 @@ export async function searchCorpusArticles(
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
-			const candidateIds = [...ranks.keys()].slice(0, limit);
+			const candidateIds = [...ranks.keys()].filter(isValidUuid).slice(0, limit);
+			if (candidateIds.length === 0) return [];
 			const params: unknown[] = [candidateIds];
 			let where = `id = ANY($1::uuid[])`;
 			if (fromDate) {
@@ -166,6 +167,7 @@ async function relatedArticles(
 	limit: number,
 	offset: number,
 ): Promise<string[]> {
+	if (!isValidUuid(seed.id)) return [];
 	const seedTable = seed.type === 'user_file' ? 'user_files' : 'articles';
 	const rows = await client.query<{ id: string }>(
 		`WITH src AS (
@@ -379,7 +381,7 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 		articleIdsByCollection.set(row.from_id, list);
 	}
 
-	const allArticleIds = [...new Set(citationsResult.rows.map((r) => r.to_id))];
+	const allArticleIds = [...new Set(citationsResult.rows.map((r) => r.to_id).filter(isValidUuid))];
 	if (allArticleIds.length === 0) {
 		return new Map(
 			collectionsResult.rows.map((col) => [

@@ -17,11 +17,14 @@ import { scrapeWebPage } from '../web-scraper';
 type UpdateData = ProcessorResult['updateData'];
 
 function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): void {
-	if (isEmpty(article.title_cn)) updateData.title_cn = analysis.title_cn;
-	if (isEmpty(article.summary)) updateData.summary = analysis.summary_en;
-	if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
-	if (!article.tags?.length) updateData.tags = [...new Set([...analysis.tags, analysis.category])];
-	if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+	if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
+	if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
+	if (analysis.content) updateData.content = analysis.content;
+	if (isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
+	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
+	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
+	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
 	if (analysis.entities?.length) updateData.entities = analysis.entities;
 }
 
@@ -55,7 +58,7 @@ export class TwitterProcessor implements ArticleProcessor {
 
 		if (hasFullContent) {
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
-			const analysis = await generateArticleAnalysis(article, ctx.env.AI);
+			const analysis = await generateArticleAnalysis(article, ctx.env);
 			applyArticleAnalysis(article, analysis, updateData);
 			return { updateData };
 		}
@@ -86,7 +89,7 @@ export class TwitterProcessor implements ArticleProcessor {
 			updateData.content = linked.content;
 			const analysis = await generateArticleAnalysis(
 				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-				ctx.env.AI,
+				ctx.env,
 			);
 			applyArticleAnalysis(article, analysis, updateData);
 			return true;
@@ -97,11 +100,17 @@ export class TwitterProcessor implements ArticleProcessor {
 	}
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
-		const analysis = await translateTweet(tweetText, ctx.env.AI);
-		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80) || article.title;
+		const analysis = await translateTweet(tweetText, ctx.env);
+		if (!analysis) {
+			if (!article.tags?.length) updateData.tags = ['Twitter'];
+			return;
+		}
+		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80);
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
-		if (!article.tags?.length) updateData.tags = analysis.tags;
-		if (!article.keywords?.length) updateData.keywords = analysis.keywords;
+		if (isEmpty(article.content)) updateData.content = tweetText;
+		if (isEmpty(article.content_cn)) updateData.content_cn = analysis.summary_cn;
+		if (!article.tags?.length && analysis.tags.length) updateData.tags = analysis.tags;
+		if (!article.keywords?.length && analysis.keywords.length) updateData.keywords = analysis.keywords;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 	}
 }
@@ -117,7 +126,6 @@ interface TweetAnalysis {
 	entities: Array<{ name: string; name_cn: string; type: string }>;
 }
 
-const TWEET_FALLBACK: TweetAnalysis = { summary_cn: '', tags: ['Twitter'], keywords: [], entities: [] };
 const TweetAnalysisSchema = z.object({
 	summary_cn: z.string().min(1),
 	tags: z.array(z.string().min(1)),
@@ -150,27 +158,28 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, ai: ProcessorContext['env']['AI']): Promise<TweetAnalysis> {
+async function translateTweet(tweetText: string, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 
 	try {
-		const result = await generateObject<TweetAnalysis>(ai, `推文內容：\n${tweetText}`, {
+		const result = await generateObject<TweetAnalysis>(env.AI, `推文內容：\n${tweetText}`, {
 			schema: TweetAnalysisSchema,
 			schemaName: 'tweet analysis',
 			task: AI_TASKS.tweetAnalysis,
+			gatewayId: env.AI_GATEWAY_NAME,
 			maxTokens: 600,
 			systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
 		});
 		if (!result) throw new Error('No JSON found');
 
 		return {
-			summary_cn: result.summary_cn ?? tweetText,
-			tags: (result.tags ?? ['Twitter']).slice(0, 5),
-			keywords: (result.keywords ?? []).slice(0, 8),
+			summary_cn: result.summary_cn,
+			tags: (result.tags.length ? result.tags : ['Twitter']).slice(0, 5),
+			keywords: result.keywords.slice(0, 8),
 			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
 		};
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Tweet translation failed', error: String(error) });
-		return { ...TWEET_FALLBACK, summary_cn: tweetText };
+		return null;
 	}
 }
