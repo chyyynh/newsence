@@ -34,7 +34,11 @@ export function isExtractablePdfFile(args: { originType?: string | null; fileTyp
 }
 
 export function storageKeyToAssetUrl(key: string): string {
-	return `/api/media/asset/${key}`;
+	const encodedPath = key
+		.split('/')
+		.map((segment) => encodeURIComponent(segment))
+		.join('/');
+	return `/api/media/asset/${encodedPath}`;
 }
 
 export function userUploadKey(userId: string, extension: string): string {
