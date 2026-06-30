@@ -36,6 +36,7 @@
  */
 
 import type { Env, ExecutionContext } from '@shared/types';
+import { assertExternalFetchable } from '@shared/web';
 import { getProxySigningSecret, verifyProxySignature } from './sign-url';
 
 // Routing-only — these hosts serve byte-range video streams, so we always
@@ -48,6 +49,7 @@ const VIDEO_HOSTS = new Set(['video.twimg.com']);
 // mint arbitrary width/quality combinations and burn transformation quota.
 const ALLOWED_TRANSFORM_WIDTHS = new Set([256, 1280, 1920]);
 const ALLOWED_QUALITY = 75;
+const MAX_REDIRECTS = 5;
 // Bumped when key derivation changes; old entries become orphaned and can
 // be cleaned up via R2 lifecycle or `wrangler r2 object delete`.
 const TRANSFORM_KEY_VERSION = 'v1';
@@ -102,10 +104,20 @@ function corsPreflight(): Response {
 async function fetchUpstream(parsed: URL, range: string | null): Promise<Response> {
 	const headers: HeadersInit = { 'User-Agent': 'Mozilla/5.0 (compatible; NewsenceProxy/1.0)' };
 	if (range) headers.Range = range;
-	return fetch(parsed.toString(), {
-		headers,
-		cf: { cacheEverything: true, cacheTtl: 60 * 60 * 24 * 30 },
-	});
+	let current = parsed;
+	for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+		const response = await fetch(current.toString(), {
+			headers,
+			redirect: 'manual',
+			cf: { cacheEverything: true, cacheTtl: 60 * 60 * 24 * 30 },
+		});
+		if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+		await response.body?.cancel();
+		const location = response.headers.get('Location');
+		if (!location) throw new Error('Upstream redirect missing Location');
+		current = assertExternalFetchable(new URL(location, current).toString());
+	}
+	throw new Error('Too many upstream redirects');
 }
 
 function videoPassthrough(upstream: Response): Response {
@@ -184,11 +196,11 @@ export async function handleProxy(request: Request, env: Env, ctx: ExecutionCont
 	const [, optionsStr, encodedUrl] = match;
 	let parsed: URL;
 	try {
-		parsed = new URL(decodeURIComponent(encodedUrl));
-	} catch {
-		return new Response('Invalid media URL', { status: 400 });
+		parsed = assertExternalFetchable(decodeURIComponent(encodedUrl));
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'Invalid media URL';
+		return new Response(message, { status: 400 });
 	}
-	if (parsed.protocol !== 'https:') return new Response('Only https upstreams allowed', { status: 403 });
 
 	const signingSecret = getProxySigningSecret(env);
 	if (!signingSecret) return new Response('Proxy signing not configured', { status: 503 });
