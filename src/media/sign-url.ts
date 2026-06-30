@@ -11,6 +11,8 @@
  */
 
 const ENCODER = new TextEncoder();
+const HMAC_SHA256_HEX_RE = /^[0-9a-fA-F]{64}$/;
+const UNIX_SECONDS_RE = /^\d{10}$/;
 
 let cachedKey: { secret: string; key: CryptoKey } | null = null;
 
@@ -22,7 +24,7 @@ async function importKey(secret: string): Promise<CryptoKey> {
 }
 
 function hexToBytes(hex: string): Uint8Array | null {
-	if (hex.length === 0 || hex.length % 2 !== 0) return null;
+	if (!HMAC_SHA256_HEX_RE.test(hex)) return null;
 	const out = new Uint8Array(hex.length / 2);
 	for (let i = 0; i < out.length; i++) {
 		const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -42,6 +44,7 @@ export function getProxySigningSecret(env: ProxySigningEnv): string | null {
 }
 
 async function verifyHmacSig(buildSignInput: (expNum: number) => string, sig: string, exp: string, secret: string): Promise<boolean> {
+	if (!UNIX_SECONDS_RE.test(exp)) return false;
 	const expNum = Number.parseInt(exp, 10);
 	if (!Number.isFinite(expNum) || expNum <= Math.floor(Date.now() / 1000)) return false;
 	const sigBytes = hexToBytes(sig);
