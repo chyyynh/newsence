@@ -6,6 +6,7 @@ import type { Client } from 'pg';
 
 type SearchRanks = Map<string, number>;
 type ResourceType = 'article' | 'collection' | 'url';
+type RankArticleOptions = { fromDate?: Date | null };
 
 export interface ArticleSummary {
 	id: string;
@@ -95,9 +96,9 @@ export async function searchCorpusArticles(
 	const limit = opts?.limit ?? RESULT_LIMIT;
 	return withDb(env, async (client) => {
 		const trimmed = query.trim();
-		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = trimmed ? await rankArticles(client, env, trimmed, rankLimit) : null;
 		const fromDate = opts?.daysAgo ? new Date(Date.now() - opts.daysAgo * 86_400_000) : null;
+		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
+		const ranks = trimmed ? await rankArticles(client, env, trimmed, rankLimit, { fromDate }) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
@@ -186,7 +187,7 @@ async function relatedArticles(
 	return rows.rows.map((r) => r.id);
 }
 
-async function rankArticles(client: Client, env: Env, query: string, limit = 100): Promise<SearchRanks> {
+async function rankArticles(client: Client, env: Env, query: string, limit = 100, options: RankArticleOptions = {}): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 
@@ -194,8 +195,17 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 	const patterns = tokens.length > 0 ? tokens.map((t) => `%${t}%`) : [`%${sanitized}%`];
 
 	const embedding = await generateArticleEmbedding(sanitized, env.AI).catch(() => null);
-	if (!embedding) return keywordOnly(client, patterns, limit);
+	if (!embedding) return keywordOnly(client, patterns, limit, options);
 	const vectorStr = `[${embedding.join(',')}]`;
+	const params: unknown[] = [
+		vectorStr,
+		Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP),
+		patterns,
+		RRF_K,
+		RECENCY_HALF_LIFE_DAYS,
+		limit,
+	];
+	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
 
 	try {
 		const result = await client.query<{ id: string; score: number | string }>(
@@ -203,16 +213,18 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 			WITH vec AS (
 				SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
 				FROM articles
-				WHERE embedding IS NOT NULL
+				WHERE embedding IS NOT NULL${dateFilter}
 				ORDER BY embedding <=> $1::vector
 				LIMIT $2
 			),
 			kw AS (
 				SELECT id, ROW_NUMBER() OVER (ORDER BY published_date DESC NULLS LAST) AS rank
 				FROM articles
-				WHERE EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($3::text[]))
-				   OR title ILIKE ANY($3::text[])
-				   OR title_cn ILIKE ANY($3::text[])
+				WHERE (
+					EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($3::text[]))
+					OR title ILIKE ANY($3::text[])
+					OR title_cn ILIKE ANY($3::text[])
+				)${dateFilter}
 				LIMIT $2
 			),
 			fused AS (
@@ -231,29 +243,33 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 			ORDER BY score DESC
 			LIMIT $6
 			`,
-			[vectorStr, Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP), patterns, RRF_K, RECENCY_HALF_LIFE_DAYS, limit],
+			params,
 		);
 		return new Map(result.rows.map((r) => [r.id, Number(r.score)]));
 	} catch (error) {
 		console.warn({ tag: 'CORPUS', msg: 'hybrid query failed, falling back to keyword search', error: String(error) });
-		return keywordOnly(client, patterns, limit);
+		return keywordOnly(client, patterns, limit, options);
 	}
 }
 
-async function keywordOnly(client: Client, patterns: string[], limit: number): Promise<SearchRanks> {
+async function keywordOnly(client: Client, patterns: string[], limit: number, options: RankArticleOptions = {}): Promise<SearchRanks> {
+	const params: unknown[] = [patterns, limit];
+	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
 	try {
 		const result = await client.query<{ id: string; match_count: number | string }>(
 			`
 			SELECT id,
 				(SELECT COUNT(*) FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[])) AS match_count
 			FROM articles
-			WHERE EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
-			   OR title ILIKE ANY($1::text[])
-			   OR title_cn ILIKE ANY($1::text[])
+			WHERE (
+				EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
+				OR title ILIKE ANY($1::text[])
+				OR title_cn ILIKE ANY($1::text[])
+			)${dateFilter}
 			ORDER BY match_count DESC, published_date DESC NULLS LAST
 			LIMIT $2
 			`,
-			[patterns, limit],
+			params,
 		);
 		const max = Math.max(...result.rows.map((r) => Number(r.match_count)), 1);
 		return new Map(result.rows.map((r) => [r.id, Number(r.match_count) / max]));
