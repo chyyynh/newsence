@@ -69,38 +69,6 @@ const RRF_K = 60;
 const RECENCY_HALF_LIFE_DAYS = 30;
 const OVERFETCH_MULTIPLIER = 5;
 const OVERFETCH_CAP = 200;
-const SEARCH_STOP_WORDS = new Set([
-	'a',
-	'an',
-	'and',
-	'are',
-	'as',
-	'at',
-	'by',
-	'for',
-	'from',
-	'has',
-	'have',
-	'how',
-	'in',
-	'is',
-	'it',
-	'of',
-	'on',
-	'or',
-	'that',
-	'the',
-	'this',
-	'to',
-	'was',
-	'what',
-	'when',
-	'where',
-	'which',
-	'who',
-	'why',
-	'with',
-]);
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -323,10 +291,8 @@ function tokenize(sanitized: string): string[] {
 	const parts = sanitized.split(/[\s,，、。.;；!！?？/\\|]+/).filter(Boolean);
 	const tokens = new Set<string>();
 	for (const p of parts) {
-		const token = p.toLowerCase();
-		if (SEARCH_STOP_WORDS.has(token)) continue;
-		if (/[㐀-鿿぀-ヿ]/.test(token) || token.length >= 2) {
-			tokens.add(token);
+		if (/[㐀-鿿぀-ヿ]/.test(p) || p.length >= 2) {
+			tokens.add(p);
 		}
 	}
 	return [...tokens].slice(0, 8);
