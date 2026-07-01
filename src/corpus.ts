@@ -59,6 +59,8 @@ const ARTICLE_CONTENT_COLS = `${ARTICLE_SUMMARY_COLS}, content, content_cn, sour
 const EMPTY_RANKS: SearchRanks = new Map();
 const SEARCH_LIMIT = 200;
 const RESULT_LIMIT = 10;
+const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
+const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const COLLECTION_LIMIT = 100;
@@ -93,12 +95,13 @@ export async function searchCorpusArticles(
 	const limit = opts?.limit ?? RESULT_LIMIT;
 	return withDb(env, async (client) => {
 		const trimmed = query.trim();
-		const ranks = trimmed ? await rankArticles(client, env, trimmed, SEARCH_LIMIT) : null;
+		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
+		const ranks = trimmed ? await rankArticles(client, env, trimmed, rankLimit) : null;
 		const fromDate = opts?.daysAgo ? new Date(Date.now() - opts.daysAgo * 86_400_000) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
-			const candidateIds = [...ranks.keys()].filter(isValidUuid).slice(0, limit);
+			const candidateIds = [...ranks.keys()].filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
 			const params: unknown[] = [candidateIds];
 			let where = `id = ANY($1::uuid[])`;
@@ -107,7 +110,7 @@ export async function searchCorpusArticles(
 				where += ` AND published_date >= $${params.length}`;
 			}
 			const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
-			return sortByRank(result.rows, ranks).map(formatSummary);
+			return sortByRank(result.rows, ranks).slice(0, limit).map(formatSummary);
 		}
 
 		const params: unknown[] = [];
