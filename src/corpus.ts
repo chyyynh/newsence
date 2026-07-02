@@ -7,6 +7,8 @@ import type { Client } from 'pg';
 type SearchRanks = Map<string, number>;
 type ResourceType = 'article' | 'collection' | 'url';
 type RankArticleOptions = { fromDate?: Date | null };
+export type ArticleRank = { id: string; score: number };
+export type ArticleSearchOptions = { daysAgo?: number; limit?: number };
 
 export interface ArticleSummary {
 	id: string;
@@ -72,10 +74,10 @@ const OVERFETCH_CAP = 200;
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function rankCorpusArticleIds(env: Env, query: string, limit = 100): Promise<Array<{ id: string; score: number }>> {
+export async function searchCorpusArticleRanks(env: Env, query: string, limit = 100): Promise<ArticleRank[]> {
 	return withDb(env, async (client) => {
 		const ranks = await rankArticles(client, env, query, limit);
-		return [...ranks].map(([id, score]) => ({ id, score }));
+		return rankEntries(ranks);
 	});
 }
 
@@ -88,11 +90,7 @@ export async function relatedCorpusArticleIds(
 	return withDb(env, (client) => relatedArticles(client, seed, limit, offset));
 }
 
-export async function searchCorpusArticles(
-	env: Env,
-	query: string,
-	opts?: { daysAgo?: number; limit?: number },
-): Promise<ArticleSummary[]> {
+export async function searchCorpusArticles(env: Env, query: string, opts?: ArticleSearchOptions): Promise<ArticleSummary[]> {
 	const limit = opts?.limit ?? RESULT_LIMIT;
 	return withDb(env, async (client) => {
 		const trimmed = query.trim();
@@ -159,6 +157,10 @@ function formatSummary(a: ArticleSummaryRow): ArticleSummary {
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: a.tags ?? undefined,
 	};
+}
+
+function rankEntries(ranks: SearchRanks): ArticleRank[] {
+	return [...ranks].map(([id, score]) => ({ id, score }));
 }
 
 function sortByRank<T extends { id: string }>(articles: T[], ranks: SearchRanks): T[] {

@@ -8,7 +8,7 @@ import { USER_FILES_TABLE } from '@shared/article-store';
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
-import { rankCorpusArticleIds, relatedCorpusArticleIds } from '../corpus';
+import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
@@ -83,7 +83,7 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
 	const limit = Math.min(Math.max(Math.trunc(body.limit ?? 100), 1), SEARCH_LIMIT_MAX);
 
 	try {
-		const results = await rankCorpusArticleIds(env, query, limit);
+		const results = await searchCorpusArticleRanks(env, query, limit);
 		return jsonData({ results }, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'hybrid search failed', error: error instanceof Error ? error.message : String(error) });

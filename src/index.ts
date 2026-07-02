@@ -10,7 +10,7 @@ import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.wo
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
-import type { ArticleSummary, CorpusReadItem, CorpusReadResult } from './corpus';
+import type { ArticleSearchOptions, ArticleSummary, CorpusReadItem, CorpusReadResult } from './corpus';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
@@ -45,7 +45,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
-	searchArticles(query: string, opts?: { daysAgo?: number; limit?: number }): Promise<ArticleSummary[]> {
+	searchArticles(query: string, opts?: ArticleSearchOptions): Promise<ArticleSummary[]> {
 		return searchCorpusArticles(this.env, query, opts);
 	}
 
