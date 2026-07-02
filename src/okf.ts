@@ -469,6 +469,7 @@ function renderArticle(article: ArticleRow, entities: EntityRow[], entityPaths: 
 			source_type: article.source_type,
 			title_cn: article.title_cn,
 			description_cn: article.summary_cn,
+			newsence_article_id: article.id,
 		}),
 		`# ${title}`,
 		summary ?? '',
@@ -524,12 +525,15 @@ function renderLog(
 	entityQuality: EntityQualityStats,
 	articleQuality: ArticleQualityStats,
 ): string {
-	const today = new Date().toISOString().slice(0, 10);
+	const exportedAt = new Date().toISOString();
+	const today = exportedAt.slice(0, 10);
 	const unknownTypes = Object.entries(entityQuality.unknownTypes).map(([type, count]) => `  * ${type}: ${count}`);
 	return compactMarkdown([
 		'# Directory Update Log',
 		`## ${today}`,
 		`* **Export**: Generated OKF bundle for "${collection.name}" with ${articleCount} articles and ${entityCount} entity pages.`,
+		`* **Collection id**: ${collection.id}.`,
+		`* **Exported at**: ${exportedAt}.`,
 		`* **Collection visibility**: ${collection.visibility}. Private collections require an authenticated owner viewer before export; public collections may be exported through the internal endpoint without a viewer id.`,
 		'* **Article quality audit**:',
 		`  * Missing resource URL: ${articleQuality.missingResource}`,
