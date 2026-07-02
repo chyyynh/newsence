@@ -7,6 +7,7 @@ import { handleR2Asset } from '@media/r2-asset';
 import {
 	getArticlesMissingEntities,
 	getEntityQualitySnapshot,
+	type MaintenanceCursor,
 	pruneOrphanEntities,
 	repairMissingArticleEntityLinks,
 	USER_FILES_TABLE,
@@ -138,6 +139,15 @@ function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): num
 	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);
 }
 
+function parseMaintenanceCursor(value: unknown): MaintenanceCursor | null {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+	const record = value as Record<string, unknown>;
+	const publishedDate = typeof record.publishedDate === 'string' ? record.publishedDate.trim() : '';
+	const id = typeof record.id === 'string' ? record.id.trim() : '';
+	if (!publishedDate || !id || Number.isNaN(Date.parse(publishedDate))) return null;
+	return { id, publishedDate };
+}
+
 function health(): Response {
 	return Response.json({
 		status: 'ok',
@@ -197,7 +207,10 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number; before?: string; includeLinked?: boolean }>(request, INTERNAL_CORS_HEADERS);
+	const body = await parseJsonBody<{ limit?: number; before?: string; cursor?: unknown; includeLinked?: boolean }>(
+		request,
+		INTERNAL_CORS_HEADERS,
+	);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
@@ -205,9 +218,13 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	if (before && Number.isNaN(Date.parse(before))) {
 		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
 	}
+	const cursor = parseMaintenanceCursor(body.cursor);
+	if (body.cursor !== undefined && !cursor) {
+		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
+	}
 	const includeLinked = body.includeLinked === true;
 	const result = await withDbTransaction(env, 'repair entity links', (db) =>
-		repairMissingArticleEntityLinks(db, limit, { before, includeLinked }),
+		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked }),
 	);
 	return jsonData({ ...result, includeLinked }, INTERNAL_CORS_HEADERS);
 }
@@ -218,7 +235,10 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number; before?: string; includeEmpty?: boolean }>(request, INTERNAL_CORS_HEADERS);
+	const body = await parseJsonBody<{ limit?: number; before?: string; cursor?: unknown; includeEmpty?: boolean }>(
+		request,
+		INTERNAL_CORS_HEADERS,
+	);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
@@ -226,11 +246,16 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	if (before && Number.isNaN(Date.parse(before))) {
 		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
 	}
+	const cursor = parseMaintenanceCursor(body.cursor);
+	if (body.cursor !== undefined && !cursor) {
+		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
+	}
 	const articles = await withDbTransaction(env, 'select missing article entities', (db) =>
-		getArticlesMissingEntities(db, limit, { before, includeEmpty: body.includeEmpty === true }),
+		getArticlesMissingEntities(db, limit, { before, cursor: cursor ?? undefined, includeEmpty: body.includeEmpty === true }),
 	);
 	const articleIds = articles.map((article) => article.id);
 	const nextBefore = articles.length === limit ? (articles.at(-1)?.publishedDate ?? null) : null;
+	const nextCursor = articles.length === limit && articles.at(-1)?.publishedDate ? (articles.at(-1) as MaintenanceCursor) : null;
 	if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
 	return jsonData(
 		{
@@ -239,6 +264,7 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 			batch: articles,
 			includeEmpty: body.includeEmpty === true,
 			nextBefore,
+			nextCursor,
 		},
 		INTERNAL_CORS_HEADERS,
 	);

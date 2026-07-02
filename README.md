@@ -86,14 +86,14 @@ Use this maintenance flow before changing schema:
 curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
 
 # Reapply current entity normalization and filters to both linked and unlinked rows.
-# Response includes nextBefore; pass it as before to page through linked-row repairs.
+# Response includes nextCursor; pass it as cursor to page without skipping equal timestamps.
 curl -X POST "$CORE_WORKER_URL/entities/repair-links" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
   -d '{"includeLinked": true}'
 
 # Fill extraction gaps, including articles previously persisted as an empty extraction.
-# Response includes nextBefore; pass it as before to page through large backfills.
+# Response includes nextCursor; pass it as cursor to page without skipping equal timestamps.
 curl -X POST "$CORE_WORKER_URL/entities/backfill-missing" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
