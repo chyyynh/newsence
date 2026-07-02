@@ -12,6 +12,20 @@ import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@share
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 import type { ArticleSearchInput, ArticleSummary, CorpusReadItem, CorpusReadResult } from './corpus';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
+import {
+	type AddResourceResult,
+	addResource,
+	type CreateDocumentResult,
+	createDocument,
+	type DocumentReadResult,
+	type EditDocumentResult,
+	editDocument,
+	listWorkspaces,
+	readDocuments,
+	type WorkspaceCatalogEntry,
+	type WorkspaceDecision,
+	workspaceSummary,
+} from './documents';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
@@ -30,9 +44,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	}
 
 	// ── Service-binding RPC for the chat worker ──────────────────────────────
-	// Thin delegates to core-owned domain facades. URL add-resource ingestion is
-	// intentionally handled by the frontend document endpoint because citation
-	// writes and workspace ownership live there.
+	// Thin delegates to core-owned domain facades.
 
 	/** Persist a generated image into the canonical user_file blob store. */
 	storeGeneratedImage(input: {
@@ -54,9 +66,50 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 		return extractSource(this.env, { kind: 'url', url });
 	}
 
-	/** Read article/collection/url resources from the core corpus (documents are read via Vercel). */
+	/** Read article/collection/url resources from the core corpus. */
 	readCorpusItems(items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
 		return readCorpusItems(this.env, items, userId);
+	}
+
+	/** Read Tiptap documents as markdown context. */
+	readDocuments(userId: string, ids: string[]): Promise<DocumentReadResult[]> {
+		return readDocuments(this.env, userId, ids);
+	}
+
+	/** Persist AI-generated markdown into a Tiptap document. */
+	createDocument(input: {
+		userId: string;
+		planId: string;
+		title: string;
+		markdown: string;
+		workspace: WorkspaceDecision;
+	}): Promise<CreateDocumentResult> {
+		return createDocument(this.env, input);
+	}
+
+	/** Apply str_replace edits to a document. */
+	editDocument(input: {
+		userId: string;
+		documentId: string;
+		edits: Array<{ old_string: string; new_string: string }>;
+		snapshot?: boolean;
+	}): Promise<EditDocumentResult> {
+		return editDocument(this.env, input);
+	}
+
+	/** Pin article/file/URL resources to a document's workspace. */
+	addDocumentResource(input: { userId: string; documentId: string; resourceIds?: string[]; urls?: string[] }): Promise<AddResourceResult> {
+		return addResource(this.env, input);
+	}
+
+	/** Workspace catalog used by scope-free create-document decisions. */
+	listWorkspaces(userId: string): Promise<WorkspaceCatalogEntry[]> {
+		return listWorkspaces(this.env, userId);
+	}
+
+	/** Workspace pinned-resource summary for workspace-scoped chat context. */
+	workspaceSummary(userId: string, workspaceId: string): Promise<string | null> {
+		return workspaceSummary(this.env, userId, workspaceId);
 	}
 }
 
