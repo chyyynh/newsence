@@ -426,24 +426,31 @@ function renderArticle(article: ArticleRow, entities: EntityRow[], entityPaths: 
 
 function renderEntity(entity: EntityRow, links: EntityRow[], articles: ArticleRow[], articlePaths: Map<string, string>): string {
 	const articleById = new Map(articles.map((article) => [article.id, article]));
-	const articleLinks = uniqueBy(links, (link) => link.article_id)
+	const linkedArticles = uniqueBy(links, (link) => link.article_id)
 		.map((link) => articleById.get(link.article_id))
-		.filter((article): article is ArticleRow => !!article)
-		.map((article) => `- [${article.title_cn || article.title}](/${articlePaths.get(article.id)})`);
+		.filter((article): article is ArticleRow => !!article);
+	const articleLinks = linkedArticles.map((article) => `- [${article.title_cn || article.title}](/${articlePaths.get(article.id)})`);
+	const persistedEntity = isPersistedEntityId(entity.id);
 	return compactMarkdown([
 		frontmatter({
 			type: entity.type,
 			title: entity.name,
 			name_cn: entity.name_cn,
 			tags: [entity.type],
-			newsence_entity_id: entity.id,
-			newsence_article_count: entity.article_count,
+			newsence_entity_id: persistedEntity ? entity.id : undefined,
+			newsence_entity_source: persistedEntity ? 'entity_table' : 'article_json_fallback',
+			newsence_global_article_count: persistedEntity ? entity.article_count : undefined,
+			newsence_bundle_article_count: linkedArticles.length,
 		}),
 		`# ${entity.name}`,
 		entity.name_cn ? `Chinese name: ${entity.name_cn}` : '',
 		'## Mentioned in',
 		...articleLinks,
 	]);
+}
+
+function isPersistedEntityId(id: string): boolean {
+	return UUID_RE.test(id);
 }
 
 function renderLog(collection: CollectionRow, articleCount: number, entityCount: number, quality: EntityQualityStats): string {
@@ -464,7 +471,7 @@ function renderLog(collection: CollectionRow, articleCount: number, entityCount:
 		`  * Articles without join-table entity links: ${quality.articlesWithoutEntityLinks}`,
 		unknownTypes.length ? '* **Unknown entity types preserved by OKF tolerance**:' : '',
 		...unknownTypes,
-		'* **Producer notes**: category is derived from the known classification tag stored in tags because category is not a first-class stored column. keywords are emitted as an extension frontmatter key.',
+		'* **Producer notes**: category is derived from the known classification tag stored in tags because category is not a first-class stored column. keywords are emitted as an extension frontmatter key. Entity pages distinguish bundle-local article counts from persisted global entity counts.',
 	]);
 }
 
