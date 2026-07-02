@@ -11,6 +11,7 @@ import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import type { JsonValue } from '@worker-contracts/core-rpc';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import {
+	addResourceUrlsToSource,
 	createWorkspace,
 	createWorkspaceDocument,
 	DocumentEmptyContentBlockedError,
@@ -37,6 +38,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
+	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -50,6 +52,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
+	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -68,6 +71,7 @@ const HELP_TEXT =
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /workspaces/create                   - Create a user workspace (internal token) -> {success,data:{id}}\n' +
+	'POST /resources/add-urls                  - Ingest URLs and pin user files to a workspace/collection (internal token) -> {success,data}\n' +
 	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
@@ -162,6 +166,49 @@ async function handleCreateWorkspace(request: Request, env: Env): Promise<Respon
 		}
 		console.error({ tag: 'WORKSPACE_CREATE', msg: 'create failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Workspace create failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleAddResourceUrls(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{
+		userId?: string;
+		sourceType?: string;
+		sourceId?: string;
+		urls?: string[];
+	}>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (
+		!body.userId?.trim() ||
+		(body.sourceType !== 'workspace' && body.sourceType !== 'collection') ||
+		!body.sourceId?.trim() ||
+		!Array.isArray(body.urls)
+	) {
+		return jsonError('BAD_REQUEST', 'Missing userId, source, or urls', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await addResourceUrlsToSource(env, {
+			userId: body.userId,
+			sourceType: body.sourceType,
+			sourceId: body.sourceId,
+			urls: body.urls,
+		});
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error && error.message === 'Source not found') {
+			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
+		}
+		if (error instanceof Error && error.message === 'Add at least one valid URL') {
+			return jsonError('BAD_REQUEST', error.message, 400, INTERNAL_CORS_HEADERS);
+		}
+		console.error({ tag: 'RESOURCE_ADD_URLS', msg: 'add urls failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Resource URL add failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

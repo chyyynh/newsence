@@ -13,12 +13,14 @@ import { MarkdownManager } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
 import type {
 	AddDocumentResourceResult,
+	AddResourceUrlsToSourceResult,
 	CreateDocumentResult,
 	CreateWorkspaceResult,
 	DeleteDocumentResult,
 	DocumentReadResult,
 	DocumentSnapshotSource,
 	EditDocumentResult,
+	ResourceSourceType,
 	SaveDocumentResult,
 	UpdateDocumentShareResult,
 	WorkspaceCatalogEntry,
@@ -37,6 +39,7 @@ const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } 
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 type DocumentEdit = { old_string: string; new_string: string };
+type ResourceSource = { type: ResourceSourceType; id: string };
 
 type DocumentRow = {
 	id: string;
@@ -767,7 +770,7 @@ export async function addResource(
 	const idResult = resourceIds.length
 		? await withDbClient(env, (db) => addResourceIds(db, params.userId, workspaceId, resourceIds))
 		: { created: 0, duplicates: 0, missing: 0 };
-	const urlResult = urls.length ? await addResourceUrls(env, params.userId, workspaceId, urls) : { ingested: 0, ingestFailed: [] };
+	const urlResult = urls.length ? await addDocumentResourceUrls(env, params.userId, workspaceId, urls) : { ingested: 0, ingestFailed: [] };
 	return {
 		linked: idResult.created + idResult.duplicates + urlResult.ingested,
 		created: idResult.created,
@@ -776,6 +779,47 @@ export async function addResource(
 		ingested: urlResult.ingested,
 		...(urlResult.ingestFailed.length ? { ingestFailed: urlResult.ingestFailed } : {}),
 	};
+}
+
+export async function addResourceUrlsToSource(
+	env: Env,
+	params: { userId: string; sourceType: ResourceSourceType; sourceId: string; urls: string[] },
+): Promise<AddResourceUrlsToSourceResult> {
+	const source = { type: params.sourceType, id: params.sourceId };
+	const urls = cleanHttpUrls(params.urls);
+	if (urls.length === 0) throw new Error('Add at least one valid URL');
+	await assertResourceSourceAccess(env, params.userId, source);
+
+	const ingested = await ingestUrls(env, { urls, userId: params.userId });
+	if (!ingested.ok) throw new Error(ingested.message);
+	const successfulIds = [...new Set(ingested.results.map((result) => result.userFileId).filter((id): id is string => !!id && isUuid(id)))];
+	const citationIdsByUserFileId = successfulIds.length
+		? await withDbClient(env, (db) => linkUserFilesToSource(db, params.userId, source, successfulIds))
+		: new Map<string, string>();
+
+	return {
+		results: ingested.results.map((result) => ({
+			url: result.url,
+			userFileId: result.userFileId,
+			citationId: result.userFileId ? citationIdsByUserFileId.get(result.userFileId) : undefined,
+			instanceId: result.instanceId,
+			resourceKind: result.resourceKind,
+			originType: result.userFileId ? 'saved_url' : undefined,
+			platformType: result.platformType,
+			title: result.title,
+			alreadyExists: !!result.alreadyExists,
+			error: result.error,
+		})),
+	};
+}
+
+async function assertResourceSourceAccess(env: Env, userId: string, source: ResourceSource): Promise<void> {
+	if (!isUuid(source.id)) throw new Error('Source not found');
+	const table = source.type === 'workspace' ? 'workspaces' : 'collections';
+	const sourceRow = await withDbClient(env, async (db) => {
+		return (await db.query<{ id: string }>(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2 LIMIT 1`, [source.id, userId])).rows[0];
+	});
+	if (!sourceRow) throw new Error('Source not found');
 }
 
 async function getDocumentWorkspaceId(env: Env, userId: string, documentId: string): Promise<string> {
@@ -826,7 +870,7 @@ async function addResourceIds(db: DbClient, userId: string, workspaceId: string,
 	};
 }
 
-async function addResourceUrls(env: Env, userId: string, workspaceId: string, urls: string[]) {
+async function addDocumentResourceUrls(env: Env, userId: string, workspaceId: string, urls: string[]) {
 	const ingested = await ingestUrls(env, { urls, userId });
 	if (!ingested.ok) throw new Error(ingested.message);
 	const successfulIds = [...new Set(ingested.results.map((result) => result.userFileId).filter((id): id is string => !!id && isUuid(id)))];
@@ -835,16 +879,21 @@ async function addResourceUrls(env: Env, userId: string, workspaceId: string, ur
 		.map((result) => ({ url: result.url, error: result.error ?? 'URL ingest did not return a user file id' }));
 	if (successfulIds.length === 0) return { ingested: 0, ingestFailed: failures };
 
-	await withDbClient(env, (db) => linkUserFilesToWorkspace(db, userId, workspaceId, successfulIds));
+	await withDbClient(env, (db) => linkUserFilesToSource(db, userId, { type: 'workspace', id: workspaceId }, successfulIds));
 	return { ingested: successfulIds.length, ingestFailed: failures };
 }
 
-async function linkUserFilesToWorkspace(db: DbClient, userId: string, workspaceId: string, userFileIds: string[]): Promise<void> {
+async function linkUserFilesToSource(
+	db: DbClient,
+	userId: string,
+	source: ResourceSource,
+	userFileIds: string[],
+): Promise<Map<string, string>> {
 	const values: unknown[] = [];
 	const rows = userFileIds
 		.map((userFileId, index) => {
 			const offset = index * 5;
-			values.push(userId, workspaceId, 'workspace', 'user_file', userFileId);
+			values.push(userId, source.id, source.type, 'user_file', userFileId);
 			return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5})`;
 		})
 		.join(', ');
@@ -854,4 +903,10 @@ async function linkUserFilesToWorkspace(db: DbClient, userId: string, workspaceI
 		 ON CONFLICT (from_type, from_id, to_type, to_id) DO NOTHING`,
 		values,
 	);
+	const linked = await db.query<{ id: string; to_id: string }>(
+		`SELECT id, to_id FROM citations
+		 WHERE user_id = $1 AND from_id = $2 AND from_type = $3 AND to_type = 'user_file' AND to_id = ANY($4::uuid[])`,
+		[userId, source.id, source.type, userFileIds],
+	);
+	return new Map(linked.rows.map((row) => [row.to_id, row.id]));
 }

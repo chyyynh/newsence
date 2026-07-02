@@ -14,6 +14,7 @@ import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 import {
 	addResource,
+	addResourceUrlsToSource,
 	createDocument,
 	createWorkspace,
 	createWorkspaceDocument,
@@ -105,6 +106,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Pin article/file/URL resources to a document's workspace. */
 	addDocumentResource(input: CoreRpcArgs<'addDocumentResource'>[0]) {
 		return addResource(this.env, input);
+	}
+
+	/** Ingest URLs and pin the resulting user files to a workspace or collection. */
+	addResourceUrlsToSource(input: CoreRpcArgs<'addResourceUrlsToSource'>[0]) {
+		return addResourceUrlsToSource(this.env, input);
 	}
 
 	/** Workspace catalog used by scope-free create-document decisions. */
