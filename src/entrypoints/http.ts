@@ -4,7 +4,12 @@ import { handleRetryCron } from '@ingest/retry';
 import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
-import { getArticleIdsMissingEntities, repairMissingArticleEntityLinks, USER_FILES_TABLE } from '@shared/article-store';
+import {
+	getArticleIdsMissingEntities,
+	pruneOrphanEntities,
+	repairMissingArticleEntityLinks,
+	USER_FILES_TABLE,
+} from '@shared/article-store';
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import { withDbTransaction } from '@shared/db';
 import type { Env, ExecutionContext } from '@shared/types';
@@ -41,6 +46,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/ingest': (req, env) => handleIngest(req, env),
 	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
 	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
+	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
@@ -62,6 +68,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
+	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
@@ -86,6 +93,7 @@ const HELP_TEXT =
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
 	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB\n' +
+	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/repair-links               - Internal: repair missing article_entities links from stored entities JSONB\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
@@ -120,6 +128,10 @@ function isResourceTargetType(value: unknown): value is 'article' | 'user_file' 
 
 function isResourceSourceType(value: unknown): value is 'workspace' | 'collection' | 'user' {
 	return value === 'workspace' || value === 'collection' || value === 'user';
+}
+
+function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): number {
+	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);
 }
 
 function health(): Response {
@@ -184,7 +196,7 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	const body = await parseJsonBody<{ limit?: number }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const limit = Math.min(Math.max(Number.isFinite(body.limit) ? Math.trunc(body.limit ?? 100) : 100, 1), 500);
+	const limit = boundedMaintenanceLimit(body.limit);
 	const result = await withDbTransaction(env, 'repair entity links', (db) => repairMissingArticleEntityLinks(db, limit));
 	return jsonData(result, INTERNAL_CORS_HEADERS);
 }
@@ -198,7 +210,7 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	const body = await parseJsonBody<{ limit?: number; before?: string }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const limit = Math.min(Math.max(Number.isFinite(body.limit) ? Math.trunc(body.limit ?? 100) : 100, 1), 500);
+	const limit = boundedMaintenanceLimit(body.limit);
 	const before = body.before?.trim() || undefined;
 	if (before && Number.isNaN(Date.parse(before))) {
 		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
@@ -208,6 +220,20 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	);
 	if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
 	return jsonData({ articles: articleIds.length, articleIds }, INTERNAL_CORS_HEADERS);
+}
+
+async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ limit?: number }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	const limit = boundedMaintenanceLimit(body.limit);
+	const result = await withDbTransaction(env, 'prune orphan entities', (db) => pruneOrphanEntities(db, limit));
+	return jsonData(result, INTERNAL_CORS_HEADERS);
 }
 
 async function handleCreateWorkspace(request: Request, env: Env): Promise<Response> {

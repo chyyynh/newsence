@@ -420,6 +420,29 @@ export async function getArticleIdsMissingEntities(db: DbClient, limit: number, 
 	return result.rows.map((row) => row.id);
 }
 
+export async function pruneOrphanEntities(db: DbClient, limit: number): Promise<{ deleted: number }> {
+	const result = await db.query<{ deleted: number }>(
+		`WITH orphan_entities AS (
+		   SELECT e.id
+		     FROM entities e
+		    WHERE NOT EXISTS (
+		      SELECT 1 FROM article_entities ae WHERE ae.entity_id = e.id
+		    )
+		    ORDER BY e.updated_at ASC
+		    LIMIT $1
+		 ),
+		 deleted_entities AS (
+		   DELETE FROM entities e
+		    USING orphan_entities o
+		    WHERE e.id = o.id
+		    RETURNING e.id
+		 )
+		 SELECT COUNT(*)::int AS deleted FROM deleted_entities`,
+		[limit],
+	);
+	return { deleted: result.rows[0]?.deleted ?? 0 };
+}
+
 export type ExistingArticleRecord = {
 	id: string;
 	url: string;
