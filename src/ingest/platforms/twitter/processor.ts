@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject } from '@shared/ai';
+import { entityExtractionExclusionNames } from '@shared/article-store';
 import type { ArticleCategory } from '@shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@shared/types';
 import { z } from 'zod';
@@ -104,7 +105,7 @@ export class TwitterProcessor implements ArticleProcessor {
 	}
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
-		const analysis = await translateTweet(tweetText, ctx.env);
+		const analysis = await translateTweet(tweetText, article, ctx.env);
 		if (!analysis) {
 			if (!article.tags?.length) updateData.tags = ['Twitter'];
 			return;
@@ -158,6 +159,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 不要把 Twitter/X、作者帳號或發文平台當作實體，除非推文本身就在討論該平台或作者
 - 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
 - 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
+- 如果只能判斷出泛詞、版本碎片或來源名稱，寧可少提取
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
@@ -165,11 +167,19 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
+function buildTweetContextPrompt(tweetText: string, article: Article): string {
+	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
+	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
+	return `推文來源: ${article.source}${excludedLine}
+推文內容：
+${tweetText}`;
+}
+
+async function translateTweet(tweetText: string, article: Article, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 
 	try {
-		const result = await generateObject<TweetAnalysis>(env.AI, `推文內容：\n${tweetText}`, {
+		const result = await generateObject<TweetAnalysis>(env.AI, buildTweetContextPrompt(tweetText, article), {
 			schema: TweetAnalysisSchema,
 			schemaName: 'tweet analysis',
 			task: AI_TASKS.tweetAnalysis,

@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject, generateText } from '@shared/ai';
-import type { ProcessableTable } from '@shared/article-store';
+import { entityExtractionExclusionNames, type ProcessableTable } from '@shared/article-store';
 import type { ArticleCategory, PlatformEnrichments } from '@shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@shared/types';
 import { z } from 'zod';
@@ -144,14 +144,18 @@ const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實�
 - 不要把文章來源、平台、作者名稱當作實體，除非文章主題就是該來源、平台或作者本身
 - 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
 - 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
+- 如果只能判斷出泛詞、版本碎片或來源名稱，寧可少提取
 
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
 function buildArticleContextPrompt(article: Article): string {
 	const content = article.content || article.summary || article.title;
+	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
+	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 	return `文章資訊:
 標題: ${article.title}
 來源: ${article.source}
+來源類型: ${article.source_type ?? 'unknown'}${excludedLine}
 摘要: ${article.summary || article.summary_cn || '無摘要'}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;

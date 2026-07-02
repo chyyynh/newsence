@@ -279,8 +279,21 @@ function platformMetadataSourceAliases(metadata: unknown): string[] {
 }
 
 function excludedEntityCanonicalNames(source?: string | null, platformMetadata?: unknown): Set<string> {
-	const names = [...sourceNameAliases(source), ...platformMetadataSourceAliases(platformMetadata)];
+	const names = entityExtractionExclusionNames(source, platformMetadata);
 	return new Set(names.map(canonicalizeEntityName).filter(Boolean));
+}
+
+export function entityExtractionExclusionNames(source?: string | null, platformMetadata?: unknown): string[] {
+	const seen = new Set<string>();
+	const names: string[] = [];
+	for (const name of [...sourceNameAliases(source), ...platformMetadataSourceAliases(platformMetadata)]) {
+		const canonical = canonicalizeEntityName(name);
+		if (!canonical || seen.has(canonical)) continue;
+		seen.add(canonical);
+		names.push(name.trim());
+		if (names.length >= ENTITY_QUALITY_TOP_LIMIT) break;
+	}
+	return names;
 }
 
 export function normalizeArticleEntitiesForStorage(
