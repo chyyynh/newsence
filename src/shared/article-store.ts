@@ -107,7 +107,7 @@ type EntityQualityCoverageCountsRow = {
 type EntityQualityMonthlyRow = EntityQualityCoverageCountsRow & { month: string };
 type EntityQualitySourceTypeRow = EntityQualityCoverageCountsRow & { source_type: string };
 type EntityQualityMonthlySourceTypeRow = EntityQualityCoverageCountsRow & { month: string; source_type: string };
-type EntityQualityTypeRow = { type: string; count: number | string | null };
+type EntityQualityTypeRow = { type: string; count: number | string | null; linked_article_count: number | string | null };
 type EntityQualityExtensionRow = { extname: string };
 type EntityQualitySelfSourceOffenderRow = {
 	canonical_name: string;
@@ -125,6 +125,7 @@ type EntityQualityTypeExampleRow = {
 	canonical_name: string;
 	name: string;
 	article_count: number | string | null;
+	linked_article_count: number | string | null;
 };
 type EntityQualitySyncGapRow = {
 	id: string;
@@ -655,7 +656,8 @@ export async function getEntityQualitySnapshot(
 	unknownTypes: Array<{
 		type: string;
 		count: number;
-		examples: Array<{ canonicalName: string; name: string; articleCount: number }>;
+		linkedArticleCount: number;
+		examples: Array<{ canonicalName: string; name: string; articleCount: number; linkedArticleCount: number }>;
 	}>;
 	topOffenders: {
 		selfSource: Array<{ canonicalName: string; name: string; source: string; links: number }>;
@@ -847,10 +849,13 @@ export async function getEntityQualitySnapshot(
 	);
 
 	const unknownTypes = await db.query<EntityQualityTypeRow>(
-		`SELECT type, COUNT(*)::int AS count
-		   FROM entities
-		  WHERE NOT (type = ANY($1::text[]))
-		  GROUP BY type
+		`SELECT e.type,
+		        COUNT(DISTINCT e.id)::int AS count,
+		        COUNT(ae.article_id)::int AS linked_article_count
+		   FROM entities e
+		   LEFT JOIN article_entities ae ON ae.entity_id = e.id
+		  WHERE NOT (e.type = ANY($1::text[]))
+		  GROUP BY e.type
 		  ORDER BY count DESC, type ASC`,
 		[[...ENTITY_TYPES]],
 	);
@@ -859,27 +864,38 @@ export async function getEntityQualitySnapshot(
 		`SELECT type,
 		        canonical_name,
 		        name,
-		        article_count
+		        article_count,
+		        linked_article_count
 		   FROM (
-		     SELECT type,
-		            canonical_name,
-		            name,
-		            article_count,
-		            row_number() OVER (PARTITION BY type ORDER BY article_count DESC, canonical_name ASC) AS rank
-		       FROM entities
-		      WHERE NOT (type = ANY($1::text[]))
+		     SELECT e.type,
+		            e.canonical_name,
+		            e.name,
+		            e.article_count,
+		            COUNT(ae.article_id)::int AS linked_article_count,
+		            row_number() OVER (
+		              PARTITION BY e.type
+		              ORDER BY COUNT(ae.article_id) DESC, e.article_count DESC, e.canonical_name ASC
+		            ) AS rank
+		       FROM entities e
+		       LEFT JOIN article_entities ae ON ae.entity_id = e.id
+		      WHERE NOT (e.type = ANY($1::text[]))
+		      GROUP BY e.id, e.type, e.canonical_name, e.name, e.article_count
 		   ) ranked
 		  WHERE rank <= $2
 		  ORDER BY type ASC, rank ASC`,
 		[[...ENTITY_TYPES], ENTITY_QUALITY_EXAMPLES_PER_TYPE],
 	);
-	const examplesByType = new Map<string, Array<{ canonicalName: string; name: string; articleCount: number }>>();
+	const examplesByType = new Map<
+		string,
+		Array<{ canonicalName: string; name: string; articleCount: number; linkedArticleCount: number }>
+	>();
 	for (const entry of unknownTypeExamples.rows) {
 		const examples = examplesByType.get(entry.type) ?? [];
 		examples.push({
 			canonicalName: entry.canonical_name,
 			name: entry.name,
 			articleCount: intValue(entry.article_count),
+			linkedArticleCount: intValue(entry.linked_article_count),
 		});
 		examplesByType.set(entry.type, examples);
 	}
@@ -1085,6 +1101,7 @@ export async function getEntityQualitySnapshot(
 		unknownTypes: unknownTypes.rows.map((entry) => ({
 			type: entry.type,
 			count: intValue(entry.count),
+			linkedArticleCount: intValue(entry.linked_article_count),
 			examples: examplesByType.get(entry.type) ?? [],
 		})),
 		topOffenders: {
