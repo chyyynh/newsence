@@ -800,18 +800,28 @@ export async function addResourceToSource(
 		]);
 		if (!sourceExists || !targetExists) throw new Error('Resource not found');
 
-		const row = (
+		const inserted = (
 			await db.query<{ id: string; created_at: Date | string }>(
 				`INSERT INTO citations (user_id, from_id, from_type, to_type, to_id)
 				 VALUES ($1, $2, $3, $4, $5)
-				 ON CONFLICT (from_type, from_id, to_type, to_id)
-				 DO UPDATE SET user_id = EXCLUDED.user_id, updated_at = citations.updated_at
+				 ON CONFLICT (from_type, from_id, to_type, to_id) DO NOTHING
 				 RETURNING id, created_at`,
 				[params.userId, source.id, source.type, target.type, target.id],
 			)
 		).rows[0];
-		if (!row) throw new Error('Resource not found');
-		return { citationId: row.id, createdAt: dateIso(row.created_at) };
+		if (inserted) return { citationId: inserted.id, createdAt: dateIso(inserted.created_at), created: true };
+
+		const existing = (
+			await db.query<{ id: string; created_at: Date | string }>(
+				`SELECT id, created_at
+				 FROM citations
+				 WHERE user_id = $1 AND from_type = $3 AND from_id = $2 AND to_type = $4 AND to_id = $5
+				 LIMIT 1`,
+				[params.userId, source.id, source.type, target.type, target.id],
+			)
+		).rows[0];
+		if (!existing) throw new Error('Resource not found');
+		return { citationId: existing.id, createdAt: dateIso(existing.created_at), created: false };
 	});
 }
 
