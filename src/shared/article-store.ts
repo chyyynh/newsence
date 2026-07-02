@@ -361,6 +361,9 @@ export async function syncArticleEntities(
 			`INSERT INTO entities (canonical_name, name, name_cn, type)
 			 VALUES ($1, $2, $3, $4)
 			 ON CONFLICT (canonical_name) DO UPDATE SET
+			   name = EXCLUDED.name,
+			   name_cn = EXCLUDED.name_cn,
+			   type = EXCLUDED.type,
 			   updated_at = NOW()
 			 RETURNING id`,
 			[canonical, entity.name, entity.name_cn, entity.type],
