@@ -92,7 +92,7 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
-	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB\n' +
+	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/repair-links               - Internal: repair missing article_entities links from stored entities JSONB\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
@@ -207,7 +207,7 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number; before?: string }>(request, INTERNAL_CORS_HEADERS);
+	const body = await parseJsonBody<{ limit?: number; before?: string; includeEmpty?: boolean }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
@@ -216,10 +216,10 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
 	}
 	const articleIds = await withDbTransaction(env, 'select missing article entities', (db) =>
-		getArticleIdsMissingEntities(db, limit, before),
+		getArticleIdsMissingEntities(db, limit, { before, includeEmpty: body.includeEmpty === true }),
 	);
 	if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
-	return jsonData({ articles: articleIds.length, articleIds }, INTERNAL_CORS_HEADERS);
+	return jsonData({ articles: articleIds.length, articleIds, includeEmpty: body.includeEmpty === true }, INTERNAL_CORS_HEADERS);
 }
 
 async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {

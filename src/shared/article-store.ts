@@ -401,13 +401,24 @@ export async function repairMissingArticleEntityLinks(
 	return { scanned: result.rows.length, repaired, normalized, skipped };
 }
 
-export async function getArticleIdsMissingEntities(db: DbClient, limit: number, before?: Date | string): Promise<string[]> {
+export async function getArticleIdsMissingEntities(
+	db: DbClient,
+	limit: number,
+	options: { before?: Date | string; includeEmpty?: boolean } = {},
+): Promise<string[]> {
 	const result = await db.query<{ id: string }>(
 		`SELECT id FROM ${ARTICLES_TABLE}
 		  WHERE ($2::timestamptz IS NULL OR published_date < $2)
 		    AND (
 		      entities IS NULL
 		      OR jsonb_typeof(entities) <> 'array'
+		      OR (
+		        $3::boolean
+		        AND CASE
+		          WHEN jsonb_typeof(entities) = 'array' THEN jsonb_array_length(entities) = 0
+		          ELSE false
+		        END
+		      )
 		    )
 		    AND (
 		      content IS NOT NULL
@@ -415,7 +426,7 @@ export async function getArticleIdsMissingEntities(db: DbClient, limit: number, 
 		    )
 		  ORDER BY published_date DESC
 		  LIMIT $1`,
-		[limit, before ?? null],
+		[limit, options.before ?? null, options.includeEmpty === true],
 	);
 	return result.rows.map((row) => row.id);
 }
