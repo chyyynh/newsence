@@ -3,7 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject, generateText } from '@shared/ai';
-import { entityExtractionExclusionNames, type ProcessableTable } from '@shared/article-store';
+import type { ProcessableTable } from '@shared/article-store';
+import { entityExtractionExclusionNames } from '@shared/entities/normalize';
 import type { ArticleCategory, PlatformEnrichments } from '@shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@shared/types';
 import { z } from 'zod';

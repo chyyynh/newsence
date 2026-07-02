@@ -1,14 +1,7 @@
-import {
-	type ArticleEntityInput,
-	insertFinalSourceArticle,
-	isArticleEntityInput,
-	normalizeArticleEntitiesForStorage,
-	type ProcessableTable,
-	syncArticleEntities,
-	USER_FILES_TABLE,
-	updateProcessedArticle,
-} from '@shared/article-store';
+import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, updateProcessedArticle } from '@shared/article-store';
 import { withDbTransaction } from '@shared/db';
+import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@shared/entities/normalize';
+import { syncArticleEntities } from '@shared/entities/sync';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@shared/source-draft';
 import type { Article, Env } from '@shared/types';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';

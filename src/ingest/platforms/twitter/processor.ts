@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject } from '@shared/ai';
-import { entityExtractionExclusionNames } from '@shared/article-store';
+import { entityExtractionExclusionNames } from '@shared/entities/normalize';
 import type { ArticleCategory } from '@shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@shared/types';
 import { z } from 'zod';

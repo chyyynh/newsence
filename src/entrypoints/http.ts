@@ -4,16 +4,8 @@ import { handleRetryCron } from '@ingest/retry';
 import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
-import {
-	getArticlesMissingEntities,
-	getEntityQualitySnapshot,
-	type MaintenanceCursor,
-	pruneOrphanEntities,
-	repairMissingArticleEntityLinks,
-	USER_FILES_TABLE,
-} from '@shared/article-store';
-import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
-import { withDbTransaction } from '@shared/db';
+import { USER_FILES_TABLE } from '@shared/article-store';
+import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import type { JsonValue } from '@worker-contracts/core-rpc';
@@ -33,14 +25,14 @@ import {
 	validateResourceSource,
 	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
+import {
+	handleBackfillMissingEntities,
+	handleEntityQuality,
+	handlePruneOrphanEntities,
+	handleRepairEntityLinks,
+} from './entity-maintenance';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
-
-const INTERNAL_CORS_HEADERS: Record<string, string> = {
-	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
-};
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
@@ -135,23 +127,6 @@ function isResourceSourceType(value: unknown): value is 'workspace' | 'collectio
 	return value === 'workspace' || value === 'collection' || value === 'user';
 }
 
-function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): number {
-	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);
-}
-
-function parseMaintenanceCursor(value: unknown): MaintenanceCursor | null {
-	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-	const record = value as Record<string, unknown>;
-	const publishedDate = typeof record.publishedDate === 'string' ? record.publishedDate.trim() : '';
-	const id = typeof record.id === 'string' ? record.id.trim() : '';
-	if (!publishedDate || !id || Number.isNaN(Date.parse(publishedDate))) return null;
-	return { id, publishedDate };
-}
-
-function parseMaintenanceSourceType(value: unknown): string | null {
-	return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
 function health(): Response {
 	return Response.json({
 		status: 'ok',
@@ -203,123 +178,6 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
 	}
-}
-
-async function handleRepairEntityLinks(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		limit?: number;
-		before?: string;
-		cursor?: unknown;
-		includeLinked?: boolean;
-		sourceType?: string;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	const limit = boundedMaintenanceLimit(body.limit);
-	const before = body.before?.trim() || undefined;
-	if (before && Number.isNaN(Date.parse(before))) {
-		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
-	}
-	const cursor = parseMaintenanceCursor(body.cursor);
-	if (body.cursor !== undefined && !cursor) {
-		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
-	}
-	const sourceType = parseMaintenanceSourceType(body.sourceType);
-	if (body.sourceType !== undefined && !sourceType) {
-		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
-	}
-	const includeLinked = body.includeLinked === true;
-	const result = await withDbTransaction(env, 'repair entity links', (db) =>
-		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked, sourceType: sourceType ?? undefined }),
-	);
-	return jsonData({ ...result, includeLinked, sourceType: sourceType ?? null }, INTERNAL_CORS_HEADERS);
-}
-
-async function handleBackfillMissingEntities(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		limit?: number;
-		before?: string;
-		cursor?: unknown;
-		includeEmpty?: boolean;
-		sourceType?: string;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	const limit = boundedMaintenanceLimit(body.limit);
-	const before = body.before?.trim() || undefined;
-	if (before && Number.isNaN(Date.parse(before))) {
-		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
-	}
-	const cursor = parseMaintenanceCursor(body.cursor);
-	if (body.cursor !== undefined && !cursor) {
-		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
-	}
-	const sourceType = parseMaintenanceSourceType(body.sourceType);
-	if (body.sourceType !== undefined && !sourceType) {
-		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
-	}
-	const articles = await withDbTransaction(env, 'select missing article entities', (db) =>
-		getArticlesMissingEntities(db, limit, {
-			before,
-			cursor: cursor ?? undefined,
-			includeEmpty: body.includeEmpty === true,
-			sourceType: sourceType ?? undefined,
-		}),
-	);
-	const articleIds = articles.map((article) => article.id);
-	const nextBefore = articles.length === limit ? (articles.at(-1)?.publishedDate ?? null) : null;
-	const nextCursor = articles.length === limit && articles.at(-1)?.publishedDate ? (articles.at(-1) as MaintenanceCursor) : null;
-	if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
-	return jsonData(
-		{
-			articles: articleIds.length,
-			articleIds,
-			batch: articles,
-			includeEmpty: body.includeEmpty === true,
-			sourceType: sourceType ?? null,
-			nextBefore,
-			nextCursor,
-		},
-		INTERNAL_CORS_HEADERS,
-	);
-}
-
-async function handleEntityQuality(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ months?: number }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	const months = boundedMaintenanceLimit(body.months, 6, 24);
-	const result = await withDbTransaction(env, 'entity quality snapshot', (db) => getEntityQualitySnapshot(db, { months }));
-	return jsonData(result, INTERNAL_CORS_HEADERS);
-}
-
-async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ limit?: number }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	const limit = boundedMaintenanceLimit(body.limit);
-	const result = await withDbTransaction(env, 'prune orphan entities', (db) => pruneOrphanEntities(db, limit));
-	return jsonData(result, INTERNAL_CORS_HEADERS);
 }
 
 async function handleCreateWorkspace(request: Request, env: Env): Promise<Response> {
