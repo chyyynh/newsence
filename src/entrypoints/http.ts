@@ -197,12 +197,18 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number; includeLinked?: boolean }>(request, INTERNAL_CORS_HEADERS);
+	const body = await parseJsonBody<{ limit?: number; before?: string; includeLinked?: boolean }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
+	const before = body.before?.trim() || undefined;
+	if (before && Number.isNaN(Date.parse(before))) {
+		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
+	}
 	const includeLinked = body.includeLinked === true;
-	const result = await withDbTransaction(env, 'repair entity links', (db) => repairMissingArticleEntityLinks(db, limit, { includeLinked }));
+	const result = await withDbTransaction(env, 'repair entity links', (db) =>
+		repairMissingArticleEntityLinks(db, limit, { before, includeLinked }),
+	);
 	return jsonData({ ...result, includeLinked }, INTERNAL_CORS_HEADERS);
 }
 

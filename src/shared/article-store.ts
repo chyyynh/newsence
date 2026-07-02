@@ -73,7 +73,13 @@ export type ProcessedArticleUpdate = Record<string, unknown>;
 
 export type ArticleEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
-type ArticleEntityRepairRow = { id: string; source: string | null; platform_metadata: unknown; entities: unknown };
+type ArticleEntityRepairRow = {
+	id: string;
+	source: string | null;
+	platform_metadata: unknown;
+	entities: unknown;
+	published_date: string | Date | null;
+};
 type EntityQualityOverviewRow = {
 	total_articles: number | string | null;
 	with_entity_json: number | string | null;
@@ -464,24 +470,26 @@ async function refreshEntityArticleCounts(db: DbClient, entityIds: string[]): Pr
 export async function repairMissingArticleEntityLinks(
 	db: DbClient,
 	limit: number,
-	options: { includeLinked?: boolean } = {},
-): Promise<{ scanned: number; repaired: number; normalized: number; skipped: number }> {
+	options: { before?: Date | string; includeLinked?: boolean } = {},
+): Promise<{ scanned: number; repaired: number; normalized: number; skipped: number; nextBefore: string | null }> {
 	const result = await db.query<ArticleEntityRepairRow>(
-		`SELECT a.id, a.source, a.platform_metadata, a.entities
+		`SELECT a.id, a.source, a.platform_metadata, a.entities, a.published_date
 		   FROM ${ARTICLES_TABLE} a
 		  WHERE jsonb_typeof(a.entities) = 'array'
 		    AND jsonb_array_length(a.entities) > 0
-		    AND ($2::boolean OR NOT EXISTS (
+		    AND ($2::timestamptz IS NULL OR a.published_date < $2)
+		    AND ($3::boolean OR NOT EXISTS (
 		      SELECT 1 FROM article_entities ae WHERE ae.article_id = a.id
 		    ))
-		  ORDER BY a.published_date DESC
+		  ORDER BY a.published_date DESC, a.id ASC
 		  LIMIT $1`,
-		[limit, options.includeLinked === true],
+		[limit, options.before ?? null, options.includeLinked === true],
 	);
 
 	let repaired = 0;
 	let normalized = 0;
 	let skipped = 0;
+	const nextBefore = result.rows.length === limit ? result.rows.at(-1)?.published_date : null;
 
 	for (const row of result.rows) {
 		if (!Array.isArray(row.entities)) {
@@ -506,7 +514,13 @@ export async function repairMissingArticleEntityLinks(
 		repaired++;
 	}
 
-	return { scanned: result.rows.length, repaired, normalized, skipped };
+	return {
+		scanned: result.rows.length,
+		repaired,
+		normalized,
+		skipped,
+		nextBefore: nextBefore ? new Date(nextBefore).toISOString() : null,
+	};
 }
 
 export type MissingEntityArticle = { id: string; publishedDate: string | null };

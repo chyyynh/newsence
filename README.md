@@ -86,6 +86,7 @@ Use this maintenance flow before changing schema:
 curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
 
 # Reapply current entity normalization and filters to both linked and unlinked rows.
+# Response includes nextBefore; pass it as before to page through linked-row repairs.
 curl -X POST "$CORE_WORKER_URL/entities/repair-links" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
