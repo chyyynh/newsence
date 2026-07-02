@@ -25,6 +25,7 @@ import {
 	validateResourceSource,
 	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
+import { handleExportCollectionOkf } from '../okf';
 import {
 	handleBackfillMissingEntities,
 	handleEntityQuality,
@@ -43,6 +44,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
 	'/entities/quality': (req, env) => handleEntityQuality(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
+	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
@@ -66,6 +68,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
 	'/entities/quality': (req, env) => handleEntityQuality(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
+	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
@@ -92,6 +95,7 @@ const HELP_TEXT =
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
 	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB; optional {sourceType}\n' +
+	'POST /okf/collections/export              - Export a collection as an OKF v0.1 bundle tar.gz (internal token) -> gzip stream\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
