@@ -482,10 +482,17 @@ export async function createWorkspaceDocument(
 				   INSERT INTO user_documents (user_id, workspace_id, title, content)
 				   SELECT $2, id, $3, $4::jsonb FROM workspace
 				   RETURNING id, workspace_id, title, description, content, version, share_enabled, share_slug, updated_at, user_id
+				 ), touched AS (
+				   UPDATE workspaces w
+				      SET updated_at = NOW()
+				     FROM inserted
+				    WHERE w.id = inserted.workspace_id AND w.user_id = $2
+				RETURNING w.id
 				 )
 				 SELECT inserted.id, inserted.workspace_id, inserted.title, inserted.description, inserted.content,
 				        inserted.version, inserted.share_enabled, inserted.share_slug, inserted.updated_at, u.username
 				   FROM inserted
+				   LEFT JOIN touched t ON t.id = inserted.workspace_id
 				   LEFT JOIN "user" u ON u.id = inserted.user_id`,
 				[params.workspaceId, params.userId, title, content],
 			)
@@ -650,6 +657,7 @@ async function insertDocument(
 		)
 	).rows[0];
 	if (!row) throw new Error('Document not created');
+	await db.query(`UPDATE workspaces SET updated_at = NOW() WHERE id = $1 AND user_id = $2`, [input.workspaceId, input.userId]);
 	return row;
 }
 
