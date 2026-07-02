@@ -83,7 +83,7 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
 	const limit = Math.min(Math.max(Math.trunc(body.limit ?? 100), 1), SEARCH_LIMIT_MAX);
 
 	try {
-		const results = await searchCorpusArticleRanks(env, query, limit);
+		const results = await searchCorpusArticleRanks(env, { query, limit });
 		return jsonData({ results }, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'hybrid search failed', error: error instanceof Error ? error.message : String(error) });

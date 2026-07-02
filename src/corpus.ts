@@ -8,7 +8,8 @@ type SearchRanks = Map<string, number>;
 type ResourceType = 'article' | 'collection' | 'url';
 type RankArticleOptions = { fromDate?: Date | null };
 export type ArticleRank = { id: string; score: number };
-export type ArticleSearchOptions = { daysAgo?: number; limit?: number };
+export type ArticleRankSearchInput = { query: string; limit?: number };
+export type ArticleSearchInput = { query: string; daysAgo?: number; limit?: number };
 
 export interface ArticleSummary {
 	id: string;
@@ -74,7 +75,10 @@ const OVERFETCH_CAP = 200;
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function searchCorpusArticleRanks(env: Env, query: string, limit = 100): Promise<ArticleRank[]> {
+export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearchInput): Promise<ArticleRank[]> {
+	const query = input.query.trim();
+	if (!query) return [];
+	const limit = input.limit ?? 100;
 	return withDb(env, async (client) => {
 		const ranks = await rankArticles(client, env, query, limit);
 		return rankEntries(ranks);
@@ -90,13 +94,13 @@ export async function relatedCorpusArticleIds(
 	return withDb(env, (client) => relatedArticles(client, seed, limit, offset));
 }
 
-export async function searchCorpusArticles(env: Env, query: string, opts?: ArticleSearchOptions): Promise<ArticleSummary[]> {
-	const limit = opts?.limit ?? RESULT_LIMIT;
+export async function searchCorpusArticles(env: Env, input: ArticleSearchInput): Promise<ArticleSummary[]> {
+	const query = input.query.trim();
+	const limit = input.limit ?? RESULT_LIMIT;
 	return withDb(env, async (client) => {
-		const trimmed = query.trim();
-		const fromDate = opts?.daysAgo ? new Date(Date.now() - opts.daysAgo * 86_400_000) : null;
+		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
 		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = trimmed ? await rankArticles(client, env, trimmed, rankLimit, { fromDate }) : null;
+		const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
