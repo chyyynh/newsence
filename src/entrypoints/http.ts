@@ -99,7 +99,7 @@ const HELP_TEXT =
 	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []; optional {sourceType}\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
-	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB\n' +
+	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB; optional {sourceType}\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
@@ -207,10 +207,13 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number; before?: string; cursor?: unknown; includeLinked?: boolean }>(
-		request,
-		INTERNAL_CORS_HEADERS,
-	);
+	const body = await parseJsonBody<{
+		limit?: number;
+		before?: string;
+		cursor?: unknown;
+		includeLinked?: boolean;
+		sourceType?: string;
+	}>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
@@ -222,11 +225,15 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	if (body.cursor !== undefined && !cursor) {
 		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
 	}
+	const sourceType = body.sourceType?.trim() || undefined;
+	if (body.sourceType !== undefined && !sourceType) {
+		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
+	}
 	const includeLinked = body.includeLinked === true;
 	const result = await withDbTransaction(env, 'repair entity links', (db) =>
-		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked }),
+		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked, sourceType }),
 	);
-	return jsonData({ ...result, includeLinked }, INTERNAL_CORS_HEADERS);
+	return jsonData({ ...result, includeLinked, sourceType: sourceType ?? null }, INTERNAL_CORS_HEADERS);
 }
 
 async function handleBackfillMissingEntities(request: Request, env: Env): Promise<Response> {

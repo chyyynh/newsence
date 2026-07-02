@@ -484,7 +484,7 @@ async function refreshEntityArticleCounts(db: DbClient, entityIds: string[]): Pr
 export async function repairMissingArticleEntityLinks(
 	db: DbClient,
 	limit: number,
-	options: { before?: Date | string; cursor?: MaintenanceCursor; includeLinked?: boolean } = {},
+	options: { before?: Date | string; cursor?: MaintenanceCursor; includeLinked?: boolean; sourceType?: string } = {},
 ): Promise<{
 	scanned: number;
 	repaired: number;
@@ -508,9 +508,13 @@ export async function repairMissingArticleEntityLinks(
 		    AND ($4::boolean OR NOT EXISTS (
 		      SELECT 1 FROM article_entities ae WHERE ae.article_id = a.id
 		    ))
+		    AND (
+		      $5::text IS NULL
+		      OR COALESCE(NULLIF(TRIM(a.source_type), ''), 'unknown') = $5
+		    )
 		  ORDER BY a.published_date DESC, a.id ASC
 		  LIMIT $1`,
-		[limit, cursorDate, cursorId, options.includeLinked === true],
+		[limit, cursorDate, cursorId, options.includeLinked === true, options.sourceType ?? null],
 	);
 
 	let repaired = 0;
