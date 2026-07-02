@@ -130,6 +130,7 @@ type EntityQualitySyncGapRow = {
 	id: string;
 	title: string | null;
 	source: string | null;
+	source_type: string;
 	published_date: string | Date | null;
 	entity_count: number | string | null;
 };
@@ -664,6 +665,7 @@ export async function getEntityQualitySnapshot(
 			id: string;
 			title: string | null;
 			source: string | null;
+			sourceType: string;
 			publishedDate: string | null;
 			entityCount: number;
 		}>;
@@ -903,6 +905,7 @@ export async function getEntityQualitySnapshot(
 		`SELECT a.id,
 		        a.title,
 		        a.source,
+		        COALESCE(NULLIF(TRIM(a.source_type), ''), 'unknown') AS source_type,
 		        a.published_date,
 		        jsonb_array_length(a.entities)::int AS entity_count
 		   FROM ${ARTICLES_TABLE} a
@@ -1076,6 +1079,7 @@ export async function getEntityQualitySnapshot(
 				id: entry.id,
 				title: entry.title,
 				source: entry.source,
+				sourceType: entry.source_type,
 				publishedDate: isoDateValue(entry.published_date),
 				entityCount: intValue(entry.entity_count),
 			})),
