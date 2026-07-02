@@ -146,6 +146,28 @@ function stringValue(value: unknown): string | null {
 	return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function sourceNameAliases(source?: string | null): string[] {
+	const value = stringValue(source);
+	if (!value) return [];
+	const aliases = [value];
+
+	const host = hostFromSource(value);
+	if (host) {
+		aliases.push(host);
+		const labels = host.replace(/^www\./, '').split('.');
+		if (labels.length > 1 && labels[0]) aliases.push(labels[0]);
+	}
+	return aliases;
+}
+
+function hostFromSource(value: string): string | null {
+	try {
+		return new URL(value.includes('://') ? value : `https://${value}`).hostname.replace(/^www\./, '');
+	} catch {
+		return null;
+	}
+}
+
 function platformMetadataSourceAliases(metadata: unknown): string[] {
 	const envelope = recordValue(metadata);
 	const data = recordValue(envelope?.data);
@@ -173,7 +195,7 @@ function platformMetadataSourceAliases(metadata: unknown): string[] {
 }
 
 function excludedEntityCanonicalNames(source?: string | null, platformMetadata?: unknown): Set<string> {
-	const names = [source ?? '', ...platformMetadataSourceAliases(platformMetadata)];
+	const names = [...sourceNameAliases(source), ...platformMetadataSourceAliases(platformMetadata)];
 	return new Set(names.map(canonicalizeEntityName).filter(Boolean));
 }
 
