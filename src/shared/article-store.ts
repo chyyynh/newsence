@@ -314,6 +314,25 @@ export async function repairMissingArticleEntityLinks(
 	return { scanned: result.rows.length, repaired, normalized, skipped };
 }
 
+export async function getArticleIdsMissingEntities(db: DbClient, limit: number, before?: Date | string): Promise<string[]> {
+	const result = await db.query<{ id: string }>(
+		`SELECT id FROM ${ARTICLES_TABLE}
+		  WHERE ($2::timestamptz IS NULL OR published_date < $2)
+		    AND (
+		      entities IS NULL
+		      OR jsonb_typeof(entities) <> 'array'
+		    )
+		    AND (
+		      content IS NOT NULL
+		      OR summary IS NOT NULL
+		    )
+		  ORDER BY published_date DESC
+		  LIMIT $1`,
+		[limit, before ?? null],
+	);
+	return result.rows.map((row) => row.id);
+}
+
 export type ExistingArticleRecord = {
 	id: string;
 	url: string;
