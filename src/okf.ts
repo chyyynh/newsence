@@ -59,6 +59,7 @@ const CORS_HEADERS = {
 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASCII_GENERIC_ENTITY = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
+const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const OKF_ENTITY_TYPES = new Set(['person', 'organization', 'product', 'technology', 'event']);
 const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
@@ -266,7 +267,12 @@ function entityLinkKey(articleId: string, canonical: string): string {
 }
 
 function canonicalizeEntityName(name: string): string {
-	return name.toLowerCase().trim();
+	return name
+		.toLowerCase()
+		.normalize('NFKC')
+		.replace(/\s+/g, ' ')
+		.replace(/^[\s"'`“”‘’([{]+|[\s"'`“”‘’.,:;!?)]}]+$/g, '')
+		.trim();
 }
 
 function readJsonEntities(value: unknown): Array<{ name: string; name_cn: string | null; type: string }> {
@@ -291,10 +297,11 @@ function entityFilterReason(
 	entity: EntityRow,
 	article: ArticleRow | undefined,
 ): keyof Pick<EntityQualityStats, 'filteredGeneric' | 'filteredSelfSource' | 'filteredTooShort'> | null {
-	const canonical = entity.canonical_name.trim().toLowerCase();
+	const canonical = canonicalizeEntityName(entity.canonical_name);
 	if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) return 'filteredTooShort';
+	if (ASCII_TICKER_ENTITY_RE.test(canonical)) return 'filteredGeneric';
 	if (ASCII_GENERIC_ENTITY.has(canonical)) return 'filteredGeneric';
-	if (article?.source?.trim().toLowerCase() === canonical) return 'filteredSelfSource';
+	if (article?.source && canonicalizeEntityName(article.source) === canonical) return 'filteredSelfSource';
 	return null;
 }
 
