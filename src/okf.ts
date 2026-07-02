@@ -8,6 +8,7 @@ type CollectionRow = {
 	id: string;
 	name: string;
 	description: string | null;
+	visibility: 'public' | 'private';
 	updated_at: Date | string;
 };
 
@@ -70,13 +71,14 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 
 	const body = await parseJsonBody<{ userId?: string; collectionId?: string }>(request, CORS_HEADERS);
 	if (body instanceof Response) return body;
-	if (!body.userId?.trim() || !body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
-		return jsonError('BAD_REQUEST', 'Missing userId or collectionId', 400, CORS_HEADERS);
+	const viewerId = body.userId?.trim() || null;
+	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
+		return jsonError('BAD_REQUEST', 'Missing collectionId', 400, CORS_HEADERS);
 	}
 
 	try {
 		const bundle = await buildCollectionOkfBundle(env, {
-			userId: body.userId,
+			viewerId,
 			collectionId: body.collectionId,
 		});
 		return new Response(tarGzipStream(bundle.files), {
@@ -98,21 +100,22 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 
 async function buildCollectionOkfBundle(
 	env: Env,
-	input: { userId: string; collectionId: string },
+	input: { viewerId: string | null; collectionId: string },
 ): Promise<{ slug: string; files: OkfFile[] }> {
 	return withDbClient(env, async (db) => {
 		const collection = (
 			await db.query<CollectionRow>(
-				`SELECT id, name, description, updated_at
+				`SELECT id, name, description, visibility, updated_at
 				 FROM collections
-				 WHERE id = $1 AND user_id = $2
+				 WHERE id = $1
+				   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
 				 LIMIT 1`,
-				[input.collectionId, input.userId],
+				[input.collectionId, input.viewerId],
 			)
 		).rows[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const articles = await readCollectionArticles(db, collection.id, input.userId);
+		const articles = await readCollectionArticles(db, collection.id);
 		const rawEntities = articles.length ? await readArticleEntities(db, articles) : [];
 		const fallback = mergeJsonEntityFallbacks(rawEntities, articles);
 		const { entities, quality } = filterEntitiesForOkf(fallback.entities, articles, {
@@ -128,7 +131,7 @@ async function buildCollectionOkfBundle(
 	});
 }
 
-async function readCollectionArticles(db: DbClient, collectionId: string, userId: string): Promise<ArticleRow[]> {
+async function readCollectionArticles(db: DbClient, collectionId: string): Promise<ArticleRow[]> {
 	const result = await db.query<ArticleRow>(
 		`SELECT
 		   a.id::text,
@@ -147,12 +150,11 @@ async function readCollectionArticles(db: DbClient, collectionId: string, userId
 		   a.entities
 		 FROM citations c
 		 JOIN articles a ON a.id::text = c.to_id
-		 WHERE c.user_id = $1
-		   AND c.from_type = 'collection'
-		   AND c.from_id = $2
+		 WHERE c.from_type = 'collection'
+		   AND c.from_id = $1
 		   AND c.to_type = 'article'
 		 ORDER BY c.created_at ASC`,
-		[userId, collectionId],
+		[collectionId],
 	);
 	return result.rows;
 }
@@ -468,6 +470,7 @@ function renderLog(collection: CollectionRow, articleCount: number, entityCount:
 		'# Directory Update Log',
 		`## ${today}`,
 		`* **Export**: Generated OKF bundle for "${collection.name}" with ${articleCount} articles and ${entityCount} entity pages.`,
+		`* **Collection visibility**: ${collection.visibility}. Private collections require an authenticated owner viewer before export; public collections may be exported through the internal endpoint without a viewer id.`,
 		'* **Entity quality gate**:',
 		`  * Persisted article-entity links read: ${quality.persistedLinks}`,
 		`  * Export-only links recovered from article JSON: ${quality.jsonFallbackLinks}`,
