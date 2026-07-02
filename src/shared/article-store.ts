@@ -117,6 +117,13 @@ type EntityQualityTypeExampleRow = {
 	name: string;
 	article_count: number | string | null;
 };
+type EntityQualitySyncGapRow = {
+	id: string;
+	title: string | null;
+	source: string | null;
+	published_date: string | Date | null;
+	entity_count: number | string | null;
+};
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -550,6 +557,15 @@ export async function getEntityQualitySnapshot(
 		selfSource: Array<{ canonicalName: string; name: string; source: string; links: number }>;
 		generic: Array<{ canonicalName: string; name: string; links: number }>;
 	};
+	syncGaps: {
+		jsonWithoutLinks: Array<{
+			id: string;
+			title: string | null;
+			source: string | null;
+			publishedDate: string | null;
+			entityCount: number;
+		}>;
+	};
 	database: {
 		extensions: {
 			pgTrgm: boolean;
@@ -706,6 +722,23 @@ export async function getEntityQualitySnapshot(
 		[[...GENERIC_ENTITY_CANONICALS], ENTITY_QUALITY_TOP_LIMIT],
 	);
 
+	const jsonWithoutLinkExamples = await db.query<EntityQualitySyncGapRow>(
+		`SELECT a.id,
+		        a.title,
+		        a.source,
+		        a.published_date,
+		        jsonb_array_length(a.entities)::int AS entity_count
+		   FROM ${ARTICLES_TABLE} a
+		  WHERE jsonb_typeof(a.entities) = 'array'
+		    AND jsonb_array_length(a.entities) > 0
+		    AND NOT EXISTS (
+		      SELECT 1 FROM article_entities ae WHERE ae.article_id = a.id
+		    )
+		  ORDER BY a.published_date DESC
+		  LIMIT $1`,
+		[ENTITY_QUALITY_TOP_LIMIT],
+	);
+
 	const recommendedExtensions = ['pg_trgm', 'vector'];
 	const extensions = await db.query<EntityQualityExtensionRow>(
 		`SELECT extname
@@ -762,6 +795,15 @@ export async function getEntityQualitySnapshot(
 				canonicalName: entry.canonical_name,
 				name: entry.name,
 				links: intValue(entry.links),
+			})),
+		},
+		syncGaps: {
+			jsonWithoutLinks: jsonWithoutLinkExamples.rows.map((entry) => ({
+				id: entry.id,
+				title: entry.title,
+				source: entry.source,
+				publishedDate: entry.published_date ? new Date(entry.published_date).toISOString() : null,
+				entityCount: intValue(entry.entity_count),
 			})),
 		},
 		database: {
