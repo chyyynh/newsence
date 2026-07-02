@@ -13,6 +13,7 @@ import { MarkdownManager } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
 import type {
 	AddDocumentResourceResult,
+	AddResourceToSourceResult,
 	AddResourceUrlsToSourceResult,
 	CreateDocumentResult,
 	CreateWorkspaceResult,
@@ -42,6 +43,7 @@ const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 type DocumentEdit = { old_string: string; new_string: string };
 type ResourceSource = { type: ResourceSourceType; id: string };
+type ResourceTarget = { type: ResourceTargetType; id: string };
 
 type DocumentRow = {
 	id: string;
@@ -783,6 +785,36 @@ export async function addResource(
 	};
 }
 
+export async function addResourceToSource(
+	env: Env,
+	params: { userId: string; sourceType: ResourceSourceType; sourceId: string; targetType: ResourceTargetType; targetId: string },
+): Promise<AddResourceToSourceResult> {
+	if (!isUuid(params.sourceId) || !isUuid(params.targetId)) throw new Error('Resource not found');
+	const source = { type: params.sourceType, id: params.sourceId };
+	const target = { type: params.targetType, id: params.targetId };
+
+	return withDbClient(env, async (db) => {
+		const [sourceExists, targetExists] = await Promise.all([
+			resourceSourceExists(db, params.userId, source),
+			resourceTargetExists(db, params.userId, target),
+		]);
+		if (!sourceExists || !targetExists) throw new Error('Resource not found');
+
+		const row = (
+			await db.query<{ id: string; created_at: Date | string }>(
+				`INSERT INTO citations (user_id, from_id, from_type, to_type, to_id)
+				 VALUES ($1, $2, $3, $4, $5)
+				 ON CONFLICT (from_type, from_id, to_type, to_id)
+				 DO UPDATE SET user_id = EXCLUDED.user_id, updated_at = citations.updated_at
+				 RETURNING id, created_at`,
+				[params.userId, source.id, source.type, target.type, target.id],
+			)
+		).rows[0];
+		if (!row) throw new Error('Resource not found');
+		return { citationId: row.id, createdAt: dateIso(row.created_at) };
+	});
+}
+
 export async function deleteResource(env: Env, params: { userId: string; citationId: string }): Promise<RemoveResourceResult> {
 	if (!isUuid(params.citationId)) throw new Error('Resource not found');
 	return withDbClient(env, async (db) => {
@@ -854,11 +886,38 @@ export async function addResourceUrlsToSource(
 
 async function assertResourceSourceAccess(env: Env, userId: string, source: ResourceSource): Promise<void> {
 	if (!isUuid(source.id)) throw new Error('Source not found');
-	const table = source.type === 'workspace' ? 'workspaces' : 'collections';
 	const sourceRow = await withDbClient(env, async (db) => {
-		return (await db.query<{ id: string }>(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2 LIMIT 1`, [source.id, userId])).rows[0];
+		return resourceSourceExists(db, userId, source);
 	});
 	if (!sourceRow) throw new Error('Source not found');
+}
+
+async function resourceSourceExists(db: DbClient, userId: string, source: ResourceSource): Promise<boolean> {
+	const table = source.type === 'workspace' ? 'workspaces' : 'collections';
+	const row = (await db.query<{ id: string }>(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2 LIMIT 1`, [source.id, userId]))
+		.rows[0];
+	return !!row;
+}
+
+async function resourceTargetExists(db: DbClient, userId: string, target: ResourceTarget): Promise<boolean> {
+	if (target.type === 'article') {
+		const row = (await db.query<{ id: string }>('SELECT id FROM articles WHERE id = $1 LIMIT 1', [target.id])).rows[0];
+		return !!row;
+	}
+	if (target.type === 'user_file') {
+		const row = (await db.query<{ id: string }>('SELECT id FROM user_files WHERE id = $1 AND user_id = $2 LIMIT 1', [target.id, userId]))
+			.rows[0];
+		return !!row;
+	}
+	if (target.type === 'document') {
+		const row = (
+			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1', [target.id, userId])
+		).rows[0];
+		return !!row;
+	}
+	const row = (await db.query<{ id: string }>('SELECT id FROM collections WHERE id = $1 AND user_id = $2 LIMIT 1', [target.id, userId]))
+		.rows[0];
+	return !!row;
 }
 
 async function getDocumentWorkspaceId(env: Env, userId: string, documentId: string): Promise<string> {

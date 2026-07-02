@@ -14,6 +14,7 @@ import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 import {
 	addResource,
+	addResourceToSource,
 	addResourceUrlsToSource,
 	createDocument,
 	createWorkspace,
@@ -114,6 +115,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Pin article/file/URL resources to a document's workspace. */
 	addDocumentResource(input: CoreRpcArgs<'addDocumentResource'>[0]) {
 		return addResource(this.env, input);
+	}
+
+	/** Pin a resource target to a workspace or collection source. */
+	addResourceToSource(input: CoreRpcArgs<'addResourceToSource'>[0]) {
+		return addResourceToSource(this.env, input);
 	}
 
 	/** Remove a user-owned citation by citation id. */
