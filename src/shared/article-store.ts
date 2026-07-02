@@ -412,18 +412,19 @@ async function refreshEntityArticleCounts(db: DbClient, entityIds: string[]): Pr
 export async function repairMissingArticleEntityLinks(
 	db: DbClient,
 	limit: number,
+	options: { includeLinked?: boolean } = {},
 ): Promise<{ scanned: number; repaired: number; normalized: number; skipped: number }> {
 	const result = await db.query<ArticleEntityRepairRow>(
 		`SELECT a.id, a.source, a.platform_metadata, a.entities
 		   FROM ${ARTICLES_TABLE} a
 		  WHERE jsonb_typeof(a.entities) = 'array'
 		    AND jsonb_array_length(a.entities) > 0
-		    AND NOT EXISTS (
+		    AND ($2::boolean OR NOT EXISTS (
 		      SELECT 1 FROM article_entities ae WHERE ae.article_id = a.id
-		    )
+		    ))
 		  ORDER BY a.published_date DESC
 		  LIMIT $1`,
-		[limit],
+		[limit, options.includeLinked === true],
 	);
 
 	let repaired = 0;

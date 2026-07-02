@@ -98,7 +98,7 @@ const HELP_TEXT =
 	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
-	'POST /entities/repair-links               - Internal: repair missing article_entities links from stored entities JSONB\n' +
+	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
@@ -197,12 +197,13 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number }>(request, INTERNAL_CORS_HEADERS);
+	const body = await parseJsonBody<{ limit?: number; includeLinked?: boolean }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
-	const result = await withDbTransaction(env, 'repair entity links', (db) => repairMissingArticleEntityLinks(db, limit));
-	return jsonData(result, INTERNAL_CORS_HEADERS);
+	const includeLinked = body.includeLinked === true;
+	const result = await withDbTransaction(env, 'repair entity links', (db) => repairMissingArticleEntityLinks(db, limit, { includeLinked }));
+	return jsonData({ ...result, includeLinked }, INTERNAL_CORS_HEADERS);
 }
 
 async function handleBackfillMissingEntities(request: Request, env: Env): Promise<Response> {
