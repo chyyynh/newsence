@@ -37,12 +37,14 @@ const ENTITY_TYPE_MAX_LENGTH = 20;
 export const MAX_ENTITIES_PER_ARTICLE = 10;
 const MAX_EXCLUSION_NAMES = 10;
 
+// Trailing side strips quotes only: `.`/`)`/`}`/`!` can be part of legit
+// names (u.s., snap inc., model context protocol (mcp), safe{wallet}, yahoo!).
 export function canonicalizeEntityName(name: string): string {
 	return name
 		.toLowerCase()
 		.normalize('NFKC')
 		.replace(/\s+/g, ' ')
-		.replace(/^[\s"'`“”‘’([{]+|[\s"'`“”‘’.,:;!?)]}]+$/g, '')
+		.replace(/^[\s"'`“”‘’([{]+|[\s"'`“”‘’]+$/g, '')
 		.trim();
 }
 
