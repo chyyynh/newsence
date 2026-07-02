@@ -100,6 +100,17 @@ type EntityQualityMonthlyRow = {
 };
 type EntityQualityTypeRow = { type: string; count: number | string | null };
 type EntityQualityExtensionRow = { extname: string };
+type EntityQualitySelfSourceOffenderRow = {
+	canonical_name: string;
+	name: string;
+	source: string;
+	links: number | string | null;
+};
+type EntityQualityGenericOffenderRow = {
+	canonical_name: string;
+	name: string;
+	links: number | string | null;
+};
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -123,6 +134,7 @@ const SOURCE_FEED_SUFFIX_CANONICALS = new Set([
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
 const MAX_ENTITIES_PER_ARTICLE = 10;
+const ENTITY_QUALITY_TOP_LIMIT = 10;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
@@ -523,6 +535,10 @@ export async function getEntityQualitySnapshot(
 		coverage: number;
 	}>;
 	unknownTypes: Array<{ type: string; count: number }>;
+	topOffenders: {
+		selfSource: Array<{ canonicalName: string; name: string; source: string; links: number }>;
+		generic: Array<{ canonicalName: string; name: string; links: number }>;
+	};
 	database: {
 		extensions: {
 			pgTrgm: boolean;
@@ -622,6 +638,34 @@ export async function getEntityQualitySnapshot(
 		[[...ENTITY_TYPES]],
 	);
 
+	const selfSourceOffenders = await db.query<EntityQualitySelfSourceOffenderRow>(
+		`SELECT e.canonical_name,
+		        e.name,
+		        a.source,
+		        COUNT(*)::int AS links
+		   FROM article_entities ae
+		   JOIN entities e ON e.id = ae.entity_id
+		   JOIN ${ARTICLES_TABLE} a ON a.id = ae.article_id
+		  WHERE LOWER(TRIM(a.source)) = e.canonical_name
+		  GROUP BY e.canonical_name, e.name, a.source
+		  ORDER BY links DESC, e.canonical_name ASC
+		  LIMIT $1`,
+		[ENTITY_QUALITY_TOP_LIMIT],
+	);
+
+	const genericOffenders = await db.query<EntityQualityGenericOffenderRow>(
+		`SELECT e.canonical_name,
+		        e.name,
+		        COUNT(*)::int AS links
+		   FROM article_entities ae
+		   JOIN entities e ON e.id = ae.entity_id
+		  WHERE e.canonical_name = ANY($1::text[])
+		  GROUP BY e.canonical_name, e.name
+		  ORDER BY links DESC, e.canonical_name ASC
+		  LIMIT $2`,
+		[[...GENERIC_ENTITY_CANONICALS], ENTITY_QUALITY_TOP_LIMIT],
+	);
+
 	const recommendedExtensions = ['pg_trgm', 'vector'];
 	const extensions = await db.query<EntityQualityExtensionRow>(
 		`SELECT extname
@@ -663,6 +707,19 @@ export async function getEntityQualitySnapshot(
 			};
 		}),
 		unknownTypes: unknownTypes.rows.map((entry) => ({ type: entry.type, count: intValue(entry.count) })),
+		topOffenders: {
+			selfSource: selfSourceOffenders.rows.map((entry) => ({
+				canonicalName: entry.canonical_name,
+				name: entry.name,
+				source: entry.source,
+				links: intValue(entry.links),
+			})),
+			generic: genericOffenders.rows.map((entry) => ({
+				canonicalName: entry.canonical_name,
+				name: entry.name,
+				links: intValue(entry.links),
+			})),
+		},
 		database: {
 			extensions: {
 				pgTrgm: installedExtensions.has('pg_trgm'),

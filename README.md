@@ -81,7 +81,7 @@ It intentionally does not perform semantic alias merging in the database. Model 
 Use this maintenance flow before changing schema:
 
 ```bash
-# Inspect coverage, self-source pollution, generic entities, over-cap rows, orphans,
+# Inspect coverage, top self-source/generic offenders, over-cap rows, orphans,
 # and recommended DB extensions such as pg_trgm/vector.
 curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
 
