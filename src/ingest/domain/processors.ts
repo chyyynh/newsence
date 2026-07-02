@@ -29,7 +29,7 @@ class DefaultProcessor implements ArticleProcessor {
 		if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.content) updateData.content = analysis.content;
 		if (isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
-		if (analysis.entities?.length) updateData.entities = analysis.entities;
+		if (analysis.entities) updateData.entities = analysis.entities;
 
 		return { updateData, classificationCategory: analysis.category };
 	}

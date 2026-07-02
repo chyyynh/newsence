@@ -27,7 +27,7 @@ function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, upda
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
 	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
 	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-	if (analysis.entities?.length) updateData.entities = analysis.entities;
+	if (analysis.entities) updateData.entities = analysis.entities;
 	return analysis.category;
 }
 
@@ -115,7 +115,7 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (isEmpty(article.content_cn)) updateData.content_cn = analysis.summary_cn;
 		if (!article.tags?.length && analysis.tags.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length && analysis.keywords.length) updateData.keywords = analysis.keywords;
-		if (analysis.entities?.length) updateData.entities = analysis.entities;
+		updateData.entities = analysis.entities;
 	}
 }
 
