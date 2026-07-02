@@ -140,6 +140,13 @@ type EntityQualityBackfillRow = {
 	oldest_processable_missing_published_date: string | Date | null;
 	newest_processable_missing_published_date: string | Date | null;
 };
+type EntityQualityBackfillSourceTypeRow = {
+	source_type: string;
+	processable_missing_or_empty: number | string | null;
+	processable_missing_before_first_entity: number | string | null;
+	oldest_processable_missing_published_date: string | Date | null;
+	newest_processable_missing_published_date: string | Date | null;
+};
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -232,6 +239,10 @@ function stringValue(value: unknown): string | null {
 
 function intValue(value: number | string | null | undefined): number {
 	return Number(value ?? 0);
+}
+
+function isoDateValue(value: string | Date | null | undefined): string | null {
+	return value ? new Date(value).toISOString() : null;
 }
 
 function sourceNameAliases(source?: string | null): string[] {
@@ -655,6 +666,13 @@ export async function getEntityQualitySnapshot(
 		processableMissingBeforeFirstEntityDate: number;
 		oldestProcessableMissingPublishedDate: string | null;
 		newestProcessableMissingPublishedDate: string | null;
+		sourceTypes: Array<{
+			sourceType: string;
+			processableMissingOrEmpty: number;
+			processableMissingBeforeFirstEntityDate: number;
+			oldestProcessableMissingPublishedDate: string | null;
+			newestProcessableMissingPublishedDate: string | null;
+		}>;
 	};
 	database: {
 		extensions: {
@@ -924,6 +942,42 @@ export async function getEntityQualitySnapshot(
 		[],
 	);
 
+	const backfillSourceTypes = await db.query<EntityQualityBackfillSourceTypeRow>(
+		`WITH first_entity AS (
+		   SELECT MIN(published_date) AS first_entity_published_date
+		     FROM ${ARTICLES_TABLE}
+		    WHERE jsonb_typeof(entities) = 'array'
+		      AND jsonb_array_length(entities) > 0
+		 ),
+		 processable_backlog AS (
+		   SELECT COALESCE(NULLIF(TRIM(a.source_type), ''), 'unknown') AS source_type,
+		          a.published_date
+		     FROM ${ARTICLES_TABLE} a
+		    WHERE (a.content IS NOT NULL OR a.summary IS NOT NULL)
+		      AND (
+		        a.entities IS NULL
+		        OR jsonb_typeof(a.entities) <> 'array'
+		        OR CASE
+		          WHEN jsonb_typeof(a.entities) = 'array' THEN jsonb_array_length(a.entities) = 0
+		          ELSE false
+		        END
+		      )
+		 )
+		 SELECT p.source_type,
+		        COUNT(*)::int AS processable_missing_or_empty,
+		        COUNT(*) FILTER (
+		          WHERE f.first_entity_published_date IS NOT NULL
+		            AND p.published_date < f.first_entity_published_date
+		        )::int AS processable_missing_before_first_entity,
+		        MIN(p.published_date) AS oldest_processable_missing_published_date,
+		        MAX(p.published_date) AS newest_processable_missing_published_date
+		   FROM processable_backlog p
+		   CROSS JOIN first_entity f
+		  GROUP BY p.source_type
+		  ORDER BY processable_missing_or_empty DESC, p.source_type ASC`,
+		[],
+	);
+
 	const recommendedExtensions = ['pg_trgm', 'vector'];
 	const extensions = await db.query<EntityQualityExtensionRow>(
 		`SELECT extname
@@ -1014,22 +1068,23 @@ export async function getEntityQualitySnapshot(
 				id: entry.id,
 				title: entry.title,
 				source: entry.source,
-				publishedDate: entry.published_date ? new Date(entry.published_date).toISOString() : null,
+				publishedDate: isoDateValue(entry.published_date),
 				entityCount: intValue(entry.entity_count),
 			})),
 		},
 		backfill: {
-			firstEntityPublishedDate: backfill.rows[0]?.first_entity_published_date
-				? new Date(backfill.rows[0].first_entity_published_date).toISOString()
-				: null,
+			firstEntityPublishedDate: isoDateValue(backfill.rows[0]?.first_entity_published_date),
 			processableMissingOrEmpty: intValue(backfill.rows[0]?.processable_missing_or_empty),
 			processableMissingBeforeFirstEntityDate: intValue(backfill.rows[0]?.processable_missing_before_first_entity),
-			oldestProcessableMissingPublishedDate: backfill.rows[0]?.oldest_processable_missing_published_date
-				? new Date(backfill.rows[0].oldest_processable_missing_published_date).toISOString()
-				: null,
-			newestProcessableMissingPublishedDate: backfill.rows[0]?.newest_processable_missing_published_date
-				? new Date(backfill.rows[0].newest_processable_missing_published_date).toISOString()
-				: null,
+			oldestProcessableMissingPublishedDate: isoDateValue(backfill.rows[0]?.oldest_processable_missing_published_date),
+			newestProcessableMissingPublishedDate: isoDateValue(backfill.rows[0]?.newest_processable_missing_published_date),
+			sourceTypes: backfillSourceTypes.rows.map((entry) => ({
+				sourceType: entry.source_type,
+				processableMissingOrEmpty: intValue(entry.processable_missing_or_empty),
+				processableMissingBeforeFirstEntityDate: intValue(entry.processable_missing_before_first_entity),
+				oldestProcessableMissingPublishedDate: isoDateValue(entry.oldest_processable_missing_published_date),
+				newestProcessableMissingPublishedDate: isoDateValue(entry.newest_processable_missing_published_date),
+			})),
 		},
 		database: {
 			extensions: {
