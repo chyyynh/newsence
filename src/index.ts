@@ -19,9 +19,11 @@ import {
 	createWorkspace,
 	createWorkspaceDocument,
 	deleteDocument,
+	deleteResource,
 	editDocument,
 	listWorkspaces,
 	readDocuments,
+	removeResourceFromSource,
 	saveDocument,
 	updateDocumentShare,
 	workspaceSummary,
@@ -112,6 +114,16 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Pin article/file/URL resources to a document's workspace. */
 	addDocumentResource(input: CoreRpcArgs<'addDocumentResource'>[0]) {
 		return addResource(this.env, input);
+	}
+
+	/** Remove a user-owned citation by citation id. */
+	deleteResource(input: CoreRpcArgs<'deleteResource'>[0]) {
+		return deleteResource(this.env, input);
+	}
+
+	/** Remove a user-owned citation by source and target. */
+	removeResourceFromSource(input: CoreRpcArgs<'removeResourceFromSource'>[0]) {
+		return removeResourceFromSource(this.env, input);
 	}
 
 	/** Ingest URLs and pin the resulting user files to a workspace or collection. */

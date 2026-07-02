@@ -20,7 +20,9 @@ import type {
 	DocumentReadResult,
 	DocumentSnapshotSource,
 	EditDocumentResult,
+	RemoveResourceResult,
 	ResourceSourceType,
+	ResourceTargetType,
 	SaveDocumentResult,
 	UpdateDocumentShareResult,
 	WorkspaceCatalogEntry,
@@ -779,6 +781,43 @@ export async function addResource(
 		ingested: urlResult.ingested,
 		...(urlResult.ingestFailed.length ? { ingestFailed: urlResult.ingestFailed } : {}),
 	};
+}
+
+export async function deleteResource(env: Env, params: { userId: string; citationId: string }): Promise<RemoveResourceResult> {
+	if (!isUuid(params.citationId)) throw new Error('Resource not found');
+	return withDbClient(env, async (db) => {
+		const row = (
+			await db.query<{ id: string }>('DELETE FROM citations WHERE id = $1 AND user_id = $2 RETURNING id', [
+				params.citationId,
+				params.userId,
+			])
+		).rows[0];
+		if (!row) throw new Error('Resource not found');
+		return { id: row.id };
+	});
+}
+
+export async function removeResourceFromSource(
+	env: Env,
+	params: { userId: string; sourceType: ResourceSourceType; sourceId: string; targetType: ResourceTargetType; targetId: string },
+): Promise<RemoveResourceResult> {
+	if (!isUuid(params.sourceId) || !isUuid(params.targetId)) throw new Error('Resource not found');
+	return withDbClient(env, async (db) => {
+		const row = (
+			await db.query<{ to_id: string }>(
+				`DELETE FROM citations
+				 WHERE user_id = $1
+				   AND from_type = $2
+				   AND from_id = $3
+				   AND to_type = $4
+				   AND to_id = $5
+				RETURNING to_id`,
+				[params.userId, params.sourceType, params.sourceId, params.targetType, params.targetId],
+			)
+		).rows[0];
+		if (!row) throw new Error('Resource not found');
+		return { id: row.to_id };
+	});
 }
 
 export async function addResourceUrlsToSource(

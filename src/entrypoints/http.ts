@@ -17,6 +17,8 @@ import {
 	DocumentEmptyContentBlockedError,
 	DocumentVersionConflictError,
 	deleteDocument,
+	deleteResource,
+	removeResourceFromSource,
 	saveDocument,
 	updateDocumentShare,
 	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
@@ -39,6 +41,8 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
 	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
+	'/resources/delete': (req, env) => handleDeleteResource(req, env),
+	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -54,6 +58,8 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
 	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
+	'/resources/delete': (req, env) => handleDeleteResource(req, env),
+	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -74,6 +80,8 @@ const HELP_TEXT =
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /workspaces/create                   - Create a user workspace (internal token) -> {success,data:{id}}\n' +
 	'POST /resources/add-urls                  - Ingest URLs and pin user files to a workspace/collection (internal token) -> {success,data}\n' +
+	'POST /resources/delete                    - Remove a user-owned citation by citation id (internal token) -> {success,data:{id}}\n' +
+	'POST /resources/remove                    - Remove a user-owned citation by source/target (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
@@ -212,6 +220,77 @@ async function handleAddResourceUrls(request: Request, env: Env): Promise<Respon
 		}
 		console.error({ tag: 'RESOURCE_ADD_URLS', msg: 'add urls failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Resource URL add failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleDeleteResource(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ userId?: string; citationId?: string }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !body.citationId?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing userId or citationId', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await deleteResource(env, { userId: body.userId, citationId: body.citationId });
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error && error.message === 'Resource not found') {
+			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
+		}
+		console.error({ tag: 'RESOURCE_DELETE', msg: 'delete failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Resource delete failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleRemoveResourceFromSource(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{
+		userId?: string;
+		sourceType?: string;
+		sourceId?: string;
+		targetType?: string;
+		targetId?: string;
+	}>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (
+		!body.userId?.trim() ||
+		(body.sourceType !== 'workspace' && body.sourceType !== 'collection') ||
+		!body.sourceId?.trim() ||
+		(body.targetType !== 'article' &&
+			body.targetType !== 'user_file' &&
+			body.targetType !== 'document' &&
+			body.targetType !== 'collection') ||
+		!body.targetId?.trim()
+	) {
+		return jsonError('BAD_REQUEST', 'Missing source or target', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await removeResourceFromSource(env, {
+			userId: body.userId,
+			sourceType: body.sourceType,
+			sourceId: body.sourceId,
+			targetType: body.targetType,
+			targetId: body.targetId,
+		});
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error && error.message === 'Resource not found') {
+			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
+		}
+		console.error({ tag: 'RESOURCE_REMOVE', msg: 'remove failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Resource remove failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 
