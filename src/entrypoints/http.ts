@@ -25,7 +25,6 @@ import {
 	validateResourceSource,
 	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
-import { handleExportCollectionOkf } from '../okf';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
@@ -52,7 +51,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
-	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
 	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
@@ -72,7 +70,6 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
-	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
 	// handleDeleteUserMediaFile has no OPTIONS branch; answer the preflight here.
 	'/media/delete-user-file': () => new Response(null, { headers: INTERNAL_CORS_HEADERS }),
 };
@@ -98,7 +95,6 @@ const HELP_TEXT =
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
 	'POST /documents/share                     - Update document share settings (internal token) -> {success,data}\n' +
-	'POST /okf/collections/export              - Export a collection as OKF tar.gz (internal token) -> gzip stream\n' +
 	'POST /media/delete-user-file              - Delete a user-owned blob user_file and R2 object (internal token) -> {success,data}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
@@ -383,11 +379,7 @@ async function handleValidateResourceSource(request: Request, env: Env): Promise
 		if (error instanceof Error && error.message === 'Source not found') {
 			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
 		}
-		console.error({
-			tag: 'RESOURCE_VALIDATE_SOURCE',
-			msg: 'validate source failed',
-			error: error instanceof Error ? error.message : String(error),
-		});
+		console.error({ tag: 'RESOURCE_VALIDATE_SOURCE', msg: 'validate source failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Resource source validation failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
