@@ -70,13 +70,14 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
 	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
-	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source);
+	const platformMetadata = finalInsert.updatePayload.platform_metadata ?? finalInsert.article.platformMetadata;
+	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
 	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
 	const youtubeTranscript = sourceDraftYoutubeTranscript(draft);
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
-		if (entities) await syncArticleEntities(db, articleId, entities, finalInsert.article.source);
+		if (entities) await syncArticleEntities(db, articleId, entities, finalInsert.article.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		if (twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
@@ -115,12 +116,14 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 		},
 	};
 	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, extractionMetadata(input.pdfTextTemp));
-	const entities = entityUpdatePayload(updatePayload, input.article.source);
+	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
+	const entities = entityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
 	return withDbTransaction(env, 'row workflow', async (db) => {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
-		if (table !== USER_FILES_TABLE && entities) await syncArticleEntities(db, target.articleId, entities, input.article.source);
+		if (table !== USER_FILES_TABLE && entities)
+			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		return target.articleId;
 	});
@@ -129,9 +132,10 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 function entityUpdatePayload(
 	updatePayload: Record<string, unknown>,
 	source?: string | null,
+	platformMetadata?: unknown,
 ): Array<{ name: string; name_cn: string; type: string }> | null {
 	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isEntityInput), source);
+	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isEntityInput), source, platformMetadata);
 	updatePayload.entities = entities;
 	return entities;
 }

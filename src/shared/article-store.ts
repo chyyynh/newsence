@@ -73,7 +73,7 @@ export type ProcessedArticleUpdate = Record<string, unknown>;
 
 type ArticleEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
-type ArticleEntityRepairRow = { id: string; source: string | null; entities: unknown };
+type ArticleEntityRepairRow = { id: string; source: string | null; platform_metadata: unknown; entities: unknown };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPES = new Set<string>(['person', 'organization', 'product', 'technology', 'event'] satisfies EntityType[]);
@@ -111,14 +111,14 @@ function canonicalizeEntityName(name: string): string {
 		.trim();
 }
 
-function shouldStoreArticleEntity(entity: NormalizedArticleEntity, source?: string | null): boolean {
+function shouldStoreArticleEntity(entity: NormalizedArticleEntity, excludedCanonicalNames: ReadonlySet<string>): boolean {
 	const canonical = canonicalizeEntityName(entity.name);
 	if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) return false;
 	if (canonical.length > ENTITY_NAME_MAX_LENGTH || entity.name.length > ENTITY_NAME_MAX_LENGTH) return false;
 	if (entity.name_cn.length > ENTITY_NAME_MAX_LENGTH || entity.type.length > ENTITY_TYPE_MAX_LENGTH) return false;
 	if (ASCII_TICKER_ENTITY_RE.test(canonical)) return false;
 	if (GENERIC_ENTITY_CANONICALS.has(canonical)) return false;
-	return !source || canonicalizeEntityName(source) !== canonical;
+	return !excludedCanonicalNames.has(canonical);
 }
 
 function normalizeEntityType(value: string): EntityType | null {
@@ -138,13 +138,57 @@ function normalizeArticleEntity(entity: ArticleEntityInput): NormalizedArticleEn
 	};
 }
 
-export function normalizeArticleEntitiesForStorage(entities: ArticleEntityInput[], source?: string | null): NormalizedArticleEntity[] {
+function recordValue(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringValue(value: unknown): string | null {
+	return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function platformMetadataSourceAliases(metadata: unknown): string[] {
+	const envelope = recordValue(metadata);
+	const data = recordValue(envelope?.data);
+	const type = stringValue(envelope?.type);
+	if (!type || !data) return [];
+	const aliases: string[] = [];
+	const add = (value: unknown) => {
+		const str = stringValue(value);
+		if (str) aliases.push(str);
+	};
+
+	if (type === 'twitter') {
+		add(data.authorName);
+		const userName = stringValue(data.authorUserName);
+		if (userName) aliases.push(userName, `@${userName}`);
+		aliases.push('Twitter', 'X');
+	} else if (type === 'youtube') {
+		add(data.channelName);
+		aliases.push('YouTube');
+	} else if (type === 'hackernews') {
+		add(data.author);
+		aliases.push('Hacker News');
+	}
+	return aliases;
+}
+
+function excludedEntityCanonicalNames(source?: string | null, platformMetadata?: unknown): Set<string> {
+	const names = [source ?? '', ...platformMetadataSourceAliases(platformMetadata)];
+	return new Set(names.map(canonicalizeEntityName).filter(Boolean));
+}
+
+export function normalizeArticleEntitiesForStorage(
+	entities: ArticleEntityInput[],
+	source?: string | null,
+	platformMetadata?: unknown,
+): NormalizedArticleEntity[] {
 	const byCanonical = new Map<string, NormalizedArticleEntity>();
+	const excludedCanonicals = excludedEntityCanonicalNames(source, platformMetadata);
 	for (const entity of entities) {
 		const normalized = normalizeArticleEntity(entity);
 		if (!normalized) continue;
 		const canonical = canonicalizeEntityName(normalized.name);
-		if (!canonical || byCanonical.has(canonical) || !shouldStoreArticleEntity(normalized, source)) continue;
+		if (!canonical || byCanonical.has(canonical) || !shouldStoreArticleEntity(normalized, excludedCanonicals)) continue;
 		byCanonical.set(canonical, normalized);
 		if (byCanonical.size >= MAX_ENTITIES_PER_ARTICLE) break;
 	}
@@ -226,8 +270,9 @@ export async function syncArticleEntities(
 	articleId: string,
 	entities: ArticleEntityInput[],
 	source?: string | null,
+	platformMetadata?: unknown,
 ): Promise<void> {
-	const normalizedEntities = normalizeArticleEntitiesForStorage(entities, source);
+	const normalizedEntities = normalizeArticleEntitiesForStorage(entities, source, platformMetadata);
 	const entityIds: string[] = [];
 
 	for (const entity of normalizedEntities) {
@@ -272,7 +317,7 @@ export async function repairMissingArticleEntityLinks(
 	limit: number,
 ): Promise<{ scanned: number; repaired: number; normalized: number; skipped: number }> {
 	const result = await db.query<ArticleEntityRepairRow>(
-		`SELECT a.id, a.source, a.entities
+		`SELECT a.id, a.source, a.platform_metadata, a.entities
 		   FROM ${ARTICLES_TABLE} a
 		  WHERE jsonb_typeof(a.entities) = 'array'
 		    AND jsonb_array_length(a.entities) > 0
@@ -295,7 +340,7 @@ export async function repairMissingArticleEntityLinks(
 		}
 
 		const rawEntities = row.entities.filter(isArticleEntityInput);
-		const entities = normalizeArticleEntitiesForStorage(rawEntities, row.source);
+		const entities = normalizeArticleEntitiesForStorage(rawEntities, row.source, row.platform_metadata);
 		const normalizedJson = JSON.stringify(entities);
 		if (!entities.length) {
 			await db.query(`UPDATE ${ARTICLES_TABLE} SET entities = '[]'::jsonb WHERE id = $1`, [row.id]);
@@ -307,7 +352,7 @@ export async function repairMissingArticleEntityLinks(
 			await db.query(`UPDATE ${ARTICLES_TABLE} SET entities = $2::jsonb WHERE id = $1`, [row.id, normalizedJson]);
 			normalized++;
 		}
-		await syncArticleEntities(db, row.id, entities, row.source);
+		await syncArticleEntities(db, row.id, entities, row.source, row.platform_metadata);
 		repaired++;
 	}
 
