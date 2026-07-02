@@ -14,19 +14,16 @@ import StarterKit from '@tiptap/starter-kit';
 import type {
 	AddDocumentResourceResult,
 	CreateDocumentResult,
+	CreateWorkspaceResult,
 	DeleteDocumentResult,
-	DocumentListItemResult,
 	DocumentReadResult,
 	DocumentSnapshotSource,
-	DocumentVersionListResult,
-	DocumentVersionResult,
 	EditDocumentResult,
 	SaveDocumentResult,
 	UpdateDocumentShareResult,
 	WorkspaceCatalogEntry,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
-	WorkspaceDocumentRouteResult,
 } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
@@ -69,7 +66,6 @@ type WorkspaceDocumentRow = {
 	username: string | null;
 	updated_at: Date | string;
 };
-type DocumentListRow = Omit<WorkspaceDocumentRow, 'content' | 'version'>;
 type DocumentShareRow = {
 	id: string;
 	title: string;
@@ -92,17 +88,6 @@ type SaveDocumentRow = {
 	content: JSONContent | null;
 	version: number;
 	updated_at: Date | string;
-};
-type DocumentVersionListRow = {
-	id: string;
-	version: number;
-	title: string;
-	source: string;
-	created_at: Date | string;
-};
-type DocumentVersionRow = DocumentVersionListRow & {
-	document_id: string;
-	content: JSONContent | null;
 };
 
 export class DocumentVersionConflictError extends Error {
@@ -185,19 +170,6 @@ function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumen
 		description: row.description,
 		content: (row.content ?? EMPTY_TIPTAP_DOCUMENT) as WorkspaceDocumentResult['content'],
 		version: row.version,
-		shareEnabled: row.share_enabled,
-		shareSlug: row.share_slug,
-		username: row.username,
-		updatedAt: dateIso(row.updated_at),
-	};
-}
-
-function serializeDocumentListItem(row: DocumentListRow): DocumentListItemResult {
-	return {
-		id: row.id,
-		workspaceId: row.workspace_id,
-		title: row.title,
-		description: row.description,
 		shareEnabled: row.share_enabled,
 		shareSlug: row.share_slug,
 		username: row.username,
@@ -342,6 +314,30 @@ export async function listWorkspaces(env: Env, userId: string): Promise<Workspac
 	});
 }
 
+export async function createWorkspace(
+	env: Env,
+	params: { userId: string; title: string; description?: string | null },
+): Promise<CreateWorkspaceResult> {
+	return withDbTransaction(env, 'create workspace', async (db) => {
+		const limit = await workspaceQuotaLimitTx(db, params.userId);
+		if (limit !== null) {
+			const count = Number((await db.query('SELECT COUNT(*) FROM workspaces WHERE user_id = $1', [params.userId])).rows[0]?.count ?? 0);
+			if (count >= limit) throw new Error(WORKSPACE_QUOTA_EXCEEDED_MESSAGE);
+		}
+
+		const workspace = (
+			await db.query<{ id: string }>(
+				`INSERT INTO workspaces (user_id, title, description)
+				 VALUES ($1, $2, $3)
+				 RETURNING id`,
+				[params.userId, params.title.trim().slice(0, 120) || 'Workspace', params.description?.trim().slice(0, 500) || null],
+			)
+		).rows[0];
+		if (!workspace) throw new Error('Workspace not created');
+		return { id: workspace.id };
+	});
+}
+
 export async function workspaceSummary(env: Env, userId: string, workspaceId: string): Promise<string | null> {
 	if (!isUuid(workspaceId)) return null;
 	return withDbClient(env, async (db) => {
@@ -393,84 +389,6 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 		]
 			.filter(Boolean)
 			.join('\n\n');
-	});
-}
-
-export async function listDocuments(env: Env, params: { userId: string; workspaceId?: string | null }): Promise<DocumentListItemResult[]> {
-	const workspaceId = params.workspaceId?.trim() || null;
-	if (workspaceId && !isUuid(workspaceId)) return [];
-	return withDbClient(env, async (db) => {
-		const rows = (
-			await db.query<DocumentListRow>(
-				`SELECT d.id, d.workspace_id, d.title, d.description, d.share_enabled, d.share_slug, d.updated_at, u.username
-				 FROM user_documents d
-				 LEFT JOIN "user" u ON u.id = d.user_id
-				 WHERE d.user_id = $1
-				   AND ($2::uuid IS NULL OR d.workspace_id = $2::uuid)
-				 ORDER BY d.updated_at DESC
-				 LIMIT 200`,
-				[params.userId, workspaceId],
-			)
-		).rows;
-		return rows.map(serializeDocumentListItem);
-	});
-}
-
-export async function getDocument(env: Env, params: { userId: string; documentId: string }): Promise<WorkspaceDocumentResult | null> {
-	if (!isUuid(params.documentId)) return null;
-	return withDbClient(env, async (db) => {
-		const row = (
-			await db.query<WorkspaceDocumentRow>(
-				`SELECT d.id, d.workspace_id, d.title, d.description, d.content, d.version,
-				        d.share_enabled, d.share_slug, d.updated_at, u.username
-				   FROM user_documents d
-				   LEFT JOIN "user" u ON u.id = d.user_id
-				  WHERE d.id = $1 AND d.user_id = $2
-				  LIMIT 1`,
-				[params.documentId, params.userId],
-			)
-		).rows[0];
-		return row ? serializeWorkspaceDocument(row) : null;
-	});
-}
-
-export async function getWorkspaceDocumentRoute(
-	env: Env,
-	params: { userId: string; workspaceId: string; documentId?: string | null },
-): Promise<WorkspaceDocumentRouteResult> {
-	if (!isUuid(params.workspaceId)) return { status: 'not-found' };
-	return withDbClient(env, async (db) => {
-		const workspaceExists = async () => {
-			const workspace = (
-				await db.query<{ id: string }>('SELECT id FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1', [
-					params.workspaceId,
-					params.userId,
-				])
-			).rows[0];
-			return !!workspace;
-		};
-
-		if (!params.documentId) {
-			return (await workspaceExists()) ? { status: 'ready', document: null } : { status: 'not-found' };
-		}
-
-		if (!isUuid(params.documentId)) {
-			return (await workspaceExists()) ? { status: 'missing-document' } : { status: 'not-found' };
-		}
-
-		const row = (
-			await db.query<WorkspaceDocumentRow>(
-				`SELECT d.id, d.workspace_id, d.title, d.description, d.content, d.version,
-				        d.share_enabled, d.share_slug, d.updated_at, u.username
-				   FROM user_documents d
-				   LEFT JOIN "user" u ON u.id = d.user_id
-				  WHERE d.id = $1 AND d.workspace_id = $2 AND d.user_id = $3
-				  LIMIT 1`,
-				[params.documentId, params.workspaceId, params.userId],
-			)
-		).rows[0];
-		if (row) return { status: 'ready', document: serializeWorkspaceDocument(row) };
-		return (await workspaceExists()) ? { status: 'missing-document' } : { status: 'not-found' };
 	});
 }
 
@@ -652,87 +570,6 @@ export async function saveDocument(
 		}
 
 		return serializeSaveDocument(updated);
-	});
-}
-
-export async function listDocumentVersions(
-	env: Env,
-	params: { userId: string; documentId: string; limit?: number; cursor?: string | null },
-): Promise<DocumentVersionListResult> {
-	if (!isUuid(params.documentId)) throw new Error('Document not found');
-	const limit = Math.min(Math.max(params.limit ?? 50, 1), 100);
-	const cursorDate = params.cursor ? new Date(params.cursor) : null;
-	if (cursorDate && Number.isNaN(cursorDate.getTime())) throw new Error('Invalid pagination cursor');
-
-	return withDbClient(env, async (db) => {
-		const document = (
-			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1', [
-				params.documentId,
-				params.userId,
-			])
-		).rows[0];
-		if (!document) throw new Error('Document not found');
-
-		const versions = (
-			await db.query<DocumentVersionListRow>(
-				`SELECT id, version, title, source, created_at
-				 FROM document_versions
-				 WHERE document_id = $1
-				   AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
-				 ORDER BY created_at DESC
-				 LIMIT $3`,
-				[params.documentId, cursorDate?.toISOString() ?? null, limit],
-			)
-		).rows;
-
-		return {
-			data: versions.map((version) => ({
-				id: version.id,
-				version: version.version,
-				title: version.title,
-				source: version.source,
-				createdAt: dateIso(version.created_at),
-			})),
-			hasMore: versions.length === limit,
-			nextCursor: versions.length === limit ? dateIso(versions[versions.length - 1].created_at) : null,
-		};
-	});
-}
-
-export async function getDocumentVersion(
-	env: Env,
-	params: { userId: string; documentId: string; versionId: string },
-): Promise<DocumentVersionResult> {
-	if (!isUuid(params.documentId) || !isUuid(params.versionId)) throw new Error('Document version not found');
-	return withDbClient(env, async (db) => {
-		const document = (
-			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1', [
-				params.documentId,
-				params.userId,
-			])
-		).rows[0];
-		if (!document) throw new Error('Document not found');
-
-		const version = (
-			await db.query<DocumentVersionRow>(
-				`SELECT id, document_id, content, title, version, source, created_at
-				 FROM document_versions
-				 WHERE id = $1 AND document_id = $2
-				 LIMIT 1`,
-				[params.versionId, params.documentId],
-			)
-		).rows[0];
-		if (!version) throw new Error('Document version not found');
-
-		return {
-			id: version.id,
-			documentId: version.document_id,
-			content: (version.content ?? EMPTY_TIPTAP_DOCUMENT) as DocumentVersionResult['content'],
-			title: version.title,
-			version: version.version,
-			source: version.source,
-			createdAt: dateIso(version.created_at),
-		};
 	});
 }
 

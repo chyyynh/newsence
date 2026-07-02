@@ -15,14 +15,10 @@ import { readCorpusItems, searchCorpusArticles } from './corpus';
 import {
 	addResource,
 	createDocument,
+	createWorkspace,
 	createWorkspaceDocument,
 	deleteDocument,
 	editDocument,
-	getDocument,
-	getDocumentVersion,
-	getWorkspaceDocumentRoute,
-	listDocuments,
-	listDocumentVersions,
 	listWorkspaces,
 	readDocuments,
 	saveDocument,
@@ -76,21 +72,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		return readDocuments(this.env, userId, ids);
 	}
 
-	/** List user-owned documents, optionally scoped to a workspace. */
-	listDocuments(input: CoreRpcArgs<'listDocuments'>[0]) {
-		return listDocuments(this.env, input);
-	}
-
-	/** Read a user-owned document for the editor. */
-	getDocument(input: CoreRpcArgs<'getDocument'>[0]) {
-		return getDocument(this.env, input);
-	}
-
-	/** Resolve a workspace document route without leaking workspace existence. */
-	getWorkspaceDocumentRoute(input: CoreRpcArgs<'getWorkspaceDocumentRoute'>[0]) {
-		return getWorkspaceDocumentRoute(this.env, input);
-	}
-
 	/** Persist AI-generated markdown into a Tiptap document. */
 	createDocument(input: CoreRpcArgs<'createDocument'>[0]) {
 		return createDocument(this.env, input);
@@ -111,16 +92,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		return saveDocument(this.env, input);
 	}
 
-	/** List previous document versions for the owner. */
-	listDocumentVersions(input: CoreRpcArgs<'listDocumentVersions'>[0]) {
-		return listDocumentVersions(this.env, input);
-	}
-
-	/** Read one previous document version for the owner. */
-	getDocumentVersion(input: CoreRpcArgs<'getDocumentVersion'>[0]) {
-		return getDocumentVersion(this.env, input);
-	}
-
 	/** Update public-share settings for a user-owned document. */
 	updateDocumentShare(input: CoreRpcArgs<'updateDocumentShare'>[0]) {
 		return updateDocumentShare(this.env, input);
@@ -139,6 +110,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Workspace catalog used by scope-free create-document decisions. */
 	listWorkspaces(userId: CoreRpcArgs<'listWorkspaces'>[0]) {
 		return listWorkspaces(this.env, userId);
+	}
+
+	/** Create a workspace with core-owned quota enforcement. */
+	createWorkspace(input: CoreRpcArgs<'createWorkspace'>[0]) {
+		return createWorkspace(this.env, input);
 	}
 
 	/** Workspace pinned-resource summary for workspace-scoped chat context. */
