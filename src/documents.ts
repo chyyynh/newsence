@@ -28,6 +28,7 @@ import type {
 	UpdateDocumentShareResult,
 	ValidateResourceSourceResult,
 	WorkspaceCatalogResult,
+	WorkspaceCreationCapability,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
@@ -290,18 +291,29 @@ function resourceSummaryLine(
 	return `- ${title}${summary ? `: ${summary}` : ''}`;
 }
 
+async function readWorkspaceCreationCapability(db: DbClient, userId: string): Promise<WorkspaceCreationCapability> {
+	const meta = (
+		await db.query<{ plan_id: string | null; workspace_count: string | number }>(
+			`SELECT
+			   (SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1) AS plan_id,
+			   COUNT(*) AS workspace_count
+			 FROM workspaces
+			 WHERE user_id = $1`,
+			[userId],
+		)
+	).rows[0];
+	return {
+		canCreateWorkspace: canCreateWorkspaceForPlan(meta?.plan_id ?? 'free', Number(meta?.workspace_count ?? 0)),
+	};
+}
+
+export async function workspaceCreationCapability(env: Env, userId: string): Promise<WorkspaceCreationCapability> {
+	return withDbClient(env, (db) => readWorkspaceCreationCapability(db, userId));
+}
+
 export async function listWorkspaces(env: Env, userId: string): Promise<WorkspaceCatalogResult> {
 	return withDbClient(env, async (db) => {
-		const meta = (
-			await db.query<{ plan_id: string | null; workspace_count: string | number }>(
-				`SELECT
-				   (SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1) AS plan_id,
-				   COUNT(*) AS workspace_count
-				 FROM workspaces
-				 WHERE user_id = $1`,
-				[userId],
-			)
-		).rows[0];
+		const capability = await readWorkspaceCreationCapability(db, userId);
 		const result = await db.query<{
 			id: string;
 			title: string;
@@ -318,7 +330,7 @@ export async function listWorkspaces(env: Env, userId: string): Promise<Workspac
 			[userId],
 		);
 		return {
-			canCreateWorkspace: canCreateWorkspaceForPlan(meta?.plan_id ?? 'free', Number(meta?.workspace_count ?? 0)),
+			canCreateWorkspace: capability.canCreateWorkspace,
 			entries: result.rows.map((row) => ({
 				id: row.id,
 				title: row.title,

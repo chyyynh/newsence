@@ -28,6 +28,7 @@ import {
 	saveDocument,
 	updateDocumentShare,
 	validateResourceSource,
+	workspaceCreationCapability,
 	workspaceSummary,
 } from './documents';
 import { deleteUserMediaFile } from './media/delete';
@@ -146,6 +147,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Workspace catalog used by scope-free create-document decisions. */
 	listWorkspaces(userId: CoreRpcArgs<'listWorkspaces'>[0]) {
 		return listWorkspaces(this.env, userId);
+	}
+
+	/** Workspace creation capability without loading the full workspace catalog. */
+	workspaceCreationCapability(userId: CoreRpcArgs<'workspaceCreationCapability'>[0]) {
+		return workspaceCreationCapability(this.env, userId);
 	}
 
 	/** Create a workspace with core-owned quota enforcement. */
