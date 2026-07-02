@@ -31,7 +31,7 @@ class DefaultProcessor implements ArticleProcessor {
 		if (isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
-		return { updateData };
+		return { updateData, classificationCategory: analysis.category };
 	}
 }
 
@@ -99,7 +99,7 @@ export function buildProcessorUpdatePayload(
 	metadataPatch?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	const category = categoryFromTags(updatePayload.tags);
+	const category = result.classificationCategory ?? categoryFromTags(updatePayload.tags);
 	let mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
 	if (category) mergedMetadata = withClassification(mergedMetadata ?? article.platform_metadata, category);
 	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };

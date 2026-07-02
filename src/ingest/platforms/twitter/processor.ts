@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject } from '@shared/ai';
+import type { ArticleCategory } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article } from '@shared/types';
 import { z } from 'zod';
 import {
@@ -15,8 +16,9 @@ import {
 import { scrapeWebPage } from '../web-scraper';
 
 type UpdateData = ProcessorResult['updateData'];
+type LinkedArticleAnalysisResult = { applied: false } | { applied: true; category?: ArticleCategory };
 
-function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): void {
+function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): ArticleCategory | undefined {
 	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
 	if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
 	if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
@@ -26,6 +28,7 @@ function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, upda
 	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
 	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
 	if (analysis.entities?.length) updateData.entities = analysis.entities;
+	return analysis.category;
 }
 
 function extractTweetText(article: Article): string {
@@ -59,16 +62,18 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (hasFullContent) {
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
 			const analysis = await generateArticleAnalysis(article, ctx.env);
-			applyArticleAnalysis(article, analysis, updateData);
-			return { updateData };
+			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
 		}
 
 		const tweetText = extractTweetText(article);
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
 		const linkedUrl = getLinkedUrl(article);
-		if (linkedUrl && (await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData))) {
-			return { updateData };
+		const linkedAnalysis: LinkedArticleAnalysisResult = linkedUrl
+			? await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData)
+			: { applied: false };
+		if (linkedAnalysis.applied) {
+			return { updateData, classificationCategory: linkedAnalysis.category };
 		}
 
 		await this.applyPlainTweetAnalysis(tweetText, article, ctx, updateData);
@@ -81,21 +86,20 @@ export class TwitterProcessor implements ArticleProcessor {
 		ctx: ProcessorContext,
 		linkedUrl: string,
 		updateData: UpdateData,
-	): Promise<boolean> {
+	): Promise<LinkedArticleAnalysisResult> {
 		try {
 			const linked = await scrapeWebPage(linkedUrl);
-			if (!linked.content || linked.content.length <= 100) return false;
+			if (!linked.content || linked.content.length <= 100) return { applied: false };
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
 			updateData.content = linked.content;
 			const analysis = await generateArticleAnalysis(
 				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
 				ctx.env,
 			);
-			applyArticleAnalysis(article, analysis, updateData);
-			return true;
+			return { applied: true, category: applyArticleAnalysis(article, analysis, updateData) };
 		} catch (e) {
 			console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(e) });
-			return false;
+			return { applied: false };
 		}
 	}
 

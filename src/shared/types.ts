@@ -1,4 +1,4 @@
-import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
+import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
 
 type WorkerScheduledEvent = ScheduledEvent;
 type WorkerExecutionContext = ExecutionContext;
@@ -66,7 +66,7 @@ export interface AIAnalysisResult {
 	content?: string;
 	content_cn?: string;
 	title_cn?: string;
-	category?: string;
+	category?: ArticleCategory;
 	entities?: ExtractedEntity[];
 }
 

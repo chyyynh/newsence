@@ -4,7 +4,7 @@
 
 import { AI_TASKS, generateObject, generateText } from '@shared/ai';
 import type { ProcessableTable } from '@shared/article-store';
-import type { PlatformEnrichments } from '@shared/platform-metadata';
+import type { ArticleCategory, PlatformEnrichments } from '@shared/platform-metadata';
 import type { AIAnalysisResult, Article, Env } from '@shared/types';
 import { z } from 'zod';
 
@@ -25,6 +25,7 @@ export interface ProcessorResult {
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
+	classificationCategory?: ArticleCategory;
 	/**
 	 * Measured OG image dimensions, merged into `platform_metadata` at persist
 	 * time (creating a `default` envelope if none exists). Populated by the

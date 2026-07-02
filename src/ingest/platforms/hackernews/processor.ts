@@ -243,7 +243,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		if (analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
 		if (analysis.entities?.length) updateData.entities = analysis.entities;
 
-		return { updateData, enrichments };
+		return { updateData, enrichments, classificationCategory: analysis.category };
 	}
 
 	private async fetchHnData(itemId: string | null): Promise<HnItem | null> {
