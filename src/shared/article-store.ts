@@ -134,6 +134,7 @@ type EntityQualitySyncGapRow = {
 	published_date: string | Date | null;
 	entity_count: number | string | null;
 };
+type EntityQualityArticleExampleRow = EntityQualitySyncGapRow;
 type EntityQualityBackfillRow = {
 	first_entity_published_date: string | Date | null;
 	processable_missing_or_empty: number | string | null;
@@ -670,6 +671,16 @@ export async function getEntityQualitySnapshot(
 			entityCount: number;
 		}>;
 	};
+	limitViolations: {
+		overCapArticles: Array<{
+			id: string;
+			title: string | null;
+			source: string | null;
+			sourceType: string;
+			publishedDate: string | null;
+			entityCount: number;
+		}>;
+	};
 	backfill: {
 		firstEntityPublishedDate: string | null;
 		processableMissingOrEmpty: number;
@@ -919,6 +930,21 @@ export async function getEntityQualitySnapshot(
 		[ENTITY_QUALITY_TOP_LIMIT],
 	);
 
+	const overCapExamples = await db.query<EntityQualityArticleExampleRow>(
+		`SELECT a.id,
+		        a.title,
+		        a.source,
+		        COALESCE(NULLIF(TRIM(a.source_type), ''), 'unknown') AS source_type,
+		        a.published_date,
+		        jsonb_array_length(a.entities)::int AS entity_count
+		   FROM ${ARTICLES_TABLE} a
+		  WHERE jsonb_typeof(a.entities) = 'array'
+		    AND jsonb_array_length(a.entities) > $1
+		  ORDER BY entity_count DESC, a.published_date DESC
+		  LIMIT $2`,
+		[MAX_ENTITIES_PER_ARTICLE, ENTITY_QUALITY_TOP_LIMIT],
+	);
+
 	const backfill = await db.query<EntityQualityBackfillRow>(
 		`WITH first_entity AS (
 		   SELECT MIN(published_date) AS first_entity_published_date
@@ -1076,6 +1102,16 @@ export async function getEntityQualitySnapshot(
 		},
 		syncGaps: {
 			jsonWithoutLinks: jsonWithoutLinkExamples.rows.map((entry) => ({
+				id: entry.id,
+				title: entry.title,
+				source: entry.source,
+				sourceType: entry.source_type,
+				publishedDate: isoDateValue(entry.published_date),
+				entityCount: intValue(entry.entity_count),
+			})),
+		},
+		limitViolations: {
+			overCapArticles: overCapExamples.rows.map((entry) => ({
 				id: entry.id,
 				title: entry.title,
 				source: entry.source,
