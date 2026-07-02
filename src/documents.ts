@@ -14,6 +14,7 @@ import StarterKit from '@tiptap/starter-kit';
 import type {
 	AddDocumentResourceResult,
 	CreateDocumentResult,
+	DeleteDocumentResult,
 	DocumentReadResult,
 	EditDocumentResult,
 	WorkspaceCatalogEntry,
@@ -290,6 +291,20 @@ export async function createDocument(
 			workspaceTitle: workspace.title,
 			workspaceCreated: true,
 		};
+	});
+}
+
+export async function deleteDocument(env: Env, params: { userId: string; documentId: string }): Promise<DeleteDocumentResult> {
+	if (!isUuid(params.documentId)) throw new Error('Document not found');
+	return withDbClient(env, async (db) => {
+		const row = (
+			await db.query<{ id: string }>(`DELETE FROM user_documents WHERE id = $1 AND user_id = $2 RETURNING id`, [
+				params.documentId,
+				params.userId,
+			])
+		).rows[0];
+		if (!row) throw new Error('Document not found');
+		return { id: row.id };
 	});
 }
 

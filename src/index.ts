@@ -12,7 +12,7 @@ import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@share
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
-import { addResource, createDocument, editDocument, listWorkspaces, readDocuments, workspaceSummary } from './documents';
+import { addResource, createDocument, deleteDocument, editDocument, listWorkspaces, readDocuments, workspaceSummary } from './documents';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
@@ -63,6 +63,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Persist AI-generated markdown into a Tiptap document. */
 	createDocument(input: CoreRpcArgs<'createDocument'>[0]) {
 		return createDocument(this.env, input);
+	}
+
+	/** Delete a user-owned document. */
+	deleteDocument(input: CoreRpcArgs<'deleteDocument'>[0]) {
+		return deleteDocument(this.env, input);
 	}
 
 	/** Apply str_replace edits to a document. */

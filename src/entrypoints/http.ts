@@ -9,6 +9,7 @@ import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
+import { deleteDocument } from '../documents';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
@@ -25,6 +26,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
+	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
 
@@ -33,6 +35,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
+	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 };
 
 const HELP_TEXT =
@@ -46,6 +49,7 @@ const HELP_TEXT =
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
+	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +
@@ -107,6 +111,31 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleDeleteDocument(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ userId?: string; documentId?: string }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !body.documentId?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing userId or documentId', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await deleteDocument(env, { userId: body.userId, documentId: body.documentId });
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error && error.message === 'Document not found') {
+			return jsonError('NOT_FOUND', 'Document not found', 404, INTERNAL_CORS_HEADERS);
+		}
+		console.error({ tag: 'DOCUMENT_DELETE', msg: 'delete failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Document delete failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 
