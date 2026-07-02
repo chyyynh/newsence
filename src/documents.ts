@@ -23,6 +23,8 @@ import type {
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
 const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
+// Workspace creation quota is enforced here, inside the create-document
+// transaction. Callers may hint the model, but they should not duplicate this policy.
 const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
 
 type DocumentEdit = { old_string: string; new_string: string };
