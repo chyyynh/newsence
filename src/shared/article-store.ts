@@ -111,6 +111,12 @@ type EntityQualityGenericOffenderRow = {
 	name: string;
 	links: number | string | null;
 };
+type EntityQualityTypeExampleRow = {
+	type: string;
+	canonical_name: string;
+	name: string;
+	article_count: number | string | null;
+};
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -135,6 +141,7 @@ const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
 const MAX_ENTITIES_PER_ARTICLE = 10;
 const ENTITY_QUALITY_TOP_LIMIT = 10;
+const ENTITY_QUALITY_EXAMPLES_PER_TYPE = 3;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
@@ -534,7 +541,11 @@ export async function getEntityQualitySnapshot(
 		jsonWithoutLinks: number;
 		coverage: number;
 	}>;
-	unknownTypes: Array<{ type: string; count: number }>;
+	unknownTypes: Array<{
+		type: string;
+		count: number;
+		examples: Array<{ canonicalName: string; name: string; articleCount: number }>;
+	}>;
 	topOffenders: {
 		selfSource: Array<{ canonicalName: string; name: string; source: string; links: number }>;
 		generic: Array<{ canonicalName: string; name: string; links: number }>;
@@ -638,6 +649,35 @@ export async function getEntityQualitySnapshot(
 		[[...ENTITY_TYPES]],
 	);
 
+	const unknownTypeExamples = await db.query<EntityQualityTypeExampleRow>(
+		`SELECT type,
+		        canonical_name,
+		        name,
+		        article_count
+		   FROM (
+		     SELECT type,
+		            canonical_name,
+		            name,
+		            article_count,
+		            row_number() OVER (PARTITION BY type ORDER BY article_count DESC, canonical_name ASC) AS rank
+		       FROM entities
+		      WHERE NOT (type = ANY($1::text[]))
+		   ) ranked
+		  WHERE rank <= $2
+		  ORDER BY type ASC, rank ASC`,
+		[[...ENTITY_TYPES], ENTITY_QUALITY_EXAMPLES_PER_TYPE],
+	);
+	const examplesByType = new Map<string, Array<{ canonicalName: string; name: string; articleCount: number }>>();
+	for (const entry of unknownTypeExamples.rows) {
+		const examples = examplesByType.get(entry.type) ?? [];
+		examples.push({
+			canonicalName: entry.canonical_name,
+			name: entry.name,
+			articleCount: intValue(entry.article_count),
+		});
+		examplesByType.set(entry.type, examples);
+	}
+
 	const selfSourceOffenders = await db.query<EntityQualitySelfSourceOffenderRow>(
 		`SELECT e.canonical_name,
 		        e.name,
@@ -706,7 +746,11 @@ export async function getEntityQualitySnapshot(
 				coverage: totalArticles ? withEntityJson / totalArticles : 0,
 			};
 		}),
-		unknownTypes: unknownTypes.rows.map((entry) => ({ type: entry.type, count: intValue(entry.count) })),
+		unknownTypes: unknownTypes.rows.map((entry) => ({
+			type: entry.type,
+			count: intValue(entry.count),
+			examples: examplesByType.get(entry.type) ?? [],
+		})),
 		topOffenders: {
 			selfSource: selfSourceOffenders.rows.map((entry) => ({
 				canonicalName: entry.canonical_name,
