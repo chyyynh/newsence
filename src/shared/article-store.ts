@@ -124,6 +124,13 @@ type EntityQualitySyncGapRow = {
 	published_date: string | Date | null;
 	entity_count: number | string | null;
 };
+type EntityQualityBackfillRow = {
+	first_entity_published_date: string | Date | null;
+	processable_missing_or_empty: number | string | null;
+	processable_missing_before_first_entity: number | string | null;
+	oldest_processable_missing_published_date: string | Date | null;
+	newest_processable_missing_published_date: string | Date | null;
+};
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -579,6 +586,13 @@ export async function getEntityQualitySnapshot(
 			entityCount: number;
 		}>;
 	};
+	backfill: {
+		firstEntityPublishedDate: string | null;
+		processableMissingOrEmpty: number;
+		processableMissingBeforeFirstEntityDate: number;
+		oldestProcessableMissingPublishedDate: string | null;
+		newestProcessableMissingPublishedDate: string | null;
+	};
 	database: {
 		extensions: {
 			pgTrgm: boolean;
@@ -752,6 +766,40 @@ export async function getEntityQualitySnapshot(
 		[ENTITY_QUALITY_TOP_LIMIT],
 	);
 
+	const backfill = await db.query<EntityQualityBackfillRow>(
+		`WITH first_entity AS (
+		   SELECT MIN(published_date) AS first_entity_published_date
+		     FROM ${ARTICLES_TABLE}
+		    WHERE jsonb_typeof(entities) = 'array'
+		      AND jsonb_array_length(entities) > 0
+		 ),
+		 processable_backlog AS (
+		   SELECT a.published_date
+		     FROM ${ARTICLES_TABLE} a
+		    WHERE (a.content IS NOT NULL OR a.summary IS NOT NULL)
+		      AND (
+		        a.entities IS NULL
+		        OR jsonb_typeof(a.entities) <> 'array'
+		        OR CASE
+		          WHEN jsonb_typeof(a.entities) = 'array' THEN jsonb_array_length(a.entities) = 0
+		          ELSE false
+		        END
+		      )
+		 )
+		 SELECT f.first_entity_published_date,
+		        COUNT(p.published_date)::int AS processable_missing_or_empty,
+		        COUNT(*) FILTER (
+		          WHERE f.first_entity_published_date IS NOT NULL
+		            AND p.published_date < f.first_entity_published_date
+		        )::int AS processable_missing_before_first_entity,
+		        MIN(p.published_date) AS oldest_processable_missing_published_date,
+		        MAX(p.published_date) AS newest_processable_missing_published_date
+		   FROM first_entity f
+		   LEFT JOIN processable_backlog p ON true
+		  GROUP BY f.first_entity_published_date`,
+		[],
+	);
+
 	const recommendedExtensions = ['pg_trgm', 'vector'];
 	const extensions = await db.query<EntityQualityExtensionRow>(
 		`SELECT extname
@@ -818,6 +866,19 @@ export async function getEntityQualitySnapshot(
 				publishedDate: entry.published_date ? new Date(entry.published_date).toISOString() : null,
 				entityCount: intValue(entry.entity_count),
 			})),
+		},
+		backfill: {
+			firstEntityPublishedDate: backfill.rows[0]?.first_entity_published_date
+				? new Date(backfill.rows[0].first_entity_published_date).toISOString()
+				: null,
+			processableMissingOrEmpty: intValue(backfill.rows[0]?.processable_missing_or_empty),
+			processableMissingBeforeFirstEntityDate: intValue(backfill.rows[0]?.processable_missing_before_first_entity),
+			oldestProcessableMissingPublishedDate: backfill.rows[0]?.oldest_processable_missing_published_date
+				? new Date(backfill.rows[0].oldest_processable_missing_published_date).toISOString()
+				: null,
+			newestProcessableMissingPublishedDate: backfill.rows[0]?.newest_processable_missing_published_date
+				? new Date(backfill.rows[0].newest_processable_missing_published_date).toISOString()
+				: null,
 		},
 		database: {
 			extensions: {
