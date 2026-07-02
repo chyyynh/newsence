@@ -47,13 +47,21 @@ export async function deleteUserMediaFile(env: Env, input: { userId: string; fil
 
 	if (file.storage_key) {
 		await assertMediaFileNotUsedInDocuments(env, input.userId, file.storage_key);
-		await deleteR2Objects(env, [file.storage_key]);
 	}
 
 	await withDbTransaction(env, 'delete user media file', async (db) => {
 		await db.query(`DELETE FROM citations WHERE user_id = $1 AND to_type = 'user_file' AND to_id = $2`, [input.userId, file.id]);
 		await db.query(`DELETE FROM user_files WHERE id = $1 AND user_id = $2 AND resource_kind = 'blob'`, [file.id, input.userId]);
 	});
+
+	// R2 last: failing here only orphans a blob, never a live row pointing at a deleted object.
+	if (file.storage_key) {
+		try {
+			await deleteR2Objects(env, [file.storage_key]);
+		} catch (error) {
+			console.error({ tag: 'MEDIA_DELETE', msg: 'R2 delete failed after row removal', key: file.storage_key, error: String(error) });
+		}
+	}
 
 	return { ok: true, id: file.id };
 }
