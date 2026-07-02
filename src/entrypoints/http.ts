@@ -18,8 +18,6 @@ const INTERNAL_CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
 
-const SEARCH_LIMIT_MAX = 500;
-
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
@@ -76,14 +74,12 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
 	const body = await parseJsonBody<{ query?: string; limit?: number }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const query = body.query?.trim();
-	if (!query) {
+	if (!body.query?.trim()) {
 		return jsonData({ results: [] }, INTERNAL_CORS_HEADERS);
 	}
-	const limit = Math.min(Math.max(Math.trunc(body.limit ?? 100), 1), SEARCH_LIMIT_MAX);
 
 	try {
-		const results = await searchCorpusArticleRanks(env, { query, limit });
+		const results = await searchCorpusArticleRanks(env, { query: body.query, limit: body.limit });
 		return jsonData({ results }, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'hybrid search failed', error: error instanceof Error ? error.message : String(error) });
@@ -100,16 +96,13 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	const body = await parseJsonBody<{ id?: string; type?: string; limit?: number; offset?: number }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const id = body.id?.trim();
-	const type = body.type === 'user_file' ? 'user_file' : 'article';
-	if (!id) {
+	if (!body.id?.trim()) {
 		return jsonError('BAD_REQUEST', 'Missing seed id', 400, INTERNAL_CORS_HEADERS);
 	}
-	const limit = Math.min(Math.max(Math.trunc(body.limit ?? 12), 1), SEARCH_LIMIT_MAX);
-	const offset = Math.max(Math.trunc(body.offset ?? 0), 0);
+	const type = body.type === 'user_file' ? 'user_file' : 'article';
 
 	try {
-		const ids = await relatedCorpusArticleIds(env, { id, type }, limit, offset);
+		const ids = await relatedCorpusArticleIds(env, { seed: { id: body.id, type }, limit: body.limit, offset: body.offset });
 		return jsonData({ ids }, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });

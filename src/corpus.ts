@@ -10,6 +10,11 @@ type RankArticleOptions = { fromDate?: Date | null };
 export type ArticleRank = { id: string; score: number };
 export type ArticleRankSearchInput = { query: string; limit?: number };
 export type ArticleSearchInput = { query: string; daysAgo?: number; limit?: number };
+export type RelatedArticleSearchInput = {
+	seed: { id: string; type: 'article' | 'user_file' };
+	limit?: number;
+	offset?: number;
+};
 
 export interface ArticleSummary {
 	id: string;
@@ -62,7 +67,11 @@ const ARTICLE_SUMMARY_COLS = 'id, title, title_cn, url, published_date, source, 
 const ARTICLE_CONTENT_COLS = `${ARTICLE_SUMMARY_COLS}, content, content_cn, source_type`;
 const EMPTY_RANKS: SearchRanks = new Map();
 const SEARCH_LIMIT = 200;
+const SEARCH_RANK_LIMIT_MAX = 500;
 const RESULT_LIMIT = 10;
+const RESULT_LIMIT_MAX = 50;
+const RELATED_LIMIT_DEFAULT = 12;
+const RELATED_LIMIT_MAX = 500;
 const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
 const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
@@ -78,25 +87,27 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearchInput): Promise<ArticleRank[]> {
 	const query = input.query.trim();
 	if (!query) return [];
-	const limit = input.limit ?? 100;
+	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
 	return withDb(env, async (client) => {
 		const ranks = await rankArticles(client, env, query, limit);
 		return rankEntries(ranks);
 	});
 }
 
-export async function relatedCorpusArticleIds(
-	env: Env,
-	seed: { id: string; type: 'article' | 'user_file' },
-	limit: number,
-	offset: number,
-): Promise<string[]> {
-	return withDb(env, (client) => relatedArticles(client, seed, limit, offset));
+export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSearchInput): Promise<string[]> {
+	const seed = { id: input.seed.id.trim(), type: input.seed.type };
+	if (!seed.id) return [];
+	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
+	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+	return withDb(env, async (client) => {
+		const ids = await relatedArticles(client, seed, limit, offset);
+		return [...new Set(ids)].filter((id) => id !== seed.id);
+	});
 }
 
 export async function searchCorpusArticles(env: Env, input: ArticleSearchInput): Promise<ArticleSummary[]> {
 	const query = input.query.trim();
-	const limit = input.limit ?? RESULT_LIMIT;
+	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	return withDb(env, async (client) => {
 		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
 		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
@@ -133,6 +144,11 @@ export async function searchCorpusArticles(env: Env, input: ArticleSearchInput):
 
 export async function readCorpusItems(env: Env, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
 	return withDb(env, (client) => readItems(client, items, userId));
+}
+
+function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
 async function withDb<T>(env: Env, fn: (client: Client) => Promise<T>): Promise<T> {
