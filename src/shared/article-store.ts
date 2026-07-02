@@ -99,6 +99,7 @@ type EntityQualityMonthlyRow = {
 	json_without_links: number | string | null;
 };
 type EntityQualityTypeRow = { type: string; count: number | string | null };
+type EntityQualityExtensionRow = { extname: string };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -522,6 +523,13 @@ export async function getEntityQualitySnapshot(
 		coverage: number;
 	}>;
 	unknownTypes: Array<{ type: string; count: number }>;
+	database: {
+		extensions: {
+			pgTrgm: boolean;
+			vector: boolean;
+		};
+		missingRecommendedExtensions: string[];
+	};
 }> {
 	const overview = await db.query<EntityQualityOverviewRow>(
 		`WITH article_entity_state AS (
@@ -614,6 +622,15 @@ export async function getEntityQualitySnapshot(
 		[[...ENTITY_TYPES]],
 	);
 
+	const recommendedExtensions = ['pg_trgm', 'vector'];
+	const extensions = await db.query<EntityQualityExtensionRow>(
+		`SELECT extname
+		   FROM pg_extension
+		  WHERE extname = ANY($1::text[])
+		  ORDER BY extname ASC`,
+		[recommendedExtensions],
+	);
+	const installedExtensions = new Set(extensions.rows.map((entry) => entry.extname));
 	const row = overview.rows[0];
 	return {
 		overview: {
@@ -646,6 +663,13 @@ export async function getEntityQualitySnapshot(
 			};
 		}),
 		unknownTypes: unknownTypes.rows.map((entry) => ({ type: entry.type, count: intValue(entry.count) })),
+		database: {
+			extensions: {
+				pgTrgm: installedExtensions.has('pg_trgm'),
+				vector: installedExtensions.has('vector'),
+			},
+			missingRecommendedExtensions: recommendedExtensions.filter((extension) => !installedExtensions.has(extension)),
+		},
 	};
 }
 
