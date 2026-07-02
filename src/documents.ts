@@ -794,13 +794,18 @@ export async function addResource(
 	};
 }
 
+// better-auth user ids are 32-char alphanumeric, not UUIDs; ownership is enforced in resourceSourceExists
+function hasValidResourceSourceId(source: ResourceSource): boolean {
+	return source.type === 'user' || isUuid(source.id);
+}
+
 export async function addResourceToSource(
 	env: Env,
 	params: { userId: string; sourceType: ResourceSourceType; sourceId: string; targetType: ResourceTargetType; targetId: string },
 ): Promise<AddResourceToSourceResult> {
-	if (!isUuid(params.sourceId) || !isUuid(params.targetId)) throw new Error('Resource not found');
 	const source = { type: params.sourceType, id: params.sourceId };
 	const target = { type: params.targetType, id: params.targetId };
+	if (!hasValidResourceSourceId(source) || !isUuid(params.targetId)) throw new Error('Resource not found');
 
 	return withDbClient(env, async (db) => {
 		const [sourceExists, targetExists] = await Promise.all([
@@ -852,7 +857,8 @@ export async function removeResourceFromSource(
 	env: Env,
 	params: { userId: string; sourceType: ResourceSourceType; sourceId: string; targetType: ResourceTargetType; targetId: string },
 ): Promise<RemoveResourceResult> {
-	if (!isUuid(params.sourceId) || !isUuid(params.targetId)) throw new Error('Resource not found');
+	if (!hasValidResourceSourceId({ type: params.sourceType, id: params.sourceId }) || !isUuid(params.targetId))
+		throw new Error('Resource not found');
 	return withDbClient(env, async (db) => {
 		const row = (
 			await db.query<{ to_id: string }>(
@@ -913,7 +919,7 @@ export async function addResourceUrlsToSource(
 }
 
 async function assertResourceSourceAccess(env: Env, userId: string, source: ResourceSource): Promise<void> {
-	if (!isUuid(source.id)) throw new Error('Source not found');
+	if (!hasValidResourceSourceId(source)) throw new Error('Source not found');
 	const sourceRow = await withDbClient(env, async (db) => {
 		return resourceSourceExists(db, userId, source);
 	});
