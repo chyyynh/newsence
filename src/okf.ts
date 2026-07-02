@@ -59,6 +59,7 @@ const CORS_HEADERS = {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASCII_GENERIC_ENTITY = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const OKF_ENTITY_TYPES = new Set(['person', 'organization', 'product', 'technology', 'event']);
+const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
 
 export async function handleExportCollectionOkf(request: Request, env: Env): Promise<Response> {
@@ -406,6 +407,7 @@ function renderArticle(article: ArticleRow, entities: EntityRow[], entityPaths: 
 			resource: article.url,
 			tags: article.tags?.length ? article.tags : undefined,
 			keywords: article.keywords?.length ? article.keywords : undefined,
+			category: deriveArticleCategory(article.tags),
 			timestamp: toIso(article.published_date),
 			source: article.source,
 			source_type: article.source_type,
@@ -462,8 +464,12 @@ function renderLog(collection: CollectionRow, articleCount: number, entityCount:
 		`  * Articles without join-table entity links: ${quality.articlesWithoutEntityLinks}`,
 		unknownTypes.length ? '* **Unknown entity types preserved by OKF tolerance**:' : '',
 		...unknownTypes,
-		'* **Producer notes**: category is not a first-class stored column; current ingestion folds classification category into tags. keywords are emitted as an extension frontmatter key.',
+		'* **Producer notes**: category is derived from the known classification tag stored in tags because category is not a first-class stored column. keywords are emitted as an extension frontmatter key.',
 	]);
+}
+
+function deriveArticleCategory(tags: string[] | null): string | null {
+	return tags?.find((tag) => ARTICLE_CATEGORY_TAGS.has(tag)) ?? null;
 }
 
 function indexEntry(title: string, path: string, description: string | null | undefined): string {
@@ -514,7 +520,7 @@ function assignPaths(items: Array<{ id: string; label: string }>, prefix: string
 	const used = new Set<string>();
 	const paths = new Map<string, string>();
 	for (const item of items) {
-		const base = slugify(item.label) || item.id.slice(0, 8);
+		const base = slugify(item.label) || fallbackSlug(item.id);
 		let slug = base;
 		for (let i = 2; used.has(slug); i++) slug = `${base}-${i}`;
 		used.add(slug);
@@ -524,7 +530,11 @@ function assignPaths(items: Array<{ id: string; label: string }>, prefix: string
 }
 
 function uniqueSlug(label: string, id: string): string {
-	return `${slugify(label) || 'collection'}-${id.slice(0, 8)}`;
+	return `${slugify(label) || 'collection'}-${fallbackSlug(id)}`;
+}
+
+function fallbackSlug(id: string): string {
+	return slugify(id) || 'item';
 }
 
 function slugify(value: string): string {
