@@ -903,6 +903,11 @@ async function assertResourceSourceAccess(env: Env, userId: string, source: Reso
 }
 
 async function resourceSourceExists(db: DbClient, userId: string, source: ResourceSource): Promise<boolean> {
+	if (source.type === 'user') {
+		if (source.id !== userId) return false;
+		const row = (await db.query<{ id: string }>('SELECT id FROM "user" WHERE id = $1 LIMIT 1', [userId])).rows[0];
+		return !!row;
+	}
 	const table = source.type === 'workspace' ? 'workspaces' : 'collections';
 	const row = (await db.query<{ id: string }>(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2 LIMIT 1`, [source.id, userId]))
 		.rows[0];

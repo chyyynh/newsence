@@ -106,6 +106,10 @@ function isResourceTargetType(value: unknown): value is 'article' | 'user_file' 
 	return value === 'article' || value === 'user_file' || value === 'document' || value === 'collection';
 }
 
+function isResourceSourceType(value: unknown): value is 'workspace' | 'collection' | 'user' {
+	return value === 'workspace' || value === 'collection' || value === 'user';
+}
+
 function health(): Response {
 	return Response.json({
 		status: 'ok',
@@ -248,7 +252,7 @@ async function handleAddResourceToSource(request: Request, env: Env): Promise<Re
 
 	if (
 		!body.userId?.trim() ||
-		(body.sourceType !== 'workspace' && body.sourceType !== 'collection') ||
+		!isResourceSourceType(body.sourceType) ||
 		!body.sourceId?.trim() ||
 		!isResourceTargetType(body.targetType) ||
 		!body.targetId?.trim()
@@ -316,7 +320,7 @@ async function handleRemoveResourceFromSource(request: Request, env: Env): Promi
 
 	if (
 		!body.userId?.trim() ||
-		(body.sourceType !== 'workspace' && body.sourceType !== 'collection') ||
+		!isResourceSourceType(body.sourceType) ||
 		!body.sourceId?.trim() ||
 		!isResourceTargetType(body.targetType) ||
 		!body.targetId?.trim()
