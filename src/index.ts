@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { routeRequest } from '@entry/http';
-import { type PersistGeneratedImageResult, persistGeneratedImage } from '@ingest/blob-persistence';
+import { persistGeneratedImage } from '@ingest/blob-persistence';
 import { extractSource, type NormalizedContent } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
@@ -10,23 +10,13 @@ import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.wo
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
-import type {
-	AddDocumentResourceResult,
-	ArticleSearchInput,
-	ArticleSummary,
-	CoreRpc,
-	CreateDocumentResult,
-	DocumentReadResult,
-	EditDocumentResult,
-	ReadContextItem,
-	ReadContextResult,
-	WorkspaceCatalogEntry,
-	WorkspaceDecision,
-} from '@worker-contracts/core-rpc';
+import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 import { addResource, createDocument, editDocument, listWorkspaces, readDocuments, workspaceSummary } from './documents';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
+
+type CoreRpcArgs<Method extends keyof CoreRpc> = Parameters<CoreRpc[Method]>;
 
 export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
 	override async fetch(request: Request): Promise<Response> {
@@ -46,73 +36,52 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	// Thin delegates to core-owned domain facades.
 
 	/** Persist a generated image into the canonical user_file blob store. */
-	storeGeneratedImage(input: {
-		userId: string;
-		bytes: Uint8Array;
-		contentType: string;
-		title: string;
-	}): Promise<PersistGeneratedImageResult> {
+	storeGeneratedImage(input: CoreRpcArgs<'storeGeneratedImage'>[0]) {
 		return persistGeneratedImage(this.env, input);
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
-	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]> {
+	searchArticles(input: CoreRpcArgs<'searchArticles'>[0]) {
 		return searchCorpusArticles(this.env, input);
 	}
 
 	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
-	scrapeUrl(url: string): Promise<NormalizedContent> {
+	scrapeUrl(url: CoreRpcArgs<'scrapeUrl'>[0]): Promise<NormalizedContent> {
 		return extractSource(this.env, { kind: 'url', url });
 	}
 
 	/** Read article/collection/url resources from the core corpus. */
-	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
+	readCorpusItems(items: CoreRpcArgs<'readCorpusItems'>[0], userId: CoreRpcArgs<'readCorpusItems'>[1]) {
 		return readCorpusItems(this.env, items, userId);
 	}
 
 	/** Read Tiptap documents as markdown context. */
-	readDocuments(userId: string, ids: string[]): Promise<DocumentReadResult[]> {
+	readDocuments(userId: CoreRpcArgs<'readDocuments'>[0], ids: CoreRpcArgs<'readDocuments'>[1]) {
 		return readDocuments(this.env, userId, ids);
 	}
 
 	/** Persist AI-generated markdown into a Tiptap document. */
-	createDocument(input: {
-		userId: string;
-		planId: string;
-		title: string;
-		markdown: string;
-		workspace: WorkspaceDecision;
-	}): Promise<CreateDocumentResult> {
+	createDocument(input: CoreRpcArgs<'createDocument'>[0]) {
 		return createDocument(this.env, input);
 	}
 
 	/** Apply str_replace edits to a document. */
-	editDocument(input: {
-		userId: string;
-		documentId: string;
-		edits: Array<{ old_string: string; new_string: string }>;
-		snapshot?: boolean;
-	}): Promise<EditDocumentResult> {
+	editDocument(input: CoreRpcArgs<'editDocument'>[0]) {
 		return editDocument(this.env, input);
 	}
 
 	/** Pin article/file/URL resources to a document's workspace. */
-	addDocumentResource(input: {
-		userId: string;
-		documentId: string;
-		resourceIds?: string[];
-		urls?: string[];
-	}): Promise<AddDocumentResourceResult> {
+	addDocumentResource(input: CoreRpcArgs<'addDocumentResource'>[0]) {
 		return addResource(this.env, input);
 	}
 
 	/** Workspace catalog used by scope-free create-document decisions. */
-	listWorkspaces(userId: string): Promise<WorkspaceCatalogEntry[]> {
+	listWorkspaces(userId: CoreRpcArgs<'listWorkspaces'>[0]) {
 		return listWorkspaces(this.env, userId);
 	}
 
 	/** Workspace pinned-resource summary for workspace-scoped chat context. */
-	workspaceSummary(userId: string, workspaceId: string): Promise<string | null> {
+	workspaceSummary(userId: CoreRpcArgs<'workspaceSummary'>[0], workspaceId: CoreRpcArgs<'workspaceSummary'>[1]) {
 		return workspaceSummary(this.env, userId, workspaceId);
 	}
 }
