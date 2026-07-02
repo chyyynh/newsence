@@ -97,22 +97,16 @@ type EntityQualityOverviewRow = {
 	self_source_exact_links: number | string | null;
 	generic_entity_links: number | string | null;
 };
-type EntityQualityMonthlyRow = {
-	month: string;
+type EntityQualityCoverageCountsRow = {
 	total_articles: number | string | null;
 	with_entity_json: number | string | null;
 	empty_entity_json: number | string | null;
 	missing_or_invalid_entity_json: number | string | null;
 	json_without_links: number | string | null;
 };
-type EntityQualitySourceTypeRow = {
-	source_type: string;
-	total_articles: number | string | null;
-	with_entity_json: number | string | null;
-	empty_entity_json: number | string | null;
-	missing_or_invalid_entity_json: number | string | null;
-	json_without_links: number | string | null;
-};
+type EntityQualityMonthlyRow = EntityQualityCoverageCountsRow & { month: string };
+type EntityQualitySourceTypeRow = EntityQualityCoverageCountsRow & { source_type: string };
+type EntityQualityMonthlySourceTypeRow = EntityQualityCoverageCountsRow & { month: string; source_type: string };
 type EntityQualityTypeRow = { type: string; count: number | string | null };
 type EntityQualityExtensionRow = { extname: string };
 type EntityQualitySelfSourceOffenderRow = {
@@ -627,6 +621,16 @@ export async function getEntityQualitySnapshot(
 		jsonWithoutLinks: number;
 		coverage: number;
 	}>;
+	monthlySourceTypes: Array<{
+		month: string;
+		sourceType: string;
+		totalArticles: number;
+		withEntityJson: number;
+		emptyEntityJson: number;
+		missingOrInvalidEntityJson: number;
+		jsonWithoutLinks: number;
+		coverage: number;
+	}>;
 	unknownTypes: Array<{
 		type: string;
 		count: number;
@@ -769,6 +773,38 @@ export async function getEntityQualitySnapshot(
 		  GROUP BY s.source_type
 		  ORDER BY total_articles DESC, s.source_type ASC`,
 		[],
+	);
+
+	const monthlySourceTypes = await db.query<EntityQualityMonthlySourceTypeRow>(
+		`WITH article_entity_state AS (
+		   SELECT a.id,
+		          date_trunc('month', a.published_date)::date AS month,
+		          COALESCE(NULLIF(TRIM(a.source_type), ''), 'unknown') AS source_type,
+		          CASE
+		            WHEN jsonb_typeof(a.entities) = 'array' THEN jsonb_array_length(a.entities)
+		            ELSE NULL
+		          END AS entity_count,
+		          a.entities IS NULL OR jsonb_typeof(a.entities) <> 'array' AS missing_or_invalid_entities
+		     FROM ${ARTICLES_TABLE} a
+		    WHERE a.published_date >= date_trunc('month', NOW()) - ($1::int * INTERVAL '1 month')
+		 ),
+		 article_link_counts AS (
+		   SELECT article_id, COUNT(*)::int AS link_count
+		     FROM article_entities
+		    GROUP BY article_id
+		 )
+		 SELECT to_char(s.month, 'YYYY-MM') AS month,
+		        s.source_type,
+		        COUNT(*)::int AS total_articles,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0)::int AS with_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count = 0)::int AS empty_entity_json,
+		        COUNT(*) FILTER (WHERE s.missing_or_invalid_entities)::int AS missing_or_invalid_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0 AND COALESCE(alc.link_count, 0) = 0)::int AS json_without_links
+		   FROM article_entity_state s
+		   LEFT JOIN article_link_counts alc ON alc.article_id = s.id
+		  GROUP BY s.month, s.source_type
+		  ORDER BY s.month DESC, total_articles DESC, s.source_type ASC`,
+		[options.months],
 	);
 
 	const unknownTypes = await db.query<EntityQualityTypeRow>(
@@ -932,6 +968,20 @@ export async function getEntityQualitySnapshot(
 			const totalArticles = intValue(entry.total_articles);
 			const withEntityJson = intValue(entry.with_entity_json);
 			return {
+				sourceType: entry.source_type,
+				totalArticles,
+				withEntityJson,
+				emptyEntityJson: intValue(entry.empty_entity_json),
+				missingOrInvalidEntityJson: intValue(entry.missing_or_invalid_entity_json),
+				jsonWithoutLinks: intValue(entry.json_without_links),
+				coverage: totalArticles ? withEntityJson / totalArticles : 0,
+			};
+		}),
+		monthlySourceTypes: monthlySourceTypes.rows.map((entry) => {
+			const totalArticles = intValue(entry.total_articles);
+			const withEntityJson = intValue(entry.with_entity_json);
+			return {
+				month: entry.month,
 				sourceType: entry.source_type,
 				totalArticles,
 				withEntityJson,
