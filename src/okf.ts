@@ -51,6 +51,18 @@ type EntityQualityStats = {
 	unknownTypes: Record<string, number>;
 };
 
+type ArticleQualityStats = {
+	missingResource: number;
+	missingDescription: number;
+	missingBody: number;
+	missingTimestamp: number;
+	missingTags: number;
+	missingKeywords: number;
+	missingChineseTitle: number;
+	missingChineseDescription: number;
+	articlesWithoutExportedEntityLinks: number;
+};
+
 const CORS_HEADERS = {
 	'Access-Control-Allow-Origin': '*',
 	'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -125,9 +137,10 @@ async function buildCollectionOkfBundle(
 			jsonWithoutLinksArticles: fallback.jsonWithoutPersistedLinksArticles,
 			articlesWithoutEntityLinks: fallback.articlesWithoutPersistedLinks,
 		});
+		const articleQuality = measureArticleQuality(articles, entities);
 		return {
 			slug: uniqueSlug(collection.name, collection.id),
-			files: renderOkfFiles(collection, articles, entities, quality),
+			files: renderOkfFiles(collection, articles, entities, quality, articleQuality),
 		};
 	});
 }
@@ -262,6 +275,33 @@ function filterEntitiesForOkf(
 	return { entities: filtered, quality };
 }
 
+function measureArticleQuality(articles: ArticleRow[], exportedEntities: EntityRow[]): ArticleQualityStats {
+	const articlesWithExportedEntities = new Set(exportedEntities.map((entity) => entity.article_id));
+	const stats: ArticleQualityStats = {
+		missingResource: 0,
+		missingDescription: 0,
+		missingBody: 0,
+		missingTimestamp: 0,
+		missingTags: 0,
+		missingKeywords: 0,
+		missingChineseTitle: 0,
+		missingChineseDescription: 0,
+		articlesWithoutExportedEntityLinks: 0,
+	};
+	for (const article of articles) {
+		if (!hasText(article.url)) stats.missingResource += 1;
+		if (!hasText(article.summary) && !hasText(article.summary_cn)) stats.missingDescription += 1;
+		if (!hasText(article.content) && !hasText(article.content_cn)) stats.missingBody += 1;
+		if (!toIso(article.published_date)) stats.missingTimestamp += 1;
+		if (!article.tags?.length) stats.missingTags += 1;
+		if (!article.keywords?.length) stats.missingKeywords += 1;
+		if (!hasText(article.title_cn)) stats.missingChineseTitle += 1;
+		if (!hasText(article.summary_cn)) stats.missingChineseDescription += 1;
+		if (!articlesWithExportedEntities.has(article.id)) stats.articlesWithoutExportedEntityLinks += 1;
+	}
+	return stats;
+}
+
 function entityLinkKey(articleId: string, canonical: string): string {
 	return `${articleId}:${canonical}`;
 }
@@ -309,11 +349,16 @@ function hasJsonEntities(value: unknown): boolean {
 	return Array.isArray(value) && value.length > 0;
 }
 
+function hasText(value: string | null | undefined): boolean {
+	return !!value?.trim();
+}
+
 function* renderOkfFiles(
 	collection: CollectionRow,
 	articles: ArticleRow[],
 	entities: EntityRow[],
-	quality: EntityQualityStats,
+	entityQuality: EntityQualityStats,
+	articleQuality: ArticleQualityStats,
 ): Iterable<OkfFile> {
 	const articlePaths = assignPaths(
 		articles.map((article) => ({ id: article.id, label: article.title_cn || article.title })),
@@ -368,7 +413,7 @@ function* renderOkfFiles(
 			content: renderEntity(entity, articlesByEntityId.get(entity.id) ?? [], articles, articlePaths),
 		};
 	}
-	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size, quality) };
+	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size, entityQuality, articleQuality) };
 }
 
 function stripDirectoryPrefix(path: string, prefix: string): string {
@@ -472,26 +517,42 @@ function isPersistedEntityId(id: string): boolean {
 	return UUID_RE.test(id);
 }
 
-function renderLog(collection: CollectionRow, articleCount: number, entityCount: number, quality: EntityQualityStats): string {
+function renderLog(
+	collection: CollectionRow,
+	articleCount: number,
+	entityCount: number,
+	entityQuality: EntityQualityStats,
+	articleQuality: ArticleQualityStats,
+): string {
 	const today = new Date().toISOString().slice(0, 10);
-	const unknownTypes = Object.entries(quality.unknownTypes).map(([type, count]) => `  * ${type}: ${count}`);
+	const unknownTypes = Object.entries(entityQuality.unknownTypes).map(([type, count]) => `  * ${type}: ${count}`);
 	return compactMarkdown([
 		'# Directory Update Log',
 		`## ${today}`,
 		`* **Export**: Generated OKF bundle for "${collection.name}" with ${articleCount} articles and ${entityCount} entity pages.`,
 		`* **Collection visibility**: ${collection.visibility}. Private collections require an authenticated owner viewer before export; public collections may be exported through the internal endpoint without a viewer id.`,
+		'* **Article quality audit**:',
+		`  * Missing resource URL: ${articleQuality.missingResource}`,
+		`  * Missing description: ${articleQuality.missingDescription}`,
+		`  * Missing markdown body: ${articleQuality.missingBody}`,
+		`  * Missing timestamp: ${articleQuality.missingTimestamp}`,
+		`  * Missing tags: ${articleQuality.missingTags}`,
+		`  * Missing keywords: ${articleQuality.missingKeywords}`,
+		`  * Missing Chinese title: ${articleQuality.missingChineseTitle}`,
+		`  * Missing Chinese description: ${articleQuality.missingChineseDescription}`,
+		`  * Articles without exported entity links: ${articleQuality.articlesWithoutExportedEntityLinks}`,
 		'* **Entity quality gate**:',
-		`  * Persisted article-entity links read: ${quality.persistedLinks}`,
-		`  * Export-only links recovered from article JSON: ${quality.jsonFallbackLinks}`,
-		`  * Exported links: ${quality.exportedLinks}`,
-		`  * Filtered self-source links: ${quality.filteredSelfSource}`,
-		`  * Filtered generic-token links: ${quality.filteredGeneric}`,
-		`  * Filtered too-short links: ${quality.filteredTooShort}`,
-		`  * Articles with entity JSON but no join-table links: ${quality.jsonWithoutLinksArticles}`,
-		`  * Articles without join-table entity links: ${quality.articlesWithoutEntityLinks}`,
+		`  * Persisted article-entity links read: ${entityQuality.persistedLinks}`,
+		`  * Export-only links recovered from article JSON: ${entityQuality.jsonFallbackLinks}`,
+		`  * Exported links: ${entityQuality.exportedLinks}`,
+		`  * Filtered self-source links: ${entityQuality.filteredSelfSource}`,
+		`  * Filtered generic-token links: ${entityQuality.filteredGeneric}`,
+		`  * Filtered too-short links: ${entityQuality.filteredTooShort}`,
+		`  * Articles with entity JSON but no join-table links: ${entityQuality.jsonWithoutLinksArticles}`,
+		`  * Articles without join-table entity links: ${entityQuality.articlesWithoutEntityLinks}`,
 		unknownTypes.length ? '* **Unknown entity types preserved by OKF tolerance**:' : '',
 		...unknownTypes,
-		'* **Producer notes**: category is derived from the known classification tag stored in tags because category is not a first-class stored column. keywords are emitted as an extension frontmatter key. Entity pages distinguish bundle-local article counts from persisted global entity counts.',
+		'* **Producer notes**: category is derived from the known classification tag stored in tags because category is not a first-class stored column. keywords are emitted as an extension frontmatter key. Article quality audit tracks recommended OKF metadata coverage, not conformance failures. Entity pages distinguish bundle-local article counts from persisted global entity counts.',
 	]);
 }
 
