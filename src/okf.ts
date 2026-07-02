@@ -325,9 +325,9 @@ function renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], entit
 				'Articles',
 				articles.map((article) =>
 					indexEntry(
-						article.title_cn || article.title,
+						displayArticleTitle(article),
 						stripDirectoryPrefix(articlePaths.get(article.id)!, 'articles'),
-						article.summary_cn || article.summary,
+						displayArticleDescription(article),
 					),
 				),
 			),
@@ -377,7 +377,7 @@ function renderRootIndex(
 		collection.description ?? '',
 		'## Articles',
 		...articles.map((article) =>
-			indexEntry(article.title_cn || article.title, articlePaths.get(article.id)!, article.summary_cn || article.summary),
+			indexEntry(displayArticleTitle(article), articlePaths.get(article.id)!, displayArticleDescription(article)),
 		),
 	];
 	if (entityById.size > 0) {
@@ -395,8 +395,8 @@ function renderDirectoryIndex(title: string, entries: string[]): string {
 }
 
 function renderArticle(article: ArticleRow, entities: EntityRow[], entityPaths: Map<string, string>): string {
-	const title = article.title_cn || article.title;
-	const summary = article.summary_cn || article.summary;
+	const title = displayArticleTitle(article);
+	const summary = displayArticleDescription(article);
 	const content = article.content || article.content_cn || summary || '';
 	const entityLinks = uniqueBy(entities, (entity) => entity.id).map((entity) => `- [${entity.name}](/${entityPaths.get(entity.id)})`);
 	return compactMarkdown([
@@ -422,6 +422,14 @@ function renderArticle(article: ArticleRow, entities: EntityRow[], entityPaths: 
 		'# Citations',
 		`[1] [${article.source || article.url}](${article.url})`,
 	]);
+}
+
+function displayArticleTitle(article: ArticleRow): string {
+	return article.title || article.title_cn || 'Untitled article';
+}
+
+function displayArticleDescription(article: ArticleRow): string | null {
+	return article.summary || article.summary_cn;
 }
 
 function renderEntity(entity: EntityRow, links: EntityRow[], articles: ArticleRow[], articlePaths: Map<string, string>): string {
