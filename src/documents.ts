@@ -16,7 +16,11 @@ import type {
 	CreateDocumentResult,
 	DeleteDocumentResult,
 	DocumentReadResult,
+	DocumentSnapshotSource,
+	DocumentVersionListResult,
+	DocumentVersionResult,
 	EditDocumentResult,
+	SaveDocumentResult,
 	UpdateDocumentShareResult,
 	WorkspaceCatalogEntry,
 	WorkspaceDecision,
@@ -29,6 +33,7 @@ const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
 // Workspace creation quota is enforced here, inside the create-document
 // transaction. Callers may hint the model, but they should not send plan state.
 const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
+const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -78,6 +83,41 @@ type DocumentShareUpdateRow = {
 	updated_at: Date | string;
 	username: string | null;
 };
+type SaveDocumentRow = {
+	id: string;
+	title: string;
+	content: JSONContent | null;
+	version: number;
+	updated_at: Date | string;
+};
+type DocumentVersionListRow = {
+	id: string;
+	version: number;
+	title: string;
+	source: string;
+	created_at: Date | string;
+};
+type DocumentVersionRow = DocumentVersionListRow & {
+	document_id: string;
+	content: JSONContent | null;
+};
+
+export class DocumentVersionConflictError extends Error {
+	constructor(
+		readonly serverVersion: number,
+		readonly clientVersion: number,
+	) {
+		super('Document version conflict');
+		this.name = 'DocumentVersionConflictError';
+	}
+}
+
+export class DocumentEmptyContentBlockedError extends Error {
+	constructor() {
+		super('Empty document content was blocked');
+		this.name = 'DocumentEmptyContentBlockedError';
+	}
+}
 
 const markdownManager = new MarkdownManager({
 	extensions: [
@@ -110,6 +150,19 @@ function hasTransientImageSrc(node: unknown): boolean {
 	const record = node as Record<string, unknown>;
 	if (typeof record.src === 'string' && (record.src.startsWith('blob:') || record.src.startsWith('data:'))) return true;
 	return Object.values(record).some(hasTransientImageSrc);
+}
+
+function contentHasMeaningfulNode(nodes: JSONContent[] | undefined): boolean {
+	return !!nodes?.some((node) => {
+		if (typeof node.text === 'string' && node.text.trim()) return true;
+		if (node.type && !['doc', 'paragraph', 'hardBreak', 'text'].includes(node.type)) return true;
+		return contentHasMeaningfulNode(node.content);
+	});
+}
+
+function isEmptyEditorContent(content: unknown): boolean {
+	if (content === null || content === undefined) return true;
+	return !contentHasMeaningfulNode((content as JSONContent).content);
 }
 
 function dateIso(value: Date | string): string {
@@ -146,6 +199,20 @@ function serializeDocumentShareUpdate(row: DocumentShareUpdateRow): UpdateDocume
 		updatedAt: dateIso(row.updated_at),
 		username: row.username,
 	};
+}
+
+function serializeSaveDocument(row: SaveDocumentRow): SaveDocumentResult {
+	return {
+		id: row.id,
+		title: row.title,
+		content: (row.content ?? EMPTY_TIPTAP_DOCUMENT) as SaveDocumentResult['content'],
+		version: row.version,
+		updatedAt: dateIso(row.updated_at),
+	};
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function generateShareSlugFromTitle(title: string): string {
@@ -423,6 +490,158 @@ export async function deleteDocument(env: Env, params: { userId: string; documen
 	});
 }
 
+export async function saveDocument(
+	env: Env,
+	params: {
+		userId: string;
+		documentId: string;
+		title: string;
+		content: SaveDocumentResult['content'];
+		allowEmptyContentOverwrite?: boolean;
+		expectedVersion?: number;
+		source?: DocumentSnapshotSource;
+		forceSnapshot?: boolean;
+	},
+): Promise<SaveDocumentResult> {
+	if (!isUuid(params.documentId)) throw new Error('Document not found');
+	return withDbTransaction(env, 'save document', async (db) => {
+		const existing = (
+			await db.query<DocumentRow>(
+				`SELECT id, title, content, version, workspace_id, created_at, updated_at
+				 FROM user_documents
+				 WHERE id = $1 AND user_id = $2
+				 LIMIT 1`,
+				[params.documentId, params.userId],
+			)
+		).rows[0];
+		if (!existing) throw new Error('Document not found');
+		if (params.expectedVersion !== undefined && params.expectedVersion !== existing.version) {
+			throw new DocumentVersionConflictError(existing.version, params.expectedVersion);
+		}
+
+		const incomingContent = params.content as JSONContent;
+		const incomingEmpty = isEmptyEditorContent(incomingContent);
+		const existingHasContent = !isEmptyEditorContent(existing.content);
+		if (hasTransientImageSrc(incomingContent)) throw new Error('Images are still uploading');
+		if (incomingEmpty && existingHasContent && params.allowEmptyContentOverwrite !== true) {
+			throw new DocumentEmptyContentBlockedError();
+		}
+
+		const contentChanged = !sameJson(existing.content, incomingContent);
+		const updated = (
+			await db.query<SaveDocumentRow>(
+				`UPDATE user_documents
+				 SET title = $3,
+				     content = $4::jsonb,
+				     version = CASE WHEN $5 THEN version + 1 ELSE version END,
+				     updated_at = NOW()
+				 WHERE id = $1 AND user_id = $2
+				 RETURNING id, title, content, version, updated_at`,
+				[existing.id, params.userId, params.title.trim().slice(0, 200) || 'Untitled', JSON.stringify(incomingContent), contentChanged],
+			)
+		).rows[0];
+		if (!updated) throw new Error('Document not found');
+
+		const source = params.source ?? 'auto-save';
+		if (contentChanged || params.forceSnapshot) {
+			await createDocumentVersionSnapshot(
+				db,
+				{
+					content: existing.content ?? EMPTY_TIPTAP_DOCUMENT,
+					documentId: existing.id,
+					source,
+					title: existing.title,
+					version: existing.version,
+				},
+				source === 'auto-save' && !params.forceSnapshot ? { minIntervalMs: SNAPSHOT_THROTTLE_MS } : undefined,
+			);
+		}
+
+		return serializeSaveDocument(updated);
+	});
+}
+
+export async function listDocumentVersions(
+	env: Env,
+	params: { userId: string; documentId: string; limit?: number; cursor?: string | null },
+): Promise<DocumentVersionListResult> {
+	if (!isUuid(params.documentId)) throw new Error('Document not found');
+	const limit = Math.min(Math.max(params.limit ?? 50, 1), 100);
+	const cursorDate = params.cursor ? new Date(params.cursor) : null;
+	if (cursorDate && Number.isNaN(cursorDate.getTime())) throw new Error('Invalid pagination cursor');
+
+	return withDbClient(env, async (db) => {
+		const document = (
+			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1', [
+				params.documentId,
+				params.userId,
+			])
+		).rows[0];
+		if (!document) throw new Error('Document not found');
+
+		const versions = (
+			await db.query<DocumentVersionListRow>(
+				`SELECT id, version, title, source, created_at
+				 FROM document_versions
+				 WHERE document_id = $1
+				   AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+				 ORDER BY created_at DESC
+				 LIMIT $3`,
+				[params.documentId, cursorDate?.toISOString() ?? null, limit],
+			)
+		).rows;
+
+		return {
+			data: versions.map((version) => ({
+				id: version.id,
+				version: version.version,
+				title: version.title,
+				source: version.source,
+				createdAt: dateIso(version.created_at),
+			})),
+			hasMore: versions.length === limit,
+			nextCursor: versions.length === limit ? dateIso(versions[versions.length - 1].created_at) : null,
+		};
+	});
+}
+
+export async function getDocumentVersion(
+	env: Env,
+	params: { userId: string; documentId: string; versionId: string },
+): Promise<DocumentVersionResult> {
+	if (!isUuid(params.documentId) || !isUuid(params.versionId)) throw new Error('Document version not found');
+	return withDbClient(env, async (db) => {
+		const document = (
+			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1', [
+				params.documentId,
+				params.userId,
+			])
+		).rows[0];
+		if (!document) throw new Error('Document not found');
+
+		const version = (
+			await db.query<DocumentVersionRow>(
+				`SELECT id, document_id, content, title, version, source, created_at
+				 FROM document_versions
+				 WHERE id = $1 AND document_id = $2
+				 LIMIT 1`,
+				[params.versionId, params.documentId],
+			)
+		).rows[0];
+		if (!version) throw new Error('Document version not found');
+
+		return {
+			id: version.id,
+			documentId: version.document_id,
+			content: (version.content ?? EMPTY_TIPTAP_DOCUMENT) as DocumentVersionResult['content'],
+			title: version.title,
+			version: version.version,
+			source: version.source,
+			createdAt: dateIso(version.created_at),
+		};
+	});
+}
+
 export async function updateDocumentShare(
 	env: Env,
 	params: { userId: string; documentId: string; shareEnabled: boolean; shareSlug?: string | null; description?: string | null },
@@ -571,6 +790,7 @@ export async function editDocument(
 			await createDocumentVersionSnapshot(db, {
 				content: document.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
 				documentId: document.id,
+				source: 'ai-edit',
 				title: document.title,
 				version: document.version,
 			});
@@ -582,19 +802,24 @@ export async function editDocument(
 
 async function createDocumentVersionSnapshot(
 	db: DbClient,
-	input: { documentId: string; content: JSONContent; title: string; version: number },
+	input: { documentId: string; content: JSONContent; title: string; version: number; source: DocumentSnapshotSource },
+	options?: { minIntervalMs?: number },
 ): Promise<void> {
 	const latest = (
-		await db.query<{ content: JSONContent | null }>(
-			`SELECT content FROM document_versions WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
+		await db.query<{ content: JSONContent | null; created_at: Date | string }>(
+			`SELECT content, created_at FROM document_versions WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
 			[input.documentId],
 		)
 	).rows[0];
-	if (latest && JSON.stringify(latest.content) === JSON.stringify(input.content)) return;
+	if (latest && sameJson(latest.content, input.content)) return;
+	if (options?.minIntervalMs && latest?.created_at) {
+		const elapsed = Date.now() - new Date(latest.created_at).getTime();
+		if (elapsed < options.minIntervalMs) return;
+	}
 	await db.query(
 		`INSERT INTO document_versions (document_id, content, title, version, source)
-		 VALUES ($1, $2::jsonb, $3, $4, 'ai-edit')`,
-		[input.documentId, JSON.stringify(input.content), input.title, input.version],
+		 VALUES ($1, $2::jsonb, $3, $4, $5)`,
+		[input.documentId, JSON.stringify(input.content), input.title, input.version, input.source],
 	);
 }
 

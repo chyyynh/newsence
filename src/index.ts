@@ -18,8 +18,11 @@ import {
 	createWorkspaceDocument,
 	deleteDocument,
 	editDocument,
+	getDocumentVersion,
+	listDocumentVersions,
 	listWorkspaces,
 	readDocuments,
+	saveDocument,
 	updateDocumentShare,
 	workspaceSummary,
 } from './documents';
@@ -83,6 +86,21 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Delete a user-owned document. */
 	deleteDocument(input: CoreRpcArgs<'deleteDocument'>[0]) {
 		return deleteDocument(this.env, input);
+	}
+
+	/** Save editor content with optimistic-version checks and snapshots. */
+	saveDocument(input: CoreRpcArgs<'saveDocument'>[0]) {
+		return saveDocument(this.env, input);
+	}
+
+	/** List previous document versions for the owner. */
+	listDocumentVersions(input: CoreRpcArgs<'listDocumentVersions'>[0]) {
+		return listDocumentVersions(this.env, input);
+	}
+
+	/** Read one previous document version for the owner. */
+	getDocumentVersion(input: CoreRpcArgs<'getDocumentVersion'>[0]) {
+		return getDocumentVersion(this.env, input);
 	}
 
 	/** Update public-share settings for a user-owned document. */
