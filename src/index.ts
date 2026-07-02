@@ -16,9 +16,11 @@ import {
 	addResource,
 	addResourceToSource,
 	addResourceUrlsToSource,
+	createCollection,
 	createDocument,
 	createWorkspace,
 	createWorkspaceDocument,
+	deleteCollection,
 	deleteDocument,
 	deleteResource,
 	editDocument,
@@ -26,6 +28,7 @@ import {
 	readDocuments,
 	removeResourceFromSource,
 	saveDocument,
+	updateCollection,
 	updateDocumentShare,
 	validateResourceSource,
 	workspaceSummary,
@@ -141,6 +144,21 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Ingest URLs and pin the resulting user files to a workspace or collection. */
 	addResourceUrlsToSource(input: CoreRpcArgs<'addResourceUrlsToSource'>[0]) {
 		return addResourceUrlsToSource(this.env, input);
+	}
+
+	/** Create a user-owned collection with core-owned plan enforcement. */
+	createCollection(input: CoreRpcArgs<'createCollection'>[0]) {
+		return createCollection(this.env, input);
+	}
+
+	/** Update a user-owned collection with core-owned plan enforcement. */
+	updateCollection(input: CoreRpcArgs<'updateCollection'>[0]) {
+		return updateCollection(this.env, input);
+	}
+
+	/** Delete a user-owned collection and its collection citations. */
+	deleteCollection(input: CoreRpcArgs<'deleteCollection'>[0]) {
+		return deleteCollection(this.env, input);
 	}
 
 	/** Workspace catalog used by scope-free create-document decisions. */

@@ -15,6 +15,8 @@ import type {
 	AddDocumentResourceResult,
 	AddResourceToSourceResult,
 	AddResourceUrlsToSourceResult,
+	CollectionMutationResult,
+	CollectionVisibility,
 	CreateDocumentResult,
 	CreateWorkspaceResult,
 	DeleteDocumentResult,
@@ -34,10 +36,12 @@ import type {
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
+export const PRIVATE_COLLECTIONS_REQUIRED_MESSAGE = 'Private collections require Pro.';
 export const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
 // Workspace creation quota is enforced here, inside the create-document
 // transaction. Callers may hint the model, but they should not send plan state.
 const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
+const PLAN_PRIVATE_COLLECTIONS: Record<string, boolean> = { free: false, pro: true, test: true };
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -256,10 +260,19 @@ function maxWorkspaces(planId: string): number | null {
 	return PLAN_MAX_WORKSPACES[planId] ?? PLAN_MAX_WORKSPACES.free;
 }
 
+function canUsePrivateCollections(planId: string): boolean {
+	return PLAN_PRIVATE_COLLECTIONS[planId] ?? PLAN_PRIVATE_COLLECTIONS.free;
+}
+
 async function workspaceQuotaLimitTx(db: DbClient, userId: string): Promise<number | null> {
 	await db.query('SELECT pg_advisory_xact_lock(581203, hashtext($1))', [userId]);
 	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
 	return maxWorkspaces(settings.rows[0]?.plan_id ?? 'free');
+}
+
+async function assertCanUsePrivateCollectionsTx(db: DbClient, userId: string): Promise<void> {
+	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
+	if (!canUsePrivateCollections(settings.rows[0]?.plan_id ?? 'free')) throw new Error(PRIVATE_COLLECTIONS_REQUIRED_MESSAGE);
 }
 
 function applyMarkdownEdits(content: string, edits: DocumentEdit[]): { applied: number; failedAt?: string; result: string } {
@@ -343,6 +356,103 @@ export async function createWorkspace(
 		).rows[0];
 		if (!workspace) throw new Error('Workspace not created');
 		return { id: workspace.id };
+	});
+}
+
+function normalizeCollectionName(name: string): string {
+	const normalized = name.trim().slice(0, 100);
+	if (!normalized) throw new Error('Name is required');
+	return normalized;
+}
+
+function normalizeCollectionDescription(description?: string | null): string | null {
+	return description?.trim().slice(0, 500) || null;
+}
+
+function normalizeCollectionVisibility(visibility?: CollectionVisibility): CollectionVisibility {
+	return visibility === 'private' ? 'private' : 'public';
+}
+
+export async function createCollection(
+	env: Env,
+	params: { userId: string; name: string; description?: string | null; visibility?: CollectionVisibility },
+): Promise<CollectionMutationResult> {
+	const name = normalizeCollectionName(params.name);
+	const description = normalizeCollectionDescription(params.description);
+	const visibility = normalizeCollectionVisibility(params.visibility);
+
+	return withDbTransaction(env, 'create collection', async (db) => {
+		if (visibility === 'private') await assertCanUsePrivateCollectionsTx(db, params.userId);
+		const row = (
+			await db.query<{ id: string }>(
+				`INSERT INTO collections (user_id, name, description, visibility)
+				 VALUES ($1, $2, $3, $4)
+				 RETURNING id`,
+				[params.userId, name, description, visibility],
+			)
+		).rows[0];
+		if (!row) throw new Error('Collection not created');
+		return { id: row.id };
+	});
+}
+
+export async function updateCollection(
+	env: Env,
+	params: { userId: string; collectionId: string; name: string; description?: string | null; visibility?: CollectionVisibility },
+): Promise<CollectionMutationResult> {
+	if (!isUuid(params.collectionId)) throw new Error('Collection not found');
+	const name = normalizeCollectionName(params.name);
+	const description = normalizeCollectionDescription(params.description);
+
+	return withDbTransaction(env, 'update collection', async (db) => {
+		const existing = (
+			await db.query<{ visibility: CollectionVisibility }>('SELECT visibility FROM collections WHERE id = $1 AND user_id = $2 LIMIT 1', [
+				params.collectionId,
+				params.userId,
+			])
+		).rows[0];
+		if (!existing) throw new Error('Collection not found');
+		const visibility = params.visibility ?? existing.visibility;
+		if (visibility === 'private' && existing.visibility !== 'private') {
+			await assertCanUsePrivateCollectionsTx(db, params.userId);
+		}
+		const row = (
+			await db.query<{ id: string }>(
+				`UPDATE collections
+				    SET name = $3,
+				        description = $4,
+				        visibility = $5,
+				        updated_at = NOW()
+				  WHERE id = $1 AND user_id = $2
+				RETURNING id`,
+				[params.collectionId, params.userId, name, description, visibility],
+			)
+		).rows[0];
+		if (!row) throw new Error('Collection not found');
+		return { id: row.id };
+	});
+}
+
+export async function deleteCollection(env: Env, params: { userId: string; collectionId: string }): Promise<CollectionMutationResult> {
+	if (!isUuid(params.collectionId)) throw new Error('Collection not found');
+	return withDbTransaction(env, 'delete collection', async (db) => {
+		const row = (
+			await db.query<{ id: string }>('DELETE FROM collections WHERE id = $1 AND user_id = $2 RETURNING id', [
+				params.collectionId,
+				params.userId,
+			])
+		).rows[0];
+		if (!row) throw new Error('Collection not found');
+		await db.query(
+			`DELETE FROM citations
+			  WHERE user_id = $1
+			    AND (
+			      (from_type = 'collection' AND from_id = $2)
+			      OR (to_type = 'collection' AND to_id = $2)
+			    )`,
+			[params.userId, params.collectionId],
+		);
+		return { id: row.id };
 	});
 }
 
