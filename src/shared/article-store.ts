@@ -101,6 +101,22 @@ type EntityQualityTypeRow = { type: string; count: number | string | null };
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
+const SOURCE_FEED_SUFFIX_CANONICALS = new Set([
+	'ai',
+	'article',
+	'articles',
+	'blog',
+	'business',
+	'crypto',
+	'finance',
+	'news',
+	'research',
+	'rss',
+	'startup',
+	'startups',
+	'tech',
+	'technology',
+]);
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
 const MAX_ENTITIES_PER_ARTICLE = 10;
@@ -176,7 +192,7 @@ function intValue(value: number | string | null | undefined): number {
 function sourceNameAliases(source?: string | null): string[] {
 	const value = stringValue(source);
 	if (!value) return [];
-	const aliases = [value];
+	const aliases = [value, ...sourceFeedBaseAliases(value)];
 
 	const host = hostFromSource(value);
 	if (host) {
@@ -185,6 +201,18 @@ function sourceNameAliases(source?: string | null): string[] {
 		if (labels.length > 1 && labels[0]) aliases.push(labels[0]);
 	}
 	return aliases;
+}
+
+function sourceFeedBaseAliases(value: string): string[] {
+	const match = value.match(/^(.+?)\s+[-–—|:]\s+(.+)$/);
+	if (!match) return [];
+	const [, base, suffix] = match;
+	const suffixTokens = canonicalizeEntityName(suffix)
+		.split(/[\s/]+/)
+		.filter(Boolean);
+	if (!suffixTokens.length || !suffixTokens.every((token) => SOURCE_FEED_SUFFIX_CANONICALS.has(token))) return [];
+	const alias = base.trim();
+	return alias ? [alias] : [];
 }
 
 function hostFromSource(value: string): string | null {
