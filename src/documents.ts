@@ -15,6 +15,7 @@ import type {
 	AddDocumentResourceResult,
 	CreateDocumentResult,
 	DeleteDocumentResult,
+	DocumentListItemResult,
 	DocumentReadResult,
 	DocumentSnapshotSource,
 	DocumentVersionListResult,
@@ -25,6 +26,7 @@ import type {
 	WorkspaceCatalogEntry,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
+	WorkspaceDocumentRouteResult,
 } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
@@ -67,6 +69,7 @@ type WorkspaceDocumentRow = {
 	username: string | null;
 	updated_at: Date | string;
 };
+type DocumentListRow = Omit<WorkspaceDocumentRow, 'content' | 'version'>;
 type DocumentShareRow = {
 	id: string;
 	title: string;
@@ -182,6 +185,19 @@ function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumen
 		description: row.description,
 		content: (row.content ?? EMPTY_TIPTAP_DOCUMENT) as WorkspaceDocumentResult['content'],
 		version: row.version,
+		shareEnabled: row.share_enabled,
+		shareSlug: row.share_slug,
+		username: row.username,
+		updatedAt: dateIso(row.updated_at),
+	};
+}
+
+function serializeDocumentListItem(row: DocumentListRow): DocumentListItemResult {
+	return {
+		id: row.id,
+		workspaceId: row.workspace_id,
+		title: row.title,
+		description: row.description,
 		shareEnabled: row.share_enabled,
 		shareSlug: row.share_slug,
 		username: row.username,
@@ -377,6 +393,84 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 		]
 			.filter(Boolean)
 			.join('\n\n');
+	});
+}
+
+export async function listDocuments(env: Env, params: { userId: string; workspaceId?: string | null }): Promise<DocumentListItemResult[]> {
+	const workspaceId = params.workspaceId?.trim() || null;
+	if (workspaceId && !isUuid(workspaceId)) return [];
+	return withDbClient(env, async (db) => {
+		const rows = (
+			await db.query<DocumentListRow>(
+				`SELECT d.id, d.workspace_id, d.title, d.description, d.share_enabled, d.share_slug, d.updated_at, u.username
+				 FROM user_documents d
+				 LEFT JOIN "user" u ON u.id = d.user_id
+				 WHERE d.user_id = $1
+				   AND ($2::uuid IS NULL OR d.workspace_id = $2::uuid)
+				 ORDER BY d.updated_at DESC
+				 LIMIT 200`,
+				[params.userId, workspaceId],
+			)
+		).rows;
+		return rows.map(serializeDocumentListItem);
+	});
+}
+
+export async function getDocument(env: Env, params: { userId: string; documentId: string }): Promise<WorkspaceDocumentResult | null> {
+	if (!isUuid(params.documentId)) return null;
+	return withDbClient(env, async (db) => {
+		const row = (
+			await db.query<WorkspaceDocumentRow>(
+				`SELECT d.id, d.workspace_id, d.title, d.description, d.content, d.version,
+				        d.share_enabled, d.share_slug, d.updated_at, u.username
+				   FROM user_documents d
+				   LEFT JOIN "user" u ON u.id = d.user_id
+				  WHERE d.id = $1 AND d.user_id = $2
+				  LIMIT 1`,
+				[params.documentId, params.userId],
+			)
+		).rows[0];
+		return row ? serializeWorkspaceDocument(row) : null;
+	});
+}
+
+export async function getWorkspaceDocumentRoute(
+	env: Env,
+	params: { userId: string; workspaceId: string; documentId?: string | null },
+): Promise<WorkspaceDocumentRouteResult> {
+	if (!isUuid(params.workspaceId)) return { status: 'not-found' };
+	return withDbClient(env, async (db) => {
+		const workspaceExists = async () => {
+			const workspace = (
+				await db.query<{ id: string }>('SELECT id FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1', [
+					params.workspaceId,
+					params.userId,
+				])
+			).rows[0];
+			return !!workspace;
+		};
+
+		if (!params.documentId) {
+			return (await workspaceExists()) ? { status: 'ready', document: null } : { status: 'not-found' };
+		}
+
+		if (!isUuid(params.documentId)) {
+			return (await workspaceExists()) ? { status: 'missing-document' } : { status: 'not-found' };
+		}
+
+		const row = (
+			await db.query<WorkspaceDocumentRow>(
+				`SELECT d.id, d.workspace_id, d.title, d.description, d.content, d.version,
+				        d.share_enabled, d.share_slug, d.updated_at, u.username
+				   FROM user_documents d
+				   LEFT JOIN "user" u ON u.id = d.user_id
+				  WHERE d.id = $1 AND d.workspace_id = $2 AND d.user_id = $3
+				  LIMIT 1`,
+				[params.documentId, params.workspaceId, params.userId],
+			)
+		).rows[0];
+		if (row) return { status: 'ready', document: serializeWorkspaceDocument(row) };
+		return (await workspaceExists()) ? { status: 'missing-document' } : { status: 'not-found' };
 	});
 }
 

@@ -15,7 +15,10 @@ import {
 	DocumentEmptyContentBlockedError,
 	DocumentVersionConflictError,
 	deleteDocument,
+	getDocument,
 	getDocumentVersion,
+	getWorkspaceDocumentRoute,
+	listDocuments,
 	listDocumentVersions,
 	saveDocument,
 	updateDocumentShare,
@@ -38,6 +41,9 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
+	'/documents/get': (req, env) => handleGetDocument(req, env),
+	'/documents/list': (req, env) => handleListDocuments(req, env),
+	'/documents/route': (req, env) => handleWorkspaceDocumentRoute(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
 	'/documents/versions/get': (req, env) => handleGetDocumentVersion(req, env),
@@ -52,6 +58,9 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
+	'/documents/get': (req, env) => handleGetDocument(req, env),
+	'/documents/list': (req, env) => handleListDocuments(req, env),
+	'/documents/route': (req, env) => handleWorkspaceDocumentRoute(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
 	'/documents/versions/get': (req, env) => handleGetDocumentVersion(req, env),
@@ -71,6 +80,9 @@ const HELP_TEXT =
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
+	'POST /documents/list                      - List user-owned documents (internal token) -> {success,data}\n' +
+	'POST /documents/get                       - Read one user-owned document (internal token) -> {success,data}\n' +
+	'POST /documents/route                     - Resolve workspace document route state (internal token) -> {success,data}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
 	'POST /documents/share                     - Update document share settings (internal token) -> {success,data}\n' +
 	'POST /documents/versions/list             - List previous document versions (internal token) -> {success,data}\n' +
@@ -186,6 +198,76 @@ async function handleDeleteDocument(request: Request, env: Env): Promise<Respons
 		}
 		console.error({ tag: 'DOCUMENT_DELETE', msg: 'delete failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Document delete failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleListDocuments(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ userId?: string; workspaceId?: string | null }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing userId', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await listDocuments(env, { userId: body.userId, workspaceId: body.workspaceId });
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		console.error({ tag: 'DOCUMENT_READ', msg: 'list failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Document list failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleGetDocument(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ userId?: string; documentId?: string }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !body.documentId?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing userId or documentId', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await getDocument(env, { userId: body.userId, documentId: body.documentId });
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		console.error({ tag: 'DOCUMENT_READ', msg: 'get failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Document read failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleWorkspaceDocumentRoute(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ userId?: string; workspaceId?: string; documentId?: string | null }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !body.workspaceId?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing userId or workspaceId', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await getWorkspaceDocumentRoute(env, {
+			userId: body.userId,
+			workspaceId: body.workspaceId,
+			documentId: body.documentId,
+		});
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		console.error({ tag: 'DOCUMENT_READ', msg: 'route failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Document route failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

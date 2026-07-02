@@ -18,7 +18,10 @@ import {
 	createWorkspaceDocument,
 	deleteDocument,
 	editDocument,
+	getDocument,
 	getDocumentVersion,
+	getWorkspaceDocumentRoute,
+	listDocuments,
 	listDocumentVersions,
 	listWorkspaces,
 	readDocuments,
@@ -71,6 +74,21 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Read Tiptap documents as markdown context. */
 	readDocuments(userId: CoreRpcArgs<'readDocuments'>[0], ids: CoreRpcArgs<'readDocuments'>[1]) {
 		return readDocuments(this.env, userId, ids);
+	}
+
+	/** List user-owned documents, optionally scoped to a workspace. */
+	listDocuments(input: CoreRpcArgs<'listDocuments'>[0]) {
+		return listDocuments(this.env, input);
+	}
+
+	/** Read a user-owned document for the editor. */
+	getDocument(input: CoreRpcArgs<'getDocument'>[0]) {
+		return getDocument(this.env, input);
+	}
+
+	/** Resolve a workspace document route without leaking workspace existence. */
+	getWorkspaceDocumentRoute(input: CoreRpcArgs<'getWorkspaceDocumentRoute'>[0]) {
+		return getWorkspaceDocumentRoute(this.env, input);
 	}
 
 	/** Persist AI-generated markdown into a Tiptap document. */
