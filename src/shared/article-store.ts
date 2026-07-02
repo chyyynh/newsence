@@ -144,6 +144,14 @@ type EntityQualitySyncGapRow = {
 	entity_count: number | string | null;
 };
 type EntityQualityArticleExampleRow = EntityQualitySyncGapRow;
+type EntityQualityArticleExample = {
+	id: string;
+	title: string | null;
+	source: string | null;
+	sourceType: string;
+	publishedDate: string | null;
+	entityCount: number;
+};
 type EntityQualityBackfillRow = {
 	first_entity_published_date: string | Date | null;
 	processable_missing_or_empty: number | string | null;
@@ -254,6 +262,17 @@ function intValue(value: number | string | null | undefined): number {
 
 function isoDateValue(value: string | Date | null | undefined): string | null {
 	return value ? new Date(value).toISOString() : null;
+}
+
+function articleExampleValue(entry: EntityQualityArticleExampleRow): EntityQualityArticleExample {
+	return {
+		id: entry.id,
+		title: entry.title,
+		source: entry.source,
+		sourceType: entry.source_type,
+		publishedDate: isoDateValue(entry.published_date),
+		entityCount: intValue(entry.entity_count),
+	};
 }
 
 function sourceNameAliases(source?: string | null): string[] {
@@ -672,24 +691,10 @@ export async function getEntityQualitySnapshot(
 		generic: Array<{ canonicalName: string; name: string; links: number }>;
 	};
 	syncGaps: {
-		jsonWithoutLinks: Array<{
-			id: string;
-			title: string | null;
-			source: string | null;
-			sourceType: string;
-			publishedDate: string | null;
-			entityCount: number;
-		}>;
+		jsonWithoutLinks: EntityQualityArticleExample[];
 	};
 	limitViolations: {
-		overCapArticles: Array<{
-			id: string;
-			title: string | null;
-			source: string | null;
-			sourceType: string;
-			publishedDate: string | null;
-			entityCount: number;
-		}>;
+		overCapArticles: EntityQualityArticleExample[];
 	};
 	entityRows: {
 		orphanEntities: Array<{
@@ -1152,24 +1157,10 @@ export async function getEntityQualitySnapshot(
 			})),
 		},
 		syncGaps: {
-			jsonWithoutLinks: jsonWithoutLinkExamples.rows.map((entry) => ({
-				id: entry.id,
-				title: entry.title,
-				source: entry.source,
-				sourceType: entry.source_type,
-				publishedDate: isoDateValue(entry.published_date),
-				entityCount: intValue(entry.entity_count),
-			})),
+			jsonWithoutLinks: jsonWithoutLinkExamples.rows.map(articleExampleValue),
 		},
 		limitViolations: {
-			overCapArticles: overCapExamples.rows.map((entry) => ({
-				id: entry.id,
-				title: entry.title,
-				source: entry.source,
-				sourceType: entry.source_type,
-				publishedDate: isoDateValue(entry.published_date),
-				entityCount: intValue(entry.entity_count),
-			})),
+			overCapArticles: overCapExamples.rows.map(articleExampleValue),
 		},
 		entityRows: {
 			orphanEntities: orphanEntityExamples.rows.map((entry) => ({
