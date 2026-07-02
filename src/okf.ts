@@ -102,7 +102,7 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 async function buildCollectionOkfBundle(
 	env: Env,
 	input: { viewerId: string | null; collectionId: string },
-): Promise<{ slug: string; files: OkfFile[] }> {
+): Promise<{ slug: string; files: Iterable<OkfFile> }> {
 	return withDbClient(env, async (db) => {
 		const collection = (
 			await db.query<CollectionRow>(
@@ -309,7 +309,12 @@ function hasJsonEntities(value: unknown): boolean {
 	return Array.isArray(value) && value.length > 0;
 }
 
-function renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], entities: EntityRow[], quality: EntityQualityStats): OkfFile[] {
+function* renderOkfFiles(
+	collection: CollectionRow,
+	articles: ArticleRow[],
+	entities: EntityRow[],
+	quality: EntityQualityStats,
+): Iterable<OkfFile> {
 	const articlePaths = assignPaths(
 		articles.map((article) => ({ id: article.id, label: article.title_cn || article.title })),
 		'articles',
@@ -323,27 +328,25 @@ function renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], entit
 	const entitiesByArticleId = groupBy(entities, (entity) => entity.article_id);
 	const articlesByEntityId = groupBy(entities, (entity) => entity.id);
 
-	const files: OkfFile[] = [
-		{
-			path: 'index.md',
-			content: renderRootIndex(collection, articles, entityById, articlePaths, entityPaths),
-		},
-		{
-			path: 'articles/index.md',
-			content: renderDirectoryIndex(
-				'Articles',
-				articles.map((article) =>
-					indexEntry(
-						displayArticleTitle(article),
-						stripDirectoryPrefix(articlePaths.get(article.id)!, 'articles'),
-						displayArticleDescription(article),
-					),
+	yield {
+		path: 'index.md',
+		content: renderRootIndex(collection, articles, entityById, articlePaths, entityPaths),
+	};
+	yield {
+		path: 'articles/index.md',
+		content: renderDirectoryIndex(
+			'Articles',
+			articles.map((article) =>
+				indexEntry(
+					displayArticleTitle(article),
+					stripDirectoryPrefix(articlePaths.get(article.id)!, 'articles'),
+					displayArticleDescription(article),
 				),
 			),
-		},
-	];
+		),
+	};
 	if (entityById.size > 0) {
-		files.push({
+		yield {
 			path: 'entities/index.md',
 			content: renderDirectoryIndex(
 				'Entities',
@@ -351,22 +354,21 @@ function renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], entit
 					indexEntry(entity.name, stripDirectoryPrefix(entityPaths.get(entity.id)!, 'entities'), entity.name_cn),
 				),
 			),
-		});
+		};
 	}
 	for (const article of articles) {
-		files.push({
+		yield {
 			path: articlePaths.get(article.id)!,
 			content: renderArticle(article, entitiesByArticleId.get(article.id) ?? [], entityPaths),
-		});
+		};
 	}
 	for (const entity of entityById.values()) {
-		files.push({
+		yield {
 			path: entityPaths.get(entity.id)!,
 			content: renderEntity(entity, articlesByEntityId.get(entity.id) ?? [], articles, articlePaths),
-		});
+		};
 	}
-	files.push({ path: 'log.md', content: renderLog(collection, articles.length, entityById.size, quality) });
-	return files;
+	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size, quality) };
 }
 
 function stripDirectoryPrefix(path: string, prefix: string): string {
@@ -593,10 +595,18 @@ function uniqueBy<T, K>(items: T[], key: (item: T) => K): T[] {
 	});
 }
 
-function tarGzipStream(files: OkfFile[]): ReadableStream<Uint8Array> {
+function tarGzipStream(files: Iterable<OkfFile>): ReadableStream<Uint8Array> {
+	const iterator = files[Symbol.iterator]();
+	let closed = false;
 	return new ReadableStream<Uint8Array>({
-		start(controller) {
-			for (const file of files) enqueueTarFile(controller, file);
+		pull(controller) {
+			if (closed) return;
+			const next = iterator.next();
+			if (!next.done) {
+				enqueueTarFile(controller, next.value);
+				return;
+			}
+			closed = true;
 			controller.enqueue(new Uint8Array(1024));
 			controller.close();
 		},
