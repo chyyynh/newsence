@@ -217,7 +217,7 @@ function generateShareSlugFromTitle(title: string): string {
 	const slug = trimmed
 		.toLowerCase()
 		.replace(/[^\w\s-]/g, '')
-		.replace(/\s+/g, '-')
+		.replace(/[_\s]+/g, '-')
 		.replace(/-+/g, '-')
 		.replace(/^-+|-+$/g, '')
 		.slice(0, 100);
