@@ -926,7 +926,10 @@ async function resourceTargetExists(db: DbClient, userId: string, target: Resour
 	}
 	if (target.type === 'document') {
 		const row = (
-			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1', [target.id, userId])
+			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE id = $1 AND (user_id = $2 OR share_enabled = true) LIMIT 1', [
+				target.id,
+				userId,
+			])
 		).rows[0];
 		return !!row;
 	}
