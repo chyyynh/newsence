@@ -250,7 +250,6 @@ export async function createDocument(
 				workspaceId: document.workspace_id,
 				workspaceTitle: workspace.title,
 				workspaceCreated: false,
-				url: `/w/${document.workspace_id}?d=${document.id}`,
 			};
 		}
 
@@ -284,7 +283,6 @@ export async function createDocument(
 			workspaceId: document.workspace_id,
 			workspaceTitle: workspace.title,
 			workspaceCreated: true,
-			url: `/w/${document.workspace_id}?d=${document.id}`,
 		};
 	});
 }
