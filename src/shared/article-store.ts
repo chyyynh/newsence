@@ -79,6 +79,7 @@ const ENTITY_TYPES = new Set<string>(['person', 'organization', 'product', 'tech
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
+const MAX_ENTITIES_PER_ARTICLE = 10;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
@@ -144,6 +145,7 @@ export function normalizeArticleEntitiesForStorage(entities: ArticleEntityInput[
 		const canonical = canonicalizeEntityName(normalized.name);
 		if (!canonical || byCanonical.has(canonical) || !shouldStoreArticleEntity(normalized, source)) continue;
 		byCanonical.set(canonical, normalized);
+		if (byCanonical.size >= MAX_ENTITIES_PER_ARTICLE) break;
 	}
 	return [...byCanonical.values()];
 }
