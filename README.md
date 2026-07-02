@@ -81,8 +81,9 @@ It intentionally does not perform semantic alias merging in the database. Model 
 Use this maintenance flow before changing schema:
 
 ```bash
-# Inspect coverage, backfill backlog, sync gap examples, unknown type examples,
-# top self-source/generic offenders, over-cap rows, orphans, and DB extensions.
+# Inspect monthly/source-type coverage, backfill backlog, sync gap examples,
+# unknown type examples, top self-source/generic offenders, over-cap rows,
+# orphans, and DB extensions.
 curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
 
 # Reapply current entity normalization and filters to both linked and unlinked rows.

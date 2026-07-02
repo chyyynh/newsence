@@ -105,6 +105,14 @@ type EntityQualityMonthlyRow = {
 	missing_or_invalid_entity_json: number | string | null;
 	json_without_links: number | string | null;
 };
+type EntityQualitySourceTypeRow = {
+	source_type: string;
+	total_articles: number | string | null;
+	with_entity_json: number | string | null;
+	empty_entity_json: number | string | null;
+	missing_or_invalid_entity_json: number | string | null;
+	json_without_links: number | string | null;
+};
 type EntityQualityTypeRow = { type: string; count: number | string | null };
 type EntityQualityExtensionRow = { extname: string };
 type EntityQualitySelfSourceOffenderRow = {
@@ -610,6 +618,15 @@ export async function getEntityQualitySnapshot(
 		jsonWithoutLinks: number;
 		coverage: number;
 	}>;
+	sourceTypes: Array<{
+		sourceType: string;
+		totalArticles: number;
+		withEntityJson: number;
+		emptyEntityJson: number;
+		missingOrInvalidEntityJson: number;
+		jsonWithoutLinks: number;
+		coverage: number;
+	}>;
 	unknownTypes: Array<{
 		type: string;
 		count: number;
@@ -723,6 +740,35 @@ export async function getEntityQualitySnapshot(
 		  GROUP BY s.month
 		  ORDER BY s.month DESC`,
 		[options.months],
+	);
+
+	const sourceTypes = await db.query<EntityQualitySourceTypeRow>(
+		`WITH article_entity_state AS (
+		   SELECT a.id,
+		          COALESCE(NULLIF(TRIM(a.source_type), ''), 'unknown') AS source_type,
+		          CASE
+		            WHEN jsonb_typeof(a.entities) = 'array' THEN jsonb_array_length(a.entities)
+		            ELSE NULL
+		          END AS entity_count,
+		          a.entities IS NULL OR jsonb_typeof(a.entities) <> 'array' AS missing_or_invalid_entities
+		     FROM ${ARTICLES_TABLE} a
+		 ),
+		 article_link_counts AS (
+		   SELECT article_id, COUNT(*)::int AS link_count
+		     FROM article_entities
+		    GROUP BY article_id
+		 )
+		 SELECT s.source_type,
+		        COUNT(*)::int AS total_articles,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0)::int AS with_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count = 0)::int AS empty_entity_json,
+		        COUNT(*) FILTER (WHERE s.missing_or_invalid_entities)::int AS missing_or_invalid_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0 AND COALESCE(alc.link_count, 0) = 0)::int AS json_without_links
+		   FROM article_entity_state s
+		   LEFT JOIN article_link_counts alc ON alc.article_id = s.id
+		  GROUP BY s.source_type
+		  ORDER BY total_articles DESC, s.source_type ASC`,
+		[],
 	);
 
 	const unknownTypes = await db.query<EntityQualityTypeRow>(
@@ -874,6 +920,19 @@ export async function getEntityQualitySnapshot(
 			const withEntityJson = intValue(entry.with_entity_json);
 			return {
 				month: entry.month,
+				totalArticles,
+				withEntityJson,
+				emptyEntityJson: intValue(entry.empty_entity_json),
+				missingOrInvalidEntityJson: intValue(entry.missing_or_invalid_entity_json),
+				jsonWithoutLinks: intValue(entry.json_without_links),
+				coverage: totalArticles ? withEntityJson / totalArticles : 0,
+			};
+		}),
+		sourceTypes: sourceTypes.rows.map((entry) => {
+			const totalArticles = intValue(entry.total_articles);
+			const withEntityJson = intValue(entry.with_entity_json);
+			return {
+				sourceType: entry.source_type,
 				totalArticles,
 				withEntityJson,
 				emptyEntityJson: intValue(entry.empty_entity_json),
