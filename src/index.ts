@@ -14,6 +14,7 @@ import type {
 	AddDocumentResourceResult,
 	ArticleSearchInput,
 	ArticleSummary,
+	CoreRpc,
 	CreateDocumentResult,
 	DocumentReadResult,
 	EditDocumentResult,
@@ -27,7 +28,7 @@ import { addResource, createDocument, editDocument, listWorkspaces, readDocument
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
-export default class CoreWorker extends WorkerEntrypoint<Env> {
+export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
 	override async fetch(request: Request): Promise<Response> {
 		return routeRequest(request, this.env, this.ctx);
 	}
