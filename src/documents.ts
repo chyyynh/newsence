@@ -777,7 +777,9 @@ export async function addResource(
 	if (!isUuid(params.documentId)) throw new Error('Invalid documentId');
 	const resourceIds = [...new Set((params.resourceIds ?? []).filter(isUuid))].slice(0, 20);
 	const urls = cleanHttpUrls(params.urls ?? []);
-	if (resourceIds.length === 0 && urls.length === 0) throw new Error('Provide at least one resource id or URL');
+	if (resourceIds.length === 0 && urls.length === 0) {
+		return { linked: 0, created: 0, duplicates: 0, missing: 0, ingested: 0 };
+	}
 
 	const workspaceId = await getDocumentWorkspaceId(env, params.userId, params.documentId);
 	const idResult = resourceIds.length
