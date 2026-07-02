@@ -31,13 +31,11 @@ import type {
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
+import { workspaceLimitForPlan } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
 export const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
-// Workspace creation quota is enforced here, inside the create-document
-// transaction. Callers may hint the model, but they should not send plan state.
-const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -252,14 +250,10 @@ function cleanHttpUrls(urls: string[], limit = 20): string[] {
 	return [...new Set(cleaned)].slice(0, limit);
 }
 
-function maxWorkspaces(planId: string): number | null {
-	return PLAN_MAX_WORKSPACES[planId] ?? PLAN_MAX_WORKSPACES.free;
-}
-
 async function workspaceQuotaLimitTx(db: DbClient, userId: string): Promise<number | null> {
 	await db.query('SELECT pg_advisory_xact_lock(581203, hashtext($1))', [userId]);
 	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
-	return maxWorkspaces(settings.rows[0]?.plan_id ?? 'free');
+	return workspaceLimitForPlan(settings.rows[0]?.plan_id ?? 'free');
 }
 
 function applyMarkdownEdits(content: string, edits: DocumentEdit[]): { applied: number; failedAt?: string; result: string } {
