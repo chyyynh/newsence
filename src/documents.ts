@@ -27,11 +27,11 @@ import type {
 	SaveDocumentResult,
 	UpdateDocumentShareResult,
 	ValidateResourceSourceResult,
-	WorkspaceCatalogEntry,
+	WorkspaceCatalogResult,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
-import { workspaceLimitForPlan } from '@worker-contracts/core-rpc';
+import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
@@ -290,8 +290,18 @@ function resourceSummaryLine(
 	return `- ${title}${summary ? `: ${summary}` : ''}`;
 }
 
-export async function listWorkspaces(env: Env, userId: string): Promise<WorkspaceCatalogEntry[]> {
+export async function listWorkspaces(env: Env, userId: string): Promise<WorkspaceCatalogResult> {
 	return withDbClient(env, async (db) => {
+		const meta = (
+			await db.query<{ plan_id: string | null; workspace_count: string | number }>(
+				`SELECT
+				   (SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1) AS plan_id,
+				   COUNT(*) AS workspace_count
+				 FROM workspaces
+				 WHERE user_id = $1`,
+				[userId],
+			)
+		).rows[0];
 		const result = await db.query<{
 			id: string;
 			title: string;
@@ -307,12 +317,15 @@ export async function listWorkspaces(env: Env, userId: string): Promise<Workspac
 			 LIMIT 50`,
 			[userId],
 		);
-		return result.rows.map((row) => ({
-			id: row.id,
-			title: row.title,
-			description: row.description,
-			documentCount: Number(row.document_count),
-		}));
+		return {
+			canCreateWorkspace: canCreateWorkspaceForPlan(meta?.plan_id ?? 'free', Number(meta?.workspace_count ?? 0)),
+			entries: result.rows.map((row) => ({
+				id: row.id,
+				title: row.title,
+				description: row.description,
+				documentCount: Number(row.document_count),
+			})),
+		};
 	});
 }
 
