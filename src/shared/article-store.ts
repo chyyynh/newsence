@@ -75,6 +75,8 @@ type ArticleEntityInput = { name: string; name_cn: string; type: string };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
+const ENTITY_NAME_MAX_LENGTH = 255;
+const ENTITY_TYPE_MAX_LENGTH = 20;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
@@ -108,6 +110,8 @@ function canonicalizeEntityName(name: string): string {
 function shouldStoreArticleEntity(entity: ArticleEntityInput, source?: string | null): boolean {
 	const canonical = canonicalizeEntityName(entity.name);
 	if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) return false;
+	if (canonical.length > ENTITY_NAME_MAX_LENGTH || entity.name.length > ENTITY_NAME_MAX_LENGTH) return false;
+	if (entity.name_cn.length > ENTITY_NAME_MAX_LENGTH || entity.type.length > ENTITY_TYPE_MAX_LENGTH) return false;
 	if (ASCII_TICKER_ENTITY_RE.test(canonical)) return false;
 	if (GENERIC_ENTITY_CANONICALS.has(canonical)) return false;
 	return !source || canonicalizeEntityName(source) !== canonical;
@@ -211,22 +215,18 @@ export async function syncArticleEntities(
 		const canonical = canonicalizeEntityName(entity.name);
 		if (!canonical) continue;
 
-		try {
-			const result = await db.query(
-				`INSERT INTO entities (canonical_name, name, name_cn, type)
-				 VALUES ($1, $2, $3, $4)
-				 ON CONFLICT (canonical_name) DO UPDATE SET
-				   updated_at = NOW()
-				 RETURNING id`,
-				[canonical, entity.name, entity.name_cn, entity.type],
-			);
-			const entityId = result.rows[0]?.id;
-			if (!entityId) continue;
+		const result = await db.query(
+			`INSERT INTO entities (canonical_name, name, name_cn, type)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (canonical_name) DO UPDATE SET
+			   updated_at = NOW()
+			 RETURNING id`,
+			[canonical, entity.name, entity.name_cn, entity.type],
+		);
+		const entityId = result.rows[0]?.id;
+		if (!entityId) throw new Error(`Failed to sync entity ${canonical}: no entity id returned`);
 
-			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
-		} catch (err) {
-			console.error({ tag: 'ENTITIES', msg: 'Failed to sync entity', entity: entity.name, error: String(err) });
-		}
+		await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
 	}
 
 	console.info({
