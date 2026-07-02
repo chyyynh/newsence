@@ -71,6 +71,11 @@ export interface InsertArticleData {
 
 export type ProcessedArticleUpdate = Record<string, unknown>;
 
+type ArticleEntityInput = { name: string; name_cn: string; type: string };
+
+const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
+const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
+
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
 	url: 'source_url',
@@ -89,6 +94,44 @@ function serializeProcessedArticleValue(column: string, value: unknown): unknown
 		return JSON.stringify(value);
 	}
 	return value;
+}
+
+function canonicalizeEntityName(name: string): string {
+	return name
+		.toLowerCase()
+		.normalize('NFKC')
+		.replace(/\s+/g, ' ')
+		.replace(/^[\s"'`“”‘’([{]+|[\s"'`“”‘’.,:;!?)]}]+$/g, '')
+		.trim();
+}
+
+function shouldStoreArticleEntity(entity: ArticleEntityInput, source?: string | null): boolean {
+	const canonical = canonicalizeEntityName(entity.name);
+	if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) return false;
+	if (ASCII_TICKER_ENTITY_RE.test(canonical)) return false;
+	if (GENERIC_ENTITY_CANONICALS.has(canonical)) return false;
+	return !source || canonicalizeEntityName(source) !== canonical;
+}
+
+function normalizeArticleEntity(entity: ArticleEntityInput): ArticleEntityInput {
+	const name = entity.name.trim();
+	const nameCn = entity.name_cn.trim();
+	return {
+		name,
+		name_cn: nameCn || name,
+		type: entity.type.trim(),
+	};
+}
+
+export function normalizeArticleEntitiesForStorage(entities: ArticleEntityInput[], source?: string | null): ArticleEntityInput[] {
+	const byCanonical = new Map<string, ArticleEntityInput>();
+	for (const entity of entities) {
+		const normalized = normalizeArticleEntity(entity);
+		const canonical = canonicalizeEntityName(normalized.name);
+		if (!canonical || byCanonical.has(canonical) || !shouldStoreArticleEntity(normalized, source)) continue;
+		byCanonical.set(canonical, normalized);
+	}
+	return [...byCanonical.values()];
 }
 
 export async function updateProcessedArticle(
@@ -158,12 +201,14 @@ export async function insertFinalSourceArticle(
 export async function syncArticleEntities(
 	db: DbClient,
 	articleId: string,
-	entities: Array<{ name: string; name_cn: string; type: string }>,
+	entities: ArticleEntityInput[],
+	source?: string | null,
 ): Promise<void> {
-	if (!entities.length) return;
+	const normalizedEntities = normalizeArticleEntitiesForStorage(entities, source);
+	if (!normalizedEntities.length) return;
 
-	for (const entity of entities) {
-		const canonical = entity.name.toLowerCase().trim();
+	for (const entity of normalizedEntities) {
+		const canonical = canonicalizeEntityName(entity.name);
 		if (!canonical) continue;
 
 		try {
@@ -184,7 +229,14 @@ export async function syncArticleEntities(
 		}
 	}
 
-	console.info({ tag: 'ENTITIES', msg: 'Synced', articleId, count: entities.length });
+	console.info({
+		tag: 'ENTITIES',
+		msg: 'Synced',
+		articleId,
+		inputCount: entities.length,
+		count: normalizedEntities.length,
+		filteredCount: entities.length - normalizedEntities.length,
+	});
 }
 
 export type ExistingArticleRecord = {

@@ -141,6 +141,9 @@ const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實�
 - 提取 3-8 個最重要的具名實體；如果文章太短，可以少於 3 個
 - type 只能是 person, organization, product, technology, event
 - name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
+- 不要把文章來源、平台、作者名稱當作實體，除非文章主題就是該來源、平台或作者本身
+- 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
+- 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
 
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 

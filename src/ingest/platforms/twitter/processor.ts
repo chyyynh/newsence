@@ -151,6 +151,9 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 提取重要的具名實體（人物、組織、產品、技術、事件）
 - type 只能是 person, organization, product, technology, event
 - name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
+- 不要把 Twitter/X、作者帳號或發文平台當作實體，除非推文本身就在討論該平台或作者
+- 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
+- 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
