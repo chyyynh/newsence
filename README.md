@@ -94,11 +94,12 @@ curl -X POST "$CORE_WORKER_URL/entities/repair-links" \
   -d '{"includeLinked": true}'
 
 # Fill extraction gaps, including articles previously persisted as an empty extraction.
+# Use sourceType from /entities/quality backfill.sourceTypes to partition large runs.
 # Response includes nextCursor; pass it as cursor to page without skipping equal timestamps.
 curl -X POST "$CORE_WORKER_URL/entities/backfill-missing" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
-  -d '{"includeEmpty": true}'
+  -d '{"includeEmpty": true, "sourceType": "rss"}'
 
 # Remove entities that no longer have article links after repair.
 curl -X POST "$CORE_WORKER_URL/entities/prune-orphans" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"

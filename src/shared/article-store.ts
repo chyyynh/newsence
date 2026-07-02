@@ -558,7 +558,7 @@ export type MissingEntityArticle = { id: string; publishedDate: string | null };
 export async function getArticlesMissingEntities(
 	db: DbClient,
 	limit: number,
-	options: { before?: Date | string; cursor?: MaintenanceCursor; includeEmpty?: boolean } = {},
+	options: { before?: Date | string; cursor?: MaintenanceCursor; includeEmpty?: boolean; sourceType?: string } = {},
 ): Promise<MissingEntityArticle[]> {
 	const cursorDate = options.cursor?.publishedDate ?? options.before ?? null;
 	const cursorId = options.cursor?.id ?? null;
@@ -584,9 +584,13 @@ export async function getArticlesMissingEntities(
 		      content IS NOT NULL
 		      OR summary IS NOT NULL
 		    )
+		    AND (
+		      $5::text IS NULL
+		      OR COALESCE(NULLIF(TRIM(source_type), ''), 'unknown') = $5
+		    )
 		  ORDER BY published_date DESC, id ASC
 		  LIMIT $1`,
-		[limit, cursorDate, cursorId, options.includeEmpty === true],
+		[limit, cursorDate, cursorId, options.includeEmpty === true, options.sourceType ?? null],
 	);
 	return result.rows.map((row) => ({
 		id: row.id,

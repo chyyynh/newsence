@@ -96,7 +96,7 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
-	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []\n' +
+	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []; optional {sourceType}\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
 	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB\n' +
@@ -235,10 +235,13 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
-	const body = await parseJsonBody<{ limit?: number; before?: string; cursor?: unknown; includeEmpty?: boolean }>(
-		request,
-		INTERNAL_CORS_HEADERS,
-	);
+	const body = await parseJsonBody<{
+		limit?: number;
+		before?: string;
+		cursor?: unknown;
+		includeEmpty?: boolean;
+		sourceType?: string;
+	}>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
@@ -250,8 +253,17 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	if (body.cursor !== undefined && !cursor) {
 		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
 	}
+	const sourceType = body.sourceType?.trim() || undefined;
+	if (body.sourceType !== undefined && !sourceType) {
+		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
+	}
 	const articles = await withDbTransaction(env, 'select missing article entities', (db) =>
-		getArticlesMissingEntities(db, limit, { before, cursor: cursor ?? undefined, includeEmpty: body.includeEmpty === true }),
+		getArticlesMissingEntities(db, limit, {
+			before,
+			cursor: cursor ?? undefined,
+			includeEmpty: body.includeEmpty === true,
+			sourceType,
+		}),
 	);
 	const articleIds = articles.map((article) => article.id);
 	const nextBefore = articles.length === limit ? (articles.at(-1)?.publishedDate ?? null) : null;
@@ -263,6 +275,7 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 			articleIds,
 			batch: articles,
 			includeEmpty: body.includeEmpty === true,
+			sourceType: sourceType ?? null,
 			nextBefore,
 			nextCursor,
 		},
