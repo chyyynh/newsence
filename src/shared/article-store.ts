@@ -73,6 +73,7 @@ export type ProcessedArticleUpdate = Record<string, unknown>;
 
 type ArticleEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
+type ArticleEntityRepairRow = { id: string; source: string | null; entities: unknown };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPES = new Set<string>(['person', 'organization', 'product', 'technology', 'event'] satisfies EntityType[]);
@@ -148,6 +149,12 @@ export function normalizeArticleEntitiesForStorage(entities: ArticleEntityInput[
 		if (byCanonical.size >= MAX_ENTITIES_PER_ARTICLE) break;
 	}
 	return [...byCanonical.values()];
+}
+
+function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
+	if (!value || typeof value !== 'object') return false;
+	const record = value as Record<string, unknown>;
+	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';
 }
 
 export async function updateProcessedArticle(
@@ -258,6 +265,53 @@ export async function syncArticleEntities(
 		count: normalizedEntities.length,
 		filteredCount: entities.length - normalizedEntities.length,
 	});
+}
+
+export async function repairMissingArticleEntityLinks(
+	db: DbClient,
+	limit: number,
+): Promise<{ scanned: number; repaired: number; normalized: number; skipped: number }> {
+	const result = await db.query<ArticleEntityRepairRow>(
+		`SELECT a.id, a.source, a.entities
+		   FROM ${ARTICLES_TABLE} a
+		  WHERE jsonb_typeof(a.entities) = 'array'
+		    AND jsonb_array_length(a.entities) > 0
+		    AND NOT EXISTS (
+		      SELECT 1 FROM article_entities ae WHERE ae.article_id = a.id
+		    )
+		  ORDER BY a.published_date DESC
+		  LIMIT $1`,
+		[limit],
+	);
+
+	let repaired = 0;
+	let normalized = 0;
+	let skipped = 0;
+
+	for (const row of result.rows) {
+		if (!Array.isArray(row.entities)) {
+			skipped++;
+			continue;
+		}
+
+		const rawEntities = row.entities.filter(isArticleEntityInput);
+		const entities = normalizeArticleEntitiesForStorage(rawEntities, row.source);
+		const normalizedJson = JSON.stringify(entities);
+		if (!entities.length) {
+			await db.query(`UPDATE ${ARTICLES_TABLE} SET entities = '[]'::jsonb WHERE id = $1`, [row.id]);
+			skipped++;
+			continue;
+		}
+
+		if (normalizedJson !== JSON.stringify(row.entities)) {
+			await db.query(`UPDATE ${ARTICLES_TABLE} SET entities = $2::jsonb WHERE id = $1`, [row.id, normalizedJson]);
+			normalized++;
+		}
+		await syncArticleEntities(db, row.id, entities, row.source);
+		repaired++;
+	}
+
+	return { scanned: result.rows.length, repaired, normalized, skipped };
 }
 
 export type ExistingArticleRecord = {

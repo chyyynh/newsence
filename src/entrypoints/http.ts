@@ -4,8 +4,9 @@ import { handleRetryCron } from '@ingest/retry';
 import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
-import { USER_FILES_TABLE } from '@shared/article-store';
+import { repairMissingArticleEntityLinks, USER_FILES_TABLE } from '@shared/article-store';
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
+import { withDbTransaction } from '@shared/db';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import type { JsonValue } from '@worker-contracts/core-rpc';
@@ -39,6 +40,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
 	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
+	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
@@ -58,6 +60,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
+	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
@@ -80,6 +83,7 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
+	'POST /entities/repair-links               - Internal: repair missing article_entities links from stored entities JSONB\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
@@ -166,6 +170,20 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
 	}
+}
+
+async function handleRepairEntityLinks(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ limit?: number }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	const limit = Math.min(Math.max(Number.isFinite(body.limit) ? Math.trunc(body.limit ?? 100) : 100, 1), 500);
+	const result = await withDbTransaction(env, 'repair entity links', (db) => repairMissingArticleEntityLinks(db, limit));
+	return jsonData(result, INTERNAL_CORS_HEADERS);
 }
 
 async function handleCreateWorkspace(request: Request, env: Env): Promise<Response> {
