@@ -148,6 +148,10 @@ function parseMaintenanceCursor(value: unknown): MaintenanceCursor | null {
 	return { id, publishedDate };
 }
 
+function parseMaintenanceSourceType(value: unknown): string | null {
+	return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function health(): Response {
 	return Response.json({
 		status: 'ok',
@@ -225,13 +229,13 @@ async function handleRepairEntityLinks(request: Request, env: Env): Promise<Resp
 	if (body.cursor !== undefined && !cursor) {
 		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
 	}
-	const sourceType = body.sourceType?.trim() || undefined;
+	const sourceType = parseMaintenanceSourceType(body.sourceType);
 	if (body.sourceType !== undefined && !sourceType) {
 		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
 	}
 	const includeLinked = body.includeLinked === true;
 	const result = await withDbTransaction(env, 'repair entity links', (db) =>
-		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked, sourceType }),
+		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked, sourceType: sourceType ?? undefined }),
 	);
 	return jsonData({ ...result, includeLinked, sourceType: sourceType ?? null }, INTERNAL_CORS_HEADERS);
 }
@@ -260,7 +264,7 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	if (body.cursor !== undefined && !cursor) {
 		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
 	}
-	const sourceType = body.sourceType?.trim() || undefined;
+	const sourceType = parseMaintenanceSourceType(body.sourceType);
 	if (body.sourceType !== undefined && !sourceType) {
 		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
 	}
@@ -269,7 +273,7 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 			before,
 			cursor: cursor ?? undefined,
 			includeEmpty: body.includeEmpty === true,
-			sourceType,
+			sourceType: sourceType ?? undefined,
 		}),
 	);
 	const articleIds = articles.map((article) => article.id);
