@@ -1,7 +1,7 @@
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleRetryCron } from '@ingest/retry';
-import { handleDeleteAsset } from '@media/delete';
+import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import { USER_FILES_TABLE } from '@shared/article-store';
@@ -43,6 +43,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
+	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
 
@@ -57,6 +58,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
+	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
 };
 
 const HELP_TEXT =
@@ -76,6 +78,7 @@ const HELP_TEXT =
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
 	'POST /documents/share                     - Update document share settings (internal token) -> {success,data}\n' +
+	'POST /media/delete-user-file              - Delete a user-owned blob user_file and R2 object (internal token) -> {success,data}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +

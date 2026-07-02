@@ -26,6 +26,7 @@ import {
 	updateDocumentShare,
 	workspaceSummary,
 } from './documents';
+import { deleteUserMediaFile } from './media/delete';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
@@ -86,6 +87,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Delete a user-owned document. */
 	deleteDocument(input: CoreRpcArgs<'deleteDocument'>[0]) {
 		return deleteDocument(this.env, input);
+	}
+
+	/** Delete a user-owned blob media file and its R2 object. */
+	deleteUserMediaFile(input: CoreRpcArgs<'deleteUserMediaFile'>[0]) {
+		return deleteUserMediaFile(this.env, input);
 	}
 
 	/** Save editor content with optimistic-version checks and snapshots. */
