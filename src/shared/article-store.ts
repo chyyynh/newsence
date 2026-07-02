@@ -1,5 +1,5 @@
 import { type DbClient, withDbClient } from './db';
-import type { Article, Env } from './types';
+import type { Article, EntityType, Env } from './types';
 import { normalizeUrl } from './web';
 
 export const ARTICLES_TABLE = 'articles';
@@ -72,8 +72,10 @@ export interface InsertArticleData {
 export type ProcessedArticleUpdate = Record<string, unknown>;
 
 type ArticleEntityInput = { name: string; name_cn: string; type: string };
+type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
+const ENTITY_TYPES = new Set<string>(['person', 'organization', 'product', 'technology', 'event'] satisfies EntityType[]);
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
@@ -107,7 +109,7 @@ function canonicalizeEntityName(name: string): string {
 		.trim();
 }
 
-function shouldStoreArticleEntity(entity: ArticleEntityInput, source?: string | null): boolean {
+function shouldStoreArticleEntity(entity: NormalizedArticleEntity, source?: string | null): boolean {
 	const canonical = canonicalizeEntityName(entity.name);
 	if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) return false;
 	if (canonical.length > ENTITY_NAME_MAX_LENGTH || entity.name.length > ENTITY_NAME_MAX_LENGTH) return false;
@@ -117,20 +119,28 @@ function shouldStoreArticleEntity(entity: ArticleEntityInput, source?: string | 
 	return !source || canonicalizeEntityName(source) !== canonical;
 }
 
-function normalizeArticleEntity(entity: ArticleEntityInput): ArticleEntityInput {
+function normalizeEntityType(value: string): EntityType | null {
+	const type = value.trim().toLowerCase();
+	return ENTITY_TYPES.has(type) ? (type as EntityType) : null;
+}
+
+function normalizeArticleEntity(entity: ArticleEntityInput): NormalizedArticleEntity | null {
 	const name = entity.name.trim();
 	const nameCn = entity.name_cn.trim();
+	const type = normalizeEntityType(entity.type);
+	if (!type) return null;
 	return {
 		name,
 		name_cn: nameCn || name,
-		type: entity.type.trim(),
+		type,
 	};
 }
 
-export function normalizeArticleEntitiesForStorage(entities: ArticleEntityInput[], source?: string | null): ArticleEntityInput[] {
-	const byCanonical = new Map<string, ArticleEntityInput>();
+export function normalizeArticleEntitiesForStorage(entities: ArticleEntityInput[], source?: string | null): NormalizedArticleEntity[] {
+	const byCanonical = new Map<string, NormalizedArticleEntity>();
 	for (const entity of entities) {
 		const normalized = normalizeArticleEntity(entity);
+		if (!normalized) continue;
 		const canonical = canonicalizeEntityName(normalized.name);
 		if (!canonical || byCanonical.has(canonical) || !shouldStoreArticleEntity(normalized, source)) continue;
 		byCanonical.set(canonical, normalized);
