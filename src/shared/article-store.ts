@@ -209,7 +209,7 @@ export async function syncArticleEntities(
 	source?: string | null,
 ): Promise<void> {
 	const normalizedEntities = normalizeArticleEntitiesForStorage(entities, source);
-	if (!normalizedEntities.length) return;
+	const entityIds: string[] = [];
 
 	for (const entity of normalizedEntities) {
 		const canonical = canonicalizeEntityName(entity.name);
@@ -225,7 +225,16 @@ export async function syncArticleEntities(
 		);
 		const entityId = result.rows[0]?.id;
 		if (!entityId) throw new Error(`Failed to sync entity ${canonical}: no entity id returned`);
+		entityIds.push(entityId);
+	}
 
+	if (entityIds.length) {
+		await db.query(`DELETE FROM article_entities WHERE article_id = $1 AND NOT (entity_id = ANY($2::uuid[]))`, [articleId, entityIds]);
+	} else {
+		await db.query(`DELETE FROM article_entities WHERE article_id = $1`, [articleId]);
+	}
+
+	for (const entityId of entityIds) {
 		await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
 	}
 

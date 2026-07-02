@@ -76,7 +76,7 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
-		if (entities.length) await syncArticleEntities(db, articleId, entities, finalInsert.article.source);
+		if (entities) await syncArticleEntities(db, articleId, entities, finalInsert.article.source);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		if (twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
@@ -120,7 +120,7 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 	return withDbTransaction(env, 'row workflow', async (db) => {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
-		if (table !== USER_FILES_TABLE && entities.length) await syncArticleEntities(db, target.articleId, entities, input.article.source);
+		if (table !== USER_FILES_TABLE && entities) await syncArticleEntities(db, target.articleId, entities, input.article.source);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		return target.articleId;
 	});
@@ -129,8 +129,8 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 function entityUpdatePayload(
 	updatePayload: Record<string, unknown>,
 	source?: string | null,
-): Array<{ name: string; name_cn: string; type: string }> {
-	if (!Array.isArray(updatePayload.entities)) return [];
+): Array<{ name: string; name_cn: string; type: string }> | null {
+	if (!Array.isArray(updatePayload.entities)) return null;
 	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isEntityInput), source);
 	updatePayload.entities = entities;
 	return entities;
