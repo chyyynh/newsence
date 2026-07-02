@@ -92,6 +92,7 @@ curl -X POST "$CORE_WORKER_URL/entities/repair-links" \
   -d '{"includeLinked": true}'
 
 # Fill extraction gaps, including articles previously persisted as an empty extraction.
+# Response includes nextBefore; pass it as before to page through large backfills.
 curl -X POST "$CORE_WORKER_URL/entities/backfill-missing" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \

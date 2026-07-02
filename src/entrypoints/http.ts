@@ -5,7 +5,7 @@ import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import {
-	getArticleIdsMissingEntities,
+	getArticlesMissingEntities,
 	getEntityQualitySnapshot,
 	pruneOrphanEntities,
 	repairMissingArticleEntityLinks,
@@ -220,11 +220,22 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	if (before && Number.isNaN(Date.parse(before))) {
 		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
 	}
-	const articleIds = await withDbTransaction(env, 'select missing article entities', (db) =>
-		getArticleIdsMissingEntities(db, limit, { before, includeEmpty: body.includeEmpty === true }),
+	const articles = await withDbTransaction(env, 'select missing article entities', (db) =>
+		getArticlesMissingEntities(db, limit, { before, includeEmpty: body.includeEmpty === true }),
 	);
+	const articleIds = articles.map((article) => article.id);
+	const nextBefore = articles.length === limit ? (articles.at(-1)?.publishedDate ?? null) : null;
 	if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
-	return jsonData({ articles: articleIds.length, articleIds, includeEmpty: body.includeEmpty === true }, INTERNAL_CORS_HEADERS);
+	return jsonData(
+		{
+			articles: articleIds.length,
+			articleIds,
+			batch: articles,
+			includeEmpty: body.includeEmpty === true,
+			nextBefore,
+		},
+		INTERNAL_CORS_HEADERS,
+	);
 }
 
 async function handleEntityQuality(request: Request, env: Env): Promise<Response> {

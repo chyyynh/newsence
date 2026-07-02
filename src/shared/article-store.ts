@@ -509,13 +509,15 @@ export async function repairMissingArticleEntityLinks(
 	return { scanned: result.rows.length, repaired, normalized, skipped };
 }
 
-export async function getArticleIdsMissingEntities(
+export type MissingEntityArticle = { id: string; publishedDate: string | null };
+
+export async function getArticlesMissingEntities(
 	db: DbClient,
 	limit: number,
 	options: { before?: Date | string; includeEmpty?: boolean } = {},
-): Promise<string[]> {
-	const result = await db.query<{ id: string }>(
-		`SELECT id FROM ${ARTICLES_TABLE}
+): Promise<MissingEntityArticle[]> {
+	const result = await db.query<{ id: string; published_date: string | Date | null }>(
+		`SELECT id, published_date FROM ${ARTICLES_TABLE}
 		  WHERE ($2::timestamptz IS NULL OR published_date < $2)
 		    AND (
 		      entities IS NULL
@@ -532,11 +534,14 @@ export async function getArticleIdsMissingEntities(
 		      content IS NOT NULL
 		      OR summary IS NOT NULL
 		    )
-		  ORDER BY published_date DESC
+		  ORDER BY published_date DESC, id ASC
 		  LIMIT $1`,
 		[limit, options.before ?? null, options.includeEmpty === true],
 	);
-	return result.rows.map((row) => row.id);
+	return result.rows.map((row) => ({
+		id: row.id,
+		publishedDate: row.published_date ? new Date(row.published_date).toISOString() : null,
+	}));
 }
 
 export async function getEntityQualitySnapshot(
