@@ -274,6 +274,7 @@ export async function syncArticleEntities(
 ): Promise<void> {
 	const normalizedEntities = normalizeArticleEntitiesForStorage(entities, source, platformMetadata);
 	const entityIds: string[] = [];
+	const existingLinks = await db.query<{ entity_id: string }>(`SELECT entity_id FROM article_entities WHERE article_id = $1`, [articleId]);
 
 	for (const entity of normalizedEntities) {
 		const canonical = canonicalizeEntityName(entity.name);
@@ -302,6 +303,8 @@ export async function syncArticleEntities(
 		await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
 	}
 
+	await refreshEntityArticleCounts(db, [...existingLinks.rows.map((row) => row.entity_id), ...entityIds]);
+
 	console.info({
 		tag: 'ENTITIES',
 		msg: 'Synced',
@@ -310,6 +313,23 @@ export async function syncArticleEntities(
 		count: normalizedEntities.length,
 		filteredCount: entities.length - normalizedEntities.length,
 	});
+}
+
+async function refreshEntityArticleCounts(db: DbClient, entityIds: string[]): Promise<void> {
+	const uniqueIds = [...new Set(entityIds)];
+	if (!uniqueIds.length) return;
+	await db.query(
+		`UPDATE entities e
+		    SET article_count = counts.article_count
+		   FROM (
+		     SELECT ids.id, COUNT(ae.article_id)::int AS article_count
+		       FROM unnest($1::uuid[]) AS ids(id)
+		       LEFT JOIN article_entities ae ON ae.entity_id = ids.id
+		      GROUP BY ids.id
+		   ) counts
+		  WHERE e.id = counts.id`,
+		[uniqueIds],
+	);
 }
 
 export async function repairMissingArticleEntityLinks(
