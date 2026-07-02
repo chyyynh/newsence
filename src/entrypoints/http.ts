@@ -70,7 +70,8 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
 	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
-	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
+	// handleDeleteUserMediaFile has no OPTIONS branch; answer the preflight here.
+	'/media/delete-user-file': () => new Response(null, { headers: INTERNAL_CORS_HEADERS }),
 };
 
 const HELP_TEXT =
