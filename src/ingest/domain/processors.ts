@@ -1,5 +1,11 @@
 import { prepareArticleTextForEmbedding } from '@shared/embedding';
-import { type PlatformEnrichments, type PlatformMetadata, withOgDimensions } from '@shared/platform-metadata';
+import {
+	type ArticleCategory,
+	type PlatformEnrichments,
+	type PlatformMetadata,
+	withClassification,
+	withOgDimensions,
+} from '@shared/platform-metadata';
 import type { Article } from '@shared/types';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
 
@@ -42,6 +48,8 @@ const processors: Record<string, ArticleProcessor> = {
 	default: new DefaultProcessor(),
 };
 
+const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
+
 function getProcessor(sourceType: string | undefined): ArticleProcessor {
 	return processors[sourceType ?? 'default'] ?? processors.default;
 }
@@ -71,6 +79,11 @@ function mergePlatformMetadata(
 	return result;
 }
 
+function categoryFromTags(value: unknown): ArticleCategory | null {
+	if (!Array.isArray(value)) return null;
+	return value.find((tag): tag is ArticleCategory => typeof tag === 'string' && ARTICLE_CATEGORIES.has(tag as ArticleCategory)) ?? null;
+}
+
 export async function runArticleProcessor(
 	article: Article,
 	sourceType: string | undefined,
@@ -85,8 +98,10 @@ export function buildProcessorUpdatePayload(
 	embedding?: number[] | null,
 	metadataPatch?: Record<string, unknown>,
 ): Record<string, unknown> {
-	const mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
+	const category = categoryFromTags(updatePayload.tags);
+	let mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
+	if (category) mergedMetadata = withClassification(mergedMetadata ?? article.platform_metadata, category);
 	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
 	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
 	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
