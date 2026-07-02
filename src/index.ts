@@ -10,22 +10,20 @@ import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.wo
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
-import type { ArticleSearchInput, ArticleSummary, CorpusReadItem, CorpusReadResult } from './corpus';
+import type {
+	AddDocumentResourceResult,
+	ArticleSearchInput,
+	ArticleSummary,
+	CreateDocumentResult,
+	DocumentReadResult,
+	EditDocumentResult,
+	ReadContextItem,
+	ReadContextResult,
+	WorkspaceCatalogEntry,
+	WorkspaceDecision,
+} from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
-import {
-	type AddResourceResult,
-	addResource,
-	type CreateDocumentResult,
-	createDocument,
-	type DocumentReadResult,
-	type EditDocumentResult,
-	editDocument,
-	listWorkspaces,
-	readDocuments,
-	type WorkspaceCatalogEntry,
-	type WorkspaceDecision,
-	workspaceSummary,
-} from './documents';
+import { addResource, createDocument, editDocument, listWorkspaces, readDocuments, workspaceSummary } from './documents';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
@@ -67,7 +65,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	}
 
 	/** Read article/collection/url resources from the core corpus. */
-	readCorpusItems(items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
+	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 		return readCorpusItems(this.env, items, userId);
 	}
 
@@ -98,7 +96,12 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	}
 
 	/** Pin article/file/URL resources to a document's workspace. */
-	addDocumentResource(input: { userId: string; documentId: string; resourceIds?: string[]; urls?: string[] }): Promise<AddResourceResult> {
+	addDocumentResource(input: {
+		userId: string;
+		documentId: string;
+		resourceIds?: string[];
+		urls?: string[];
+	}): Promise<AddDocumentResourceResult> {
 		return addResource(this.env, input);
 	}
 

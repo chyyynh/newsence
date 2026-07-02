@@ -2,44 +2,22 @@ import { createDbClient } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
 import type { Env } from '@shared/types';
 import { normalizeUrl } from '@shared/web';
+import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@worker-contracts/core-rpc';
 import type { Client } from 'pg';
 
 type SearchRanks = Map<string, number>;
-type ResourceType = 'article' | 'collection' | 'url';
+type ResourceType = ReadContextItem['type'];
 type RankArticleOptions = { fromDate?: Date | null };
 export type ArticleRank = { id: string; score: number };
 export type ArticleRankSearchInput = { query: string; limit?: number };
-export type ArticleSearchInput = { query: string; daysAgo?: number; limit?: number };
 export type RelatedArticleSearchInput = {
 	seed: { id: string; type: 'article' | 'user_file' };
 	limit?: number;
 	offset?: number;
 };
 
-export interface ArticleSummary {
-	id: string;
-	title: string;
-	url: string;
-	publishedDate?: string;
-	source?: string | null;
-	summary?: string;
-	tags?: string[] | null;
-}
-
-export interface CorpusReadItem {
-	type: ResourceType;
-	id: string;
-}
-
-export interface CorpusReadResult {
-	type: ResourceType | 'document' | 'error';
-	id: string;
-	title?: string;
-	content?: string;
-	articles?: Array<{ id: string; title: string; summary: string | null }>;
-	metadata?: Record<string, unknown>;
-	error?: string;
-}
+export type CorpusReadItem = ReadContextItem;
+export type CorpusReadResult = ReadContextResult;
 
 interface ArticleSummaryRow {
 	id: string;

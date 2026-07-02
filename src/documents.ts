@@ -11,59 +11,19 @@ import { Typography } from '@tiptap/extension-typography';
 import { Underline } from '@tiptap/extension-underline';
 import { MarkdownManager } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
+import type {
+	AddDocumentResourceResult,
+	CreateDocumentResult,
+	DocumentReadResult,
+	EditDocumentResult,
+	WorkspaceCatalogEntry,
+	WorkspaceDecision,
+} from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
 const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
 const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
-
-export type WorkspaceDecision = { mode: 'existing'; workspaceId: string } | { mode: 'new'; title: string; description?: string };
-
-export interface CreateDocumentResult {
-	documentId: string;
-	workspaceId: string;
-	workspaceTitle: string;
-	workspaceCreated: boolean;
-	url: string;
-}
-
-export interface EditDocumentResult {
-	editCount: number;
-	newVersion: number;
-	newMarkdown: string;
-	title: string;
-}
-
-export interface AddResourceResult {
-	linked: number;
-	created: number;
-	duplicates: number;
-	missing: number;
-	ingested?: number;
-	ingestFailed?: Array<{ url: string; error: string }>;
-}
-
-export interface WorkspaceCatalogEntry {
-	id: string;
-	title: string;
-	description: string | null;
-	documentCount: number;
-}
-
-export type DocumentReadResult =
-	| {
-			type: 'document';
-			id: string;
-			title: string;
-			content: string;
-			metadata: {
-				createdAt: string;
-				truncated: boolean;
-				updatedAt: string;
-				version: number;
-			};
-	  }
-	| { type: 'error'; id: string; error: string };
 
 type DocumentEdit = { old_string: string; new_string: string };
 
@@ -448,7 +408,7 @@ async function createDocumentVersionSnapshot(
 export async function addResource(
 	env: Env,
 	params: { userId: string; documentId: string; resourceIds?: string[]; urls?: string[] },
-): Promise<AddResourceResult> {
+): Promise<AddDocumentResourceResult> {
 	if (!isUuid(params.documentId)) throw new Error('Invalid documentId');
 	const resourceIds = [...new Set((params.resourceIds ?? []).filter(isUuid))].slice(0, 20);
 	const urls = cleanHttpUrls(params.urls ?? []);
