@@ -17,6 +17,7 @@ import type {
 	DeleteDocumentResult,
 	DocumentReadResult,
 	EditDocumentResult,
+	UpdateDocumentShareResult,
 	WorkspaceCatalogEntry,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
@@ -29,6 +30,7 @@ const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
 // transaction. Callers may hint the model, but they should not send plan state.
 const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
+const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 type DocumentEdit = { old_string: string; new_string: string };
 
@@ -59,6 +61,22 @@ type WorkspaceDocumentRow = {
 	share_slug: string | null;
 	username: string | null;
 	updated_at: Date | string;
+};
+type DocumentShareRow = {
+	id: string;
+	title: string;
+	share_slug: string | null;
+	published_at: Date | string | null;
+	username: string | null;
+};
+type DocumentShareUpdateRow = {
+	id: string;
+	share_enabled: boolean;
+	share_slug: string | null;
+	description: string | null;
+	published_at: Date | string | null;
+	updated_at: Date | string;
+	username: string | null;
 };
 
 const markdownManager = new MarkdownManager({
@@ -116,6 +134,44 @@ function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumen
 		username: row.username,
 		updatedAt: dateIso(row.updated_at),
 	};
+}
+
+function serializeDocumentShareUpdate(row: DocumentShareUpdateRow): UpdateDocumentShareResult {
+	return {
+		id: row.id,
+		shareEnabled: row.share_enabled,
+		shareSlug: row.share_slug,
+		description: row.description,
+		publishedAt: row.published_at ? dateIso(row.published_at) : null,
+		updatedAt: dateIso(row.updated_at),
+		username: row.username,
+	};
+}
+
+function generateShareSlugFromTitle(title: string): string {
+	const trimmed = title.trim();
+	if (!trimmed) return 'untitled';
+	const slug = trimmed
+		.toLowerCase()
+		.replace(/[^\w\s-]/g, '')
+		.replace(/\s+/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 100);
+	return slug.length >= 3 ? slug : `article-${Date.now()}`;
+}
+
+async function generateUniqueShareSlugTx(db: DbClient, title: string, userId: string): Promise<string> {
+	await db.query('SELECT pg_advisory_xact_lock(823947, hashtext($1))', [userId]);
+	const baseSlug = generateShareSlugFromTitle(title);
+	for (let index = 1; index <= 100; index += 1) {
+		const slug = index === 1 ? baseSlug : `${baseSlug}-${index}`;
+		const taken = (
+			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE user_id = $1 AND share_slug = $2 LIMIT 1', [userId, slug])
+		).rows[0];
+		if (!taken) return slug;
+	}
+	return `${baseSlug}-${Date.now()}`;
 }
 
 function cleanHttpUrls(urls: string[], limit = 20): string[] {
@@ -364,6 +420,63 @@ export async function deleteDocument(env: Env, params: { userId: string; documen
 		).rows[0];
 		if (!row) throw new Error('Document not found');
 		return { id: row.id };
+	});
+}
+
+export async function updateDocumentShare(
+	env: Env,
+	params: { userId: string; documentId: string; shareEnabled: boolean; shareSlug?: string | null; description?: string | null },
+): Promise<UpdateDocumentShareResult> {
+	if (!isUuid(params.documentId)) throw new Error('Document not found');
+	return withDbTransaction(env, 'update document share', async (db) => {
+		const document = (
+			await db.query<DocumentShareRow>(
+				`SELECT d.id, d.title, d.share_slug, d.published_at, u.username
+				   FROM user_documents d
+				   LEFT JOIN "user" u ON u.id = d.user_id
+				  WHERE d.id = $1 AND d.user_id = $2
+				  LIMIT 1`,
+				[params.documentId, params.userId],
+			)
+		).rows[0];
+		if (!document) throw new Error('Document not found');
+		if (params.shareEnabled && !document.username) throw new Error('Set a username before sharing.');
+
+		let shareSlug = params.shareSlug?.trim() || document.share_slug;
+		if (params.shareEnabled && !shareSlug) {
+			shareSlug = await generateUniqueShareSlugTx(db, document.title, params.userId);
+		}
+		if (shareSlug && shareSlug !== document.share_slug && !SHARE_SLUG_FORMAT.test(shareSlug)) {
+			throw new Error('Invalid share URL.');
+		}
+		if (shareSlug && shareSlug !== document.share_slug) {
+			const existing = (
+				await db.query<{ id: string }>('SELECT id FROM user_documents WHERE user_id = $1 AND share_slug = $2 AND id <> $3 LIMIT 1', [
+					params.userId,
+					shareSlug,
+					params.documentId,
+				])
+			).rows[0];
+			if (existing) throw new Error('This URL is already in use.');
+		}
+
+		const publishedAt = params.shareEnabled && !document.published_at ? new Date() : document.published_at;
+		const updated = (
+			await db.query<DocumentShareUpdateRow>(
+				`UPDATE user_documents d
+				    SET share_enabled = $3,
+				        share_slug = $4,
+				        description = $5,
+				        published_at = $6,
+				        updated_at = now()
+				   FROM "user" u
+				  WHERE d.id = $1 AND d.user_id = $2 AND u.id = d.user_id
+				RETURNING d.id, d.share_enabled, d.share_slug, d.description, d.published_at, d.updated_at, u.username`,
+				[params.documentId, params.userId, params.shareEnabled, shareSlug, params.description?.trim().slice(0, 300) || null, publishedAt],
+			)
+		).rows[0];
+		if (!updated) throw new Error('Document not found');
+		return serializeDocumentShareUpdate(updated);
 	});
 }
 

@@ -9,7 +9,7 @@ import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
-import { createWorkspaceDocument, deleteDocument } from '../documents';
+import { createWorkspaceDocument, deleteDocument, updateDocumentShare } from '../documents';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
@@ -28,6 +28,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
+	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
 
@@ -38,6 +39,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
+	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
 };
 
 const HELP_TEXT =
@@ -53,6 +55,7 @@ const HELP_TEXT =
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
+	'POST /documents/share                     - Update document share settings (internal token) -> {success,data}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +
@@ -164,6 +167,52 @@ async function handleDeleteDocument(request: Request, env: Env): Promise<Respons
 		}
 		console.error({ tag: 'DOCUMENT_DELETE', msg: 'delete failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Document delete failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleUpdateDocumentShare(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{
+		userId?: string;
+		documentId?: string;
+		shareEnabled?: boolean;
+		shareSlug?: string | null;
+		description?: string | null;
+	}>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !body.documentId?.trim() || typeof body.shareEnabled !== 'boolean') {
+		return jsonError('BAD_REQUEST', 'Missing userId, documentId, or shareEnabled', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await updateDocumentShare(env, {
+			userId: body.userId,
+			documentId: body.documentId,
+			shareEnabled: body.shareEnabled,
+			shareSlug: body.shareSlug,
+			description: body.description,
+		});
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error) {
+			if (
+				error.message === 'Document not found' ||
+				error.message === 'Set a username before sharing.' ||
+				error.message === 'Invalid share URL.' ||
+				error.message === 'This URL is already in use.'
+			) {
+				return error.message === 'Document not found'
+					? jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS)
+					: jsonError('BAD_REQUEST', error.message, 400, INTERNAL_CORS_HEADERS);
+			}
+		}
+		console.error({ tag: 'DOCUMENT_SHARE', msg: 'update failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Document share update failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

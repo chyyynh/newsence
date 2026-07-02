@@ -20,6 +20,7 @@ import {
 	editDocument,
 	listWorkspaces,
 	readDocuments,
+	updateDocumentShare,
 	workspaceSummary,
 } from './documents';
 
@@ -82,6 +83,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Delete a user-owned document. */
 	deleteDocument(input: CoreRpcArgs<'deleteDocument'>[0]) {
 		return deleteDocument(this.env, input);
+	}
+
+	/** Update public-share settings for a user-owned document. */
+	updateDocumentShare(input: CoreRpcArgs<'updateDocumentShare'>[0]) {
+		return updateDocumentShare(this.env, input);
 	}
 
 	/** Apply str_replace edits to a document. */
