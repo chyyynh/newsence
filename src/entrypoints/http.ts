@@ -22,6 +22,7 @@ import {
 	removeResourceFromSource,
 	saveDocument,
 	updateDocumentShare,
+	validateResourceSource,
 	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
 
@@ -45,6 +46,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
 	'/resources/delete': (req, env) => handleDeleteResource(req, env),
 	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
+	'/resources/validate-source': (req, env) => handleValidateResourceSource(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -63,6 +65,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
 	'/resources/delete': (req, env) => handleDeleteResource(req, env),
 	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
+	'/resources/validate-source': (req, env) => handleValidateResourceSource(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -86,6 +89,7 @@ const HELP_TEXT =
 	'POST /resources/add-urls                  - Ingest URLs and pin user files to a workspace/collection (internal token) -> {success,data}\n' +
 	'POST /resources/delete                    - Remove a user-owned citation by citation id (internal token) -> {success,data:{id}}\n' +
 	'POST /resources/remove                    - Remove a user-owned citation by source/target (internal token) -> {success,data:{id}}\n' +
+	'POST /resources/validate-source           - Validate source ownership before upload/linking (internal token) -> {success,data}\n' +
 	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
@@ -343,6 +347,39 @@ async function handleRemoveResourceFromSource(request: Request, env: Env): Promi
 		}
 		console.error({ tag: 'RESOURCE_REMOVE', msg: 'remove failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Resource remove failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleValidateResourceSource(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{
+		userId?: string;
+		sourceType?: string;
+		sourceId?: string;
+	}>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !isResourceSourceType(body.sourceType) || !body.sourceId?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing source', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await validateResourceSource(env, {
+			userId: body.userId,
+			sourceType: body.sourceType,
+			sourceId: body.sourceId,
+		});
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error && error.message === 'Source not found') {
+			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
+		}
+		console.error({ tag: 'RESOURCE_VALIDATE_SOURCE', msg: 'validate source failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Resource source validation failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

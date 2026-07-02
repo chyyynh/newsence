@@ -27,6 +27,7 @@ import {
 	removeResourceFromSource,
 	saveDocument,
 	updateDocumentShare,
+	validateResourceSource,
 	workspaceSummary,
 } from './documents';
 import { deleteUserMediaFile } from './media/delete';
@@ -130,6 +131,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Remove a user-owned citation by source and target. */
 	removeResourceFromSource(input: CoreRpcArgs<'removeResourceFromSource'>[0]) {
 		return removeResourceFromSource(this.env, input);
+	}
+
+	/** Validate that a user can pin resources to a source. */
+	validateResourceSource(input: CoreRpcArgs<'validateResourceSource'>[0]) {
+		return validateResourceSource(this.env, input);
 	}
 
 	/** Ingest URLs and pin the resulting user files to a workspace or collection. */

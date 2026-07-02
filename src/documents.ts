@@ -26,6 +26,7 @@ import type {
 	ResourceTargetType,
 	SaveDocumentResult,
 	UpdateDocumentShareResult,
+	ValidateResourceSourceResult,
 	WorkspaceCatalogEntry,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
@@ -868,6 +869,15 @@ export async function removeResourceFromSource(
 		if (!row) throw new Error('Resource not found');
 		return { id: row.to_id };
 	});
+}
+
+export async function validateResourceSource(
+	env: Env,
+	params: { userId: string; sourceType: ResourceSourceType; sourceId: string },
+): Promise<ValidateResourceSourceResult> {
+	const source = { type: params.sourceType, id: params.sourceId };
+	await assertResourceSourceAccess(env, params.userId, source);
+	return { sourceId: source.id, sourceType: source.type };
 }
 
 export async function addResourceUrlsToSource(
