@@ -39,7 +39,8 @@ type EntityRow = {
 };
 
 type EntityQualityStats = {
-	totalLinks: number;
+	persistedLinks: number;
+	jsonFallbackLinks: number;
 	exportedLinks: number;
 	filteredGeneric: number;
 	filteredSelfSource: number;
@@ -112,7 +113,13 @@ async function buildCollectionOkfBundle(
 
 		const articles = await readCollectionArticles(db, collection.id, input.userId);
 		const rawEntities = articles.length ? await readArticleEntities(db, articles) : [];
-		const { entities, quality } = filterEntitiesForOkf(rawEntities, articles);
+		const fallback = mergeJsonEntityFallbacks(rawEntities, articles);
+		const { entities, quality } = filterEntitiesForOkf(fallback.entities, articles, {
+			persistedLinks: rawEntities.length,
+			jsonFallbackLinks: fallback.fallbackLinks,
+			jsonWithoutLinksArticles: fallback.jsonWithoutPersistedLinksArticles,
+			articlesWithoutEntityLinks: fallback.articlesWithoutPersistedLinks,
+		});
 		return {
 			slug: uniqueSlug(collection.name, collection.id),
 			files: renderOkfFiles(collection, articles, entities, quality),
@@ -169,17 +176,73 @@ async function readArticleEntities(db: DbClient, articles: ArticleRow[]): Promis
 	return result.rows;
 }
 
-function filterEntitiesForOkf(entities: EntityRow[], articles: ArticleRow[]): { entities: EntityRow[]; quality: EntityQualityStats } {
+function mergeJsonEntityFallbacks(
+	entities: EntityRow[],
+	articles: ArticleRow[],
+): {
+	entities: EntityRow[];
+	fallbackLinks: number;
+	jsonWithoutPersistedLinksArticles: number;
+	articlesWithoutPersistedLinks: number;
+} {
+	const byCanonical = new Map<string, EntityRow>();
+	const linkKeys = new Set<string>();
+	const persistedLinkedArticleIds = new Set<string>();
+	for (const entity of entities) {
+		const canonical = canonicalizeEntityName(entity.canonical_name);
+		byCanonical.set(canonical, entity);
+		linkKeys.add(entityLinkKey(entity.article_id, canonical));
+		persistedLinkedArticleIds.add(entity.article_id);
+	}
+
+	const merged = [...entities];
+	let fallbackLinks = 0;
+	for (const article of articles) {
+		for (const jsonEntity of readJsonEntities(article.entities)) {
+			const canonical = canonicalizeEntityName(jsonEntity.name);
+			if (!canonical) continue;
+			const key = entityLinkKey(article.id, canonical);
+			if (linkKeys.has(key)) continue;
+
+			const existing = byCanonical.get(canonical);
+			merged.push({
+				article_id: article.id,
+				id: existing?.id ?? `json:${canonical}`,
+				canonical_name: canonical,
+				name: existing?.name ?? jsonEntity.name,
+				name_cn: existing?.name_cn ?? jsonEntity.name_cn,
+				type: existing?.type ?? jsonEntity.type,
+				article_count: existing?.article_count ?? 0,
+			});
+			linkKeys.add(key);
+			fallbackLinks += 1;
+		}
+	}
+	return {
+		entities: merged,
+		fallbackLinks,
+		jsonWithoutPersistedLinksArticles: articles.filter(
+			(article) => hasJsonEntities(article.entities) && !persistedLinkedArticleIds.has(article.id),
+		).length,
+		articlesWithoutPersistedLinks: articles.filter((article) => !persistedLinkedArticleIds.has(article.id)).length,
+	};
+}
+
+function filterEntitiesForOkf(
+	entities: EntityRow[],
+	articles: ArticleRow[],
+	inputQuality: Pick<
+		EntityQualityStats,
+		'persistedLinks' | 'jsonFallbackLinks' | 'jsonWithoutLinksArticles' | 'articlesWithoutEntityLinks'
+	>,
+): { entities: EntityRow[]; quality: EntityQualityStats } {
 	const articleById = new Map(articles.map((article) => [article.id, article]));
-	const linkedArticleIds = new Set(entities.map((entity) => entity.article_id));
 	const quality: EntityQualityStats = {
-		totalLinks: entities.length,
+		...inputQuality,
 		exportedLinks: 0,
 		filteredGeneric: 0,
 		filteredSelfSource: 0,
 		filteredTooShort: 0,
-		jsonWithoutLinksArticles: articles.filter((article) => hasJsonEntities(article.entities) && !linkedArticleIds.has(article.id)).length,
-		articlesWithoutEntityLinks: articles.filter((article) => !linkedArticleIds.has(article.id)).length,
 		unknownTypes: {},
 	};
 	const filtered = entities.filter((entity) => {
@@ -193,6 +256,32 @@ function filterEntitiesForOkf(entities: EntityRow[], articles: ArticleRow[]): { 
 		return false;
 	});
 	return { entities: filtered, quality };
+}
+
+function entityLinkKey(articleId: string, canonical: string): string {
+	return `${articleId}:${canonical}`;
+}
+
+function canonicalizeEntityName(name: string): string {
+	return name.toLowerCase().trim();
+}
+
+function readJsonEntities(value: unknown): Array<{ name: string; name_cn: string | null; type: string }> {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item) => {
+		if (!item || typeof item !== 'object') return [];
+		const record = item as Record<string, unknown>;
+		const name = typeof record.name === 'string' ? record.name.trim() : '';
+		const type = typeof record.type === 'string' ? record.type.trim() : '';
+		if (!name || !type) return [];
+		return [
+			{
+				name,
+				name_cn: typeof record.name_cn === 'string' && record.name_cn.trim() ? record.name_cn.trim() : null,
+				type,
+			},
+		];
+	});
 }
 
 function entityFilterReason(
@@ -363,7 +452,8 @@ function renderLog(collection: CollectionRow, articleCount: number, entityCount:
 		`## ${today}`,
 		`* **Export**: Generated OKF bundle for "${collection.name}" with ${articleCount} articles and ${entityCount} entity pages.`,
 		'* **Entity quality gate**:',
-		`  * Total article-entity links read: ${quality.totalLinks}`,
+		`  * Persisted article-entity links read: ${quality.persistedLinks}`,
+		`  * Export-only links recovered from article JSON: ${quality.jsonFallbackLinks}`,
 		`  * Exported links: ${quality.exportedLinks}`,
 		`  * Filtered self-source links: ${quality.filteredSelfSource}`,
 		`  * Filtered generic-token links: ${quality.filteredGeneric}`,
