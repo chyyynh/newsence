@@ -11,12 +11,14 @@ import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import type { JsonValue } from '@worker-contracts/core-rpc';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import {
+	createWorkspace,
 	createWorkspaceDocument,
 	DocumentEmptyContentBlockedError,
 	DocumentVersionConflictError,
 	deleteDocument,
 	saveDocument,
 	updateDocumentShare,
+	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
@@ -34,6 +36,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
+	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -46,6 +49,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
+	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
 	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
 	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
 	'/documents/save': (req, env) => handleSaveDocument(req, env),
@@ -63,6 +67,7 @@ const HELP_TEXT =
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
+	'POST /workspaces/create                   - Create a user workspace (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
 	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
 	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
@@ -128,6 +133,35 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
+	}
+}
+
+async function handleCreateWorkspace(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ userId?: string; title?: string; description?: string | null }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	if (!body.userId?.trim() || !body.title?.trim()) {
+		return jsonError('BAD_REQUEST', 'Missing userId or title', 400, INTERNAL_CORS_HEADERS);
+	}
+
+	try {
+		const result = await createWorkspace(env, {
+			userId: body.userId,
+			title: body.title,
+			description: body.description,
+		});
+		return jsonData(result, INTERNAL_CORS_HEADERS);
+	} catch (error) {
+		if (error instanceof Error && error.message === WORKSPACE_QUOTA_EXCEEDED_MESSAGE) {
+			return jsonError('WORKSPACE_QUOTA_EXCEEDED', error.message, 403, INTERNAL_CORS_HEADERS);
+		}
+		console.error({ tag: 'WORKSPACE_CREATE', msg: 'create failed', error: error instanceof Error ? error.message : String(error) });
+		return jsonError('INTERNAL_ERROR', 'Workspace create failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 
