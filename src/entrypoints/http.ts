@@ -379,7 +379,11 @@ async function handleValidateResourceSource(request: Request, env: Env): Promise
 		if (error instanceof Error && error.message === 'Source not found') {
 			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
 		}
-		console.error({ tag: 'RESOURCE_VALIDATE_SOURCE', msg: 'validate source failed', error: error instanceof Error ? error.message : String(error) });
+		console.error({
+			tag: 'RESOURCE_VALIDATE_SOURCE',
+			msg: 'validate source failed',
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return jsonError('INTERNAL_ERROR', 'Resource source validation failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
