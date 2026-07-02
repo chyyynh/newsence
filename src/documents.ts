@@ -19,6 +19,7 @@ import type {
 	EditDocumentResult,
 	WorkspaceCatalogEntry,
 	WorkspaceDecision,
+	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
@@ -27,6 +28,7 @@ const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
 // Workspace creation quota is enforced here, inside the create-document
 // transaction. Callers may hint the model, but they should not send plan state.
 const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
+const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 
 type DocumentEdit = { old_string: string; new_string: string };
 
@@ -45,6 +47,18 @@ type ResourceSummaryRow = {
 	title_cn: string | null;
 	summary: string | null;
 	summary_cn: string | null;
+};
+type WorkspaceDocumentRow = {
+	id: string;
+	workspace_id: string | null;
+	title: string;
+	description: string | null;
+	content: JSONContent | null;
+	version: number;
+	share_enabled: boolean;
+	share_slug: string | null;
+	username: string | null;
+	updated_at: Date | string;
 };
 
 const markdownManager = new MarkdownManager({
@@ -87,6 +101,21 @@ function dateIso(value: Date | string): string {
 function truncateContextDocument(markdown: string) {
 	if (markdown.length <= MAX_CONTEXT_DOCUMENT_CHARS) return { content: markdown, truncated: false };
 	return { content: markdown.slice(0, MAX_CONTEXT_DOCUMENT_CHARS), truncated: true };
+}
+
+function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumentResult {
+	return {
+		id: row.id,
+		workspaceId: row.workspace_id,
+		title: row.title,
+		description: row.description,
+		content: (row.content ?? EMPTY_TIPTAP_DOCUMENT) as WorkspaceDocumentResult['content'],
+		version: row.version,
+		shareEnabled: row.share_enabled,
+		shareSlug: row.share_slug,
+		username: row.username,
+		updatedAt: dateIso(row.updated_at),
+	};
 }
 
 function cleanHttpUrls(urls: string[], limit = 20): string[] {
@@ -291,6 +320,36 @@ export async function createDocument(
 			workspaceTitle: workspace.title,
 			workspaceCreated: true,
 		};
+	});
+}
+
+export async function createWorkspaceDocument(
+	env: Env,
+	params: { userId: string; workspaceId: string; title?: string },
+): Promise<WorkspaceDocumentResult> {
+	if (!isUuid(params.workspaceId)) throw new Error('Workspace not found');
+	const title = params.title?.trim().slice(0, 200) || 'Untitled';
+	const content = JSON.stringify(EMPTY_TIPTAP_DOCUMENT);
+
+	return withDbClient(env, async (db) => {
+		const row = (
+			await db.query<WorkspaceDocumentRow>(
+				`WITH workspace AS (
+				   SELECT id FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1
+				 ), inserted AS (
+				   INSERT INTO user_documents (user_id, workspace_id, title, content)
+				   SELECT $2, id, $3, $4::jsonb FROM workspace
+				   RETURNING id, workspace_id, title, description, content, version, share_enabled, share_slug, updated_at, user_id
+				 )
+				 SELECT inserted.id, inserted.workspace_id, inserted.title, inserted.description, inserted.content,
+				        inserted.version, inserted.share_enabled, inserted.share_slug, inserted.updated_at, u.username
+				   FROM inserted
+				   LEFT JOIN "user" u ON u.id = inserted.user_id`,
+				[params.workspaceId, params.userId, title, content],
+			)
+		).rows[0];
+		if (!row) throw new Error('Workspace not found');
+		return serializeWorkspaceDocument(row);
 	});
 }
 
