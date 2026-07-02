@@ -71,7 +71,7 @@ export interface InsertArticleData {
 
 export type ProcessedArticleUpdate = Record<string, unknown>;
 
-type ArticleEntityInput = { name: string; name_cn: string; type: string };
+export type ArticleEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
 type ArticleEntityRepairRow = { id: string; source: string | null; platform_metadata: unknown; entities: unknown };
 
@@ -217,7 +217,7 @@ export function normalizeArticleEntitiesForStorage(
 	return [...byCanonical.values()];
 }
 
-function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
+export function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
 	if (!value || typeof value !== 'object') return false;
 	const record = value as Record<string, unknown>;
 	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';

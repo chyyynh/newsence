@@ -1,5 +1,7 @@
 import {
+	type ArticleEntityInput,
 	insertFinalSourceArticle,
+	isArticleEntityInput,
 	normalizeArticleEntitiesForStorage,
 	type ProcessableTable,
 	syncArticleEntities,
@@ -133,17 +135,11 @@ function entityUpdatePayload(
 	updatePayload: Record<string, unknown>,
 	source?: string | null,
 	platformMetadata?: unknown,
-): Array<{ name: string; name_cn: string; type: string }> | null {
+): ArticleEntityInput[] | null {
 	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isEntityInput), source, platformMetadata);
+	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
 	updatePayload.entities = entities;
 	return entities;
-}
-
-function isEntityInput(value: unknown): value is { name: string; name_cn: string; type: string } {
-	if (!value || typeof value !== 'object') return false;
-	const record = value as Record<string, unknown>;
-	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';
 }
 
 function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {
