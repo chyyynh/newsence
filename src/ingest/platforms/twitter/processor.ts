@@ -4,7 +4,7 @@
 
 import { AI_TASKS, generateObject } from '@shared/ai';
 import type { ArticleCategory } from '@shared/platform-metadata';
-import type { AIAnalysisResult, Article } from '@shared/types';
+import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@shared/types';
 import { z } from 'zod';
 import {
 	type ArticleProcessor,
@@ -138,7 +138,7 @@ const TweetAnalysisSchema = z.object({
 		z.object({
 			name: z.string().min(1),
 			name_cn: z.string().min(1),
-			type: z.enum(['person', 'organization', 'product', 'technology', 'event']),
+			type: z.enum(ENTITY_TYPES),
 		}),
 	),
 });
@@ -152,8 +152,8 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - summary_cn 是忠實翻譯，不是評論或摘要
 
 實體擷取規則：
-- 提取重要的具名實體（人物、組織、產品、技術、事件）
-- type 只能是 person, organization, product, technology, event
+- 提取重要的具名實體（人物、組織、產品、技術、事件、地點）
+- type 只能是 person, organization, product, technology, event, location
 - name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
 - 不要把 Twitter/X、作者帳號或發文平台當作實體，除非推文本身就在討論該平台或作者
 - 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL

@@ -67,7 +67,7 @@ Roughly 30 seconds per article. Each step retries independently with exponential
 | Stage                   | Model             | What it does                                                                                      |
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
 | **Analysis**          | Workers AI Qwen3 | Article → bilingual title, summary, tags, keywords, category                                      |
-| **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
+| **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
 | **Embedding**         | BGE-M3 (1024d)   | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
 Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole article into fallback.

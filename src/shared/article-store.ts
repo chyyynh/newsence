@@ -1,5 +1,5 @@
 import { type DbClient, withDbClient } from './db';
-import type { Article, EntityType, Env } from './types';
+import { type Article, ENTITY_TYPES, type EntityType, type Env } from './types';
 import { normalizeUrl } from './web';
 
 export const ARTICLES_TABLE = 'articles';
@@ -76,7 +76,7 @@ type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType
 type ArticleEntityRepairRow = { id: string; source: string | null; platform_metadata: unknown; entities: unknown };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
-const ENTITY_TYPES = new Set<string>(['person', 'organization', 'product', 'technology', 'event'] satisfies EntityType[]);
+const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
@@ -123,7 +123,7 @@ function shouldStoreArticleEntity(entity: NormalizedArticleEntity, excludedCanon
 
 function normalizeEntityType(value: string): EntityType | null {
 	const type = value.trim().toLowerCase();
-	return ENTITY_TYPES.has(type) ? (type as EntityType) : null;
+	return ENTITY_TYPE_SET.has(type) ? (type as EntityType) : null;
 }
 
 function normalizeArticleEntity(entity: ArticleEntityInput): NormalizedArticleEntity | null {

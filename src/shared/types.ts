@@ -50,7 +50,8 @@ export interface Article {
 }
 
 // AI Analysis result
-export type EntityType = 'person' | 'organization' | 'product' | 'technology' | 'event';
+export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
 
 export interface ExtractedEntity {
 	name: string;

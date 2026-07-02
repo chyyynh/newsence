@@ -5,7 +5,7 @@
 import { AI_TASKS, generateObject, generateText } from '@shared/ai';
 import type { ProcessableTable } from '@shared/article-store';
 import type { ArticleCategory, PlatformEnrichments } from '@shared/platform-metadata';
-import type { AIAnalysisResult, Article, Env } from '@shared/types';
+import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@shared/types';
 import { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────
@@ -61,7 +61,6 @@ const MAX_CONTENT_CLEANUP_LENGTH = 12000;
 const MIN_CONTENT_CLEANUP_LENGTH = 800;
 const MAX_CONTENT_TRANSLATION_LENGTH = 12000;
 const MIN_CONTENT_TRANSLATION_LENGTH = 120;
-const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event'] as const;
 const ARTICLE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
 const ExtractedEntitySchema = z.object({
@@ -140,7 +139,7 @@ const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實�
 
 實體擷取規則：
 - 提取 3-8 個最重要的具名實體；如果文章太短，可以少於 3 個
-- type 只能是 person, organization, product, technology, event
+- type 只能是 person, organization, product, technology, event, location
 - name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
 - 不要把文章來源、平台、作者名稱當作實體，除非文章主題就是該來源、平台或作者本身
 - 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
