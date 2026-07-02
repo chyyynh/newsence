@@ -74,6 +74,29 @@ export type ProcessedArticleUpdate = Record<string, unknown>;
 export type ArticleEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
 type ArticleEntityRepairRow = { id: string; source: string | null; platform_metadata: unknown; entities: unknown };
+type EntityQualityOverviewRow = {
+	total_articles: number | string | null;
+	with_entity_json: number | string | null;
+	empty_entity_json: number | string | null;
+	missing_entity_json: number | string | null;
+	invalid_entity_json: number | string | null;
+	json_without_links: number | string | null;
+	max_entities_per_article: number | string | null;
+	over_cap_articles: number | string | null;
+	total_entities: number | string | null;
+	total_entity_links: number | string | null;
+	orphan_entities: number | string | null;
+	article_count_drift: number | string | null;
+};
+type EntityQualityMonthlyRow = {
+	month: string;
+	total_articles: number | string | null;
+	with_entity_json: number | string | null;
+	empty_entity_json: number | string | null;
+	missing_or_invalid_entity_json: number | string | null;
+	json_without_links: number | string | null;
+};
+type EntityQualityTypeRow = { type: string; count: number | string | null };
 
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
@@ -144,6 +167,10 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
 	return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function intValue(value: number | string | null | undefined): number {
+	return Number(value ?? 0);
 }
 
 function sourceNameAliases(source?: string | null): string[] {
@@ -429,6 +456,150 @@ export async function getArticleIdsMissingEntities(
 		[limit, options.before ?? null, options.includeEmpty === true],
 	);
 	return result.rows.map((row) => row.id);
+}
+
+export async function getEntityQualitySnapshot(
+	db: DbClient,
+	options: { months: number },
+): Promise<{
+	overview: {
+		totalArticles: number;
+		withEntityJson: number;
+		emptyEntityJson: number;
+		missingEntityJson: number;
+		invalidEntityJson: number;
+		jsonWithoutLinks: number;
+		maxEntitiesPerArticle: number;
+		overCapArticles: number;
+		totalEntities: number;
+		totalEntityLinks: number;
+		orphanEntities: number;
+		articleCountDrift: number;
+	};
+	monthly: Array<{
+		month: string;
+		totalArticles: number;
+		withEntityJson: number;
+		emptyEntityJson: number;
+		missingOrInvalidEntityJson: number;
+		jsonWithoutLinks: number;
+		coverage: number;
+	}>;
+	unknownTypes: Array<{ type: string; count: number }>;
+}> {
+	const overview = await db.query<EntityQualityOverviewRow>(
+		`WITH article_entity_state AS (
+		   SELECT a.id,
+		          CASE
+		            WHEN jsonb_typeof(a.entities) = 'array' THEN jsonb_array_length(a.entities)
+		            ELSE NULL
+		          END AS entity_count,
+		          a.entities IS NULL AS missing_entities,
+		          a.entities IS NOT NULL AND jsonb_typeof(a.entities) <> 'array' AS invalid_entities
+		     FROM ${ARTICLES_TABLE} a
+		 ),
+		 article_link_counts AS (
+		   SELECT article_id, COUNT(*)::int AS link_count
+		     FROM article_entities
+		    GROUP BY article_id
+		 ),
+		 entity_link_counts AS (
+		   SELECT entity_id, COUNT(*)::int AS link_count
+		     FROM article_entities
+		    GROUP BY entity_id
+		 )
+		 SELECT COUNT(*)::int AS total_articles,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0)::int AS with_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count = 0)::int AS empty_entity_json,
+		        COUNT(*) FILTER (WHERE s.missing_entities)::int AS missing_entity_json,
+		        COUNT(*) FILTER (WHERE s.invalid_entities)::int AS invalid_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0 AND COALESCE(alc.link_count, 0) = 0)::int AS json_without_links,
+		        COALESCE(MAX(s.entity_count), 0)::int AS max_entities_per_article,
+		        COUNT(*) FILTER (WHERE s.entity_count > $1)::int AS over_cap_articles,
+		        (SELECT COUNT(*)::int FROM entities) AS total_entities,
+		        (SELECT COUNT(*)::int FROM article_entities) AS total_entity_links,
+		        (SELECT COUNT(*)::int FROM entities e WHERE NOT EXISTS (
+		          SELECT 1 FROM article_entities ae WHERE ae.entity_id = e.id
+		        )) AS orphan_entities,
+		        (SELECT COUNT(*)::int
+		           FROM entities e
+		           LEFT JOIN entity_link_counts elc ON elc.entity_id = e.id
+		          WHERE e.article_count <> COALESCE(elc.link_count, 0)) AS article_count_drift
+		   FROM article_entity_state s
+		   LEFT JOIN article_link_counts alc ON alc.article_id = s.id`,
+		[MAX_ENTITIES_PER_ARTICLE],
+	);
+
+	const monthly = await db.query<EntityQualityMonthlyRow>(
+		`WITH article_entity_state AS (
+		   SELECT a.id,
+		          date_trunc('month', a.published_date)::date AS month,
+		          CASE
+		            WHEN jsonb_typeof(a.entities) = 'array' THEN jsonb_array_length(a.entities)
+		            ELSE NULL
+		          END AS entity_count,
+		          a.entities IS NULL OR jsonb_typeof(a.entities) <> 'array' AS missing_or_invalid_entities
+		     FROM ${ARTICLES_TABLE} a
+		    WHERE a.published_date >= date_trunc('month', NOW()) - ($1::int * INTERVAL '1 month')
+		 ),
+		 article_link_counts AS (
+		   SELECT article_id, COUNT(*)::int AS link_count
+		     FROM article_entities
+		    GROUP BY article_id
+		 )
+		 SELECT to_char(s.month, 'YYYY-MM') AS month,
+		        COUNT(*)::int AS total_articles,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0)::int AS with_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count = 0)::int AS empty_entity_json,
+		        COUNT(*) FILTER (WHERE s.missing_or_invalid_entities)::int AS missing_or_invalid_entity_json,
+		        COUNT(*) FILTER (WHERE s.entity_count > 0 AND COALESCE(alc.link_count, 0) = 0)::int AS json_without_links
+		   FROM article_entity_state s
+		   LEFT JOIN article_link_counts alc ON alc.article_id = s.id
+		  GROUP BY s.month
+		  ORDER BY s.month DESC`,
+		[options.months],
+	);
+
+	const unknownTypes = await db.query<EntityQualityTypeRow>(
+		`SELECT type, COUNT(*)::int AS count
+		   FROM entities
+		  WHERE NOT (type = ANY($1::text[]))
+		  GROUP BY type
+		  ORDER BY count DESC, type ASC`,
+		[[...ENTITY_TYPES]],
+	);
+
+	const row = overview.rows[0];
+	return {
+		overview: {
+			totalArticles: intValue(row?.total_articles),
+			withEntityJson: intValue(row?.with_entity_json),
+			emptyEntityJson: intValue(row?.empty_entity_json),
+			missingEntityJson: intValue(row?.missing_entity_json),
+			invalidEntityJson: intValue(row?.invalid_entity_json),
+			jsonWithoutLinks: intValue(row?.json_without_links),
+			maxEntitiesPerArticle: intValue(row?.max_entities_per_article),
+			overCapArticles: intValue(row?.over_cap_articles),
+			totalEntities: intValue(row?.total_entities),
+			totalEntityLinks: intValue(row?.total_entity_links),
+			orphanEntities: intValue(row?.orphan_entities),
+			articleCountDrift: intValue(row?.article_count_drift),
+		},
+		monthly: monthly.rows.map((entry) => {
+			const totalArticles = intValue(entry.total_articles);
+			const withEntityJson = intValue(entry.with_entity_json);
+			return {
+				month: entry.month,
+				totalArticles,
+				withEntityJson,
+				emptyEntityJson: intValue(entry.empty_entity_json),
+				missingOrInvalidEntityJson: intValue(entry.missing_or_invalid_entity_json),
+				jsonWithoutLinks: intValue(entry.json_without_links),
+				coverage: totalArticles ? withEntityJson / totalArticles : 0,
+			};
+		}),
+		unknownTypes: unknownTypes.rows.map((entry) => ({ type: entry.type, count: intValue(entry.count) })),
+	};
 }
 
 export async function pruneOrphanEntities(db: DbClient, limit: number): Promise<{ deleted: number }> {

@@ -6,6 +6,7 @@ import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import {
 	getArticleIdsMissingEntities,
+	getEntityQualitySnapshot,
 	pruneOrphanEntities,
 	repairMissingArticleEntityLinks,
 	USER_FILES_TABLE,
@@ -47,6 +48,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
 	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
 	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
+	'/entities/quality': (req, env) => handleEntityQuality(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
@@ -69,6 +71,7 @@ const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
 	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
+	'/entities/quality': (req, env) => handleEntityQuality(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
@@ -94,6 +97,7 @@ const HELP_TEXT =
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
 	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
+	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
 	'POST /entities/repair-links               - Internal: repair missing article_entities links from stored entities JSONB\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
@@ -220,6 +224,20 @@ async function handleBackfillMissingEntities(request: Request, env: Env): Promis
 	);
 	if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
 	return jsonData({ articles: articleIds.length, articleIds, includeEmpty: body.includeEmpty === true }, INTERNAL_CORS_HEADERS);
+}
+
+async function handleEntityQuality(request: Request, env: Env): Promise<Response> {
+	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+
+	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
+	if (unauth) return unauth;
+
+	const body = await parseJsonBody<{ months?: number }>(request, INTERNAL_CORS_HEADERS);
+	if (body instanceof Response) return body;
+
+	const months = boundedMaintenanceLimit(body.months, 6, 24);
+	const result = await withDbTransaction(env, 'entity quality snapshot', (db) => getEntityQualitySnapshot(db, { months }));
+	return jsonData(result, INTERNAL_CORS_HEADERS);
 }
 
 async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
