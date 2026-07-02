@@ -87,6 +87,8 @@ type EntityQualityOverviewRow = {
 	total_entity_links: number | string | null;
 	orphan_entities: number | string | null;
 	article_count_drift: number | string | null;
+	self_source_exact_links: number | string | null;
+	generic_entity_links: number | string | null;
 };
 type EntityQualityMonthlyRow = {
 	month: string;
@@ -507,6 +509,8 @@ export async function getEntityQualitySnapshot(
 		totalEntityLinks: number;
 		orphanEntities: number;
 		articleCountDrift: number;
+		selfSourceExactLinks: number;
+		genericEntityLinks: number;
 	};
 	monthly: Array<{
 		month: string;
@@ -556,10 +560,19 @@ export async function getEntityQualitySnapshot(
 		        (SELECT COUNT(*)::int
 		           FROM entities e
 		           LEFT JOIN entity_link_counts elc ON elc.entity_id = e.id
-		          WHERE e.article_count <> COALESCE(elc.link_count, 0)) AS article_count_drift
+		          WHERE e.article_count <> COALESCE(elc.link_count, 0)) AS article_count_drift,
+		        (SELECT COUNT(*)::int
+		           FROM article_entities ae
+		           JOIN entities e ON e.id = ae.entity_id
+		           JOIN ${ARTICLES_TABLE} a ON a.id = ae.article_id
+		          WHERE LOWER(TRIM(a.source)) = e.canonical_name) AS self_source_exact_links,
+		        (SELECT COUNT(*)::int
+		           FROM article_entities ae
+		           JOIN entities e ON e.id = ae.entity_id
+		          WHERE e.canonical_name = ANY($2::text[])) AS generic_entity_links
 		   FROM article_entity_state s
 		   LEFT JOIN article_link_counts alc ON alc.article_id = s.id`,
-		[MAX_ENTITIES_PER_ARTICLE],
+		[MAX_ENTITIES_PER_ARTICLE, [...GENERIC_ENTITY_CANONICALS]],
 	);
 
 	const monthly = await db.query<EntityQualityMonthlyRow>(
@@ -616,6 +629,8 @@ export async function getEntityQualitySnapshot(
 			totalEntityLinks: intValue(row?.total_entity_links),
 			orphanEntities: intValue(row?.orphan_entities),
 			articleCountDrift: intValue(row?.article_count_drift),
+			selfSourceExactLinks: intValue(row?.self_source_exact_links),
+			genericEntityLinks: intValue(row?.generic_entity_links),
 		},
 		monthly: monthly.rows.map((entry) => {
 			const totalArticles = intValue(entry.total_articles);
