@@ -120,6 +120,14 @@ type EntityQualityGenericOffenderRow = {
 	name: string;
 	links: number | string | null;
 };
+type EntityQualityOrphanEntityRow = {
+	canonical_name: string;
+	name: string;
+	name_cn: string;
+	type: string;
+	article_count: number | string | null;
+	updated_at: string | Date | null;
+};
 type EntityQualityTypeExampleRow = {
 	type: string;
 	canonical_name: string;
@@ -683,6 +691,16 @@ export async function getEntityQualitySnapshot(
 			entityCount: number;
 		}>;
 	};
+	entityRows: {
+		orphanEntities: Array<{
+			canonicalName: string;
+			name: string;
+			nameCn: string;
+			type: string;
+			articleCount: number;
+			updatedAt: string | null;
+		}>;
+	};
 	backfill: {
 		firstEntityPublishedDate: string | null;
 		processableMissingOrEmpty: number;
@@ -961,6 +979,22 @@ export async function getEntityQualitySnapshot(
 		[MAX_ENTITIES_PER_ARTICLE, ENTITY_QUALITY_TOP_LIMIT],
 	);
 
+	const orphanEntityExamples = await db.query<EntityQualityOrphanEntityRow>(
+		`SELECT e.canonical_name,
+		        e.name,
+		        e.name_cn,
+		        e.type,
+		        e.article_count,
+		        e.updated_at
+		   FROM entities e
+		  WHERE NOT EXISTS (
+		    SELECT 1 FROM article_entities ae WHERE ae.entity_id = e.id
+		  )
+		  ORDER BY e.updated_at ASC, e.canonical_name ASC
+		  LIMIT $1`,
+		[ENTITY_QUALITY_TOP_LIMIT],
+	);
+
 	const backfill = await db.query<EntityQualityBackfillRow>(
 		`WITH first_entity AS (
 		   SELECT MIN(published_date) AS first_entity_published_date
@@ -1135,6 +1169,16 @@ export async function getEntityQualitySnapshot(
 				sourceType: entry.source_type,
 				publishedDate: isoDateValue(entry.published_date),
 				entityCount: intValue(entry.entity_count),
+			})),
+		},
+		entityRows: {
+			orphanEntities: orphanEntityExamples.rows.map((entry) => ({
+				canonicalName: entry.canonical_name,
+				name: entry.name,
+				nameCn: entry.name_cn,
+				type: entry.type,
+				articleCount: intValue(entry.article_count),
+				updatedAt: isoDateValue(entry.updated_at),
 			})),
 		},
 		backfill: {
