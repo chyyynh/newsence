@@ -2,35 +2,22 @@ import { createDbClient } from '@shared/db';
 import { generateArticleEmbedding } from '@shared/embedding';
 import type { Env } from '@shared/types';
 import { normalizeUrl } from '@shared/web';
+import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@worker-contracts/core-rpc';
 import type { Client } from 'pg';
 
 type SearchRanks = Map<string, number>;
-type ResourceType = 'article' | 'collection' | 'url';
+type ResourceType = ReadContextItem['type'];
+type RankArticleOptions = { fromDate?: Date | null };
+export type ArticleRank = { id: string; score: number };
+export type ArticleRankSearchInput = { query: string; limit?: number };
+export type RelatedArticleSearchInput = {
+	seed: { id: string; type: 'article' | 'user_file' };
+	limit?: number;
+	offset?: number;
+};
 
-export interface ArticleSummary {
-	id: string;
-	title: string;
-	url: string;
-	publishedDate?: string;
-	source?: string | null;
-	summary?: string;
-	tags?: string[] | null;
-}
-
-export interface CorpusReadItem {
-	type: ResourceType;
-	id: string;
-}
-
-export interface CorpusReadResult {
-	type: ResourceType | 'document' | 'error';
-	id: string;
-	title?: string;
-	content?: string;
-	articles?: Array<{ id: string; title: string; summary: string | null }>;
-	metadata?: Record<string, unknown>;
-	error?: string;
-}
+export type CorpusReadItem = ReadContextItem;
+export type CorpusReadResult = ReadContextResult;
 
 interface ArticleSummaryRow {
 	id: string;
@@ -58,7 +45,13 @@ const ARTICLE_SUMMARY_COLS = 'id, title, title_cn, url, published_date, source, 
 const ARTICLE_CONTENT_COLS = `${ARTICLE_SUMMARY_COLS}, content, content_cn, source_type`;
 const EMPTY_RANKS: SearchRanks = new Map();
 const SEARCH_LIMIT = 200;
+const SEARCH_RANK_LIMIT_MAX = 500;
 const RESULT_LIMIT = 10;
+const RESULT_LIMIT_MAX = 50;
+const RELATED_LIMIT_DEFAULT = 12;
+const RELATED_LIMIT_MAX = 500;
+const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
+const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const COLLECTION_LIMIT = 100;
@@ -69,36 +62,38 @@ const OVERFETCH_CAP = 200;
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function rankCorpusArticleIds(env: Env, query: string, limit = 100): Promise<Array<{ id: string; score: number }>> {
+export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearchInput): Promise<ArticleRank[]> {
+	const query = input.query.trim();
+	if (!query) return [];
+	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
 	return withDb(env, async (client) => {
 		const ranks = await rankArticles(client, env, query, limit);
-		return [...ranks].map(([id, score]) => ({ id, score }));
+		return rankEntries(ranks);
 	});
 }
 
-export async function relatedCorpusArticleIds(
-	env: Env,
-	seed: { id: string; type: 'article' | 'user_file' },
-	limit: number,
-	offset: number,
-): Promise<string[]> {
-	return withDb(env, (client) => relatedArticles(client, seed, limit, offset));
+export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSearchInput): Promise<string[]> {
+	const seed = { id: input.seed.id.trim(), type: input.seed.type };
+	if (!seed.id) return [];
+	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
+	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+	return withDb(env, async (client) => {
+		const ids = await relatedArticles(client, seed, limit, offset);
+		return [...new Set(ids)].filter((id) => id !== seed.id);
+	});
 }
 
-export async function searchCorpusArticles(
-	env: Env,
-	query: string,
-	opts?: { daysAgo?: number; limit?: number },
-): Promise<ArticleSummary[]> {
-	const limit = opts?.limit ?? RESULT_LIMIT;
+export async function searchCorpusArticles(env: Env, input: ArticleSearchInput): Promise<ArticleSummary[]> {
+	const query = input.query.trim();
+	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	return withDb(env, async (client) => {
-		const trimmed = query.trim();
-		const ranks = trimmed ? await rankArticles(client, env, trimmed, SEARCH_LIMIT) : null;
-		const fromDate = opts?.daysAgo ? new Date(Date.now() - opts.daysAgo * 86_400_000) : null;
+		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
+		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
+		const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
-			const candidateIds = [...ranks.keys()].filter(isValidUuid).slice(0, limit);
+			const candidateIds = [...ranks.keys()].filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
 			const params: unknown[] = [candidateIds];
 			let where = `id = ANY($1::uuid[])`;
@@ -107,7 +102,7 @@ export async function searchCorpusArticles(
 				where += ` AND published_date >= $${params.length}`;
 			}
 			const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
-			return sortByRank(result.rows, ranks).map(formatSummary);
+			return sortByRank(result.rows, ranks).slice(0, limit).map(formatSummary);
 		}
 
 		const params: unknown[] = [];
@@ -127,6 +122,11 @@ export async function searchCorpusArticles(
 
 export async function readCorpusItems(env: Env, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
 	return withDb(env, (client) => readItems(client, items, userId));
+}
+
+function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
 async function withDb<T>(env: Env, fn: (client: Client) => Promise<T>): Promise<T> {
@@ -157,6 +157,10 @@ function formatSummary(a: ArticleSummaryRow): ArticleSummary {
 	};
 }
 
+function rankEntries(ranks: SearchRanks): ArticleRank[] {
+	return [...ranks].map(([id, score]) => ({ id, score }));
+}
+
 function sortByRank<T extends { id: string }>(articles: T[], ranks: SearchRanks): T[] {
 	return [...articles].sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0));
 }
@@ -183,7 +187,7 @@ async function relatedArticles(
 	return rows.rows.map((r) => r.id);
 }
 
-async function rankArticles(client: Client, env: Env, query: string, limit = 100): Promise<SearchRanks> {
+async function rankArticles(client: Client, env: Env, query: string, limit = 100, options: RankArticleOptions = {}): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 
@@ -191,8 +195,17 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 	const patterns = tokens.length > 0 ? tokens.map((t) => `%${t}%`) : [`%${sanitized}%`];
 
 	const embedding = await generateArticleEmbedding(sanitized, env.AI).catch(() => null);
-	if (!embedding) return keywordOnly(client, patterns, limit);
+	if (!embedding) return keywordOnly(client, patterns, limit, options);
 	const vectorStr = `[${embedding.join(',')}]`;
+	const params: unknown[] = [
+		vectorStr,
+		Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP),
+		patterns,
+		RRF_K,
+		RECENCY_HALF_LIFE_DAYS,
+		limit,
+	];
+	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
 
 	try {
 		const result = await client.query<{ id: string; score: number | string }>(
@@ -200,16 +213,18 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 			WITH vec AS (
 				SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
 				FROM articles
-				WHERE embedding IS NOT NULL
+				WHERE embedding IS NOT NULL${dateFilter}
 				ORDER BY embedding <=> $1::vector
 				LIMIT $2
 			),
 			kw AS (
 				SELECT id, ROW_NUMBER() OVER (ORDER BY published_date DESC NULLS LAST) AS rank
 				FROM articles
-				WHERE EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($3::text[]))
-				   OR title ILIKE ANY($3::text[])
-				   OR title_cn ILIKE ANY($3::text[])
+				WHERE (
+					EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($3::text[]))
+					OR title ILIKE ANY($3::text[])
+					OR title_cn ILIKE ANY($3::text[])
+				)${dateFilter}
 				LIMIT $2
 			),
 			fused AS (
@@ -228,29 +243,33 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 			ORDER BY score DESC
 			LIMIT $6
 			`,
-			[vectorStr, Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP), patterns, RRF_K, RECENCY_HALF_LIFE_DAYS, limit],
+			params,
 		);
 		return new Map(result.rows.map((r) => [r.id, Number(r.score)]));
 	} catch (error) {
 		console.warn({ tag: 'CORPUS', msg: 'hybrid query failed, falling back to keyword search', error: String(error) });
-		return keywordOnly(client, patterns, limit);
+		return keywordOnly(client, patterns, limit, options);
 	}
 }
 
-async function keywordOnly(client: Client, patterns: string[], limit: number): Promise<SearchRanks> {
+async function keywordOnly(client: Client, patterns: string[], limit: number, options: RankArticleOptions = {}): Promise<SearchRanks> {
+	const params: unknown[] = [patterns, limit];
+	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
 	try {
 		const result = await client.query<{ id: string; match_count: number | string }>(
 			`
 			SELECT id,
 				(SELECT COUNT(*) FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[])) AS match_count
 			FROM articles
-			WHERE EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
-			   OR title ILIKE ANY($1::text[])
-			   OR title_cn ILIKE ANY($1::text[])
+			WHERE (
+				EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
+				OR title ILIKE ANY($1::text[])
+				OR title_cn ILIKE ANY($1::text[])
+			)${dateFilter}
 			ORDER BY match_count DESC, published_date DESC NULLS LAST
 			LIMIT $2
 			`,
-			[patterns, limit],
+			params,
 		);
 		const max = Math.max(...result.rows.map((r) => Number(r.match_count)), 1);
 		return new Map(result.rows.map((r) => [r.id, Number(r.match_count) / max]));

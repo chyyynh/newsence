@@ -32,6 +32,7 @@ const CONTENT_TYPE_FALLBACKS: Record<string, string> = {
 	mp3: 'audio/mpeg',
 	wav: 'audio/wav',
 };
+const BROWSER_CACHE_MAX_AGE_SEC = 60 * 60;
 
 let unsetCorsWarningLogged = false;
 
@@ -129,11 +130,10 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, 
 		headers.set(k, v);
 	}
 	headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-	// `private` keeps user-scoped assets out of shared intermediaries
-	// (corporate proxies, ISP caches). `caches.default` at the worker still
-	// caches under our control because the Cache API treats max-age as the
-	// authoritative TTL regardless of `private`.
-	headers.set('Cache-Control', 'private, max-age=31536000, immutable');
+	// Keep browser caching aligned with the 1h signed URL. The worker still
+	// strips sig/exp from caches.default keys, so edge cache survives signature
+	// bucket rotation without making private assets immutable in the browser.
+	headers.set('Cache-Control', `private, max-age=${BROWSER_CACHE_MAX_AGE_SEC}`);
 	headers.set('ETag', object.httpEtag);
 
 	// Force download for SVG to prevent stored XSS via embedded scripts.

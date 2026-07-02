@@ -1,5 +1,9 @@
-import type { ExecutionContext, MessageBatch, Queue, ScheduledEvent } from '@cloudflare/workers-types';
 import type { PlatformMetadata, RetweetedByData } from './platform-metadata';
+
+type WorkerScheduledEvent = ScheduledEvent;
+type WorkerExecutionContext = ExecutionContext;
+type WorkerQueue = Queue;
+type WorkerMessageBatch<T = unknown> = MessageBatch<T>;
 
 /**
  * Environment bindings.
@@ -118,4 +122,9 @@ export interface Tweet {
 }
 
 // Exported handlers
-export type { ScheduledEvent, ExecutionContext, Queue, MessageBatch };
+export type {
+	WorkerExecutionContext as ExecutionContext,
+	WorkerMessageBatch as MessageBatch,
+	WorkerQueue as Queue,
+	WorkerScheduledEvent as ScheduledEvent,
+};

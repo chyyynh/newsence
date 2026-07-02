@@ -122,7 +122,7 @@ AI analysis and embeddings use the Workers AI binding, so no external LLM secret
 ```bash
 wrangler secret put KAITO_API_KEY            # optional — Twitter monitoring
 wrangler secret put YOUTUBE_API_KEY          # optional — YouTube monitoring
-wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # auth for internal HTTP endpoints
+wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # auth for protected HTTP endpoints
 ```
 
 ### 5. Deploy
@@ -230,7 +230,7 @@ Secrets (via `wrangler secret put`):
 
 | Variable                       | Required | Description                              |
 | ------------------------------ | -------- | ---------------------------------------- |
-| `CORE_WORKER_INTERNAL_TOKEN`   | Yes      | Token for internal HTTP endpoints        |
+| `CORE_WORKER_INTERNAL_TOKEN`   | Yes      | Token for protected HTTP endpoints; service-binding RPC callers do not use it |
 | `KAITO_API_KEY`                | No       | Enables Twitter monitoring               |
 | `YOUTUBE_API_KEY`              | No       | Enables YouTube channel monitoring       |
 

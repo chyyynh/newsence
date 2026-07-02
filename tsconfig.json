@@ -16,6 +16,7 @@
 		/* Path aliases for the feature-first src layout (shared / ingest / chat / media).
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
+			"@worker-contracts/*": ["../shared/*"],
 			"@shared/*": ["./src/shared/*"],
 			"@ingest/*": ["./src/ingest/*"],
 			"@chat/*": ["./src/chat/*"],
@@ -45,7 +46,7 @@
 
 		/* Skip type checking all .d.ts files. */
 		"skipLibCheck": true,
-		"types": ["@cloudflare/workers-types"]
+		"types": ["./worker-configuration.d.ts"]
 	},
 	"exclude": ["test"],
 	"include": ["src/**/*.ts", "worker-configuration.d.ts"]

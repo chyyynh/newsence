@@ -4,8 +4,14 @@ export function jsonData<T>(data: T, headers?: HeadersInit): Response {
 	return Response.json({ success: true, data }, { headers });
 }
 
-export function jsonError(code: string, message: string, status: number, headers?: HeadersInit): Response {
-	return Response.json({ success: false, error: { code, message } }, { status, headers });
+export function jsonError(
+	code: string,
+	message: string,
+	status: number,
+	headers?: HeadersInit,
+	details?: Record<string, unknown>,
+): Response {
+	return Response.json({ success: false, error: { code, message, ...(details ? { details } : {}) } }, { status, headers });
 }
 
 function getInternalToken(request: Request): string | null {
