@@ -454,29 +454,31 @@ export async function addResource(
 	const urls = cleanHttpUrls(params.urls ?? []);
 	if (resourceIds.length === 0 && urls.length === 0) throw new Error('Provide at least one resource id or URL');
 
+	const workspaceId = await getDocumentWorkspaceId(env, params.userId, params.documentId);
+	const idResult = resourceIds.length
+		? await withDbClient(env, (db) => addResourceIds(db, params.userId, workspaceId, resourceIds))
+		: { created: 0, duplicates: 0, missing: 0 };
+	const urlResult = urls.length ? await addResourceUrls(env, params.userId, workspaceId, urls) : { ingested: 0, ingestFailed: [] };
+	return {
+		linked: idResult.created + idResult.duplicates + urlResult.ingested,
+		created: idResult.created,
+		duplicates: idResult.duplicates,
+		missing: idResult.missing,
+		ingested: urlResult.ingested,
+		...(urlResult.ingestFailed.length ? { ingestFailed: urlResult.ingestFailed } : {}),
+	};
+}
+
+async function getDocumentWorkspaceId(env: Env, userId: string, documentId: string): Promise<string> {
 	return withDbClient(env, async (db) => {
 		const document = (
 			await db.query<{ workspace_id: string }>(`SELECT workspace_id FROM user_documents WHERE id = $1 AND user_id = $2 LIMIT 1`, [
-				params.documentId,
-				params.userId,
+				documentId,
+				userId,
 			])
 		).rows[0];
 		if (!document) throw new Error('Document not found');
-
-		const idResult = resourceIds.length
-			? await addResourceIds(db, params.userId, document.workspace_id, resourceIds)
-			: { created: 0, duplicates: 0, missing: 0 };
-		const urlResult = urls.length
-			? await addResourceUrls(env, db, params.userId, document.workspace_id, urls)
-			: { ingested: 0, ingestFailed: [] };
-		return {
-			linked: idResult.created + idResult.duplicates + urlResult.ingested,
-			created: idResult.created,
-			duplicates: idResult.duplicates,
-			missing: idResult.missing,
-			ingested: urlResult.ingested,
-			...(urlResult.ingestFailed.length ? { ingestFailed: urlResult.ingestFailed } : {}),
-		};
+		return document.workspace_id;
 	});
 }
 
@@ -515,7 +517,7 @@ async function addResourceIds(db: DbClient, userId: string, workspaceId: string,
 	};
 }
 
-async function addResourceUrls(env: Env, db: DbClient, userId: string, workspaceId: string, urls: string[]) {
+async function addResourceUrls(env: Env, userId: string, workspaceId: string, urls: string[]) {
 	const ingested = await ingestUrls(env, { urls, userId });
 	if (!ingested.ok) throw new Error(ingested.message);
 	const successfulIds = [...new Set(ingested.results.map((result) => result.userFileId).filter((id): id is string => !!id && isUuid(id)))];
@@ -524,8 +526,13 @@ async function addResourceUrls(env: Env, db: DbClient, userId: string, workspace
 		.map((result) => ({ url: result.url, error: result.error ?? 'URL ingest did not return a user file id' }));
 	if (successfulIds.length === 0) return { ingested: 0, ingestFailed: failures };
 
+	await withDbClient(env, (db) => linkUserFilesToWorkspace(db, userId, workspaceId, successfulIds));
+	return { ingested: successfulIds.length, ingestFailed: failures };
+}
+
+async function linkUserFilesToWorkspace(db: DbClient, userId: string, workspaceId: string, userFileIds: string[]): Promise<void> {
 	const values: unknown[] = [];
-	const rows = successfulIds
+	const rows = userFileIds
 		.map((userFileId, index) => {
 			const offset = index * 5;
 			values.push(userId, workspaceId, 'workspace', 'user_file', userFileId);
@@ -538,5 +545,4 @@ async function addResourceUrls(env: Env, db: DbClient, userId: string, workspace
 		 ON CONFLICT (from_type, from_id, to_type, to_id) DO NOTHING`,
 		values,
 	);
-	return { ingested: successfulIds.length, ingestFailed: failures };
 }
