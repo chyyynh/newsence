@@ -388,8 +388,8 @@ function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths:
 	const title = displayTitle(article);
 	const summary = displayDescription(article);
 	const content = article.content || article.content_cn || summary || '';
-	const entityLinks = uniqueBy(links, (link) => link.id).map((link) => `- [${link.name}](/${entityPaths.get(link.id)})`);
-	const citation = article.url ? [`# Citations`, `[1] [${article.source || article.url}](${article.url})`] : [];
+	const entityLinks = uniqueBy(links, (link) => link.id).map((link) => `- ${markdownLink(link.name, `/${entityPaths.get(link.id)}`)}`);
+	const citation = article.url ? [`# Citations`, `[1] ${markdownLink(article.source || article.url, article.url)}`] : [];
 	return compactMarkdown([
 		frontmatter({
 			type: article.kind === 'user_file' ? 'UserFile' : 'Article',
@@ -431,7 +431,9 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: A
 	const linkedArticles = uniqueBy(links, (link) => link.article_id)
 		.map((link) => articleById.get(link.article_id))
 		.filter((article): article is ArticleRow => !!article);
-	const articleLinks = linkedArticles.map((article) => `- [${displayTitle(article)}](/${articlePaths.get(resourceKey(article))})`);
+	const articleLinks = linkedArticles.map(
+		(article) => `- ${markdownLink(displayTitle(article), `/${articlePaths.get(resourceKey(article))}`)}`,
+	);
 	return compactMarkdown([
 		frontmatter({
 			type: entity.type,
@@ -482,7 +484,19 @@ const INDEX_DESCRIPTION_MAX = 240;
 function indexEntry(title: string, path: string, description: string | null | undefined): string {
 	const summary = description ? oneLine(description) : '';
 	const clipped = summary.length > INDEX_DESCRIPTION_MAX ? `${summary.slice(0, INDEX_DESCRIPTION_MAX)}…` : summary;
-	return `* [${title}](${path})${clipped ? ` - ${clipped}` : ''}`;
+	return `* ${markdownLink(title, path)}${clipped ? ` - ${clipped}` : ''}`;
+}
+
+function markdownLink(label: string, target: string): string {
+	return `[${escapeMarkdownLinkText(oneLine(label))}](${escapeMarkdownLinkTarget(target)})`;
+}
+
+function escapeMarkdownLinkText(value: string): string {
+	return value.replace(/([\\[\]])/g, '\\$1');
+}
+
+function escapeMarkdownLinkTarget(value: string): string {
+	return value.startsWith('/') ? value : `<${value.replace(/[\s<>]/g, (ch) => encodeURIComponent(ch))}>`;
 }
 
 function frontmatter(fields: Record<string, unknown>): string {
