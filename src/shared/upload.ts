@@ -1,3 +1,7 @@
+import {
+	UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE,
+	UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE,
+} from '@worker-contracts/billing-contracts';
 import type { DbClient } from './db';
 import { PDF_MIME } from './mime';
 import { buildMetadata } from './platform-metadata';
@@ -104,7 +108,7 @@ export async function assertBlobUploadQuotaTx(db: DbClient, userId: string, inco
 	const currentFiles = Number.parseInt(usage.rows[0]?.total_files ?? '0', 10);
 
 	if (maxUserFiles !== null && currentFiles >= maxUserFiles) {
-		throw new UploadQuotaExceededError('Upload file quota exceeded', {
+		throw new UploadQuotaExceededError(UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE, {
 			limit: maxUserFiles,
 			used: currentFiles,
 			planId,
@@ -112,7 +116,7 @@ export async function assertBlobUploadQuotaTx(db: DbClient, userId: string, inco
 	}
 
 	if (maxUserFileStorageBytes !== null && currentBytes + incomingBytes > maxUserFileStorageBytes) {
-		throw new UploadQuotaExceededError('Upload storage quota exceeded', {
+		throw new UploadQuotaExceededError(UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE, {
 			limit: maxUserFileStorageBytes,
 			used: currentBytes,
 			incoming: incomingBytes,
