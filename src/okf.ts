@@ -416,8 +416,12 @@ function articleCategory(article: ArticleRow): string | null {
 	return article.tags?.find((tag) => ARTICLE_CATEGORY_TAGS.has(tag)) ?? null;
 }
 
+const INDEX_DESCRIPTION_MAX = 240;
+
 function indexEntry(title: string, path: string, description: string | null | undefined): string {
-	return `* [${title}](${path})${description ? ` - ${oneLine(description)}` : ''}`;
+	const summary = description ? oneLine(description) : '';
+	const clipped = summary.length > INDEX_DESCRIPTION_MAX ? `${summary.slice(0, INDEX_DESCRIPTION_MAX)}…` : summary;
+	return `* [${title}](${path})${clipped ? ` - ${clipped}` : ''}`;
 }
 
 function frontmatter(fields: Record<string, unknown>): string {
