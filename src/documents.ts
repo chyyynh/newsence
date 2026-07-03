@@ -1069,7 +1069,12 @@ async function addResourceIds(db: DbClient, userId: string, workspaceId: string,
 
 async function addDocumentResourceUrls(env: Env, userId: string, workspaceId: string, urls: string[]) {
 	const ingested = await ingestUrls(env, { urls, userId });
-	if (!ingested.ok) throw new Error(ingested.message);
+	if (!ingested.ok) {
+		return {
+			ingested: 0,
+			ingestFailed: urls.map((url) => ({ url, error: ingested.message })),
+		};
+	}
 	const successfulIds = [...new Set(ingested.results.map((result) => result.userFileId).filter((id): id is string => !!id && isUuid(id)))];
 	const failures = ingested.results
 		.filter((result) => result.error || !result.userFileId)
