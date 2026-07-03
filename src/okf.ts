@@ -124,7 +124,12 @@ export async function handleOkfCollectionEntries(request: Request, env: Env): Pr
 			{
 				bundle: bundle.slug,
 				count: files.length,
-				entries: files.map((file) => ({ path: file.path, title: entryTitle(file) })),
+				entries: files.map((file) => ({
+					path: file.path,
+					title: entryTitle(file),
+					type: entryType(file),
+					links: entryLinks(file),
+				})),
 			},
 			OKF_EXPORT_CORS,
 		);
@@ -139,6 +144,20 @@ export async function handleOkfCollectionEntries(request: Request, env: Env): Pr
 
 function entryTitle(file: OkfFile): string | null {
 	return file.content.match(/^title: "(.*)"$/m)?.[1] ?? file.content.match(/^# (.+)$/m)?.[1] ?? null;
+}
+
+function entryType(file: OkfFile): string | null {
+	return file.content.match(/^type: "(.*)"$/m)?.[1] ?? null;
+}
+
+/** Outbound internal links, normalized to bundle-absolute paths without the leading slash. */
+function entryLinks(file: OkfFile): string[] {
+	const links = new Set<string>();
+	for (const match of file.content.matchAll(/\]\((\/?[^)#\s]+\.md)\)/g)) {
+		const href = match[1];
+		links.add(href.startsWith('/') ? href.slice(1) : href);
+	}
+	return [...links];
 }
 
 async function buildCollectionOkfBundle(
