@@ -144,11 +144,22 @@ export async function handleOkfCollectionEntries(request: Request, env: Env): Pr
 }
 
 function entryTitle(file: OkfFile): string | null {
-	return file.content.match(/^title: "(.*)"$/m)?.[1] ?? file.content.match(/^# (.+)$/m)?.[1] ?? null;
+	return frontmatterString(file.content, 'title') ?? file.content.match(/^# (.+)$/m)?.[1] ?? null;
 }
 
 function entryType(file: OkfFile): string | null {
-	return file.content.match(/^type: "(.*)"$/m)?.[1] ?? null;
+	return frontmatterString(file.content, 'type');
+}
+
+function frontmatterString(content: string, key: string): string | null {
+	const match = content.match(new RegExp(`^${key}: (.+)$`, 'm'));
+	if (!match) return null;
+	try {
+		const parsed = JSON.parse(match[1]);
+		return typeof parsed === 'string' ? parsed : null;
+	} catch {
+		return null;
+	}
 }
 
 /** Outbound internal links, normalized to bundle-absolute paths without the leading slash. */
