@@ -8,7 +8,11 @@ import { USER_FILES_TABLE } from '@shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
-import { isWorkspaceQuotaExceededError, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
+import {
+	isWorkspaceQuotaExceededError,
+	WORKSPACE_QUOTA_EXCEEDED_CODE,
+	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
+} from '@worker-contracts/billing-contracts';
 import type { JsonValue } from '@worker-contracts/core-rpc';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import {
@@ -209,7 +213,7 @@ async function handleCreateWorkspace(request: Request, env: Env): Promise<Respon
 		return jsonData(result, INTERNAL_CORS_HEADERS);
 	} catch (error) {
 		if (isWorkspaceQuotaExceededError(error))
-			return jsonError('WORKSPACE_QUOTA_EXCEEDED', WORKSPACE_QUOTA_EXCEEDED_MESSAGE, 403, INTERNAL_CORS_HEADERS);
+			return jsonError(WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE, 403, INTERNAL_CORS_HEADERS);
 		console.error({ tag: 'WORKSPACE_CREATE', msg: 'create failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Workspace create failed', 500, INTERNAL_CORS_HEADERS);
 	}
