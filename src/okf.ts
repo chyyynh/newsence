@@ -295,7 +295,7 @@ function* renderOkfFiles(
 	quality: ExportQuality,
 ): Iterable<OkfFile> {
 	const articlePaths = assignPaths(
-		articles.map((article) => ({ id: article.id, label: article.title || article.title_cn || article.id })),
+		articles.map((article) => ({ id: resourceKey(article), label: article.title || article.title_cn || article.id })),
 		'articles',
 	);
 	const entityById = new Map<string, EntityLinkRow>();
@@ -311,9 +311,13 @@ function* renderOkfFiles(
 	yield {
 		path: 'articles/index.md',
 		content: renderDirectoryIndex(
-			'Articles',
+			'Resources',
 			articles.map((article) =>
-				indexEntry(displayTitle(article), stripDirectoryPrefix(articlePaths.get(article.id)!, 'articles'), displayDescription(article)),
+				indexEntry(
+					displayTitle(article),
+					stripDirectoryPrefix(articlePaths.get(resourceKey(article))!, 'articles'),
+					displayDescription(article),
+				),
 			),
 		),
 	};
@@ -330,7 +334,7 @@ function* renderOkfFiles(
 	}
 	for (const article of articles) {
 		yield {
-			path: articlePaths.get(article.id)!,
+			path: articlePaths.get(resourceKey(article))!,
 			content: renderArticle(article, linksByArticleId.get(article.id) ?? [], entityPaths),
 		};
 	}
@@ -359,8 +363,10 @@ function renderRootIndex(
 		frontmatter({ okf_version: '0.1' }),
 		`# ${collection.name}`,
 		collection.description ?? '',
-		'## Articles',
-		...articles.map((article) => indexEntry(displayTitle(article), `/${articlePaths.get(article.id)!}`, displayDescription(article))),
+		'## Resources',
+		...articles.map((article) =>
+			indexEntry(displayTitle(article), `/${articlePaths.get(resourceKey(article))!}`, displayDescription(article)),
+		),
 	];
 	if (entityById.size > 0) {
 		lines.push(
@@ -369,6 +375,10 @@ function renderRootIndex(
 		);
 	}
 	return compactMarkdown(lines);
+}
+
+function resourceKey(article: ArticleRow): string {
+	return `${article.kind}:${article.id}`;
 }
 
 function renderDirectoryIndex(title: string, entries: string[]): string {
@@ -396,8 +406,9 @@ function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths:
 			source_type: article.source_type,
 			title_cn: article.title_cn,
 			description_cn: article.summary_cn,
-			newsence_article_id: article.id,
+			newsence_resource_id: article.id,
 			newsence_resource_type: article.kind,
+			newsence_article_id: article.kind === 'article' ? article.id : undefined,
 		}),
 		`# ${title}`,
 		summary ?? '',
@@ -421,7 +432,7 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: A
 	const linkedArticles = uniqueBy(links, (link) => link.article_id)
 		.map((link) => articleById.get(link.article_id))
 		.filter((article): article is ArticleRow => !!article);
-	const articleLinks = linkedArticles.map((article) => `- [${displayTitle(article)}](/${articlePaths.get(article.id)})`);
+	const articleLinks = linkedArticles.map((article) => `- [${displayTitle(article)}](/${articlePaths.get(resourceKey(article))})`);
 	return compactMarkdown([
 		frontmatter({
 			type: entity.type,
@@ -439,13 +450,13 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: A
 	]);
 }
 
-function renderLog(collection: CollectionRow, articleCount: number, entityCount: number, quality: ExportQuality): string {
+function renderLog(collection: CollectionRow, resourceCount: number, entityCount: number, quality: ExportQuality): string {
 	const exportedAt = new Date().toISOString();
 	const unknownTypes = Object.entries(quality.unknownTypes).map(([type, count]) => `  * ${type}: ${count}`);
 	return compactMarkdown([
 		'# Directory Update Log',
 		`## ${exportedAt.slice(0, 10)}`,
-		`* **Export**: OKF bundle for "${collection.name}" — ${articleCount} articles, ${entityCount} entity pages.`,
+		`* **Export**: OKF bundle for "${collection.name}" — ${resourceCount} resources, ${entityCount} entity pages.`,
 		`* **Collection id**: ${collection.id} (visibility: ${collection.visibility}). Exported at ${exportedAt}.`,
 		'* **Entity quality gate** (shared with the ingest storage gate):',
 		`  * Persisted links read: ${quality.persistedLinks}`,
