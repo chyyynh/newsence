@@ -11,7 +11,7 @@ import { Typography } from '@tiptap/extension-typography';
 import { Underline } from '@tiptap/extension-underline';
 import { MarkdownManager } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
-import { WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
+import { WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
 	AddResourceToSourceResult,
@@ -466,6 +466,7 @@ export async function createDocument(
 				workspaceId: workspace.id,
 			});
 			return {
+				ok: true,
 				documentId: document.id,
 				workspaceId: document.workspace_id,
 				workspaceTitle: workspace.title,
@@ -476,7 +477,13 @@ export async function createDocument(
 		const limit = await workspaceQuotaLimitTx(db, params.userId);
 		if (limit !== null) {
 			const count = Number((await db.query(`SELECT COUNT(*) FROM workspaces WHERE user_id = $1`, [params.userId])).rows[0]?.count ?? 0);
-			if (count >= limit) throw new Error(WORKSPACE_QUOTA_EXCEEDED_MESSAGE);
+			if (count >= limit) {
+				return {
+					ok: false,
+					code: WORKSPACE_QUOTA_EXCEEDED_CODE,
+					message: WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
+				};
+			}
 		}
 
 		const workspace = (
@@ -499,6 +506,7 @@ export async function createDocument(
 			workspaceId: workspace.id,
 		});
 		return {
+			ok: true,
 			documentId: document.id,
 			workspaceId: document.workspace_id,
 			workspaceTitle: workspace.title,
