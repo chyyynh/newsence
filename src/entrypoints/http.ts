@@ -8,7 +8,7 @@ import { USER_FILES_TABLE } from '@shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
-import type { JsonValue } from '@worker-contracts/core-rpc';
+import { type JsonValue, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/core-rpc';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import {
 	addResourceToSource,
@@ -23,7 +23,6 @@ import {
 	saveDocument,
 	updateDocumentShare,
 	validateResourceSource,
-	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
 import { handleExportCollectionOkf, handleOkfCollectionEntries } from '../okf';
 import {

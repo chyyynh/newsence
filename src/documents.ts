@@ -32,11 +32,10 @@ import type {
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
-import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
+import { canCreateWorkspaceForPlan, WORKSPACE_QUOTA_EXCEEDED_MESSAGE, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
-export const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
