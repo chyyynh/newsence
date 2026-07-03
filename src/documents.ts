@@ -371,7 +371,13 @@ export async function createWorkspace(
 		const limit = await workspaceQuotaLimitTx(db, params.userId);
 		if (limit !== null) {
 			const count = Number((await db.query('SELECT COUNT(*) FROM workspaces WHERE user_id = $1', [params.userId])).rows[0]?.count ?? 0);
-			if (count >= limit) throw new Error(WORKSPACE_QUOTA_EXCEEDED_MESSAGE);
+			if (count >= limit) {
+				return {
+					ok: false,
+					code: WORKSPACE_QUOTA_EXCEEDED_CODE,
+					message: WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
+				};
+			}
 		}
 
 		const workspace = (
@@ -383,7 +389,7 @@ export async function createWorkspace(
 			)
 		).rows[0];
 		if (!workspace) throw new Error('Workspace not created');
-		return { id: workspace.id };
+		return { ok: true, id: workspace.id };
 	});
 }
 
