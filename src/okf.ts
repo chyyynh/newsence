@@ -18,7 +18,6 @@ type CollectionRow = {
 	name: string;
 	description: string | null;
 	visibility: 'public' | 'private';
-	user_id: string | null;
 	updated_at: Date | string;
 };
 
@@ -169,17 +168,17 @@ async function buildCollectionOkfBundle(
 	return withDbClient(env, async (db) => {
 		const collection = (
 			await db.query<CollectionRow>(
-				`SELECT id, name, description, visibility, user_id, updated_at
-					 FROM collections
-					 WHERE id = $1
-					   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
+				`SELECT id, name, description, visibility, updated_at
+						 FROM collections
+						 WHERE id = $1
+						   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
 				 LIMIT 1`,
 				[input.collectionId, input.viewerId],
 			)
 		).rows[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const articles = await readCollectionArticles(db, collection);
+		const articles = await readCollectionArticles(db, collection.id, input.viewerId);
 		const linkableArticles = articles.filter((article) => article.kind === 'article');
 		const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
 		const { links: exported, quality } = gateEntityLinks(links, linkableArticles);
@@ -190,7 +189,7 @@ async function buildCollectionOkfBundle(
 	});
 }
 
-async function readCollectionArticles(db: DbClient, collection: CollectionRow): Promise<ArticleRow[]> {
+async function readCollectionArticles(db: DbClient, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {
 	const result = await db.query<ArticleRow>(
 		`SELECT *
 		 FROM (
@@ -230,7 +229,7 @@ async function readCollectionArticles(db: DbClient, collection: CollectionRow): 
 		     AND c.from_id = $1
 		 ) resources
 		 ORDER BY created_at ASC`,
-		[collection.id, collection.user_id],
+		[collectionId, viewerId],
 	);
 	return result.rows;
 }
