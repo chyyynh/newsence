@@ -11,6 +11,7 @@ import { Typography } from '@tiptap/extension-typography';
 import { Underline } from '@tiptap/extension-underline';
 import { MarkdownManager } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
+import { WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
 	AddResourceToSourceResult,
@@ -32,7 +33,7 @@ import type {
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
-import { canCreateWorkspaceForPlan, WORKSPACE_QUOTA_EXCEEDED_MESSAGE, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
+import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
