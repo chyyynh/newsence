@@ -25,7 +25,6 @@ import {
 	UnsupportedMediaError,
 } from '@shared/mime';
 import type { Env } from '@shared/types';
-import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
 import {
 	buildPdfMetadata,
 	deriveFileTitle,
@@ -37,6 +36,7 @@ import {
 } from '@shared/upload';
 import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
+import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
 import { persistBlobRow, putUserUpload } from './blob-persistence';
 
 const DEFAULT_IMAGE_TITLE = 'image';
