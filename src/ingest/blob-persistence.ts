@@ -14,6 +14,7 @@ import {
 	userGeneratedImageKey,
 	userUploadKey,
 } from '@shared/upload';
+import { QUOTA_EXCEEDED_CODE } from '@worker-contracts/billing-contracts';
 
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
 
@@ -131,7 +132,7 @@ export async function persistBlobRow(env: Env, data: InsertBlobUserFileData): Pr
 			}),
 		);
 		if (err instanceof UploadQuotaExceededError) {
-			return { ok: false, code: 'QUOTA_EXCEEDED', message: err.message };
+			return { ok: false, code: QUOTA_EXCEEDED_CODE, message: err.message };
 		}
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'DB insert failed' };
 	}
