@@ -155,38 +155,6 @@ export async function insertFinalSourceArticle(
 	return articleId;
 }
 
-export async function syncArticleEntities(
-	db: DbClient,
-	articleId: string,
-	entities: Array<{ name: string; name_cn: string; type: string }>,
-): Promise<void> {
-	if (!entities.length) return;
-
-	for (const entity of entities) {
-		const canonical = entity.name.toLowerCase().trim();
-		if (!canonical) continue;
-
-		try {
-			const result = await db.query(
-				`INSERT INTO entities (canonical_name, name, name_cn, type)
-				 VALUES ($1, $2, $3, $4)
-				 ON CONFLICT (canonical_name) DO UPDATE SET
-				   updated_at = NOW()
-				 RETURNING id`,
-				[canonical, entity.name, entity.name_cn, entity.type],
-			);
-			const entityId = result.rows[0]?.id;
-			if (!entityId) continue;
-
-			await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
-		} catch (err) {
-			console.error({ tag: 'ENTITIES', msg: 'Failed to sync entity', entity: entity.name, error: String(err) });
-		}
-	}
-
-	console.info({ tag: 'ENTITIES', msg: 'Synced', articleId, count: entities.length });
-}
-
 export type ExistingArticleRecord = {
 	id: string;
 	url: string;

@@ -67,10 +67,46 @@ Roughly 30 seconds per article. Each step retries independently with exponential
 | Stage                   | Model             | What it does                                                                                      |
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
 | **Analysis**          | Workers AI Qwen3 | Article → bilingual title, summary, tags, keywords, category                                      |
-| **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event) with EN + zh-TW names |
+| **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
 | **Embedding**         | BGE-M3 (1024d)   | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
 Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole article into fallback.
+
+### Entity Quality Policy
+
+The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, caps stored entities per article, and exposes repair/backfill endpoints so old rows can be reprocessed with the current rules.
+
+It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and OKF-style alias groups are presentation or export-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
+
+Use this maintenance flow before changing schema:
+
+```bash
+# Inspect monthly coverage, source-type coverage, monthly source-type dips,
+# source-type backfill backlog, sync gap examples, unknown type examples, top
+# self-source/generic offenders, over-cap rows, orphans, and DB extensions.
+curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
+
+# Reapply current entity normalization and filters to both linked and unlinked rows.
+# Use sourceType from /entities/quality sourceTypes/monthlySourceTypes to partition large runs.
+# Response includes nextCursor; pass it as cursor to page without skipping equal timestamps.
+curl -X POST "$CORE_WORKER_URL/entities/repair-links" \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
+  -d '{"includeLinked": true, "sourceType": "rss"}'
+
+# Fill extraction gaps, including articles previously persisted as an empty extraction.
+# Use sourceType from /entities/quality backfill.sourceTypes to partition large runs.
+# Response includes nextCursor; pass it as cursor to page without skipping equal timestamps.
+curl -X POST "$CORE_WORKER_URL/entities/backfill-missing" \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
+  -d '{"includeEmpty": true, "sourceType": "rss"}'
+
+# Remove entities that no longer have article links after repair.
+curl -X POST "$CORE_WORKER_URL/entities/prune-orphans" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
+```
+
+Change the DB schema only when the product needs a query shape that the current `entities` plus `article_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
 
 ## Stack
 

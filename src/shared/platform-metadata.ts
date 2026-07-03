@@ -125,6 +125,17 @@ export interface OgImageDimensions {
 	ogImageHeight?: number | null;
 }
 
+export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
+
+export interface ClassificationMetadata {
+	category?: ArticleCategory;
+	classifiedAt?: string;
+}
+
+export interface ClassificationEnvelope {
+	classification?: ClassificationMetadata | null;
+}
+
 /** True when an envelope already carries usable (positive) OG image dimensions. */
 export function hasOgDimensions(metadata: PlatformMetadata | null | undefined): boolean {
 	return !!metadata && !!metadata.ogImageWidth && !!metadata.ogImageHeight;
@@ -141,12 +152,29 @@ export function withOgDimensions(metadata: PlatformMetadata | null | undefined, 
 	return { ...base, ogImageWidth: width, ogImageHeight: height };
 }
 
+export function withClassification(metadata: PlatformMetadata | null | undefined, category: ArticleCategory): PlatformMetadata {
+	const base: PlatformMetadata = metadata ?? { type: 'default', fetchedAt: new Date().toISOString(), data: null };
+	return {
+		...base,
+		classification: {
+			...(base.classification ?? {}),
+			category,
+			classifiedAt: new Date().toISOString(),
+		},
+	};
+}
+
 export type PlatformMetadata =
-	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions)
-	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions);
+	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
+			ClassificationEnvelope)
+	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
+			ClassificationEnvelope)
+	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
+			ClassificationEnvelope)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
+			ClassificationEnvelope)
+	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
+			ClassificationEnvelope);
 
 // ─────────────────────────────────────────────────────────────
 // Generic envelope builder

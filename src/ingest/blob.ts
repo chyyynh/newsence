@@ -36,6 +36,7 @@ import {
 } from '@shared/upload';
 import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@shared/web';
 import { createUserFileWorkflow } from '@shared/workflow-queue';
+import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
 import { persistBlobRow, putUserUpload } from './blob-persistence';
 
 const DEFAULT_IMAGE_TITLE = 'image';
@@ -55,7 +56,7 @@ export type IngestBlobErrorCode =
 	| 'BAD_REQUEST'
 	| 'RATE_LIMITED'
 	| 'PAYLOAD_TOO_LARGE'
-	| 'QUOTA_EXCEEDED'
+	| QuotaExceededCode
 	| 'UNSUPPORTED_MEDIA_TYPE'
 	| 'INTERNAL_ERROR';
 

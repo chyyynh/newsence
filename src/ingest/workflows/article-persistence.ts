@@ -1,11 +1,7 @@
-import {
-	insertFinalSourceArticle,
-	type ProcessableTable,
-	syncArticleEntities,
-	USER_FILES_TABLE,
-	updateProcessedArticle,
-} from '@shared/article-store';
+import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, updateProcessedArticle } from '@shared/article-store';
 import { withDbTransaction } from '@shared/db';
+import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@shared/entities/normalize';
+import { syncArticleEntities } from '@shared/entities/sync';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@shared/source-draft';
 import type { Article, Env } from '@shared/types';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';
@@ -69,12 +65,14 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
 	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
+	const platformMetadata = finalInsert.updatePayload.platform_metadata ?? finalInsert.article.platformMetadata;
+	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
 	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
 	const youtubeTranscript = sourceDraftYoutubeTranscript(draft);
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
-		if (input.result.updateData.entities?.length) await syncArticleEntities(db, articleId, input.result.updateData.entities);
+		if (entities) await syncArticleEntities(db, articleId, entities, finalInsert.article.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		if (twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
@@ -113,15 +111,28 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 		},
 	};
 	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, extractionMetadata(input.pdfTextTemp));
+	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
+	const entities = entityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
 	return withDbTransaction(env, 'row workflow', async (db) => {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
-		if (table !== USER_FILES_TABLE && finalResult.updateData.entities?.length)
-			await syncArticleEntities(db, target.articleId, finalResult.updateData.entities);
+		if (table !== USER_FILES_TABLE && entities)
+			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		return target.articleId;
 	});
+}
+
+function entityUpdatePayload(
+	updatePayload: Record<string, unknown>,
+	source?: string | null,
+	platformMetadata?: unknown,
+): ArticleEntityInput[] | null {
+	if (!Array.isArray(updatePayload.entities)) return null;
+	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
+	updatePayload.entities = entities;
+	return entities;
 }
 
 function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {

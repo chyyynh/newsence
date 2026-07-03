@@ -11,6 +11,7 @@ import { Typography } from '@tiptap/extension-typography';
 import { Underline } from '@tiptap/extension-underline';
 import { MarkdownManager } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
+import { WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
 	AddResourceToSourceResult,
@@ -27,17 +28,15 @@ import type {
 	SaveDocumentResult,
 	UpdateDocumentShareResult,
 	ValidateResourceSourceResult,
-	WorkspaceCatalogEntry,
+	WorkspaceCatalogResult,
+	WorkspaceCreationCapability,
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
+import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
-export const WORKSPACE_QUOTA_EXCEEDED_MESSAGE = 'Workspace quota exceeded.';
-// Workspace creation quota is enforced here, inside the create-document
-// transaction. Callers may hint the model, but they should not send plan state.
-const PLAN_MAX_WORKSPACES: Record<string, number | null> = { free: 5, pro: null, test: null };
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -45,6 +44,13 @@ const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 type DocumentEdit = { old_string: string; new_string: string };
 type ResourceSource = { type: ResourceSourceType; id: string };
 type ResourceTarget = { type: ResourceTargetType; id: string };
+type WorkspaceCapabilityRow = { plan_id: string | null; workspace_count: string | number };
+type WorkspaceCatalogRow = WorkspaceCapabilityRow & {
+	id: string | null;
+	title: string | null;
+	description: string | null;
+	document_count: string | number | null;
+};
 
 type DocumentRow = {
 	id: string;
@@ -252,14 +258,10 @@ function cleanHttpUrls(urls: string[], limit = 20): string[] {
 	return [...new Set(cleaned)].slice(0, limit);
 }
 
-function maxWorkspaces(planId: string): number | null {
-	return PLAN_MAX_WORKSPACES[planId] ?? PLAN_MAX_WORKSPACES.free;
-}
-
 async function workspaceQuotaLimitTx(db: DbClient, userId: string): Promise<number | null> {
 	await db.query('SELECT pg_advisory_xact_lock(581203, hashtext($1))', [userId]);
 	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
-	return maxWorkspaces(settings.rows[0]?.plan_id ?? 'free');
+	return workspaceLimitForPlan(settings.rows[0]?.plan_id ?? 'free');
 }
 
 function applyMarkdownEdits(content: string, edits: DocumentEdit[]): { applied: number; failedAt?: string; result: string } {
@@ -296,29 +298,68 @@ function resourceSummaryLine(
 	return `- ${title}${summary ? `: ${summary}` : ''}`;
 }
 
-export async function listWorkspaces(env: Env, userId: string): Promise<WorkspaceCatalogEntry[]> {
+async function readWorkspaceCreationCapability(db: DbClient, userId: string): Promise<WorkspaceCreationCapability> {
+	const meta = (
+		await db.query<WorkspaceCapabilityRow>(
+			`SELECT
+			   (SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1) AS plan_id,
+			   COUNT(*) AS workspace_count
+			 FROM workspaces
+			 WHERE user_id = $1`,
+			[userId],
+		)
+	).rows[0];
+	return workspaceCreationCapabilityFromRow(meta);
+}
+
+function workspaceCreationCapabilityFromRow(row: WorkspaceCapabilityRow | undefined): WorkspaceCreationCapability {
+	return {
+		canCreateWorkspace: canCreateWorkspaceForPlan(row?.plan_id ?? 'free', Number(row?.workspace_count ?? 0)),
+	};
+}
+
+export async function workspaceCreationCapability(env: Env, userId: string): Promise<WorkspaceCreationCapability> {
+	return withDbClient(env, (db) => readWorkspaceCreationCapability(db, userId));
+}
+
+export async function listWorkspaces(env: Env, userId: string): Promise<WorkspaceCatalogResult> {
 	return withDbClient(env, async (db) => {
-		const result = await db.query<{
-			id: string;
-			title: string;
-			description: string | null;
-			document_count: string | number;
-		}>(
-			`SELECT w.id, w.title, w.description, COUNT(d.id) AS document_count
-			 FROM workspaces w
-			 LEFT JOIN user_documents d ON d.workspace_id = w.id AND d.user_id = w.user_id
-			 WHERE w.user_id = $1
-			 GROUP BY w.id
-			 ORDER BY w.updated_at DESC
-			 LIMIT 50`,
+		const result = await db.query<WorkspaceCatalogRow>(
+			`WITH meta AS (
+				 SELECT
+				   (SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1) AS plan_id,
+				   (SELECT COUNT(*) FROM workspaces WHERE user_id = $1) AS workspace_count
+			   ),
+			   catalog AS (
+				 SELECT w.id, w.title, w.description, w.updated_at, COUNT(d.id) AS document_count
+				 FROM workspaces w
+				 LEFT JOIN user_documents d ON d.workspace_id = w.id AND d.user_id = w.user_id
+				 WHERE w.user_id = $1
+				 GROUP BY w.id
+				 ORDER BY w.updated_at DESC
+				 LIMIT 50
+			   )
+			 SELECT meta.plan_id, meta.workspace_count, catalog.id, catalog.title, catalog.description, catalog.document_count
+			 FROM meta
+			 LEFT JOIN catalog ON true
+			 ORDER BY catalog.updated_at DESC NULLS LAST`,
 			[userId],
 		);
-		return result.rows.map((row) => ({
-			id: row.id,
-			title: row.title,
-			description: row.description,
-			documentCount: Number(row.document_count),
-		}));
+		const capability = workspaceCreationCapabilityFromRow(result.rows[0]);
+		return {
+			canCreateWorkspace: capability.canCreateWorkspace,
+			entries: result.rows
+				.filter(
+					(row): row is WorkspaceCatalogRow & { id: string; title: string; document_count: string | number } =>
+						typeof row.id === 'string' && typeof row.title === 'string' && row.document_count != null,
+				)
+				.map((row) => ({
+					id: row.id,
+					title: row.title,
+					description: row.description,
+					documentCount: Number(row.document_count),
+				})),
+		};
 	});
 }
 
@@ -330,7 +371,13 @@ export async function createWorkspace(
 		const limit = await workspaceQuotaLimitTx(db, params.userId);
 		if (limit !== null) {
 			const count = Number((await db.query('SELECT COUNT(*) FROM workspaces WHERE user_id = $1', [params.userId])).rows[0]?.count ?? 0);
-			if (count >= limit) throw new Error(WORKSPACE_QUOTA_EXCEEDED_MESSAGE);
+			if (count >= limit) {
+				return {
+					ok: false,
+					code: WORKSPACE_QUOTA_EXCEEDED_CODE,
+					message: WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
+				};
+			}
 		}
 
 		const workspace = (
@@ -342,7 +389,7 @@ export async function createWorkspace(
 			)
 		).rows[0];
 		if (!workspace) throw new Error('Workspace not created');
-		return { id: workspace.id };
+		return { ok: true, id: workspace.id };
 	});
 }
 
@@ -425,6 +472,7 @@ export async function createDocument(
 				workspaceId: workspace.id,
 			});
 			return {
+				ok: true,
 				documentId: document.id,
 				workspaceId: document.workspace_id,
 				workspaceTitle: workspace.title,
@@ -435,7 +483,13 @@ export async function createDocument(
 		const limit = await workspaceQuotaLimitTx(db, params.userId);
 		if (limit !== null) {
 			const count = Number((await db.query(`SELECT COUNT(*) FROM workspaces WHERE user_id = $1`, [params.userId])).rows[0]?.count ?? 0);
-			if (count >= limit) throw new Error(WORKSPACE_QUOTA_EXCEEDED_MESSAGE);
+			if (count >= limit) {
+				return {
+					ok: false,
+					code: WORKSPACE_QUOTA_EXCEEDED_CODE,
+					message: WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
+				};
+			}
 		}
 
 		const workspace = (
@@ -458,6 +512,7 @@ export async function createDocument(
 			workspaceId: workspace.id,
 		});
 		return {
+			ok: true,
 			documentId: document.id,
 			workspaceId: document.workspace_id,
 			workspaceTitle: workspace.title,
@@ -777,7 +832,9 @@ export async function addResource(
 	if (!isUuid(params.documentId)) throw new Error('Invalid documentId');
 	const resourceIds = [...new Set((params.resourceIds ?? []).filter(isUuid))].slice(0, 20);
 	const urls = cleanHttpUrls(params.urls ?? []);
-	if (resourceIds.length === 0 && urls.length === 0) throw new Error('Provide at least one resource id or URL');
+	if (resourceIds.length === 0 && urls.length === 0) {
+		return { linked: 0, created: 0, duplicates: 0, missing: 0, ingested: 0 };
+	}
 
 	const workspaceId = await getDocumentWorkspaceId(env, params.userId, params.documentId);
 	const idResult = resourceIds.length
@@ -1012,7 +1069,12 @@ async function addResourceIds(db: DbClient, userId: string, workspaceId: string,
 
 async function addDocumentResourceUrls(env: Env, userId: string, workspaceId: string, urls: string[]) {
 	const ingested = await ingestUrls(env, { urls, userId });
-	if (!ingested.ok) throw new Error(ingested.message);
+	if (!ingested.ok) {
+		return {
+			ingested: 0,
+			ingestFailed: urls.map((url) => ({ url, error: ingested.message })),
+		};
+	}
 	const successfulIds = [...new Set(ingested.results.map((result) => result.userFileId).filter((id): id is string => !!id && isUuid(id)))];
 	const failures = ingested.results
 		.filter((result) => result.error || !result.userFileId)

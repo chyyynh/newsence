@@ -1,5 +1,6 @@
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
+import { QUOTA_EXCEEDED_CODE } from '@worker-contracts/billing-contracts';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
 import { ingestUrls } from '../urls';
 
@@ -70,7 +71,7 @@ function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
 			return 429;
 		case 'PAYLOAD_TOO_LARGE':
 			return 413;
-		case 'QUOTA_EXCEEDED':
+		case QUOTA_EXCEEDED_CODE:
 			return 403;
 		case 'UNSUPPORTED_MEDIA_TYPE':
 			return 415;
@@ -105,7 +106,7 @@ async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	const status =
 		outcome.code === 'PAYLOAD_TOO_LARGE'
 			? 413
-			: outcome.code === 'QUOTA_EXCEEDED'
+			: outcome.code === QUOTA_EXCEEDED_CODE
 				? 403
 				: outcome.code === 'UNSUPPORTED_MEDIA_TYPE'
 					? 415

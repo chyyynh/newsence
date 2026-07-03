@@ -1,5 +1,11 @@
 import type { Env } from './types';
 
+export const INTERNAL_CORS_HEADERS: Record<string, string> = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
+};
+
 export function jsonData<T>(data: T, headers?: HeadersInit): Response {
 	return Response.json({ success: true, data }, { headers });
 }

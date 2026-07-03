@@ -5,7 +5,7 @@ import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import { USER_FILES_TABLE } from '@shared/article-store';
-import { jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
+import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env, ExecutionContext } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import type { JsonValue } from '@worker-contracts/core-rpc';
@@ -23,22 +23,28 @@ import {
 	saveDocument,
 	updateDocumentShare,
 	validateResourceSource,
-	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
 } from '../documents';
+import { handleExportCollectionOkf, handleOkfCollectionEntries } from '../okf';
+import {
+	handleBackfillMissingEntities,
+	handleEntityQuality,
+	handlePruneOrphanEntities,
+	handleRepairEntityLinks,
+} from './entity-maintenance';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
-
-const INTERNAL_CORS_HEADERS: Record<string, string> = {
-	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
-};
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
 	'/ingest': (req, env) => handleIngest(req, env),
 	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
+	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
+	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
+	'/entities/quality': (req, env) => handleEntityQuality(req, env),
+	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
+	'/okf/collections/entries': (req, env) => handleOkfCollectionEntries(req, env),
+	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
@@ -58,6 +64,12 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 const OPTIONS_ROUTES: Record<string, RouteHandler> = {
 	'/search': (req, env) => handleSearch(req, env),
 	'/search/related': (req, env) => handleRelated(req, env),
+	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
+	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
+	'/entities/quality': (req, env) => handleEntityQuality(req, env),
+	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
+	'/okf/collections/entries': (req, env) => handleOkfCollectionEntries(req, env),
+	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
@@ -80,6 +92,12 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
+	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []; optional {sourceType}\n' +
+	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
+	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
+	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB; optional {sourceType}\n' +
+	'POST /okf/collections/entries             - JSON view of an OKF bundle for MCP: list entries or fetch one by path (internal token)\n' +
+	'POST /okf/collections/export              - Export a collection as an OKF v0.1 bundle tar.gz (internal token) -> gzip stream\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
@@ -187,11 +205,11 @@ async function handleCreateWorkspace(request: Request, env: Env): Promise<Respon
 			title: body.title,
 			description: body.description,
 		});
+		if (!result.ok) {
+			return jsonError(result.code, result.message, 403, INTERNAL_CORS_HEADERS);
+		}
 		return jsonData(result, INTERNAL_CORS_HEADERS);
 	} catch (error) {
-		if (error instanceof Error && error.message === WORKSPACE_QUOTA_EXCEEDED_MESSAGE) {
-			return jsonError('WORKSPACE_QUOTA_EXCEEDED', error.message, 403, INTERNAL_CORS_HEADERS);
-		}
 		console.error({ tag: 'WORKSPACE_CREATE', msg: 'create failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'Workspace create failed', 500, INTERNAL_CORS_HEADERS);
 	}
@@ -379,7 +397,11 @@ async function handleValidateResourceSource(request: Request, env: Env): Promise
 		if (error instanceof Error && error.message === 'Source not found') {
 			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
 		}
-		console.error({ tag: 'RESOURCE_VALIDATE_SOURCE', msg: 'validate source failed', error: error instanceof Error ? error.message : String(error) });
+		console.error({
+			tag: 'RESOURCE_VALIDATE_SOURCE',
+			msg: 'validate source failed',
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return jsonError('INTERNAL_ERROR', 'Resource source validation failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }

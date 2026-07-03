@@ -3,7 +3,9 @@
 // ─────────────────────────────────────────────────────────────
 
 import { AI_TASKS, generateObject } from '@shared/ai';
-import type { AIAnalysisResult, Article } from '@shared/types';
+import { entityExtractionExclusionNames } from '@shared/entities/normalize';
+import type { ArticleCategory } from '@shared/platform-metadata';
+import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@shared/types';
 import { z } from 'zod';
 import {
 	type ArticleProcessor,
@@ -15,8 +17,9 @@ import {
 import { scrapeWebPage } from '../web-scraper';
 
 type UpdateData = ProcessorResult['updateData'];
+type LinkedArticleAnalysisResult = { applied: false } | { applied: true; category?: ArticleCategory };
 
-function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): void {
+function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): ArticleCategory | undefined {
 	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
 	if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
 	if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
@@ -25,7 +28,8 @@ function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, upda
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
 	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
 	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-	if (analysis.entities?.length) updateData.entities = analysis.entities;
+	if (analysis.entities) updateData.entities = analysis.entities;
+	return analysis.category;
 }
 
 function extractTweetText(article: Article): string {
@@ -59,16 +63,18 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (hasFullContent) {
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
 			const analysis = await generateArticleAnalysis(article, ctx.env);
-			applyArticleAnalysis(article, analysis, updateData);
-			return { updateData };
+			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
 		}
 
 		const tweetText = extractTweetText(article);
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
 		const linkedUrl = getLinkedUrl(article);
-		if (linkedUrl && (await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData))) {
-			return { updateData };
+		const linkedAnalysis: LinkedArticleAnalysisResult = linkedUrl
+			? await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData)
+			: { applied: false };
+		if (linkedAnalysis.applied) {
+			return { updateData, classificationCategory: linkedAnalysis.category };
 		}
 
 		await this.applyPlainTweetAnalysis(tweetText, article, ctx, updateData);
@@ -81,26 +87,25 @@ export class TwitterProcessor implements ArticleProcessor {
 		ctx: ProcessorContext,
 		linkedUrl: string,
 		updateData: UpdateData,
-	): Promise<boolean> {
+	): Promise<LinkedArticleAnalysisResult> {
 		try {
 			const linked = await scrapeWebPage(linkedUrl);
-			if (!linked.content || linked.content.length <= 100) return false;
+			if (!linked.content || linked.content.length <= 100) return { applied: false };
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
 			updateData.content = linked.content;
 			const analysis = await generateArticleAnalysis(
 				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
 				ctx.env,
 			);
-			applyArticleAnalysis(article, analysis, updateData);
-			return true;
+			return { applied: true, category: applyArticleAnalysis(article, analysis, updateData) };
 		} catch (e) {
 			console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(e) });
-			return false;
+			return { applied: false };
 		}
 	}
 
 	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
-		const analysis = await translateTweet(tweetText, ctx.env);
+		const analysis = await translateTweet(tweetText, article, ctx.env);
 		if (!analysis) {
 			if (!article.tags?.length) updateData.tags = ['Twitter'];
 			return;
@@ -111,7 +116,7 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (isEmpty(article.content_cn)) updateData.content_cn = analysis.summary_cn;
 		if (!article.tags?.length && analysis.tags.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length && analysis.keywords.length) updateData.keywords = analysis.keywords;
-		if (analysis.entities?.length) updateData.entities = analysis.entities;
+		updateData.entities = analysis.entities;
 	}
 }
 
@@ -134,7 +139,7 @@ const TweetAnalysisSchema = z.object({
 		z.object({
 			name: z.string().min(1),
 			name_cn: z.string().min(1),
-			type: z.enum(['person', 'organization', 'product', 'technology', 'event']),
+			type: z.enum(ENTITY_TYPES),
 		}),
 	),
 });
@@ -148,9 +153,13 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - summary_cn 是忠實翻譯，不是評論或摘要
 
 實體擷取規則：
-- 提取重要的具名實體（人物、組織、產品、技術、事件）
-- type 只能是 person, organization, product, technology, event
+- 提取重要的具名實體（人物、組織、產品、技術、事件、地點）
+- type 只能是 person, organization, product, technology, event, location
 - name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
+- 不要把 Twitter/X、作者帳號或發文平台當作實體，除非推文本身就在討論該平台或作者
+- 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
+- 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
+- 如果只能判斷出泛詞、版本碎片或來源名稱，寧可少提取
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
@@ -158,11 +167,19 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
+function buildTweetContextPrompt(tweetText: string, article: Article): string {
+	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
+	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
+	return `推文來源: ${article.source}${excludedLine}
+推文內容：
+${tweetText}`;
+}
+
+async function translateTweet(tweetText: string, article: Article, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 
 	try {
-		const result = await generateObject<TweetAnalysis>(env.AI, `推文內容：\n${tweetText}`, {
+		const result = await generateObject<TweetAnalysis>(env.AI, buildTweetContextPrompt(tweetText, article), {
 			schema: TweetAnalysisSchema,
 			schemaName: 'tweet analysis',
 			task: AI_TASKS.tweetAnalysis,
