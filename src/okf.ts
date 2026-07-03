@@ -18,11 +18,13 @@ type CollectionRow = {
 	name: string;
 	description: string | null;
 	visibility: 'public' | 'private';
+	user_id: string | null;
 	updated_at: Date | string;
 };
 
 type ArticleRow = {
 	id: string;
+	kind: 'article' | 'user_file';
 	title: string;
 	title_cn: string | null;
 	url: string;
@@ -167,19 +169,20 @@ async function buildCollectionOkfBundle(
 	return withDbClient(env, async (db) => {
 		const collection = (
 			await db.query<CollectionRow>(
-				`SELECT id, name, description, visibility, updated_at
-				 FROM collections
-				 WHERE id = $1
-				   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
+				`SELECT id, name, description, visibility, user_id, updated_at
+					 FROM collections
+					 WHERE id = $1
+					   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
 				 LIMIT 1`,
 				[input.collectionId, input.viewerId],
 			)
 		).rows[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const articles = await readCollectionArticles(db, collection.id);
-		const links = articles.length ? await readArticleEntityLinks(db, articles) : [];
-		const { links: exported, quality } = gateEntityLinks(links, articles);
+		const articles = await readCollectionArticles(db, collection);
+		const linkableArticles = articles.filter((article) => article.kind === 'article');
+		const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
+		const { links: exported, quality } = gateEntityLinks(links, linkableArticles);
 		return {
 			slug: uniqueSlug(collection.name, collection.id),
 			files: renderOkfFiles(collection, articles, exported, quality),
@@ -187,19 +190,47 @@ async function buildCollectionOkfBundle(
 	});
 }
 
-async function readCollectionArticles(db: DbClient, collectionId: string): Promise<ArticleRow[]> {
+async function readCollectionArticles(db: DbClient, collection: CollectionRow): Promise<ArticleRow[]> {
 	const result = await db.query<ArticleRow>(
-		`SELECT
-		   a.id::text, a.title, a.title_cn, a.url, a.source, a.source_type,
-		   a.summary, a.summary_cn, a.content, a.content_cn, a.published_date,
-		   a.tags, a.keywords, a.platform_metadata
-		 FROM citations c
-		 JOIN articles a ON a.id::text = c.to_id
-		 WHERE c.from_type = 'collection'
-		   AND c.from_id = $1
-		   AND c.to_type = 'article'
-		 ORDER BY c.created_at ASC`,
-		[collectionId],
+		`SELECT *
+		 FROM (
+		   SELECT
+		     c.created_at,
+		     'article'::text AS kind,
+		     a.id::text, a.title, a.title_cn, a.url, a.source, a.source_type,
+		     a.summary, a.summary_cn, a.content, a.content_cn, a.published_date,
+		     a.tags, a.keywords, a.platform_metadata
+		   FROM citations c
+		   JOIN articles a ON c.to_type = 'article' AND a.id::text = c.to_id
+		   WHERE c.from_type = 'collection'
+		     AND c.from_id = $1
+		   UNION ALL
+		   SELECT
+		     c.created_at,
+		     'user_file'::text AS kind,
+		     uf.id::text,
+		     COALESCE(uf.title, uf.file_name) AS title,
+		     uf.title_cn,
+		     COALESCE(uf.source_url, '') AS url,
+		     COALESCE(uf.site_name, uf.source_url, uf.file_type) AS source,
+		     COALESCE(uf.platform_type, uf.origin_type) AS source_type,
+		     uf.summary,
+		     uf.summary_cn,
+		     uf.extracted_text AS content,
+		     uf.content_cn,
+		     COALESCE(uf.published_date, uf.created_at) AS published_date,
+		     uf.tags,
+		     uf.keywords,
+		     uf.metadata AS platform_metadata
+		   FROM citations c
+		   JOIN user_files uf ON c.to_type = 'user_file'
+		     AND uf.id::text = c.to_id
+		     AND uf.user_id = $2
+		   WHERE c.from_type = 'collection'
+		     AND c.from_id = $1
+		 ) resources
+		 ORDER BY created_at ASC`,
+		[collection.id, collection.user_id],
 	);
 	return result.rows;
 }
@@ -349,12 +380,13 @@ function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths:
 	const summary = displayDescription(article);
 	const content = article.content || article.content_cn || summary || '';
 	const entityLinks = uniqueBy(links, (link) => link.id).map((link) => `- [${link.name}](/${entityPaths.get(link.id)})`);
+	const citation = article.url ? [`# Citations`, `[1] [${article.source || article.url}](${article.url})`] : [];
 	return compactMarkdown([
 		frontmatter({
-			type: 'Article',
+			type: article.kind === 'user_file' ? 'UserFile' : 'Article',
 			title,
 			description: summary,
-			resource: article.url,
+			resource: article.url || undefined,
 			tags: article.tags?.length ? article.tags : undefined,
 			timestamp: toIso(article.published_date),
 			// extension keys (spec §frontmatter: consumers must tolerate unknown keys)
@@ -365,14 +397,14 @@ function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths:
 			title_cn: article.title_cn,
 			description_cn: article.summary_cn,
 			newsence_article_id: article.id,
+			newsence_resource_type: article.kind,
 		}),
 		`# ${title}`,
 		summary ?? '',
 		entityLinks.length ? '## Linked entities' : '',
 		...entityLinks,
 		content,
-		'# Citations',
-		`[1] [${article.source || article.url}](${article.url})`,
+		...citation,
 	]);
 }
 
