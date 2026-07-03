@@ -14,7 +14,7 @@ import {
 	userGeneratedImageKey,
 	userUploadKey,
 } from '@shared/upload';
-import { QUOTA_EXCEEDED_CODE } from '@worker-contracts/billing-contracts';
+import { QUOTA_EXCEEDED_CODE, type QuotaExceededCode } from '@worker-contracts/billing-contracts';
 
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
 
@@ -35,7 +35,7 @@ export interface InsertBlobUserFileData {
 
 export type PersistBlobResult =
 	| { ok: true; userFileId: string }
-	| { ok: false; code: 'QUOTA_EXCEEDED' | 'INTERNAL_ERROR'; message: string };
+	| { ok: false; code: QuotaExceededCode | 'INTERNAL_ERROR'; message: string };
 
 export type PersistGeneratedImageResult =
 	| {
@@ -50,13 +50,13 @@ export type PersistGeneratedImageResult =
 	  }
 	| {
 			ok: false;
-			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
+			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
 			message: string;
 	  };
 
 export type PersistSavedUrlBlobResult =
 	| { ok: true; userFileId: string; fileType: string; fileSize: number; title: string }
-	| { ok: false; code: 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'INTERNAL_ERROR'; message: string };
+	| { ok: false; code: 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'INTERNAL_ERROR'; message: string };
 
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;

@@ -25,6 +25,7 @@ import {
 	UnsupportedMediaError,
 } from '@shared/mime';
 import type { Env } from '@shared/types';
+import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
 import {
 	buildPdfMetadata,
 	deriveFileTitle,
@@ -55,7 +56,7 @@ export type IngestBlobErrorCode =
 	| 'BAD_REQUEST'
 	| 'RATE_LIMITED'
 	| 'PAYLOAD_TOO_LARGE'
-	| 'QUOTA_EXCEEDED'
+	| QuotaExceededCode
 	| 'UNSUPPORTED_MEDIA_TYPE'
 	| 'INTERNAL_ERROR';
 
