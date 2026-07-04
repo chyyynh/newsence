@@ -3,14 +3,6 @@ import type { DbClient } from '@shared/db';
 import { withDbClient, withDbTransaction } from '@shared/db';
 import type { Env } from '@shared/types';
 import type { JSONContent } from '@tiptap/core';
-import { Highlight } from '@tiptap/extension-highlight';
-import { Image } from '@tiptap/extension-image';
-import { TaskItem, TaskList } from '@tiptap/extension-list';
-import { TextAlign } from '@tiptap/extension-text-align';
-import { Typography } from '@tiptap/extension-typography';
-import { Underline } from '@tiptap/extension-underline';
-import { MarkdownManager } from '@tiptap/markdown';
-import StarterKit from '@tiptap/starter-kit';
 import { WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
@@ -34,12 +26,12 @@ import type {
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
 import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
+import { contentToMarkdown, EMPTY_TIPTAP_DOCUMENT, markdownToTiptapJson } from '@worker-contracts/editor-markdown';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
 const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
-const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 type DocumentEdit = { old_string: string; new_string: string };
@@ -125,27 +117,6 @@ export class DocumentEmptyContentBlockedError extends Error {
 		super('Empty document content was blocked');
 		this.name = 'DocumentEmptyContentBlockedError';
 	}
-}
-
-const markdownManager = new MarkdownManager({
-	extensions: [
-		StarterKit.configure({ link: { openOnClick: false, enableClickSelection: true } }),
-		TextAlign.configure({ types: ['heading', 'paragraph'] }),
-		TaskList,
-		TaskItem.configure({ nested: true }),
-		Highlight.configure({ multicolor: true }),
-		Underline,
-		Typography,
-		Image,
-	],
-});
-
-function markdownToTiptapJson(markdown: string): JSONContent {
-	return markdownManager.parse(markdown);
-}
-
-function contentToMarkdown(content: JSONContent): string {
-	return markdownManager.serialize(content);
 }
 
 function isUuid(value: string): boolean {
