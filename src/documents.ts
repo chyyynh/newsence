@@ -37,6 +37,7 @@ import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contra
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
+const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -67,6 +68,11 @@ type ResourceSummaryRow = {
 	title_cn: string | null;
 	summary: string | null;
 	summary_cn: string | null;
+};
+type WorkspaceSummaryDocumentRow = {
+	id: string;
+	title: string;
+	description: string | null;
 };
 type WorkspaceDocumentRow = {
 	id: string;
@@ -298,6 +304,16 @@ function resourceSummaryLine(
 	return `- ${title}${summary ? `: ${summary}` : ''}`;
 }
 
+function compactContextLine(value: string | null | undefined, fallback = ''): string {
+	return value?.replace(/\s+/g, ' ').trim() || fallback;
+}
+
+function workspaceDocumentSummaryLine(row: WorkspaceSummaryDocumentRow): string {
+	const title = compactContextLine(row.title, 'Untitled');
+	const description = compactContextLine(row.description);
+	return `- ${title} (document id: ${row.id})${description ? `: ${description}` : ''}`;
+}
+
 async function readWorkspaceCreationCapability(db: DbClient, userId: string): Promise<WorkspaceCreationCapability> {
 	const meta = (
 		await db.query<WorkspaceCapabilityRow>(
@@ -414,7 +430,15 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 		);
 		const articleIds = citations.rows.filter((row) => row.to_type === 'article' && isUuid(row.to_id)).map((row) => row.to_id);
 		const userFileIds = citations.rows.filter((row) => row.to_type === 'user_file' && isUuid(row.to_id)).map((row) => row.to_id);
-		const [articles, files] = await Promise.all([
+		const [documents, articles, files] = await Promise.all([
+			db.query<WorkspaceSummaryDocumentRow>(
+				`SELECT id, title, description
+				 FROM user_documents
+				 WHERE workspace_id = $1 AND user_id = $2
+				 ORDER BY updated_at DESC
+				 LIMIT $3`,
+				[workspace.id, userId, MAX_WORKSPACE_SUMMARY_DOCUMENTS],
+			),
 			articleIds.length
 				? db.query<ResourceSummaryRow>(`SELECT id, title, title_cn, summary, summary_cn FROM articles WHERE id = ANY($1::uuid[])`, [
 						articleIds,
@@ -436,10 +460,14 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 		const resources = citations.rows
 			.map((citation) => resourceSummaryLine(citation, articleById, fileById))
 			.filter((line): line is string => !!line);
+		const documentLines = documents.rows.map(workspaceDocumentSummaryLine);
 
 		return [
 			`Workspace: ${workspace.title}`,
 			workspace.description ? `Description: ${workspace.description}` : '',
+			documentLines.length
+				? `Recent workspace documents (use read-context with type "document" and the document id when full content is needed):\n${documentLines.join('\n')}`
+				: '',
 			resources.length ? `Pinned resources:\n${resources.join('\n')}` : '',
 		]
 			.filter(Boolean)
