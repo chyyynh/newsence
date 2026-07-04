@@ -43,11 +43,11 @@ import { getProxySigningSecret, verifyProxySignature } from './sign-url';
 // passthrough with Range forwarding regardless of request options. Not an
 // auth check; the signature gate above already enforced access.
 const VIDEO_HOSTS = new Set(['video.twimg.com']);
-// Must stay in sync with frontend/next.config.ts images.deviceSizes/imageSizes.
-// The options segment is intentionally unsigned so Next can choose a width at
-// render time; this allowlist prevents leaked signed URLs from being used to
+// Must stay in sync with web-tanstack SafeImage's mediaTransformWidth union.
+// The options segment is intentionally unsigned so the frontend can choose a
+// width at render time; this allowlist prevents leaked signed URLs from being used to
 // mint arbitrary width/quality combinations and burn transformation quota.
-const ALLOWED_TRANSFORM_WIDTHS = new Set([256, 1280, 1920]);
+const ALLOWED_TRANSFORM_WIDTHS = new Set([256, 640, 1280, 1920]);
 const ALLOWED_QUALITY = 75;
 const MAX_REDIRECTS = 5;
 // Bumped when key derivation changes; old entries become orphaned and can
