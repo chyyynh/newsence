@@ -2,6 +2,7 @@ import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, upda
 import { withDbTransaction } from '@shared/db';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@shared/entities/normalize';
 import { syncArticleEntities } from '@shared/entities/sync';
+import type { PaperMetadata } from '@shared/platform-metadata';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@shared/source-draft';
 import type { Article, Env } from '@shared/types';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@shared/user-file-workflow-state';
@@ -31,6 +32,7 @@ export type WorkflowPersistenceInput = {
 	embedding: number[] | null;
 	pdfTextTemp: PdfTextTempResult | null;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
+	paperEnrichment: PaperMetadata | null;
 };
 
 type SourceFinalInsert = {
@@ -64,7 +66,13 @@ export async function recordWorkflowFailure(env: Env, context: WorkflowPersisten
 async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
-	const finalInsert = await prepareSourceFinalInsert(draft.article, fullArticle, input.result, input.embedding);
+	const finalInsert = await prepareSourceFinalInsert(
+		draft.article,
+		fullArticle,
+		input.result,
+		input.embedding,
+		paperMetadataPatch(input.paperEnrichment),
+	);
 	const platformMetadata = finalInsert.updatePayload.platform_metadata ?? finalInsert.article.platformMetadata;
 	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
 	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
@@ -92,8 +100,9 @@ async function prepareSourceFinalInsert(
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
+	metadataPatch: Record<string, unknown> | undefined,
 ): Promise<SourceFinalInsert> {
-	const updatePayload = buildProcessorUpdatePayload(article, result, embedding);
+	const updatePayload = buildProcessorUpdatePayload(article, result, embedding, metadataPatch);
 	const hasPayloadOgImage = Object.hasOwn(updatePayload, OG_IMAGE_UPDATE_KEY);
 	const candidate = hasPayloadOgImage ? updatePayload[OG_IMAGE_UPDATE_KEY] : base.ogImageUrl;
 	const validated = await validateImageUrl(typeof candidate === 'string' ? candidate : null);
@@ -110,7 +119,8 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 			...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
 		},
 	};
-	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, extractionMetadata(input.pdfTextTemp));
+	const metadataPatch = mergeMetadataPatches(extractionMetadata(input.pdfTextTemp), paperMetadataPatch(input.paperEnrichment));
+	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, metadataPatch);
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
 	const entities = entityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
@@ -133,6 +143,18 @@ function entityUpdatePayload(
 	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
 	updatePayload.entities = entities;
 	return entities;
+}
+
+/** Envelope patch that promotes an article to the `paper` platform type. */
+function paperMetadataPatch(paper: PaperMetadata | null): Record<string, unknown> | undefined {
+	return paper ? { type: 'paper', data: paper } : undefined;
+}
+
+/** Shallow-merge metadata patches, dropping the key entirely when all are empty. */
+function mergeMetadataPatches(...patches: Array<Record<string, unknown> | undefined>): Record<string, unknown> | undefined {
+	const merged: Record<string, unknown> = {};
+	for (const patch of patches) if (patch) Object.assign(merged, patch);
+	return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {

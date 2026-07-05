@@ -102,6 +102,44 @@ export interface PdfMetadata {
 	fileSize: number;
 }
 
+// ── Academic paper ───────────────────────────────────────────
+
+/**
+ * A single resolved reference of a paper. OpenAlex gives us the referenced
+ * work's OpenAlex id always; title/doi/year/author are best-effort (present
+ * when the batch resolve succeeds).
+ */
+export interface PaperReference {
+	openAlexId?: string;
+	doi?: string;
+	title?: string;
+	year?: number;
+	author?: string;
+}
+
+/**
+ * Academic-paper metadata (stored in the `paper` envelope). Sourced from
+ * OpenAlex via a DOI or arXiv id. `references` is capped and best-effort;
+ * `referenceCount` is the true count even when the list is truncated or the
+ * reference batch resolve failed.
+ */
+export interface PaperMetadata {
+	source: 'openalex';
+	openAlexId?: string;
+	doi?: string;
+	arxivId?: string;
+	title?: string;
+	authors: string[];
+	abstract?: string;
+	venue?: string;
+	year?: number;
+	citedByCount?: number;
+	referenceCount: number;
+	oaPdfUrl?: string;
+	landingPageUrl?: string;
+	references: PaperReference[];
+}
+
 // ─────────────────────────────────────────────────────────────
 // Enrichments
 // ─────────────────────────────────────────────────────────────
@@ -173,6 +211,8 @@ export type PlatformMetadata =
 			ClassificationEnvelope)
 	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
 			ClassificationEnvelope)
+	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
+			ClassificationEnvelope)
 	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
 			ClassificationEnvelope);
 
@@ -186,6 +226,7 @@ interface MetadataDataMap {
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
 	pdf: PdfMetadata;
+	paper: PaperMetadata;
 	default: null;
 }
 

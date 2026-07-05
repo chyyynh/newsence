@@ -9,7 +9,8 @@ import {
 	USER_FILES_TABLE,
 } from '@shared/article-store';
 import { generateArticleEmbedding } from '@shared/embedding';
-import { hasOgDimensions } from '@shared/platform-metadata';
+import { syncPaperGraph } from '@shared/papers/sync';
+import { hasOgDimensions, type PaperMetadata } from '@shared/platform-metadata';
 import {
 	cleanupSourceArticleDraftRef,
 	readSourceArticleDraft,
@@ -22,6 +23,8 @@ import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
 import type { WorkflowQueueTarget } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
+import { detectPaperId } from '../platforms/paper/detect';
+import { enrichPaperFromId } from '../platforms/paper/openalex';
 import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
@@ -258,6 +261,60 @@ async function stagePdfExtraction(
 	}
 }
 
+// Best-effort academic-paper enrichment. Detects a DOI/arXiv id from the URL
+// (always) or the extracted PDF text (only when we have staged PDF text), then
+// pulls structured metadata + references from OpenAlex. Never fails the workflow:
+// a non-paper resolves to null cheaply, and any OpenAlex error is swallowed.
+async function enrichPaperMetadata(
+	env: Env,
+	shell: ProcessableArticleShell,
+	pdfTextTemp: PdfTextTempResult | null,
+	step: WorkflowStep,
+): Promise<PaperMetadata | null> {
+	const canScanContent = !!pdfTextTemp?.textStorageKey;
+	// Cheap pre-check on the URL alone; bail before scheduling a step if there's
+	// nothing to scan and the URL isn't a paper.
+	if (!canScanContent && !detectPaperId(shell.url, null, { scanContent: false })) return null;
+
+	try {
+		return (await step.do(
+			'enrich-paper-metadata',
+			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			async () => {
+				const content = canScanContent ? await readPdfTextTemp(env, pdfTextTemp!.textStorageKey!) : null;
+				const paperId = detectPaperId(shell.url, content, { scanContent: canScanContent });
+				if (!paperId) return null;
+				const paper = await enrichPaperFromId(paperId);
+				if (paper) {
+					console.info({ tag: 'WORKFLOW', msg: 'Paper enriched', url: shell.url, doi: paper.doi, refs: paper.references.length });
+				}
+				return paper;
+			},
+		)) as PaperMetadata | null;
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'Paper enrichment failed, continuing', url: shell.url, error: String(error) });
+		return null;
+	}
+}
+
+// Promote the resolved paper + its references into the relational citation graph
+// (papers / paper_references). Runs in its own transaction inside syncPaperGraph,
+// so a DOI collision here can't roll back the already-persisted article. Fully
+// non-fatal — a graph failure is logged and the workflow still succeeds.
+async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: PaperMetadata | null, step: WorkflowStep): Promise<void> {
+	if (!paperEnrichment?.openAlexId) return;
+	try {
+		const summary = (await step.do(
+			'sync-paper-graph',
+			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => syncPaperGraph(env, articleId, paperEnrichment),
+		)) as { edges: number } | null;
+		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', article_id: articleId, edges: summary?.edges ?? 0 });
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', article_id: articleId, error: String(error) });
+	}
+}
+
 function mergeProcessorResult(result: ProcessorResult, { ogImageUrl, ogImageDimensions }: OgImagePatch): ProcessorResult {
 	return {
 		...result,
@@ -397,6 +454,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
 
+			const paperEnrichment = await enrichPaperMetadata(this.env, article, pdfTextTemp, step);
+
 			const processorResult = (await step.do(
 				'ai-analysis',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
@@ -425,8 +484,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 						embedding,
 						pdfTextTemp,
 						youtubeHighlights,
+						paperEnrichment,
 					}),
 			)) as string;
+
+			await syncPaperGraphStep(this.env, articleId, paperEnrichment, step);
 
 			await cleanupTargetTemps(this.env, context, pdfTextTemp, step);
 
