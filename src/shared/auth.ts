@@ -1,5 +1,7 @@
 import type { Env } from './types';
 
+const ENCODER = new TextEncoder();
+
 export const INTERNAL_CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Origin': '*',
 	'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -25,10 +27,9 @@ function getInternalToken(request: Request): string | null {
 }
 
 async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
-	const enc = new TextEncoder();
 	const [hashA, hashB] = await Promise.all([
-		crypto.subtle.digest('SHA-256', enc.encode(a)),
-		crypto.subtle.digest('SHA-256', enc.encode(b)),
+		crypto.subtle.digest('SHA-256', ENCODER.encode(a)),
+		crypto.subtle.digest('SHA-256', ENCODER.encode(b)),
 	]);
 	return crypto.subtle.timingSafeEqual(hashA, hashB);
 }
