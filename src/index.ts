@@ -17,7 +17,6 @@ import {
 	addResourceToSource,
 	addResourceUrlsToSource,
 	createDocument,
-	createWorkspace,
 	createWorkspaceDocument,
 	deleteDocument,
 	deleteResource,
@@ -140,11 +139,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Workspace creation capability without loading the full workspace catalog. */
 	workspaceCreationCapability(userId: CoreRpcArgs<'workspaceCreationCapability'>[0]) {
 		return workspaceCreationCapability(this.env, userId);
-	}
-
-	/** Create a workspace with core-owned quota enforcement. */
-	createWorkspace(input: CoreRpcArgs<'createWorkspace'>[0]) {
-		return createWorkspace(this.env, input);
 	}
 
 	/** Workspace pinned-resource summary for workspace-scoped chat context. */

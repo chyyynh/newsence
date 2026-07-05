@@ -13,7 +13,6 @@ import type {
 	AddResourceToSourceResult,
 	AddResourceUrlsToSourceResult,
 	CreateDocumentResult,
-	CreateWorkspaceResult,
 	DeleteDocumentResult,
 	DocumentContent,
 	DocumentSnapshotSource,
@@ -36,6 +35,9 @@ const EMPTY_DOCUMENT_CONTENT = { type: 'doc', content: [{ type: 'paragraph' }] }
 
 type ResourceSource = { type: ResourceSourceType; id: string };
 type ResourceTarget = { type: ResourceTargetType; id: string };
+type CreateWorkspaceResult =
+	| { ok: true; id: string }
+	| { ok: false; code: typeof WORKSPACE_QUOTA_EXCEEDED_CODE; message: typeof WORKSPACE_QUOTA_EXCEEDED_MESSAGE };
 type WorkspaceCapabilityRow = { plan_id: string | null; workspace_count: string | number };
 type WorkspaceCatalogRow = WorkspaceCapabilityRow & {
 	id: string | null;
