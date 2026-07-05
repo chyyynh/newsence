@@ -23,10 +23,6 @@ export interface Env extends Cloudflare.Env {
 	EXA_API_KEY?: string;
 	/** PostHog project key (server). Set via `wrangler secret put POSTHOG_API_KEY`. */
 	POSTHOG_API_KEY?: string;
-	/** Cloudflare account id for AI Gateway provider-native requests. */
-	CF_ACCOUNT_ID?: string;
-	/** Cloudflare API token with AI Gateway access for provider-native requests. */
-	CF_API_TOKEN?: string;
 }
 
 // Article related types

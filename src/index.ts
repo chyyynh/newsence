@@ -32,17 +32,9 @@ import {
 	workspaceSummary,
 } from './documents';
 import { deleteUserMediaFile } from './media/delete';
-import {
-	createPodcast,
-	failPodcast,
-	PodcastWorkflow,
-	preparePodcastRetry,
-	startPodcastSynthesis,
-	updatePodcastScript,
-	workspacePodcastContext,
-} from './podcasts';
+import { createPodcast, failPodcast, preparePodcastRetry, updatePodcastScript, workspacePodcastContext } from './podcasts';
 
-export { NewsenceMonitorWorkflow, PodcastWorkflow, ScrapeWorkflow };
+export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
 type CoreRpcArgs<Method extends keyof CoreRpc> = Parameters<CoreRpc[Method]>;
 
@@ -191,11 +183,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Reset a failed podcast row before retrying script generation or synthesis. */
 	preparePodcastRetry(input: CoreRpcArgs<'preparePodcastRetry'>[0]) {
 		return preparePodcastRetry(this.env, input);
-	}
-
-	/** Trigger the Workflow that turns a saved script into R2-hosted audio. */
-	startPodcastSynthesis(input: CoreRpcArgs<'startPodcastSynthesis'>[0]) {
-		return startPodcastSynthesis(this.env, input);
 	}
 
 	/** Mark a podcast failed from callers that error before Workflow start. */
