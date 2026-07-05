@@ -218,7 +218,7 @@ async function generateWorkflowEmbedding(
 ): Promise<number[] | null> {
 	const article = await loadFullTargetArticle(env, context, pdfTextTemp);
 	const text = buildEmbeddingTextForArticle(article, processorResult);
-	return text && env.AI ? generateArticleEmbedding(text, env.AI) : null;
+	return text && env.AI ? generateArticleEmbedding(text, env.AI, env.AI_GATEWAY_NAME) : null;
 }
 
 async function stagePdfExtraction(

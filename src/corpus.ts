@@ -194,7 +194,7 @@ async function rankArticles(client: Client, env: Env, query: string, limit = 100
 	const tokens = tokenize(sanitized);
 	const patterns = tokens.length > 0 ? tokens.map((t) => `%${t}%`) : [`%${sanitized}%`];
 
-	const embedding = await generateArticleEmbedding(sanitized, env.AI).catch(() => null);
+	const embedding = await generateArticleEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME).catch(() => null);
 	if (!embedding) return keywordOnly(client, patterns, limit, options);
 	const vectorStr = `[${embedding.join(',')}]`;
 	const params: unknown[] = [
