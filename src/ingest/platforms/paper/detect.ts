@@ -6,6 +6,15 @@
 
 export type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string };
 
+/**
+ * Detection result. `id` is a resolvable DOI/arXiv id (null when only a
+ * placeholder or no id was found). `hasAcademicMarker` is true when the text
+ * carries *any* DOI/arXiv signal — including an unassigned ACM template
+ * placeholder (`10.1145/nnnnnnn.nnnnnnn`) — which tells the enricher this is a
+ * paper worth resolving by title even though no id resolved.
+ */
+export type PaperDetection = { id: PaperId | null; hasAcademicMarker: boolean };
+
 const ARXIV_URL_RE = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/i;
 const ARXIV_INLINE_RE = /arxiv[:\s]\s*(\d{4}\.\d{4,5})(?:v\d+)?/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
@@ -16,21 +25,32 @@ function trimDoi(doi: string): string {
 	return doi.replace(/[.,;)\]]+$/, '');
 }
 
+/**
+ * Unassigned template DOIs (ACM `nnnnnnn.nnnnnnn`, generic `XXXXXXX`) look like
+ * real DOIs but resolve to nothing. Treat them as an academic *marker* but never
+ * as a usable id.
+ */
+function isPlaceholderDoi(doi: string): boolean {
+	return /n{4,}|x{4,}/i.test(doi);
+}
+
 function extractArxivId(text: string): string | null {
 	return text.match(ARXIV_URL_RE)?.[1] ?? text.match(ARXIV_INLINE_RE)?.[1] ?? null;
 }
 
-function extractDoi(text: string): string | null {
+/** Returns the first DOI-like token and whether it's a usable (non-placeholder) DOI. */
+function extractDoi(text: string): { value: string | null; marker: boolean } {
 	const raw = text.match(DOI_RE)?.[1];
-	return raw ? trimDoi(raw).toLowerCase() : null;
+	if (!raw) return { value: null, marker: false };
+	const doi = trimDoi(raw).toLowerCase();
+	return isPlaceholderDoi(doi) ? { value: null, marker: true } : { value: doi, marker: true };
 }
 
 /**
  * Resolve a paper identity from an article. Prefers the URL (unambiguous), then
- * falls back to scanning the head of the extracted text when `scanContent` is
- * set. Returns null for anything that isn't recognizably a paper.
+ * scans the head of the extracted text when `scanContent` is set.
  */
-export function detectPaperId(url: string, content: string | null, opts: { scanContent: boolean }): PaperId | null {
+export function detectPaperId(url: string, content: string | null, opts: { scanContent: boolean }): PaperDetection {
 	let host = '';
 	try {
 		host = new URL(url).hostname.toLowerCase();
@@ -39,20 +59,21 @@ export function detectPaperId(url: string, content: string | null, opts: { scanC
 	}
 
 	const urlArxiv = extractArxivId(url);
-	if (urlArxiv) return { kind: 'arxiv', value: urlArxiv };
+	if (urlArxiv) return { id: { kind: 'arxiv', value: urlArxiv }, hasAcademicMarker: true };
 
 	if (host === 'doi.org' || host === 'dx.doi.org' || host.endsWith('arxiv.org')) {
 		const urlDoi = extractDoi(url);
-		if (urlDoi) return { kind: 'doi', value: urlDoi };
+		if (urlDoi.value) return { id: { kind: 'doi', value: urlDoi.value }, hasAcademicMarker: true };
 	}
 
 	if (opts.scanContent && content) {
 		const head = content.slice(0, CONTENT_SCAN_CHARS);
 		const arxiv = extractArxivId(head);
-		if (arxiv) return { kind: 'arxiv', value: arxiv };
+		if (arxiv) return { id: { kind: 'arxiv', value: arxiv }, hasAcademicMarker: true };
 		const doi = extractDoi(head);
-		if (doi) return { kind: 'doi', value: doi };
+		if (doi.value) return { id: { kind: 'doi', value: doi.value }, hasAcademicMarker: true };
+		if (doi.marker) return { id: null, hasAcademicMarker: true };
 	}
 
-	return null;
+	return { id: null, hasAcademicMarker: false };
 }

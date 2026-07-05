@@ -125,15 +125,16 @@ async function resolveReferences(referencedWorks: string[]): Promise<PaperRefere
 	}
 }
 
-function normalizeWork(work: OaWork, id: PaperId, references: PaperReference[]): PaperMetadata {
+async function normalizeWork(work: OaWork, arxivHint?: string): Promise<PaperMetadata> {
 	const bestPdf = work.best_oa_location?.pdf_url ?? work.open_access?.oa_url ?? undefined;
 	const landing = work.primary_location?.landing_page_url ?? undefined;
 	const venue = work.primary_location?.source?.display_name ?? work.best_oa_location?.source?.display_name ?? undefined;
+	const references = await resolveReferences(work.referenced_works ?? []);
 	return {
 		source: 'openalex',
 		openAlexId: shortId(work.id) ?? undefined,
 		doi: stripDoiUrl(work.doi),
-		arxivId: id.kind === 'arxiv' ? id.value : undefined,
+		arxivId: arxivHint,
 		title: work.title ?? work.display_name ?? undefined,
 		authors: authorNames(work.authorships),
 		abstract: reconstructAbstract(work.abstract_inverted_index),
@@ -151,6 +152,23 @@ function doiFilterFor(id: PaperId): string {
 	return id.kind === 'doi' ? id.value : `10.48550/arxiv.${id.value}`;
 }
 
+/** Normalize a title for comparison: lowercase, alphanumerics only. */
+function normalizeTitle(title: string): string {
+	return title.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * Guard against title-search false positives: accept only when the candidate is
+ * effectively the same title (normalized equality, or one is a prefix of the
+ * other for subtitle/truncation differences).
+ */
+function titlesMatch(query: string, candidate: string): boolean {
+	const a = normalizeTitle(query);
+	const b = normalizeTitle(candidate);
+	if (a.length < 12 || b.length < 12) return false;
+	return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
 /**
  * Resolve a paper's metadata + references from a DOI or arXiv id. Returns null
  * when OpenAlex has no record or any network error occurs — never throws.
@@ -161,8 +179,26 @@ export async function enrichPaperFromId(id: PaperId): Promise<PaperMetadata | nu
 		const data = await fetchJson<OaListResponse>(url);
 		const work = data?.results?.[0];
 		if (!work) return null;
-		const references = await resolveReferences(work.referenced_works ?? []);
-		return normalizeWork(work, id, references);
+		return normalizeWork(work, id.kind === 'arxiv' ? id.value : undefined);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Fallback for papers whose printed DOI is a placeholder / unassigned (common in
+ * preprints & camera-ready drafts): search OpenAlex by title and accept the top
+ * hit only if its title matches (guards against grabbing an unrelated work).
+ */
+export async function enrichPaperByTitle(title: string): Promise<PaperMetadata | null> {
+	const trimmed = title.trim();
+	if (trimmed.length < 12) return null;
+	try {
+		const url = buildUrl({ filter: `title.search:${trimmed}`, select: WORK_SELECT, 'per-page': '3' });
+		const data = await fetchJson<OaListResponse>(url);
+		const work = (data?.results ?? []).find((w) => titlesMatch(trimmed, w.title ?? w.display_name ?? ''));
+		if (!work) return null;
+		return normalizeWork(work);
 	} catch {
 		return null;
 	}

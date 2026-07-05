@@ -24,7 +24,7 @@ import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegmen
 import type { WorkflowQueueTarget } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId } from '../platforms/paper/detect';
-import { enrichPaperFromId } from '../platforms/paper/openalex';
+import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
@@ -273,8 +273,8 @@ async function enrichPaperMetadata(
 ): Promise<PaperMetadata | null> {
 	const canScanContent = !!pdfTextTemp?.textStorageKey;
 	// Cheap pre-check on the URL alone; bail before scheduling a step if there's
-	// nothing to scan and the URL isn't a paper.
-	if (!canScanContent && !detectPaperId(shell.url, null, { scanContent: false })) return null;
+	// nothing to scan and the URL carries no paper signal.
+	if (!canScanContent && !detectPaperId(shell.url, null, { scanContent: false }).hasAcademicMarker) return null;
 
 	try {
 		return (await step.do(
@@ -282,11 +282,22 @@ async function enrichPaperMetadata(
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				const content = canScanContent ? await readPdfTextTemp(env, pdfTextTemp!.textStorageKey!) : null;
-				const paperId = detectPaperId(shell.url, content, { scanContent: canScanContent });
-				if (!paperId) return null;
-				const paper = await enrichPaperFromId(paperId);
+				const detection = detectPaperId(shell.url, content, { scanContent: canScanContent });
+				// Resolve by id first; fall back to a title search when the paper has an
+				// academic marker but no usable id (e.g. a placeholder/unassigned DOI).
+				let paper = detection.id ? await enrichPaperFromId(detection.id) : null;
+				if (!paper && detection.hasAcademicMarker && shell.title) {
+					paper = await enrichPaperByTitle(shell.title);
+				}
 				if (paper) {
-					console.info({ tag: 'WORKFLOW', msg: 'Paper enriched', url: shell.url, doi: paper.doi, refs: paper.references.length });
+					console.info({
+						tag: 'WORKFLOW',
+						msg: 'Paper enriched',
+						url: shell.url,
+						doi: paper.doi,
+						via: detection.id ? 'id' : 'title',
+						refs: paper.references.length,
+					});
 				}
 				return paper;
 			},
