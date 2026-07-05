@@ -9,8 +9,8 @@
  * Sig input shape: `r2:${storageKey}:${exp}` (verifyR2KeySignature). Distinct
  * prefix from /media/external/ so a leaked external-media sig can't be replayed here.
  *
- * Range support: parsed from the Range header into R2's R2Range shape and
- * forwarded to env.R2.get.
+ * Range support: forwarded as request headers to env.R2.get so the R2 binding
+ * owns HTTP Range parsing.
  */
 
 import type { Env } from '@shared/types';
@@ -82,25 +82,6 @@ function corsPreflight(request: Request, env: Env): Response {
 	});
 }
 
-function parseRange(header: string | null): R2Range | null {
-	if (!header) return null;
-	const match = header.match(/^bytes=(\d*)-(\d*)$/);
-	if (!match) return null;
-	const [, startStr, endStr] = match;
-	if (startStr === '' && endStr === '') return null;
-	if (startStr === '') {
-		const suffix = Number.parseInt(endStr, 10);
-		if (!Number.isFinite(suffix) || suffix <= 0) return null;
-		return { suffix };
-	}
-	const offset = Number.parseInt(startStr, 10);
-	if (!Number.isFinite(offset) || offset < 0) return null;
-	if (endStr === '') return { offset };
-	const end = Number.parseInt(endStr, 10);
-	if (!Number.isFinite(end) || end < offset) return null;
-	return { offset, length: end - offset + 1 };
-}
-
 function resolveRange(range: R2Range, size: number): { start: number; end: number } {
 	if ('suffix' in range) {
 		const start = Math.max(0, size - range.suffix);
@@ -111,7 +92,7 @@ function resolveRange(range: R2Range, size: number): { start: number; end: numbe
 	return { start, end: Math.min(size - 1, start + length - 1) };
 }
 
-function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, cors: Record<string, string>): Headers {
+function buildHeaders(object: R2ObjectBody, key: string, cors: Record<string, string>): Headers {
 	const headers = new Headers();
 	object.writeHttpMetadata(headers);
 	if (!headers.has('Content-Type')) headers.set('Content-Type', inferContentType(key));
@@ -131,8 +112,8 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, 
 		headers.set('Content-Disposition', 'attachment');
 	}
 
-	if (range && object.range) {
-		const { start, end } = resolveRange(range, object.size);
+	if (object.range) {
+		const { start, end } = resolveRange(object.range, object.size);
 		headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);
 		headers.set('Content-Length', String(end - start + 1));
 	} else {
@@ -168,11 +149,9 @@ export async function handleR2Asset(request: Request, env: Env): Promise<Respons
 	const ok = await verifyR2KeySignature(storageKey, sig, exp, signingSecret);
 	if (!ok) return new Response('Invalid or expired signature', { status: 403 });
 
-	const range = parseRange(request.headers.get('Range'));
-
 	let object: R2ObjectBody | null;
 	try {
-		object = await env.R2.get(storageKey, range ? { range } : undefined);
+		object = await env.R2.get(storageKey, request.headers.has('Range') ? { range: request.headers } : undefined);
 	} catch (err) {
 		const name = (err as { name?: string }).name;
 		if (name === 'InvalidRange') {
@@ -191,7 +170,7 @@ export async function handleR2Asset(request: Request, env: Env): Promise<Respons
 
 	if (!object) return new Response('Not found', { status: 404 });
 
-	const headers = buildHeaders(object, storageKey, range, getCorsHeaders(request, env));
-	const status = range ? 206 : 200;
+	const headers = buildHeaders(object, storageKey, getCorsHeaders(request, env));
+	const status = object.range ? 206 : 200;
 	return new Response(object.body, { status, headers });
 }
