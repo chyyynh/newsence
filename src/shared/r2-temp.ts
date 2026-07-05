@@ -26,10 +26,14 @@ async function getTempObject(env: Env, key: string, guard: TempObjectGuard): Pro
 	return obj;
 }
 
-export async function putTempText(env: Env, key: string, text: string, contentType: string): Promise<void> {
-	await env.R2.put(key, text, {
+async function putTempObject(env: Env, key: string, value: string | Uint8Array, contentType: string): Promise<void> {
+	await env.R2.put(key, value, {
 		httpMetadata: { contentType },
 	});
+}
+
+export async function putTempText(env: Env, key: string, text: string, contentType: string): Promise<void> {
+	await putTempObject(env, key, text, contentType);
 }
 
 export async function putRandomSerializedTempJson(env: Env, prefix: string, json: string): Promise<string> {
@@ -39,9 +43,7 @@ export async function putRandomSerializedTempJson(env: Env, prefix: string, json
 }
 
 export async function putTempBytes(env: Env, key: string, bytes: Uint8Array, contentType: string): Promise<void> {
-	await env.R2.put(key, bytes, {
-		httpMetadata: { contentType },
-	});
+	await putTempObject(env, key, bytes, contentType);
 }
 
 export async function readTempText(env: Env, key: string, guard: TempObjectGuard): Promise<string> {
@@ -55,7 +57,7 @@ export async function readTempJson<T>(env: Env, key: string, guard: TempObjectGu
 export async function readTempBytes(env: Env, key: string, guard: TempObjectGuard): Promise<{ bytes: Uint8Array; contentType?: string }> {
 	const obj = await getTempObject(env, key, guard);
 	return {
-		bytes: new Uint8Array(await obj.arrayBuffer()),
+		bytes: await obj.bytes(),
 		contentType: obj.httpMetadata?.contentType,
 	};
 }
