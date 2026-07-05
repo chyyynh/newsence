@@ -7,11 +7,11 @@ import type {
 	PodcastContextSource,
 	PodcastLanguage,
 	PodcastScript,
-	PodcastSpeaker,
 	PodcastStatus,
 	PodcastSummary,
 	WorkspacePodcastContextResult,
 } from '@worker-contracts/podcast-contracts';
+import { parsePodcastScript } from '@worker-contracts/podcast-contracts';
 
 const MAX_CONTEXT_SOURCES = 24;
 const MAX_CONTEXT_DOCUMENTS = 10;
@@ -90,31 +90,6 @@ function parsePodcastStatus(value: string): PodcastStatus {
 
 function parsePodcastLanguage(value: string): PodcastLanguage {
 	return value === 'en' ? 'en' : 'zh-TW';
-}
-
-function parsePodcastSpeaker(value: unknown): PodcastSpeaker {
-	if (value === 'host_a' || value === 'host_b') return value;
-	throw new Error('Invalid podcast speaker');
-}
-
-function parsePodcastScript(value: unknown): PodcastScript {
-	if (!value || typeof value !== 'object') throw new Error('Invalid podcast script');
-	const record = value as Record<string, unknown>;
-	const lines = Array.isArray(record.lines) ? record.lines : null;
-	if (!lines || lines.length < 6 || lines.length > 80) throw new Error('Invalid podcast script lines');
-	return {
-		scratchpad: typeof record.scratchpad === 'string' ? record.scratchpad.trim() : '',
-		lines: lines.map((line) => {
-			if (!line || typeof line !== 'object') throw new Error('Invalid podcast script line');
-			const lineRecord = line as Record<string, unknown>;
-			const text = typeof lineRecord.text === 'string' ? lineRecord.text.trim() : '';
-			if (!text) throw new Error('Podcast script line cannot be empty');
-			return {
-				speaker: parsePodcastSpeaker(lineRecord.speaker),
-				text,
-			};
-		}),
-	};
 }
 
 function podcastSummary(row: PodcastRow): PodcastSummary {
