@@ -2,7 +2,6 @@ import { ingestUrls } from '@ingest/urls';
 import type { DbClient } from '@shared/db';
 import { withDbClient, withDbTransaction } from '@shared/db';
 import type { Env } from '@shared/types';
-import type { JSONContent } from '@tiptap/core';
 import { WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
@@ -11,9 +10,8 @@ import type {
 	CreateDocumentResult,
 	CreateWorkspaceResult,
 	DeleteDocumentResult,
-	DocumentReadResult,
+	DocumentContent,
 	DocumentSnapshotSource,
-	EditDocumentResult,
 	RemoveResourceResult,
 	ResourceSourceType,
 	ResourceTargetType,
@@ -26,15 +24,12 @@ import type {
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
 import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
-import { contentToMarkdown, EMPTY_TIPTAP_DOCUMENT, markdownToTiptapJson } from '@worker-contracts/editor-markdown';
 
-const MAX_CONTEXT_DOCUMENTS = 8;
-const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
 const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const EMPTY_DOCUMENT_CONTENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies DocumentContent;
 
-type DocumentEdit = { old_string: string; new_string: string };
 type ResourceSource = { type: ResourceSourceType; id: string };
 type ResourceTarget = { type: ResourceTargetType; id: string };
 type WorkspaceCapabilityRow = { plan_id: string | null; workspace_count: string | number };
@@ -48,7 +43,7 @@ type WorkspaceCatalogRow = WorkspaceCapabilityRow & {
 type DocumentRow = {
 	id: string;
 	title: string;
-	content: JSONContent | null;
+	content: DocumentContent | null;
 	version: number;
 	workspace_id: string;
 	created_at: Date | string;
@@ -71,7 +66,7 @@ type WorkspaceDocumentRow = {
 	workspace_id: string | null;
 	title: string;
 	description: string | null;
-	content: JSONContent | null;
+	content: DocumentContent | null;
 	version: number;
 	share_enabled: boolean;
 	share_slug: string | null;
@@ -97,7 +92,7 @@ type DocumentShareUpdateRow = {
 type SaveDocumentRow = {
 	id: string;
 	title: string;
-	content: JSONContent | null;
+	content: DocumentContent | null;
 	version: number;
 	updated_at: Date | string;
 };
@@ -131,26 +126,34 @@ function hasTransientImageSrc(node: unknown): boolean {
 	return Object.values(record).some(hasTransientImageSrc);
 }
 
-function contentHasMeaningfulNode(nodes: JSONContent[] | undefined): boolean {
+function nodeChildren(node: unknown): unknown[] | undefined {
+	if (!node || typeof node !== 'object') return undefined;
+	const content = (node as Record<string, unknown>).content;
+	return Array.isArray(content) ? content : undefined;
+}
+
+function contentHasMeaningfulNode(nodes: unknown[] | undefined): boolean {
 	return !!nodes?.some((node) => {
-		if (typeof node.text === 'string' && node.text.trim()) return true;
-		if (node.type && !['doc', 'paragraph', 'hardBreak', 'text'].includes(node.type)) return true;
-		return contentHasMeaningfulNode(node.content);
+		if (!node || typeof node !== 'object') return false;
+		const record = node as Record<string, unknown>;
+		if (typeof record.text === 'string' && record.text.trim()) return true;
+		if (typeof record.type === 'string' && !['doc', 'paragraph', 'hardBreak', 'text'].includes(record.type)) return true;
+		return contentHasMeaningfulNode(nodeChildren(record));
 	});
 }
 
 function isEmptyEditorContent(content: unknown): boolean {
 	if (content === null || content === undefined) return true;
-	return !contentHasMeaningfulNode((content as JSONContent).content);
+	return !contentHasMeaningfulNode(nodeChildren(content));
+}
+
+function asDocumentContent(content: unknown): DocumentContent {
+	if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('Invalid document content');
+	return content as DocumentContent;
 }
 
 function dateIso(value: Date | string): string {
 	return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
-
-function truncateContextDocument(markdown: string) {
-	if (markdown.length <= MAX_CONTEXT_DOCUMENT_CHARS) return { content: markdown, truncated: false };
-	return { content: markdown.slice(0, MAX_CONTEXT_DOCUMENT_CHARS), truncated: true };
 }
 
 function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumentResult {
@@ -159,7 +162,7 @@ function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumen
 		workspaceId: row.workspace_id,
 		title: row.title,
 		description: row.description,
-		content: (row.content ?? EMPTY_TIPTAP_DOCUMENT) as WorkspaceDocumentResult['content'],
+		content: row.content ?? EMPTY_DOCUMENT_CONTENT,
 		version: row.version,
 		shareEnabled: row.share_enabled,
 		shareSlug: row.share_slug,
@@ -184,7 +187,7 @@ function serializeSaveDocument(row: SaveDocumentRow): SaveDocumentResult {
 	return {
 		id: row.id,
 		title: row.title,
-		content: (row.content ?? EMPTY_TIPTAP_DOCUMENT) as SaveDocumentResult['content'],
+		content: row.content ?? EMPTY_DOCUMENT_CONTENT,
 		version: row.version,
 		updatedAt: dateIso(row.updated_at),
 	};
@@ -239,27 +242,6 @@ async function workspaceQuotaLimitTx(db: DbClient, userId: string): Promise<numb
 	await db.query('SELECT pg_advisory_xact_lock(581203, hashtext($1))', [userId]);
 	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
 	return workspaceLimitForPlan(settings.rows[0]?.plan_id ?? 'free');
-}
-
-function applyMarkdownEdits(content: string, edits: DocumentEdit[]): { applied: number; failedAt?: string; result: string } {
-	let current = content;
-	let applied = 0;
-	for (const edit of edits) {
-		const first = current.indexOf(edit.old_string);
-		if (first === -1) return { applied, failedAt: edit.old_string, result: current };
-		if (current.indexOf(edit.old_string, first + edit.old_string.length) !== -1) {
-			return { applied, failedAt: `[multiple matches] ${edit.old_string}`, result: current };
-		}
-		current = current.slice(0, first) + edit.new_string + current.slice(first + edit.old_string.length);
-		applied += 1;
-	}
-	return { applied, result: current };
-}
-
-function documentContent(markdown: string): JSONContent {
-	const content = markdownToTiptapJson(markdown);
-	if (hasTransientImageSrc(content)) throw new Error('Images are still uploading');
-	return content;
 }
 
 function resourceSummaryLine(
@@ -464,10 +446,11 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 
 export async function createDocument(
 	env: Env,
-	params: { userId: string; title: string; markdown: string; workspace: WorkspaceDecision },
+	params: { userId: string; title: string; content: DocumentContent; workspace: WorkspaceDecision },
 ): Promise<CreateDocumentResult> {
-	if (!params.markdown.trim()) throw new Error('Generated document content is empty');
-	const content = documentContent(params.markdown);
+	const content = asDocumentContent(params.content);
+	if (isEmptyEditorContent(content)) throw new Error('Generated document content is empty');
+	if (hasTransientImageSrc(content)) throw new Error('Images are still uploading');
 	const normalizedTitle = params.title.trim().slice(0, 200) || 'Untitled';
 
 	return withDbTransaction(env, 'create document', async (db) => {
@@ -542,7 +525,7 @@ export async function createWorkspaceDocument(
 ): Promise<WorkspaceDocumentResult> {
 	if (!isUuid(params.workspaceId)) throw new Error('Workspace not found');
 	const title = params.title?.trim().slice(0, 200) || 'Untitled';
-	const content = JSON.stringify(EMPTY_TIPTAP_DOCUMENT);
+	const content = JSON.stringify(EMPTY_DOCUMENT_CONTENT);
 
 	return withDbClient(env, async (db) => {
 		const row = (
@@ -593,7 +576,7 @@ export async function saveDocument(
 		userId: string;
 		documentId: string;
 		title: string;
-		content: SaveDocumentResult['content'];
+		content: DocumentContent;
 		allowEmptyContentOverwrite?: boolean;
 		expectedVersion?: number;
 		source?: DocumentSnapshotSource;
@@ -616,7 +599,7 @@ export async function saveDocument(
 			throw new DocumentVersionConflictError(existing.version, params.expectedVersion);
 		}
 
-		const incomingContent = params.content as JSONContent;
+		const incomingContent = asDocumentContent(params.content);
 		const incomingEmpty = isEmptyEditorContent(incomingContent);
 		const existingHasContent = !isEmptyEditorContent(existing.content);
 		if (hasTransientImageSrc(incomingContent)) throw new Error('Images are still uploading');
@@ -644,7 +627,7 @@ export async function saveDocument(
 			await createDocumentVersionSnapshot(
 				db,
 				{
-					content: existing.content ?? EMPTY_TIPTAP_DOCUMENT,
+					content: existing.content ?? EMPTY_DOCUMENT_CONTENT,
 					documentId: existing.id,
 					source,
 					title: existing.title,
@@ -717,7 +700,7 @@ export async function updateDocumentShare(
 
 async function insertDocument(
 	db: DbClient,
-	input: { userId: string; workspaceId: string; title: string; content: JSONContent },
+	input: { userId: string; workspaceId: string; title: string; content: DocumentContent },
 ): Promise<{ id: string; workspace_id: string }> {
 	const row = (
 		await db.query<{ id: string; workspace_id: string }>(
@@ -732,98 +715,13 @@ async function insertDocument(
 	return row;
 }
 
-export async function readDocuments(env: Env, userId: string, ids: string[]): Promise<DocumentReadResult[]> {
-	const requestedIds = [...new Set(ids)].slice(0, MAX_CONTEXT_DOCUMENTS);
-	const validIds = requestedIds.filter(isUuid);
-	if (validIds.length === 0) return requestedIds.map((id) => ({ type: 'error' as const, id, error: `Document not found: ${id}` }));
-	return withDbClient(env, async (db) => {
-		const rows = (
-			await db.query<DocumentRow>(
-				`SELECT id, title, content, version, workspace_id, created_at, updated_at
-				 FROM user_documents
-				 WHERE user_id = $1 AND id = ANY($2::uuid[])`,
-				[userId, validIds],
-			)
-		).rows;
-		const byId = new Map(rows.map((row) => [row.id, row]));
-		return requestedIds.map((id) => {
-			const row = byId.get(id);
-			if (!row) return { type: 'error' as const, id, error: `Document not found: ${id}` };
-			const { content, truncated } = truncateContextDocument(
-				contentToMarkdown(row.content ?? { type: 'doc', content: [{ type: 'paragraph' }] }),
-			);
-			return {
-				type: 'document' as const,
-				id: row.id,
-				title: row.title,
-				content,
-				metadata: {
-					createdAt: dateIso(row.created_at),
-					truncated,
-					updatedAt: dateIso(row.updated_at),
-					version: row.version,
-				},
-			};
-		});
-	});
-}
-
-export async function editDocument(
-	env: Env,
-	params: { userId: string; documentId: string; edits: DocumentEdit[]; snapshot?: boolean },
-): Promise<EditDocumentResult> {
-	if (!isUuid(params.documentId)) throw new Error('Invalid documentId');
-	if (params.edits.length === 0) throw new Error('At least one edit is required');
-	return withDbTransaction(env, 'edit document', async (db) => {
-		const document = (
-			await db.query<DocumentRow>(
-				`SELECT id, title, content, version, workspace_id, created_at, updated_at
-				 FROM user_documents
-				 WHERE id = $1 AND user_id = $2
-				 LIMIT 1`,
-				[params.documentId, params.userId],
-			)
-		).rows[0];
-		if (!document) throw new Error('Document not found');
-
-		const markdown = contentToMarkdown(document.content ?? { type: 'doc', content: [{ type: 'paragraph' }] });
-		const { applied, failedAt, result } = applyMarkdownEdits(markdown, params.edits);
-		if (failedAt !== undefined) throw new Error(`Text to replace not found: "${failedAt.slice(0, 80)}"`);
-
-		const content = documentContent(result);
-		const newVersion = document.version + 1;
-		const updated = (
-			await db.query<{ title: string; version: number }>(
-				`UPDATE user_documents
-				 SET content = $3::jsonb, version = $4, updated_at = NOW()
-				 WHERE id = $1 AND user_id = $2
-				 RETURNING title, version`,
-				[document.id, params.userId, JSON.stringify(content), newVersion],
-			)
-		).rows[0];
-		if (!updated) throw new Error('Document not found');
-
-		if (params.snapshot ?? true) {
-			await createDocumentVersionSnapshot(db, {
-				content: document.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
-				documentId: document.id,
-				source: 'ai-edit',
-				title: document.title,
-				version: document.version,
-			});
-		}
-
-		return { editCount: applied, newMarkdown: result, newVersion: updated.version, title: updated.title };
-	});
-}
-
 async function createDocumentVersionSnapshot(
 	db: DbClient,
-	input: { documentId: string; content: JSONContent; title: string; version: number; source: DocumentSnapshotSource },
+	input: { documentId: string; content: DocumentContent; title: string; version: number; source: DocumentSnapshotSource },
 	options?: { minIntervalMs?: number },
 ): Promise<void> {
 	const latest = (
-		await db.query<{ content: JSONContent | null; created_at: Date | string }>(
+		await db.query<{ content: DocumentContent | null; created_at: Date | string }>(
 			`SELECT content, created_at FROM document_versions WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
 			[input.documentId],
 		)

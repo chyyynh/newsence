@@ -21,9 +21,7 @@ import {
 	createWorkspaceDocument,
 	deleteDocument,
 	deleteResource,
-	editDocument,
 	listWorkspaces,
-	readDocuments,
 	removeResourceFromSource,
 	saveDocument,
 	updateDocumentShare,
@@ -74,12 +72,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		return readCorpusItems(this.env, items, userId);
 	}
 
-	/** Read Tiptap documents as markdown context. */
-	readDocuments(userId: CoreRpcArgs<'readDocuments'>[0], ids: CoreRpcArgs<'readDocuments'>[1]) {
-		return readDocuments(this.env, userId, ids);
-	}
-
-	/** Persist AI-generated markdown into a Tiptap document. */
+	/** Persist AI-generated document JSON. */
 	createDocument(input: CoreRpcArgs<'createDocument'>[0]) {
 		return createDocument(this.env, input);
 	}
@@ -107,11 +100,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Update public-share settings for a user-owned document. */
 	updateDocumentShare(input: CoreRpcArgs<'updateDocumentShare'>[0]) {
 		return updateDocumentShare(this.env, input);
-	}
-
-	/** Apply str_replace edits to a document. */
-	editDocument(input: CoreRpcArgs<'editDocument'>[0]) {
-		return editDocument(this.env, input);
 	}
 
 	/** Pin article/file/URL resources to a document's workspace. */
