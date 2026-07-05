@@ -54,13 +54,28 @@ function buildUrl(params: Record<string, string>): string {
 	return `${OPENALEX_BASE}?${search.toString()}`;
 }
 
+// OpenAlex rate-limits by IP, and Cloudflare Workers share egress IPs — 429s are
+// expected under load. Retry a couple of times, honoring Retry-After (capped).
 async function fetchJson<T>(url: string): Promise<T | null> {
-	const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, REQUEST_TIMEOUT_MS);
-	if (!res.ok) {
-		await res.body?.cancel();
-		return null;
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, REQUEST_TIMEOUT_MS);
+			if (res.ok) return (await res.json()) as T;
+			if (res.status === 429 && attempt < 2) {
+				const retryAfter = Math.min(Number.parseInt(res.headers.get('retry-after') ?? '', 10) || 2, 5);
+				await res.body?.cancel();
+				await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+				continue;
+			}
+			console.warn({ tag: 'OPENALEX', msg: 'non-ok', status: res.status, url: url.slice(0, 100) });
+			await res.body?.cancel();
+			return null;
+		} catch (error) {
+			console.warn({ tag: 'OPENALEX', msg: 'fetch threw', error: String(error) });
+			return null;
+		}
 	}
-	return (await res.json()) as T;
+	return null;
 }
 
 /** OpenAlex work URLs are `https://openalex.org/W123` — the filter wants the bare id. */

@@ -79,19 +79,21 @@ export function extractPaperTitle(content: string): string | null {
  * Resolve a paper identity from an article. Prefers the URL (unambiguous), then
  * scans the head of the extracted text when `scanContent` is set.
  */
-export function detectPaperId(url: string, content: string | null, opts: { scanContent: boolean }): PaperDetection {
+export function detectPaperId(url: string | null | undefined, content: string | null, opts: { scanContent: boolean }): PaperDetection {
+	// Blob uploads have a null source_url — never call String.match on null.
+	const safeUrl = typeof url === 'string' ? url : '';
 	let host = '';
 	try {
-		host = new URL(url).hostname.toLowerCase();
+		host = new URL(safeUrl).hostname.toLowerCase();
 	} catch {
 		// non-URL sources (uploads) fall through to content scanning
 	}
 
-	const urlArxiv = extractArxivId(url);
+	const urlArxiv = extractArxivId(safeUrl);
 	if (urlArxiv) return { id: { kind: 'arxiv', value: urlArxiv }, hasAcademicMarker: true };
 
 	if (host === 'doi.org' || host === 'dx.doi.org' || host.endsWith('arxiv.org')) {
-		const urlDoi = extractDoi(url);
+		const urlDoi = extractDoi(safeUrl);
 		if (urlDoi.value) return { id: { kind: 'doi', value: urlDoi.value }, hasAcademicMarker: true };
 	}
 

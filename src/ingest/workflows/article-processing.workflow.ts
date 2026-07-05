@@ -267,26 +267,34 @@ async function stagePdfExtraction(
 // a non-paper resolves to null cheaply, and any OpenAlex error is swallowed.
 async function enrichPaperMetadata(
 	env: Env,
+	context: WorkflowRunContext,
 	shell: ProcessableArticleShell,
 	pdfTextTemp: PdfTextTempResult | null,
 	step: WorkflowStep,
 ): Promise<PaperMetadata | null> {
-	const canScanContent = !!pdfTextTemp?.textStorageKey;
-	// Cheap pre-check on the URL alone; bail before scheduling a step if there's
-	// nothing to scan and the URL carries no paper signal.
-	if (!canScanContent && !detectPaperId(shell.url, null, { scanContent: false }).hasAcademicMarker) return null;
+	const hasStagedText = !!pdfTextTemp?.textStorageKey;
+	const isPdfRow = shell.file_type === 'application/pdf';
+	// Bail before scheduling a step unless this could be a paper: staged PDF text
+	// (fresh upload), an already-extracted PDF row (retry), or a URL paper signal.
+	if (!hasStagedText && !isPdfRow && !detectPaperId(shell.url, null, { scanContent: false }).hasAcademicMarker) return null;
 
 	try {
 		return (await step.do(
 			'enrich-paper-metadata',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				const content = canScanContent ? await readPdfTextTemp(env, pdfTextTemp!.textStorageKey!) : null;
-				const detection = detectPaperId(shell.url, content, { scanContent: canScanContent });
+				// Content comes from the staged temp (fresh) or the persisted
+				// extracted_text (retry); loadFullTargetArticle resolves both.
+				const content = (await loadFullTargetArticle(env, context, pdfTextTemp)).content;
+				const detection = detectPaperId(shell.url, content, { scanContent: !!content });
 				// Resolve by id first; fall back to a title search when the paper has an
 				// academic marker but no usable id (e.g. a placeholder/unassigned DOI).
 				let paper = detection.id ? await enrichPaperFromId(detection.id) : null;
-				if (!paper && detection.hasAcademicMarker) {
+				// Fall back to a title search when there's a paper signal but no usable
+				// id. For uploaded PDFs, attempt it regardless of a DOI marker — the
+				// printed DOI is often a placeholder, or gets stripped by content
+				// cleanup — since the Dice title match guards against false positives.
+				if (!paper && (detection.hasAcademicMarker || isPdfRow)) {
 					// Prefer the title parsed from the PDF body over the (often noisy,
 					// filename-derived) row title — the latter rarely matches a search.
 					const searchTitle = (content ? extractPaperTitle(content) : null) ?? shell.title;
@@ -296,7 +304,6 @@ async function enrichPaperMetadata(
 					console.info({
 						tag: 'WORKFLOW',
 						msg: 'Paper enriched',
-						url: shell.url,
 						doi: paper.doi,
 						via: detection.id ? 'id' : 'title',
 						refs: paper.references.length,
@@ -468,7 +475,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
 
-			const paperEnrichment = await enrichPaperMetadata(this.env, article, pdfTextTemp, step);
+			const paperEnrichment = await enrichPaperMetadata(this.env, context, article, pdfTextTemp, step);
 
 			const processorResult = (await step.do(
 				'ai-analysis',
