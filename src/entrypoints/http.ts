@@ -127,8 +127,6 @@ function health(): Response {
 }
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -149,8 +147,6 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleRelated(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -172,8 +168,6 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleCreateWorkspace(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -201,8 +195,6 @@ async function handleCreateWorkspace(request: Request, env: Env): Promise<Respon
 }
 
 async function handleAddResourceUrls(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -244,8 +236,6 @@ async function handleAddResourceUrls(request: Request, env: Env): Promise<Respon
 }
 
 async function handleAddResourceToSource(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -287,8 +277,6 @@ async function handleAddResourceToSource(request: Request, env: Env): Promise<Re
 }
 
 async function handleDeleteResource(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -312,8 +300,6 @@ async function handleDeleteResource(request: Request, env: Env): Promise<Respons
 }
 
 async function handleRemoveResourceFromSource(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -355,8 +341,6 @@ async function handleRemoveResourceFromSource(request: Request, env: Env): Promi
 }
 
 async function handleValidateResourceSource(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -392,8 +376,6 @@ async function handleValidateResourceSource(request: Request, env: Env): Promise
 }
 
 async function handleCreateWorkspaceDocument(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -417,8 +399,6 @@ async function handleCreateWorkspaceDocument(request: Request, env: Env): Promis
 }
 
 async function handleDeleteDocument(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -442,8 +422,6 @@ async function handleDeleteDocument(request: Request, env: Env): Promise<Respons
 }
 
 async function handleSaveDocument(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -495,8 +473,6 @@ async function handleSaveDocument(request: Request, env: Env): Promise<Response>
 }
 
 async function handleUpdateDocumentShare(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -541,8 +517,6 @@ async function handleUpdateDocumentShare(request: Request, env: Env): Promise<Re
 }
 
 async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 

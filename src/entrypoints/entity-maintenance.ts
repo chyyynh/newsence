@@ -32,8 +32,6 @@ function parseMaintenanceSourceType(value: unknown): string | null {
 }
 
 export async function handleRepairEntityLinks(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -67,8 +65,6 @@ export async function handleRepairEntityLinks(request: Request, env: Env): Promi
 }
 
 export async function handleBackfillMissingEntities(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -121,8 +117,6 @@ export async function handleBackfillMissingEntities(request: Request, env: Env):
 }
 
 export async function handleEntityQuality(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
@@ -135,8 +129,6 @@ export async function handleEntityQuality(request: Request, env: Env): Promise<R
 }
 
 export async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 

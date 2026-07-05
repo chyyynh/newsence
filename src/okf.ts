@@ -67,8 +67,6 @@ const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Bus
 const encoder = new TextEncoder();
 
 export async function handleExportCollectionOkf(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: OKF_EXPORT_CORS });
-
 	const unauth = await requireAuth(request, env, OKF_EXPORT_CORS);
 	if (unauth) return unauth;
 
@@ -100,8 +98,6 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 
 // JSON view of the same bundle, for MCP consumers (kcmd-style list-entries / lookup-entry).
 export async function handleOkfCollectionEntries(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: OKF_EXPORT_CORS });
-
 	const unauth = await requireAuth(request, env, OKF_EXPORT_CORS);
 	if (unauth) return unauth;
 

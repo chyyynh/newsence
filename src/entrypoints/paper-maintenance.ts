@@ -11,8 +11,6 @@ function boundedLimit(value: unknown, fallback = 100, max = 500): number {
 }
 
 export async function handleBackfillPaperGraph(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
 
