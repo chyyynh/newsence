@@ -474,6 +474,33 @@ export async function failPodcast(
 	});
 }
 
+export async function preparePodcastRetry(
+	env: Env,
+	input: { userId: string; podcastId: string; workspaceId: string },
+): Promise<{ needsScript: boolean; podcast: PodcastSummary }> {
+	return withDbClient(env, async (db) => {
+		const row = (
+			await db.query<PodcastRow>(
+				`UPDATE user_podcasts
+				 SET status = CASE WHEN script IS NULL THEN 'scripting' ELSE 'synthesizing' END,
+				     error = NULL,
+				     audio_url = NULL,
+				     duration_sec = NULL,
+				     workflow_run_id = NULL,
+				     updated_at = NOW()
+				 WHERE id = $1
+				   AND user_id = $2
+				   AND workspace_id = $3
+				   AND status = 'failed'
+				 RETURNING id, workspace_id, title, status, audio_url, duration_sec, lang, error, created_at, updated_at, script`,
+				[input.podcastId, input.userId, input.workspaceId],
+			)
+		).rows[0];
+		if (!row) throw new PodcastNotReadyError();
+		return { needsScript: row.script == null, podcast: podcastSummary(row) };
+	});
+}
+
 export async function startPodcastSynthesis(
 	env: Env,
 	input: { userId: string; podcastId: string },

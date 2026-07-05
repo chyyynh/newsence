@@ -36,6 +36,7 @@ import {
 	createPodcast,
 	failPodcast,
 	PodcastWorkflow,
+	preparePodcastRetry,
 	startPodcastSynthesis,
 	updatePodcastScript,
 	workspacePodcastContext,
@@ -185,6 +186,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Persist the generated two-host script before synthesis starts. */
 	updatePodcastScript(input: CoreRpcArgs<'updatePodcastScript'>[0]) {
 		return updatePodcastScript(this.env, input);
+	}
+
+	/** Reset a failed podcast row before retrying script generation or synthesis. */
+	preparePodcastRetry(input: CoreRpcArgs<'preparePodcastRetry'>[0]) {
+		return preparePodcastRetry(this.env, input);
 	}
 
 	/** Trigger the Workflow that turns a saved script into R2-hosted audio. */
