@@ -1,8 +1,7 @@
 /**
- * Authenticated R2 asset handler with edge cache.
+ * Authenticated R2 asset handler.
  *
- * Replaces the streaming code path in frontend's /api/media/asset/[...key] route. The
- * Next route stays as the auth gate (checks userFile ownership / citation
+ * The app route stays as the auth gate (checks userFile ownership / citation
  * sharing) and 302s here with a short-TTL HMAC. We verify the signature, then
  * read the R2 binding directly.
  *
