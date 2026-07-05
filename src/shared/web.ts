@@ -11,23 +11,23 @@ export const FEED_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWeb
 export const BROWSER_UA =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+function isTimeoutError(err: unknown): boolean {
+	return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
 /**
- * `fetch` wrapped with an AbortController so a stalled origin can't hang a
+ * `fetch` wrapped with a timeout signal so a stalled origin can't hang a
  * cron invocation until the Worker's own runtime timeout. All cron-path
  * outbound HTTP should go through this helper.
  */
 export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		return await fetch(url, { ...options, signal: controller.signal });
+		return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
 	} catch (err) {
-		if (err instanceof Error && err.name === 'AbortError') {
+		if (isTimeoutError(err)) {
 			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
 		}
 		throw err;
-	} finally {
-		clearTimeout(timer);
 	}
 }
 
@@ -66,10 +66,8 @@ export async function fetchJsonWithTimeout<T>(
 	timeoutMs = 15_000,
 	maxBytes = DEFAULT_TEXT_MAX_BYTES,
 ): Promise<T> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const response = await fetch(url, { ...options, signal: controller.signal });
+		const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
 		if (!response.ok) {
 			await response.body?.cancel();
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -77,12 +75,10 @@ export async function fetchJsonWithTimeout<T>(
 		const text = await readTextWithLimit(response, maxBytes);
 		return JSON.parse(text) as T;
 	} catch (err) {
-		if (err instanceof Error && err.name === 'AbortError') {
+		if (isTimeoutError(err)) {
 			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
 		}
 		throw err;
-	} finally {
-		clearTimeout(timer);
 	}
 }
 
@@ -112,10 +108,8 @@ export async function validateImageUrl(url: string | null | undefined, timeoutMs
 	const trimmed = url.trim();
 	if (!trimmed) return null;
 
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	const init: RequestInit = {
-		signal: controller.signal,
+		signal: AbortSignal.timeout(timeoutMs),
 		redirect: 'follow',
 		headers: { 'User-Agent': BROWSER_UA },
 	};
@@ -130,8 +124,6 @@ export async function validateImageUrl(url: string | null | undefined, timeoutMs
 		return trimmed;
 	} catch {
 		return null;
-	} finally {
-		clearTimeout(timer);
 	}
 }
 

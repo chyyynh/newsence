@@ -33,13 +33,10 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export async function measureImageDimensions(env: Env, imageUrl: string): Promise<ImageDimensions | null> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
 	try {
 		const response = await fetch(imageUrl, {
 			headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' },
-			signal: controller.signal,
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 		});
 
 		if (!response.ok || !response.body) return null;
@@ -64,7 +61,5 @@ export async function measureImageDimensions(env: Env, imageUrl: string): Promis
 			error: err instanceof Error ? err.message : String(err),
 		});
 		return null;
-	} finally {
-		clearTimeout(timer);
 	}
 }
