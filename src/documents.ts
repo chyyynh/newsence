@@ -401,7 +401,8 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 		);
 		const articleIds = citations.rows.filter((row) => row.to_type === 'article' && isUuid(row.to_id)).map((row) => row.to_id);
 		const userFileIds = citations.rows.filter((row) => row.to_type === 'user_file' && isUuid(row.to_id)).map((row) => row.to_id);
-		const [documents, articles, files] = await Promise.all([
+		const collectionIds = citations.rows.filter((row) => row.to_type === 'collection' && isUuid(row.to_id)).map((row) => row.to_id);
+		const [documents, articles, files, collections] = await Promise.all([
 			db.query<WorkspaceSummaryDocumentRow>(
 				`SELECT id, title, description
 				 FROM user_documents
@@ -425,6 +426,14 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 				: Promise.resolve({
 						rows: [] as ResourceSummaryRow[],
 					}),
+			collectionIds.length
+				? db.query<{ id: string; name: string; description: string | null; article_count: number }>(
+						`SELECT id, name, description, article_count FROM collections WHERE id = ANY($1::uuid[]) AND user_id = $2`,
+						[collectionIds, userId],
+					)
+				: Promise.resolve({
+						rows: [] as { id: string; name: string; description: string | null; article_count: number }[],
+					}),
 		]);
 		const articleById = new Map(articles.rows.map((row) => [row.id, row]));
 		const fileById = new Map(files.rows.map((row) => [row.id, row]));
@@ -432,12 +441,19 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 			.map((citation) => resourceSummaryLine(citation, articleById, fileById))
 			.filter((line): line is string => !!line);
 		const documentLines = documents.rows.map(workspaceDocumentSummaryLine);
+		const collectionLines = collections.rows.map(
+			(row) =>
+				`- ${row.name} (collection id: ${row.id}, ${row.article_count} articles)${row.description ? `: ${compactContextLine(row.description)}` : ''}`,
+		);
 
 		return [
 			`Workspace: ${workspace.title}`,
 			workspace.description ? `Description: ${workspace.description}` : '',
 			documentLines.length
 				? `Recent workspace documents (use read-context with type "document" and the document id when full content is needed):\n${documentLines.join('\n')}`
+				: '',
+			collectionLines.length
+				? `Pinned collections (use read-context with type "collection" and the collection id to read member articles):\n${collectionLines.join('\n')}`
 				: '',
 			resources.length ? `Pinned resources:\n${resources.join('\n')}` : '',
 		]
