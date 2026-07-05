@@ -8,6 +8,7 @@ export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiBinding = Env['AI'];
+type AiGatewayMetadata = Record<string, string>;
 
 export interface AiTask {
 	name: string;
@@ -44,10 +45,10 @@ function gatewayId(value?: string): string {
 	return value?.trim() || DEFAULT_AI_GATEWAY_ID;
 }
 
-function createCoreAI(ai: AiBinding, gatewayIdValue?: string) {
+export function createCoreAI(ai: AiBinding, gatewayIdValue?: string, metadata?: AiGatewayMetadata) {
 	return createWorkersAI({
 		binding: ai,
-		gateway: { id: gatewayId(gatewayIdValue), collectLog: true },
+		gateway: { id: gatewayId(gatewayIdValue), collectLog: true, ...(metadata && { metadata }) },
 		providers: [openai],
 	});
 }

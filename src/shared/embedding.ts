@@ -1,10 +1,9 @@
 import { embed } from 'ai';
-import { createWorkersAI } from 'workers-ai-provider';
+import { createCoreAI } from './ai';
 import type { Article } from './types';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;
-const DEFAULT_AI_GATEWAY_ID = 'default';
 
 // Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
 // translations dilutes the budget without adding recall.
@@ -26,23 +25,12 @@ export function prepareArticleTextForEmbedding(article: EmbeddingInput): string 
 	return `${headerText} ${article.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
 }
 
-function gatewayId(value?: string): string {
-	return value?.trim() || DEFAULT_AI_GATEWAY_ID;
-}
-
 export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName?: string): Promise<number[] | null> {
 	const sanitizedText = text?.trim();
 	if (!sanitizedText) return null;
 
 	try {
-		const workersai = createWorkersAI({
-			binding: ai,
-			gateway: {
-				id: gatewayId(gatewayName),
-				collectLog: true,
-				metadata: { app: 'newsence', task: 'article-embedding' },
-			},
-		});
+		const workersai = createCoreAI(ai, gatewayName, { app: 'newsence', task: 'article-embedding' });
 		const result = await embed({
 			model: workersai.textEmbedding(EMBEDDING_MODEL),
 			value: sanitizedText.slice(0, MAX_TEXT_LENGTH),
