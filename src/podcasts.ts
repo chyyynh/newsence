@@ -21,10 +21,28 @@ const MAX_CONTEXT_SOURCES = 24;
 const MAX_CONTEXT_DOCUMENTS = 10;
 const MAX_SOURCE_CHARS = 6000;
 const MAX_CONTEXT_CHARS = 80_000;
-const PODCAST_AUDIO_CONTENT_TYPE = 'audio/wav';
 const GEMINI_TTS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_SAMPLE_RATE = 24_000;
 const GEMINI_SAMPLE_WIDTH_BYTES = 2;
+
+type PodcastAudioExtension = 'wav';
+type PodcastAudioFormat = {
+	contentType: string;
+	extension: PodcastAudioExtension;
+	durationSec: (bytes: Uint8Array) => number;
+};
+type PodcastForSynthesis = {
+	id: string;
+	lang: PodcastLanguage;
+	script: PodcastScript;
+	title: string;
+	userId: string;
+};
+type PodcastTtsProvider = {
+	format: PodcastAudioFormat;
+	id: 'gemini';
+	synthesize: (env: Env, podcast: PodcastForSynthesis) => Promise<Uint8Array>;
+};
 
 type PodcastRow = {
 	id: string;
@@ -450,16 +468,7 @@ export async function startPodcastSynthesis(
 	return { instanceId, podcastId: input.podcastId };
 }
 
-async function loadPodcastForWorkflow(
-	env: Env,
-	params: PodcastWorkflowParams,
-): Promise<{
-	id: string;
-	lang: PodcastLanguage;
-	script: PodcastScript;
-	title: string;
-	userId: string;
-}> {
+async function loadPodcastForWorkflow(env: Env, params: PodcastWorkflowParams): Promise<PodcastForSynthesis> {
 	return withDbClient(env, async (db) => {
 		const row = (
 			await db.query<PodcastRow>(
@@ -531,6 +540,12 @@ function wavDurationSec(bytes: Uint8Array): number {
 	return Math.max(1, Math.round(pcmBytes / (GEMINI_SAMPLE_RATE * GEMINI_SAMPLE_WIDTH_BYTES)));
 }
 
+const GEMINI_WAV_FORMAT: PodcastAudioFormat = {
+	contentType: 'audio/wav',
+	extension: 'wav',
+	durationSec: wavDurationSec,
+};
+
 function outputAudioData(payload: unknown): string | null {
 	if (!payload || typeof payload !== 'object') return null;
 	const record = payload as Record<string, unknown>;
@@ -540,7 +555,7 @@ function outputAudioData(payload: unknown): string | null {
 	return typeof data === 'string' && data ? data : null;
 }
 
-async function synthesizeWithGemini(env: Env, podcast: { lang: PodcastLanguage; script: PodcastScript }): Promise<Uint8Array> {
+async function synthesizeWithGemini(env: Env, podcast: PodcastForSynthesis): Promise<Uint8Array> {
 	if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is not configured');
 	const response = await fetch(GEMINI_TTS_ENDPOINT, {
 		method: 'POST',
@@ -569,22 +584,33 @@ async function synthesizeWithGemini(env: Env, podcast: { lang: PodcastLanguage; 
 	return pcmToWav(base64ToBytes(data));
 }
 
+const GEMINI_TTS_PROVIDER: PodcastTtsProvider = {
+	id: 'gemini',
+	format: GEMINI_WAV_FORMAT,
+	synthesize: synthesizeWithGemini,
+};
+
+function resolvePodcastTtsProvider(_env: Env): PodcastTtsProvider {
+	return GEMINI_TTS_PROVIDER;
+}
+
 async function uploadPodcastAudio(
 	env: Env,
 	params: PodcastWorkflowParams,
 	audioStream: ReadableStream<Uint8Array>,
+	format: PodcastAudioFormat,
 ): Promise<{ audioUrl: string; durationSec: number; storageKey: string }> {
 	const bytes = new Uint8Array(await new Response(audioStream).arrayBuffer());
-	const storageKey = userPodcastAudioKey(params.userId, params.podcastId);
+	const storageKey = userPodcastAudioKey(params.userId, params.podcastId, format.extension);
 	await env.R2.put(storageKey, bytes, {
 		httpMetadata: {
-			contentType: PODCAST_AUDIO_CONTENT_TYPE,
+			contentType: format.contentType,
 			cacheControl: 'private, max-age=31536000, immutable',
 		},
 	});
 	return {
 		audioUrl: storageKeyToAssetUrl(storageKey),
-		durationSec: wavDurationSec(bytes),
+		durationSec: format.durationSec(bytes),
 		storageKey,
 	};
 }
@@ -615,6 +641,7 @@ export class PodcastWorkflow extends WorkflowEntrypoint<Env, PodcastWorkflowPara
 		step: WorkflowStep,
 	): Promise<{ audioUrl: string; durationSec: number; podcastId: string; storageKey: string }> {
 		const params = event.payload;
+		const provider = resolvePodcastTtsProvider(this.env);
 		try {
 			const podcast = await step.do(
 				'load-podcast-script',
@@ -622,17 +649,17 @@ export class PodcastWorkflow extends WorkflowEntrypoint<Env, PodcastWorkflowPara
 				() => loadPodcastForWorkflow(this.env, params),
 			);
 			const audioStream = await step.do(
-				'synthesize-gemini-audio',
+				`synthesize-${provider.id}-audio`,
 				{ retries: { limit: 3, delay: '30 seconds', backoff: 'exponential' }, timeout: '15 minutes' },
 				async () => {
-					const audio = await synthesizeWithGemini(this.env, podcast);
+					const audio = await provider.synthesize(this.env, podcast);
 					return new Response(audio).body as ReadableStream<Uint8Array>;
 				},
 			);
 			const uploaded = await step.do(
 				'upload-podcast-audio',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '5 minutes' },
-				() => uploadPodcastAudio(this.env, params, audioStream as ReadableStream<Uint8Array>),
+				() => uploadPodcastAudio(this.env, params, audioStream as ReadableStream<Uint8Array>, provider.format),
 			);
 			await step.do(
 				'mark-podcast-complete',

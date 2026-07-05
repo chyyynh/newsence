@@ -50,8 +50,8 @@ export function userGeneratedImageKey(userId: string, extension: string): string
 	return `users/${userId}/illustrations/${crypto.randomUUID()}.${extension}`;
 }
 
-export function userPodcastAudioKey(userId: string, podcastId: string): string {
-	return `users/${userId}/podcasts/${podcastId}.wav`;
+export function userPodcastAudioKey(userId: string, podcastId: string, extension = 'wav'): string {
+	return `users/${userId}/podcasts/${podcastId}.${extension}`;
 }
 
 export class PayloadTooLargeError extends Error {
