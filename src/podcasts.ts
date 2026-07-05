@@ -1,9 +1,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import type { DbClient } from '@shared/db';
-import { withDbClient } from '@shared/db';
+import { withDbClient, withDbTransaction } from '@shared/db';
 import type { Env } from '@shared/types';
 import { storageKeyToAssetUrl, userPodcastAudioKey } from '@shared/upload';
 import type { JSONContent } from '@tiptap/core';
+import { AUDIO_MODEL_PRICING } from '@worker-contracts/chat-models';
 import { contentToMarkdown } from '@worker-contracts/editor-markdown';
 import {
 	GEMINI_TTS_MODEL,
@@ -24,6 +25,7 @@ const MAX_CONTEXT_CHARS = 80_000;
 const GEMINI_TTS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_SAMPLE_RATE = 24_000;
 const GEMINI_SAMPLE_WIDTH_BYTES = 2;
+const CREDITS_PER_USD = 1000;
 
 type PodcastAudioExtension = 'wav';
 type PodcastAudioFormat = {
@@ -41,6 +43,7 @@ type PodcastForSynthesis = {
 type PodcastTtsProvider = {
 	format: PodcastAudioFormat;
 	id: 'gemini';
+	modelId: string;
 	synthesize: (env: Env, podcast: PodcastForSynthesis) => Promise<Uint8Array>;
 };
 
@@ -587,11 +590,60 @@ async function synthesizeWithGemini(env: Env, podcast: PodcastForSynthesis): Pro
 const GEMINI_TTS_PROVIDER: PodcastTtsProvider = {
 	id: 'gemini',
 	format: GEMINI_WAV_FORMAT,
+	modelId: GEMINI_TTS_MODEL,
 	synthesize: synthesizeWithGemini,
 };
 
 function resolvePodcastTtsProvider(_env: Env): PodcastTtsProvider {
 	return GEMINI_TTS_PROVIDER;
+}
+
+function audioUsageForModel(modelId: string): { costUsd: number; credits: number } {
+	const pricing = AUDIO_MODEL_PRICING[modelId];
+	if (!pricing) throw new Error(`Unknown audio model "${modelId}"`);
+	const costUsd = pricing.perEpisode;
+	return { costUsd, credits: Math.ceil(costUsd * CREDITS_PER_USD) };
+}
+
+async function settlePodcastAudioUsage(db: DbClient, input: { modelId: string; podcastId: string; providerId: string; userId: string }) {
+	const existing = await db.query<{ id: string }>(
+		`SELECT id
+		 FROM user_ai_usage
+		 WHERE user_id = $1
+		   AND service_type = 'audio_overview'
+		   AND request_metadata->>'podcastId' = $2
+		 LIMIT 1`,
+		[input.userId, input.podcastId],
+	);
+	if (existing.rows[0]) return;
+
+	const usage = audioUsageForModel(input.modelId);
+	await db.query(
+		`INSERT INTO user_ai_usage
+		 (user_id, service_type, model_name, input_tokens, output_tokens, total_tokens, credits_used, estimated_cost, request_metadata)
+		 VALUES ($1, 'audio_overview', $2, NULL, NULL, 1, $3, $4, $5::jsonb)`,
+		[
+			input.userId,
+			input.modelId,
+			usage.credits,
+			usage.costUsd,
+			JSON.stringify({
+				endpoint: 'workflow/podcast',
+				phase: 'tts',
+				podcastId: input.podcastId,
+				provider: input.providerId,
+			}),
+		],
+	);
+	const result = await db.query(
+		`UPDATE user_settings
+		 SET credit_balance = GREATEST(0, credit_balance - $2),
+		     credits_used = credits_used + LEAST($2, credit_balance),
+		     updated_at = NOW()
+		 WHERE user_id = $1`,
+		[input.userId, usage.credits],
+	);
+	if (!result.rowCount) throw new Error(`No user_settings row for user ${input.userId} — cannot settle podcast usage`);
 }
 
 async function uploadPodcastAudio(
@@ -619,8 +671,9 @@ async function completePodcast(
 	env: Env,
 	params: PodcastWorkflowParams,
 	result: { audioUrl: string; durationSec: number },
+	provider: PodcastTtsProvider,
 ): Promise<PodcastSummary> {
-	return withDbClient(env, async (db) => {
+	return withDbTransaction(env, 'complete podcast', async (db) => {
 		const row = (
 			await db.query<PodcastRow>(
 				`UPDATE user_podcasts
@@ -631,6 +684,12 @@ async function completePodcast(
 			)
 		).rows[0];
 		if (!row) throw new PodcastNotFoundError();
+		await settlePodcastAudioUsage(db, {
+			userId: params.userId,
+			podcastId: params.podcastId,
+			modelId: provider.modelId,
+			providerId: provider.id,
+		});
 		return podcastSummary(row);
 	});
 }
@@ -664,7 +723,7 @@ export class PodcastWorkflow extends WorkflowEntrypoint<Env, PodcastWorkflowPara
 			await step.do(
 				'mark-podcast-complete',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => completePodcast(this.env, params, uploaded),
+				() => completePodcast(this.env, params, uploaded, provider),
 			);
 			return { ...uploaded, podcastId: params.podcastId };
 		} catch (error) {
