@@ -123,8 +123,8 @@ function resolveRange(range: R2Range, size: number): { start: number; end: numbe
 
 function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, cors: Record<string, string>): Headers {
 	const headers = new Headers();
-	const contentType = object.httpMetadata?.contentType ?? inferContentType(key);
-	headers.set('Content-Type', contentType);
+	object.writeHttpMetadata(headers);
+	if (!headers.has('Content-Type')) headers.set('Content-Type', inferContentType(key));
 	headers.set('Accept-Ranges', 'bytes');
 	for (const [k, v] of Object.entries(cors)) {
 		headers.set(k, v);
@@ -137,6 +137,7 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, 
 	headers.set('ETag', object.httpEtag);
 
 	// Force download for SVG to prevent stored XSS via embedded scripts.
+	const contentType = headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase();
 	if (contentType === 'image/svg+xml') {
 		headers.set('Content-Disposition', 'attachment');
 	}

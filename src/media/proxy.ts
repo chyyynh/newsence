@@ -173,6 +173,7 @@ async function readR2CachedTransform(env: Env, key: string): Promise<Response | 
 
 	const headers = new Headers();
 	object.writeHttpMetadata(headers);
+	headers.set('Content-Length', String(object.size));
 	headers.set('ETag', object.httpEtag);
 	return transformedResponse(object.body, headers);
 }
