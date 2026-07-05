@@ -50,6 +50,10 @@ export function userGeneratedImageKey(userId: string, extension: string): string
 	return `users/${userId}/illustrations/${crypto.randomUUID()}.${extension}`;
 }
 
+export function userPodcastAudioKey(userId: string, podcastId: string): string {
+	return `users/${userId}/podcasts/${podcastId}.wav`;
+}
+
 export class PayloadTooLargeError extends Error {
 	constructor(maxBytes: number) {
 		super(`Response body exceeded ${maxBytes} bytes`);

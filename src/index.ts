@@ -32,8 +32,16 @@ import {
 	workspaceSummary,
 } from './documents';
 import { deleteUserMediaFile } from './media/delete';
+import {
+	createPodcast,
+	failPodcast,
+	PodcastWorkflow,
+	startPodcastSynthesis,
+	updatePodcastScript,
+	workspacePodcastContext,
+} from './podcasts';
 
-export { NewsenceMonitorWorkflow, ScrapeWorkflow };
+export { NewsenceMonitorWorkflow, PodcastWorkflow, ScrapeWorkflow };
 
 type CoreRpcArgs<Method extends keyof CoreRpc> = Parameters<CoreRpc[Method]>;
 
@@ -162,6 +170,31 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Workspace pinned-resource summary for workspace-scoped chat context. */
 	workspaceSummary(userId: CoreRpcArgs<'workspaceSummary'>[0], workspaceId: CoreRpcArgs<'workspaceSummary'>[1]) {
 		return workspaceSummary(this.env, userId, workspaceId);
+	}
+
+	/** Create a podcast row and move it into scripting state. */
+	createPodcast(input: CoreRpcArgs<'createPodcast'>[0]) {
+		return createPodcast(this.env, input);
+	}
+
+	/** Build source markdown for workspace audio-overview script generation. */
+	workspacePodcastContext(input: CoreRpcArgs<'workspacePodcastContext'>[0]) {
+		return workspacePodcastContext(this.env, input);
+	}
+
+	/** Persist the generated two-host script before synthesis starts. */
+	updatePodcastScript(input: CoreRpcArgs<'updatePodcastScript'>[0]) {
+		return updatePodcastScript(this.env, input);
+	}
+
+	/** Trigger the Workflow that turns a saved script into R2-hosted audio. */
+	startPodcastSynthesis(input: CoreRpcArgs<'startPodcastSynthesis'>[0]) {
+		return startPodcastSynthesis(this.env, input);
+	}
+
+	/** Mark a podcast failed from callers that error before Workflow start. */
+	failPodcast(input: CoreRpcArgs<'failPodcast'>[0]) {
+		return failPodcast(this.env, input);
 	}
 }
 

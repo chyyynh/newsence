@@ -75,6 +75,11 @@
 			"binding": "SCRAPE_WORKFLOW",
 			"name": "newsence-scrape-workflow",
 			"class_name": "ScrapeWorkflow"
+		},
+		{
+			"binding": "PODCAST_WORKFLOW",
+			"name": "newsence-podcast-workflow",
+			"class_name": "PodcastWorkflow"
 		}
 	],
 	/**
