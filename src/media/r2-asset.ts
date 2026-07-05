@@ -118,7 +118,7 @@ function resolveRange(range: R2Range, size: number): { start: number; end: numbe
 	}
 	const start = range.offset ?? 0;
 	const length = range.length ?? size - start;
-	return { start, end: start + length - 1 };
+	return { start, end: Math.min(size - 1, start + length - 1) };
 }
 
 function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, cors: Record<string, string>): Headers {
@@ -142,7 +142,7 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, 
 	}
 
 	if (range && object.range) {
-		const { start, end } = resolveRange(object.range, object.size);
+		const { start, end } = resolveRange(range, object.size);
 		headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);
 		headers.set('Content-Length', String(end - start + 1));
 	} else {
