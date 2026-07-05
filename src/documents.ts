@@ -3,14 +3,6 @@ import type { DbClient } from '@shared/db';
 import { withDbClient, withDbTransaction } from '@shared/db';
 import type { Env } from '@shared/types';
 import type { JSONContent } from '@tiptap/core';
-import { Highlight } from '@tiptap/extension-highlight';
-import { Image } from '@tiptap/extension-image';
-import { TaskItem, TaskList } from '@tiptap/extension-list';
-import { TextAlign } from '@tiptap/extension-text-align';
-import { Typography } from '@tiptap/extension-typography';
-import { Underline } from '@tiptap/extension-underline';
-import { MarkdownManager } from '@tiptap/markdown';
-import StarterKit from '@tiptap/starter-kit';
 import { WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
@@ -34,12 +26,12 @@ import type {
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
 import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
+import { contentToMarkdown, EMPTY_TIPTAP_DOCUMENT, markdownToTiptapJson } from '@worker-contracts/editor-markdown';
 
 const MAX_CONTEXT_DOCUMENTS = 8;
 const MAX_CONTEXT_DOCUMENT_CHARS = 50_000;
 const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
-const EMPTY_TIPTAP_DOCUMENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies JSONContent;
 const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 type DocumentEdit = { old_string: string; new_string: string };
@@ -125,27 +117,6 @@ export class DocumentEmptyContentBlockedError extends Error {
 		super('Empty document content was blocked');
 		this.name = 'DocumentEmptyContentBlockedError';
 	}
-}
-
-const markdownManager = new MarkdownManager({
-	extensions: [
-		StarterKit.configure({ link: { openOnClick: false, enableClickSelection: true } }),
-		TextAlign.configure({ types: ['heading', 'paragraph'] }),
-		TaskList,
-		TaskItem.configure({ nested: true }),
-		Highlight.configure({ multicolor: true }),
-		Underline,
-		Typography,
-		Image,
-	],
-});
-
-function markdownToTiptapJson(markdown: string): JSONContent {
-	return markdownManager.parse(markdown);
-}
-
-function contentToMarkdown(content: JSONContent): string {
-	return markdownManager.serialize(content);
 }
 
 function isUuid(value: string): boolean {
@@ -430,7 +401,8 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 		);
 		const articleIds = citations.rows.filter((row) => row.to_type === 'article' && isUuid(row.to_id)).map((row) => row.to_id);
 		const userFileIds = citations.rows.filter((row) => row.to_type === 'user_file' && isUuid(row.to_id)).map((row) => row.to_id);
-		const [documents, articles, files] = await Promise.all([
+		const collectionIds = citations.rows.filter((row) => row.to_type === 'collection' && isUuid(row.to_id)).map((row) => row.to_id);
+		const [documents, articles, files, collections] = await Promise.all([
 			db.query<WorkspaceSummaryDocumentRow>(
 				`SELECT id, title, description
 				 FROM user_documents
@@ -454,6 +426,14 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 				: Promise.resolve({
 						rows: [] as ResourceSummaryRow[],
 					}),
+			collectionIds.length
+				? db.query<{ id: string; name: string; description: string | null; article_count: number }>(
+						`SELECT id, name, description, article_count FROM collections WHERE id = ANY($1::uuid[]) AND user_id = $2`,
+						[collectionIds, userId],
+					)
+				: Promise.resolve({
+						rows: [] as { id: string; name: string; description: string | null; article_count: number }[],
+					}),
 		]);
 		const articleById = new Map(articles.rows.map((row) => [row.id, row]));
 		const fileById = new Map(files.rows.map((row) => [row.id, row]));
@@ -461,12 +441,19 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 			.map((citation) => resourceSummaryLine(citation, articleById, fileById))
 			.filter((line): line is string => !!line);
 		const documentLines = documents.rows.map(workspaceDocumentSummaryLine);
+		const collectionLines = collections.rows.map(
+			(row) =>
+				`- ${row.name} (collection id: ${row.id}, ${row.article_count} articles)${row.description ? `: ${compactContextLine(row.description)}` : ''}`,
+		);
 
 		return [
 			`Workspace: ${workspace.title}`,
 			workspace.description ? `Description: ${workspace.description}` : '',
 			documentLines.length
 				? `Recent workspace documents (use read-context with type "document" and the document id when full content is needed):\n${documentLines.join('\n')}`
+				: '',
+			collectionLines.length
+				? `Pinned collections (use read-context with type "collection" and the collection id to read member articles):\n${collectionLines.join('\n')}`
 				: '',
 			resources.length ? `Pinned resources:\n${resources.join('\n')}` : '',
 		]

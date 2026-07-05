@@ -17,6 +17,8 @@
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
 			"@worker-contracts/*": ["../shared/*"],
+			/* Lets ../shared/editor-markdown.ts (outside this package root) resolve @tiptap from our copy. */
+			"@tiptap/*": ["./node_modules/@tiptap/*"],
 			"@shared/*": ["./src/shared/*"],
 			"@ingest/*": ["./src/ingest/*"],
 			"@chat/*": ["./src/chat/*"],

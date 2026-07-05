@@ -211,9 +211,9 @@ async function readCollectionArticles(db: DbClient, collectionId: string, viewer
 		     a.summary, a.summary_cn, a.content, a.content_cn, a.published_date,
 		     a.tags, a.keywords, a.platform_metadata
 		   FROM citations c
-		   JOIN articles a ON c.to_type = 'article' AND a.id::text = c.to_id
+		   JOIN articles a ON c.to_type = 'article' AND a.id = c.to_id
 		   WHERE c.from_type = 'collection'
-		     AND c.from_id = $1
+		     AND c.from_id = $1::text
 		   UNION ALL
 		   SELECT
 		     c.created_at,
@@ -234,10 +234,10 @@ async function readCollectionArticles(db: DbClient, collectionId: string, viewer
 		     uf.metadata AS platform_metadata
 		   FROM citations c
 		   JOIN user_files uf ON c.to_type = 'user_file'
-		     AND uf.id::text = c.to_id
+		     AND uf.id = c.to_id
 		     AND uf.user_id = $2
 		   WHERE c.from_type = 'collection'
-		     AND c.from_id = $1
+		     AND c.from_id = $1::text
 		 ) resources
 		 ORDER BY created_at ASC`,
 		[collectionId, viewerId],
