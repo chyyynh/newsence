@@ -19,19 +19,22 @@ function randomTempObjectKey(prefix: string, extension: string): string {
 	return `${prefix}${crypto.randomUUID()}.${extension}`;
 }
 
+async function getTempObject(env: Env, key: string, guard: TempObjectGuard): Promise<R2ObjectBody> {
+	assertTempObjectKey(key, guard);
+	const obj = await env.R2.get(key);
+	if (!obj) throw new Error(`${guard.label} missing: ${key}`);
+	return obj;
+}
+
 export async function putTempText(env: Env, key: string, text: string, contentType: string): Promise<void> {
 	await env.R2.put(key, text, {
 		httpMetadata: { contentType },
 	});
 }
 
-async function putSerializedTempJson(env: Env, key: string, json: string): Promise<void> {
-	await putTempText(env, key, json, JSON_TEMP_CONTENT_TYPE);
-}
-
 export async function putRandomSerializedTempJson(env: Env, prefix: string, json: string): Promise<string> {
 	const key = randomTempObjectKey(prefix, 'json');
-	await putSerializedTempJson(env, key, json);
+	await putTempText(env, key, json, JSON_TEMP_CONTENT_TYPE);
 	return key;
 }
 
@@ -42,20 +45,15 @@ export async function putTempBytes(env: Env, key: string, bytes: Uint8Array, con
 }
 
 export async function readTempText(env: Env, key: string, guard: TempObjectGuard): Promise<string> {
-	assertTempObjectKey(key, guard);
-	const obj = await env.R2.get(key);
-	if (!obj) throw new Error(`${guard.label} missing: ${key}`);
-	return obj.text();
+	return (await getTempObject(env, key, guard)).text();
 }
 
 export async function readTempJson<T>(env: Env, key: string, guard: TempObjectGuard): Promise<T> {
-	return JSON.parse(await readTempText(env, key, guard)) as T;
+	return (await getTempObject(env, key, guard)).json<T>();
 }
 
 export async function readTempBytes(env: Env, key: string, guard: TempObjectGuard): Promise<{ bytes: Uint8Array; contentType?: string }> {
-	assertTempObjectKey(key, guard);
-	const obj = await env.R2.get(key);
-	if (!obj) throw new Error(`${guard.label} missing: ${key}`);
+	const obj = await getTempObject(env, key, guard);
 	return {
 		bytes: new Uint8Array(await obj.arrayBuffer()),
 		contentType: obj.httpMetadata?.contentType,
