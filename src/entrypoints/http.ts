@@ -654,7 +654,7 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 		return handleProxy(request, env, ctx);
 	}
 	if (matchesEndpoint(pathname, method, '/media/asset')) {
-		return handleR2Asset(request, env, ctx);
+		return handleR2Asset(request, env);
 	}
 
 	if (method === 'OPTIONS') {

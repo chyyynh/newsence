@@ -4,15 +4,13 @@
  * Replaces the streaming code path in frontend's /api/media/asset/[...key] route. The
  * Next route stays as the auth gate (checks userFile ownership / citation
  * sharing) and 302s here with a short-TTL HMAC. We verify the signature, then
- * read the R2 binding directly and serve with caches.default.
+ * read the R2 binding directly.
  *
  * Sig input shape: `r2:${storageKey}:${exp}` (verifyR2KeySignature). Distinct
  * prefix from /media/external/ so a leaked external-media sig can't be replayed here.
  *
  * Range support: parsed from the Range header into R2's R2Range shape and
- * forwarded to env.R2.get. Range requests bypass caches.default — caching 206
- * responses correctly requires keying on (url, range), not worth the cost
- * when only PDF.js byte-range streaming benefits.
+ * forwarded to env.R2.get.
  */
 
 import type { Env } from '@shared/types';
@@ -32,7 +30,7 @@ const CONTENT_TYPE_FALLBACKS: Record<string, string> = {
 	mp3: 'audio/mpeg',
 	wav: 'audio/wav',
 };
-const BROWSER_CACHE_MAX_AGE_SEC = 60 * 60;
+const SIGNED_ASSET_BROWSER_CACHE_MAX_AGE_SEC = 60 * 60;
 
 let unsetCorsWarningLogged = false;
 
@@ -65,14 +63,6 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
 	}
 
 	return { Vary: 'Origin' };
-}
-
-function getOriginCacheBucket(request: Request, env: Env): string {
-	const allowlist = parseOriginAllowlist(env);
-	if (!allowlist) return 'fallback';
-	const origin = request.headers.get('Origin');
-	if (!origin) return 'no-origin';
-	return allowlist.includes(origin) ? `allow:${origin}` : 'denied';
 }
 
 function inferContentType(key: string): string {
@@ -131,9 +121,8 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, 
 	}
 	headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
 	// Keep browser caching aligned with the 1h signed URL. The worker still
-	// strips sig/exp from caches.default keys, so edge cache survives signature
-	// bucket rotation without making private assets immutable in the browser.
-	headers.set('Cache-Control', `private, max-age=${BROWSER_CACHE_MAX_AGE_SEC}`);
+	// verifies every uncached request before reading private R2 objects.
+	headers.set('Cache-Control', `private, max-age=${SIGNED_ASSET_BROWSER_CACHE_MAX_AGE_SEC}`);
 	headers.set('ETag', object.httpEtag);
 
 	// Force download for SVG to prevent stored XSS via embedded scripts.
@@ -153,7 +142,7 @@ function buildHeaders(object: R2ObjectBody, key: string, range: R2Range | null, 
 	return headers;
 }
 
-export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handleR2Asset(request: Request, env: Env): Promise<Response> {
 	if (request.method === 'OPTIONS') return corsPreflight(request, env);
 	if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
 
@@ -181,25 +170,6 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 
 	const range = parseRange(request.headers.get('Range'));
 
-	// Strip sig/exp from the cache key — they rotate every 15min (quantize
-	// bucket) on the same underlying object, and would otherwise force a miss
-	// every bucket roll. Range requests skip cache entirely.
-	//
-	// `__o` buckets the cache key by Origin because `caches.default` ignores
-	// `Vary: Origin` (only Vary: Accept-Encoding is honored — see Cloudflare
-	// Cache API docs). Without this, a no-Origin populator (curl, SSR fetch)
-	// can fill the cache with an ACAO-less response that subsequently breaks
-	// allowlisted-origin `fetch()` calls for a year (immutable max-age).
-	const cacheUrl = new URL(request.url);
-	cacheUrl.search = '';
-	cacheUrl.searchParams.set('__o', getOriginCacheBucket(request, env));
-	const cacheKey = new Request(cacheUrl.toString(), { method: 'GET' });
-
-	if (!range) {
-		const hit = await caches.default.match(cacheKey);
-		if (hit) return hit;
-	}
-
 	let object: R2ObjectBody | null;
 	try {
 		object = await env.R2.get(storageKey, range ? { range } : undefined);
@@ -223,10 +193,5 @@ export async function handleR2Asset(request: Request, env: Env, ctx: ExecutionCo
 
 	const headers = buildHeaders(object, storageKey, range, getCorsHeaders(request, env));
 	const status = range ? 206 : 200;
-	const response = new Response(object.body, { status, headers });
-
-	if (!range) {
-		ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
-	}
-	return response;
+	return new Response(object.body, { status, headers });
 }
