@@ -56,6 +56,7 @@ type PodcastRow = {
 	duration_sec: number | null;
 	lang: string;
 	error: string | null;
+	workflow_run_id?: string | null;
 	created_at: Date | string;
 	updated_at: Date | string;
 	script?: unknown;
@@ -439,7 +440,7 @@ export async function updatePodcastScript(
 		const row = (
 			await db.query<PodcastRow>(
 				`UPDATE user_podcasts
-				 SET title = $3, script = $4::jsonb, status = 'synthesizing', error = NULL, updated_at = NOW()
+				 SET title = $3, script = $4::jsonb, status = 'synthesizing', error = NULL, workflow_run_id = NULL, updated_at = NOW()
 				 WHERE id = $1 AND user_id = $2
 				 RETURNING id, workspace_id, title, status, audio_url, duration_sec, lang, error, created_at, updated_at`,
 				[input.podcastId, input.userId, input.title.slice(0, 200), JSON.stringify(parsed)],
@@ -450,15 +451,22 @@ export async function updatePodcastScript(
 	});
 }
 
-export async function failPodcast(env: Env, input: { userId: string; podcastId: string; error: string }): Promise<PodcastSummary> {
+export async function failPodcast(
+	env: Env,
+	input: { userId: string; podcastId: string; error: string; workflowRunId?: string },
+): Promise<PodcastSummary> {
 	return withDbClient(env, async (db) => {
+		const workflowGuard = input.workflowRunId ? 'AND workflow_run_id = $4' : '';
+		const values = input.workflowRunId
+			? [input.podcastId, input.userId, input.error.slice(0, 1000), input.workflowRunId]
+			: [input.podcastId, input.userId, input.error.slice(0, 1000)];
 		const row = (
 			await db.query<PodcastRow>(
 				`UPDATE user_podcasts
 				 SET status = 'failed', error = $3, updated_at = NOW()
-				 WHERE id = $1 AND user_id = $2 AND status <> 'complete'
+				 WHERE id = $1 AND user_id = $2 AND status <> 'complete' ${workflowGuard}
 				 RETURNING id, workspace_id, title, status, audio_url, duration_sec, lang, error, created_at, updated_at`,
-				[input.podcastId, input.userId, input.error.slice(0, 1000)],
+				values,
 			)
 		).rows[0];
 		if (!row) throw new PodcastNotFoundError();
@@ -469,31 +477,34 @@ export async function failPodcast(env: Env, input: { userId: string; podcastId: 
 export async function startPodcastSynthesis(
 	env: Env,
 	input: { userId: string; podcastId: string },
-): Promise<{ instanceId: string; podcastId: string }> {
-	await assertPodcastReadyForSynthesis(env, input);
-	const instanceId = `podcast-${input.podcastId}`;
+): Promise<{ instanceId: string; podcastId: string; workflowRunId: string }> {
+	const workflowRunId = await claimPodcastWorkflowRun(env, input);
+	const instanceId = `podcast-${input.podcastId}-${workflowRunId}`;
 	await env.PODCAST_WORKFLOW.create({
 		id: instanceId,
-		params: { podcastId: input.podcastId, userId: input.userId } satisfies PodcastWorkflowParams,
+		params: { podcastId: input.podcastId, userId: input.userId, workflowRunId } satisfies PodcastWorkflowParams,
 	});
-	return { instanceId, podcastId: input.podcastId };
+	return { instanceId, podcastId: input.podcastId, workflowRunId };
 }
 
-async function assertPodcastReadyForSynthesis(env: Env, params: PodcastWorkflowParams): Promise<void> {
-	await withDbClient(env, async (db) => {
+async function claimPodcastWorkflowRun(env: Env, params: { podcastId: string; userId: string }): Promise<string> {
+	const workflowRunId = crypto.randomUUID();
+	return withDbClient(env, async (db) => {
 		const row = (
-			await db.query<{ id: string }>(
-				`SELECT id
-				 FROM user_podcasts
+			await db.query<{ workflow_run_id: string }>(
+				`UPDATE user_podcasts
+				 SET workflow_run_id = $3, updated_at = NOW()
 				 WHERE id = $1
 				   AND user_id = $2
 				   AND status = 'synthesizing'
 				   AND script IS NOT NULL
-				 LIMIT 1`,
-				[params.podcastId, params.userId],
+				   AND workflow_run_id IS NULL
+				 RETURNING workflow_run_id`,
+				[params.podcastId, params.userId, workflowRunId],
 			)
 		).rows[0];
 		if (!row) throw new PodcastNotReadyError();
+		return row.workflow_run_id;
 	});
 }
 
@@ -505,10 +516,11 @@ async function loadPodcastForWorkflow(env: Env, params: PodcastWorkflowParams): 
 				 FROM user_podcasts
 				 WHERE id = $1
 				   AND user_id = $2
+				   AND workflow_run_id = $3
 				   AND status = 'synthesizing'
 				   AND script IS NOT NULL
 				 LIMIT 1`,
-				[params.podcastId, params.userId],
+				[params.podcastId, params.userId, params.workflowRunId],
 			)
 		).rows[0];
 		if (!row) throw new PodcastNotReadyError();
@@ -707,9 +719,9 @@ async function completePodcast(
 			await db.query<PodcastRow>(
 				`UPDATE user_podcasts
 				 SET status = 'complete', audio_url = $3, duration_sec = $4, error = NULL, updated_at = NOW()
-				 WHERE id = $1 AND user_id = $2 AND status = 'synthesizing'
+				 WHERE id = $1 AND user_id = $2 AND workflow_run_id = $5 AND status = 'synthesizing'
 				 RETURNING id, workspace_id, title, status, audio_url, duration_sec, lang, error, created_at, updated_at`,
-				[params.podcastId, params.userId, result.audioUrl, result.durationSec],
+				[params.podcastId, params.userId, result.audioUrl, result.durationSec, params.workflowRunId],
 			)
 		).rows[0];
 		if (!row) throw new PodcastNotReadyError();
@@ -759,6 +771,7 @@ export class PodcastWorkflow extends WorkflowEntrypoint<Env, PodcastWorkflowPara
 			await failPodcast(this.env, {
 				userId: params.userId,
 				podcastId: params.podcastId,
+				workflowRunId: params.workflowRunId,
 				error: error instanceof Error ? error.message : String(error),
 			}).catch((failure) => console.error({ tag: 'PODCAST_WORKFLOW', msg: 'Failed to mark podcast failed', error: String(failure) }));
 			throw error;
