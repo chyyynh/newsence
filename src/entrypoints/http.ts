@@ -63,31 +63,12 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
 
-const OPTIONS_ROUTES: Record<string, RouteHandler> = {
-	'/search': (req, env) => handleSearch(req, env),
-	'/search/related': (req, env) => handleRelated(req, env),
-	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
-	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
-	'/entities/quality': (req, env) => handleEntityQuality(req, env),
-	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
-	'/okf/collections/entries': (req, env) => handleOkfCollectionEntries(req, env),
-	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
-	'/papers/backfill-graph': (req, env) => handleBackfillPaperGraph(req, env),
-	'/scrape': (req, env) => handleScrape(req, env),
-	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
-	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
-	'/resources/add': (req, env) => handleAddResourceToSource(req, env),
-	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
-	'/resources/delete': (req, env) => handleDeleteResource(req, env),
-	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
-	'/resources/validate-source': (req, env) => handleValidateResourceSource(req, env),
-	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
-	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
-	'/documents/save': (req, env) => handleSaveDocument(req, env),
-	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
-	// handleDeleteUserMediaFile has no OPTIONS branch; answer the preflight here.
-	'/media/delete-user-file': () => new Response(null, { headers: INTERNAL_CORS_HEADERS }),
-};
+const SCRAPE_PREFLIGHT_ROUTES = new Set(['/scrape', '/scrape/jobs']);
+const INTERNAL_PREFLIGHT_ROUTES = new Set(Object.keys(POST_ROUTES).filter((route) => !SCRAPE_PREFLIGHT_ROUTES.has(route)));
+
+function internalPreflight(): Response {
+	return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+}
 
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
@@ -657,8 +638,8 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'OPTIONS') {
-		const handler = OPTIONS_ROUTES[pathname];
-		if (handler) return handler(request, env, ctx);
+		if (SCRAPE_PREFLIGHT_ROUTES.has(pathname)) return POST_ROUTES[pathname](request, env, ctx);
+		if (INTERNAL_PREFLIGHT_ROUTES.has(pathname)) return internalPreflight();
 
 		const id = scrapeJobId(pathname);
 		if (id) return handleScrapeJobStatus(request, id, env);
