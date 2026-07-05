@@ -25,6 +25,7 @@ import type { WorkflowQueueTarget } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
+import { enrichS2ByTitle, enrichS2FromId } from '../platforms/paper/semanticscholar';
 import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
@@ -287,25 +288,31 @@ async function enrichPaperMetadata(
 				// extracted_text (retry); loadFullTargetArticle resolves both.
 				const content = (await loadFullTargetArticle(env, context, pdfTextTemp)).content;
 				const detection = detectPaperId(shell.url, content, { scanContent: !!content });
-				// Resolve by id first; fall back to a title search when the paper has an
-				// academic marker but no usable id (e.g. a placeholder/unassigned DOI).
-				let paper = detection.id ? await enrichPaperFromId(detection.id) : null;
-				// Fall back to a title search when there's a paper signal but no usable
-				// id. For uploaded PDFs, attempt it regardless of a DOI marker — the
-				// printed DOI is often a placeholder, or gets stripped by content
-				// cleanup — since the Dice title match guards against false positives.
-				if (!paper && (detection.hasAcademicMarker || isPdfRow)) {
-					// Prefer the title parsed from the PDF body over the (often noisy,
-					// filename-derived) row title — the latter rarely matches a search.
-					const searchTitle = (content ? extractPaperTitle(content) : null) ?? shell.title;
-					if (searchTitle) paper = await enrichPaperByTitle(searchTitle);
+				// Prefer the title parsed from the PDF body over the (often noisy,
+				// filename-derived) row title — the latter rarely matches a search. For
+				// uploaded PDFs, a title search is attempted even without a DOI marker
+				// (placeholder/absent DOIs, or markers stripped by content cleanup) — the
+				// Dice title match guards against false positives.
+				const searchTitle = (content ? extractPaperTitle(content) : null) ?? shell.title;
+				const canTitleSearch = detection.hasAcademicMarker || isPdfRow;
+				const apiKey = env.S2_API_KEY;
+
+				// Semantic Scholar is primary — OpenAlex rate-limits shared Worker IPs.
+				let paper =
+					(detection.id ? await enrichS2FromId(detection.id, apiKey) : null) ??
+					(canTitleSearch && searchTitle ? await enrichS2ByTitle(searchTitle, apiKey) : null);
+				// OpenAlex fallback (usually 429s from Workers, but works via other egress).
+				if (!paper) {
+					paper =
+						(detection.id ? await enrichPaperFromId(detection.id) : null) ??
+						(canTitleSearch && searchTitle ? await enrichPaperByTitle(searchTitle) : null);
 				}
 				if (paper) {
 					console.info({
 						tag: 'WORKFLOW',
 						msg: 'Paper enriched',
+						source: paper.source,
 						doi: paper.doi,
-						via: detection.id ? 'id' : 'title',
 						refs: paper.references.length,
 					});
 				}

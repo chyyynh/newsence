@@ -124,7 +124,8 @@ export interface PaperReference {
  * reference batch resolve failed.
  */
 export interface PaperMetadata {
-	source: 'openalex';
+	source: 'openalex' | 'semanticscholar';
+	/** Source-native id: OpenAlex work id (Wxxx) or Semantic Scholar paperId. */
 	openAlexId?: string;
 	doi?: string;
 	arxivId?: string;

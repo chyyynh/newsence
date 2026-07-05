@@ -11,7 +11,7 @@
 
 import type { PaperMetadata, PaperReference } from '@shared/platform-metadata';
 import { fetchWithTimeout } from '@shared/web';
-import type { PaperId } from './detect';
+import { type PaperId, titlesMatch } from './detect';
 
 const OPENALEX_BASE = 'https://api.openalex.org/works';
 const POLITE_MAILTO = 'hello@newsence.app';
@@ -165,26 +165,6 @@ async function normalizeWork(work: OaWork, arxivHint?: string): Promise<PaperMet
 
 function doiFilterFor(id: PaperId): string {
 	return id.kind === 'doi' ? id.value : `10.48550/arxiv.${id.value}`;
-}
-
-function titleTokens(title: string): Set<string> {
-	return new Set(title.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-}
-
-/**
- * Guard against title-search false positives without demanding an exact match:
- * Dice coefficient over word sets tolerates minor extraction noise (a duplicated
- * wrapped word, a dropped stopword) while unrelated papers score far below the
- * threshold.
- */
-function titlesMatch(query: string, candidate: string): boolean {
-	const a = titleTokens(query);
-	const b = titleTokens(candidate);
-	if (a.size < 3 || b.size < 3) return false;
-	let overlap = 0;
-	for (const token of a) if (b.has(token)) overlap++;
-	const dice = (2 * overlap) / (a.size + b.size);
-	return dice >= 0.75;
 }
 
 /**

@@ -46,6 +46,24 @@ function extractDoi(text: string): { value: string | null; marker: boolean } {
 	return isPlaceholderDoi(doi) ? { value: null, marker: true } : { value: doi, marker: true };
 }
 
+function titleTokens(title: string): Set<string> {
+	return new Set(title.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+}
+
+/**
+ * Guard against title-search false positives without demanding an exact match:
+ * Dice coefficient over word sets tolerates minor extraction noise while
+ * unrelated papers score far below the threshold.
+ */
+export function titlesMatch(query: string, candidate: string): boolean {
+	const a = titleTokens(query);
+	const b = titleTokens(candidate);
+	if (a.size < 3 || b.size < 3) return false;
+	let overlap = 0;
+	for (const token of a) if (b.has(token)) overlap++;
+	return (2 * overlap) / (a.size + b.size) >= 0.75;
+}
+
 const TITLE_STOP_RE = /^(abstract|introduction|keywords|ccs concepts|acm reference|permission|copyright)/i;
 
 /**

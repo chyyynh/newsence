@@ -23,6 +23,9 @@ export interface Env extends Cloudflare.Env {
 	EXA_API_KEY?: string;
 	/** PostHog project key (server). Set via `wrangler secret put POSTHOG_API_KEY`. */
 	POSTHOG_API_KEY?: string;
+	/** Semantic Scholar API key (optional). Set via `wrangler secret put S2_API_KEY`.
+	 *  Without it, paper enrichment uses the unauthenticated (shared) S2 pool. */
+	S2_API_KEY?: string;
 }
 
 // Article related types
