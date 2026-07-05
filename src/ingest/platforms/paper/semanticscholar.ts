@@ -26,7 +26,7 @@ const PAPER_FIELDS = [
 	'references.title',
 	'references.year',
 	'references.externalIds',
-	'references.authors.name',
+	'references.authors',
 ].join(',');
 
 // ── S2 response shapes (only the fields we read) ─────────────────
@@ -133,23 +133,25 @@ export async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<Pape
 }
 
 /**
- * Resolve a paper by title via S2's title-match endpoint, which returns the single
- * best match (already fuzzy) — the caller still verifies the title to be safe.
+ * Resolve a paper by title. Two calls: (1) the title-match endpoint returns the
+ * single best fuzzy match's id (it does NOT support `references.*` fields and
+ * 400s on some punctuation, so query a lite, punctuation-stripped title), then
+ * (2) fetch full metadata + references by paperId. titlesMatch verifies the
+ * match against the original title.
  */
 export async function enrichS2ByTitle(title: string, apiKey?: string): Promise<PaperMetadata | null> {
 	const trimmed = title.trim();
 	if (trimmed.length < 12) return null;
-	// S2's match endpoint 400s on some punctuation (e.g. a colon in the title).
-	// It fuzzy-matches, so search on a punctuation-stripped query; titlesMatch
-	// (below) still verifies against the original title.
 	const query = encodeURIComponent(
 		trimmed
 			.replace(/[^\p{L}\p{N}\s]/gu, ' ')
 			.replace(/\s+/g, ' ')
 			.trim(),
 	);
-	const data = await fetchS2<S2MatchResponse>(`/paper/search/match?query=${query}&fields=${PAPER_FIELDS}`, apiKey);
-	const paper = data?.data?.[0];
-	if (!paper?.paperId || !titlesMatch(trimmed, paper.title ?? '')) return null;
+	const match = await fetchS2<S2MatchResponse>(`/paper/search/match?query=${query}&fields=title`, apiKey);
+	const hit = match?.data?.[0];
+	if (!hit?.paperId || !titlesMatch(trimmed, hit.title ?? '')) return null;
+	const paper = await fetchS2<S2Paper>(`/paper/${hit.paperId}?fields=${PAPER_FIELDS}`, apiKey);
+	if (!paper?.paperId) return null;
 	return normalizePaper(paper);
 }
