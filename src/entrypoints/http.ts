@@ -585,37 +585,36 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 	const unauth = await requireAuth(request, env);
 	if (unauth) return unauth;
 
-	const { readable, writable } = new TransformStream();
-	const writer = writable.getWriter();
 	const encoder = new TextEncoder();
-	const writeEvent = (data: object) => writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+	const stream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const writeEvent = (data: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+			try {
+				for (let i = 0; i < 40; i++) {
+					const instance = await env.MONITOR_WORKFLOW.get(instanceId);
+					const { status, error, output } = await instance.status();
+					const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
 
-	(async () => {
-		try {
-			for (let i = 0; i < 40; i++) {
-				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
-				const { status, error, output } = await instance.status();
-				const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
+					if (status === 'complete') {
+						writeEvent({ status: 'complete', output });
+						return;
+					}
 
-				if (status === 'complete') {
-					await writeEvent({ status: 'complete', output });
-					return;
+					writeEvent({ status, error });
+					if (isTerminal) return;
+					await sleep(3000);
 				}
-
-				await writeEvent({ status, error });
-				if (isTerminal) return;
-				await sleep(3000);
+				writeEvent({ status: 'timeout' });
+			} catch (err) {
+				writeEvent({ status: 'error', error: String(err) });
+			} finally {
+				controller.close();
 			}
-			await writeEvent({ status: 'timeout' });
-		} catch (err) {
-			await writeEvent({ status: 'error', error: String(err) });
-		} finally {
-			await writer.close();
-		}
-	})();
+		},
+	});
 
-	return new Response(readable, {
+	return new Response(stream, {
 		headers: {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache, no-transform',
