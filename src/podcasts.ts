@@ -8,6 +8,7 @@ import { AUDIO_MODEL_PRICING } from '@worker-contracts/chat-models';
 import { contentToMarkdown } from '@worker-contracts/editor-markdown';
 import {
 	GEMINI_TTS_MODEL,
+	PODCAST_TTS_MODEL,
 	type PodcastContextSource,
 	type PodcastLanguage,
 	type PodcastScript,
@@ -22,7 +23,7 @@ const MAX_CONTEXT_SOURCES = 24;
 const MAX_CONTEXT_DOCUMENTS = 10;
 const MAX_SOURCE_CHARS = 6000;
 const MAX_CONTEXT_CHARS = 80_000;
-const GEMINI_TTS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const AI_GATEWAY_GOOGLE_AI_STUDIO_PROVIDER = 'google-ai-studio';
 const GEMINI_SAMPLE_RATE = 24_000;
 const GEMINI_SAMPLE_WIDTH_BYTES = 2;
 const CREDITS_PER_USD = 1000;
@@ -42,7 +43,7 @@ type PodcastForSynthesis = {
 };
 type PodcastTtsProvider = {
 	format: PodcastAudioFormat;
-	id: 'gemini';
+	id: string;
 	modelId: string;
 	synthesize: (env: Env, podcast: PodcastForSynthesis) => Promise<Uint8Array>;
 };
@@ -626,13 +627,32 @@ function outputAudioData(payload: unknown): string | null {
 	return typeof data === 'string' && data ? data : null;
 }
 
-async function synthesizeWithGemini(env: Env, podcast: PodcastForSynthesis): Promise<Uint8Array> {
-	if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is not configured');
-	const response = await fetch(GEMINI_TTS_ENDPOINT, {
+function requiredEnv(value: string | undefined, name: string): string {
+	const trimmed = value?.trim();
+	if (!trimmed) throw new Error(`${name} is not configured`);
+	return trimmed;
+}
+
+function aiGatewayGoogleAiStudioUrl(env: Env): string {
+	const accountId = requiredEnv(env.CF_ACCOUNT_ID, 'CF_ACCOUNT_ID');
+	const gatewayName = requiredEnv(env.AI_GATEWAY_NAME, 'AI_GATEWAY_NAME');
+	return `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(accountId)}/${encodeURIComponent(gatewayName)}/${AI_GATEWAY_GOOGLE_AI_STUDIO_PROVIDER}/v1beta/interactions`;
+}
+
+function aiGatewayErrorMessage(payload: unknown): string | null {
+	if (!payload || typeof payload !== 'object') return null;
+	const error = (payload as Record<string, unknown>).error;
+	if (!error || typeof error !== 'object') return null;
+	const message = (error as Record<string, unknown>).message;
+	return typeof message === 'string' && message.trim() ? message.trim() : null;
+}
+
+async function synthesizeWithGeminiViaAiGateway(env: Env, podcast: PodcastForSynthesis): Promise<Uint8Array> {
+	const response = await fetch(aiGatewayGoogleAiStudioUrl(env), {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
-			'x-goog-api-key': env.GEMINI_API_KEY,
+			'cf-aig-authorization': `Bearer ${requiredEnv(env.CF_API_TOKEN, 'CF_API_TOKEN')}`,
 		},
 		body: JSON.stringify({
 			model: GEMINI_TTS_MODEL,
@@ -648,22 +668,23 @@ async function synthesizeWithGemini(env: Env, podcast: PodcastForSynthesis): Pro
 	});
 	const payload = (await response.json().catch(() => null)) as unknown;
 	if (!response.ok) {
-		throw new Error(`Gemini TTS failed (${response.status})`);
+		const message = aiGatewayErrorMessage(payload);
+		throw new Error(`Gemini TTS via AI Gateway failed (${response.status})${message ? `: ${message}` : ''}`);
 	}
 	const data = outputAudioData(payload);
 	if (!data) throw new Error('Gemini TTS returned no audio data');
 	return pcmToWav(base64ToBytes(data));
 }
 
-const GEMINI_TTS_PROVIDER: PodcastTtsProvider = {
-	id: 'gemini',
+const AI_GATEWAY_GEMINI_TTS_PROVIDER: PodcastTtsProvider = {
+	id: AI_GATEWAY_GOOGLE_AI_STUDIO_PROVIDER,
 	format: GEMINI_WAV_FORMAT,
-	modelId: GEMINI_TTS_MODEL,
-	synthesize: synthesizeWithGemini,
+	modelId: PODCAST_TTS_MODEL,
+	synthesize: synthesizeWithGeminiViaAiGateway,
 };
 
 function resolvePodcastTtsProvider(_env: Env): PodcastTtsProvider {
-	return GEMINI_TTS_PROVIDER;
+	return AI_GATEWAY_GEMINI_TTS_PROVIDER;
 }
 
 function audioUsageForModel(modelId: string): { costUsd: number; credits: number } {

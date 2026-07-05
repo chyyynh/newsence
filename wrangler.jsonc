@@ -159,12 +159,15 @@
 	 *   origins can read response bytes from JS after a signed URL leaks.
 	 *   When unset, falls back to `*` (with a one-time console warning).
 	 *
-	 * `AI_GATEWAY_NAME` — AI Gateway name used by Gemini text generation via
-	 *   Unified Billing. `default` is auto-created by Cloudflare on first use.
+	 * `AI_GATEWAY_NAME` — AI Gateway name used by Gemini text generation and
+	 *   podcast TTS via Unified Billing. `default` is auto-created by Cloudflare
+	 *   on first use.
 	 *
 	 * Secret (set via `wrangler secret put`):
 	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
 	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
+	 *   CF_ACCOUNT_ID + CF_API_TOKEN — Cloudflare account and API token for
+	 *     AI Gateway provider-native Google AI Studio TTS requests.
 	 */
 	"vars": {
 		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
