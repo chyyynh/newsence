@@ -69,9 +69,9 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
 
 	try {
-		const workersai = createCoreAI(ai, gatewayIdValue);
+		const workersai = createCoreAI(ai, gatewayIdValue, taskMetadata(task));
 		const result = await aiGenerateText({
-			model: workersai(CORE_TEXT_MODEL, { metadata: taskMetadata(task) }),
+			model: workersai(CORE_TEXT_MODEL),
 			prompt,
 			...(systemPrompt && { system: systemPrompt }),
 			...generationSettings(options),
@@ -87,9 +87,9 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 	const { gatewayId: gatewayIdValue, schema, schemaName = 'AI structured output', systemPrompt, task } = options;
 
 	try {
-		const workersai = createCoreAI(ai, gatewayIdValue);
+		const workersai = createCoreAI(ai, gatewayIdValue, taskMetadata(task));
 		const result = await aiGenerateText({
-			model: workersai(CORE_JSON_MODEL, { metadata: taskMetadata(task) }),
+			model: workersai(CORE_JSON_MODEL),
 			prompt,
 			...(systemPrompt && { system: systemPrompt }),
 			output: Output.object({ schema, name: schemaName }),
