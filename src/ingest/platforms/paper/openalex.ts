@@ -152,21 +152,24 @@ function doiFilterFor(id: PaperId): string {
 	return id.kind === 'doi' ? id.value : `10.48550/arxiv.${id.value}`;
 }
 
-/** Normalize a title for comparison: lowercase, alphanumerics only. */
-function normalizeTitle(title: string): string {
-	return title.toLowerCase().replace(/[^a-z0-9]+/g, '');
+function titleTokens(title: string): Set<string> {
+	return new Set(title.toLowerCase().match(/[a-z0-9]+/g) ?? []);
 }
 
 /**
- * Guard against title-search false positives: accept only when the candidate is
- * effectively the same title (normalized equality, or one is a prefix of the
- * other for subtitle/truncation differences).
+ * Guard against title-search false positives without demanding an exact match:
+ * Dice coefficient over word sets tolerates minor extraction noise (a duplicated
+ * wrapped word, a dropped stopword) while unrelated papers score far below the
+ * threshold.
  */
 function titlesMatch(query: string, candidate: string): boolean {
-	const a = normalizeTitle(query);
-	const b = normalizeTitle(candidate);
-	if (a.length < 12 || b.length < 12) return false;
-	return a === b || a.startsWith(b) || b.startsWith(a);
+	const a = titleTokens(query);
+	const b = titleTokens(candidate);
+	if (a.size < 3 || b.size < 3) return false;
+	let overlap = 0;
+	for (const token of a) if (b.has(token)) overlap++;
+	const dice = (2 * overlap) / (a.size + b.size);
+	return dice >= 0.75;
 }
 
 /**

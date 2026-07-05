@@ -46,6 +46,35 @@ function extractDoi(text: string): { value: string | null; marker: boolean } {
 	return isPlaceholderDoi(doi) ? { value: null, marker: true } : { value: doi, marker: true };
 }
 
+const TITLE_STOP_RE = /^(abstract|introduction|keywords|ccs concepts|acm reference|permission|copyright)/i;
+
+/**
+ * Extract a paper's real title from the head of its (markdown-ish) extracted
+ * text — the leading heading lines, concatenated. This beats the filename-derived
+ * title for the OpenAlex title fallback: uploads carry noisy filenames (typos,
+ * abbreviations) that no title search will match, whereas the PDF's own heading
+ * is the real thing.
+ */
+export function extractPaperTitle(content: string): string | null {
+	const lines = content
+		.split('\n')
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const parts: string[] = [];
+	for (const line of lines.slice(0, 15)) {
+		const heading = line.match(/^#{1,3}\s+(.+)$/);
+		if (!heading) {
+			if (parts.length) break; // headings ended → title complete
+			continue; // skip pre-title noise (page numbers, etc.)
+		}
+		const text = heading[1].trim();
+		if (TITLE_STOP_RE.test(text)) break;
+		parts.push(text);
+	}
+	const title = parts.join(' ').replace(/\s+/g, ' ').trim();
+	return title.length >= 12 ? title : null;
+}
+
 /**
  * Resolve a paper identity from an article. Prefers the URL (unambiguous), then
  * scans the head of the extracted text when `scanContent` is set.

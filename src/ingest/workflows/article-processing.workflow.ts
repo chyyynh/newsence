@@ -23,7 +23,7 @@ import { isExtractablePdfFile } from '@shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
 import type { WorkflowQueueTarget } from '@shared/workflow-queue';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
-import { detectPaperId } from '../platforms/paper/detect';
+import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import {
 	prepareYouTubeHighlights,
@@ -286,8 +286,11 @@ async function enrichPaperMetadata(
 				// Resolve by id first; fall back to a title search when the paper has an
 				// academic marker but no usable id (e.g. a placeholder/unassigned DOI).
 				let paper = detection.id ? await enrichPaperFromId(detection.id) : null;
-				if (!paper && detection.hasAcademicMarker && shell.title) {
-					paper = await enrichPaperByTitle(shell.title);
+				if (!paper && detection.hasAcademicMarker) {
+					// Prefer the title parsed from the PDF body over the (often noisy,
+					// filename-derived) row title — the latter rarely matches a search.
+					const searchTitle = (content ? extractPaperTitle(content) : null) ?? shell.title;
+					if (searchTitle) paper = await enrichPaperByTitle(searchTitle);
 				}
 				if (paper) {
 					console.info({
