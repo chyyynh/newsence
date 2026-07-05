@@ -13,7 +13,6 @@ import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import {
 	addResourceToSource,
 	addResourceUrlsToSource,
-	createWorkspace,
 	createWorkspaceDocument,
 	DocumentEmptyContentBlockedError,
 	DocumentVersionConflictError,
@@ -49,7 +48,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/papers/backfill-graph': (req, env) => handleBackfillPaperGraph(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
-	'/workspaces/create': (req, env) => handleCreateWorkspace(req, env),
 	'/resources/add': (req, env) => handleAddResourceToSource(req, env),
 	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
 	'/resources/delete': (req, env) => handleDeleteResource(req, env),
@@ -88,7 +86,6 @@ const HELP_TEXT =
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
-	'POST /workspaces/create                   - Create a user workspace (internal token) -> {success,data:{id}}\n' +
 	'POST /resources/add                       - Pin a resource target to a workspace/collection (internal token) -> {success,data}\n' +
 	'POST /resources/add-urls                  - Ingest URLs and pin user files to a workspace/collection (internal token) -> {success,data}\n' +
 	'POST /resources/delete                    - Remove a user-owned citation by citation id (internal token) -> {success,data:{id}}\n' +
@@ -164,33 +161,6 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleCreateWorkspace(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; title?: string; description?: string | null }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !body.title?.trim()) {
-		return jsonError('BAD_REQUEST', 'Missing userId or title', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await createWorkspace(env, {
-			userId: body.userId,
-			title: body.title,
-			description: body.description,
-		});
-		if (!result.ok) {
-			return jsonError(result.code, result.message, 403, INTERNAL_CORS_HEADERS);
-		}
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		console.error({ tag: 'WORKSPACE_CREATE', msg: 'create failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Workspace create failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

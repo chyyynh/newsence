@@ -2,7 +2,12 @@ import { ingestUrls } from '@ingest/urls';
 import type { DbClient } from '@shared/db';
 import { withDbClient, withDbTransaction } from '@shared/db';
 import type { Env } from '@shared/types';
-import { WORKSPACE_QUOTA_EXCEEDED_CODE, WORKSPACE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
+import {
+	canCreateWorkspaceForPlan,
+	WORKSPACE_QUOTA_EXCEEDED_CODE,
+	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
+	workspaceLimitForPlan,
+} from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
 	AddResourceToSourceResult,
@@ -23,7 +28,6 @@ import type {
 	WorkspaceDecision,
 	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
-import { canCreateWorkspaceForPlan, workspaceLimitForPlan } from '@worker-contracts/core-rpc';
 
 const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
 const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
