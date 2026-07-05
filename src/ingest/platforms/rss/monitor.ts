@@ -7,7 +7,7 @@ import {
 import { withDbClient } from '@shared/db';
 import type { PlatformMetadata } from '@shared/platform-metadata';
 import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@shared/source-feed-state';
-import type { Env, ExecutionContext, RSSFeed } from '@shared/types';
+import type { Env, RSSFeed } from '@shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
 import { startSourceArticleWorkflow } from '@shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';

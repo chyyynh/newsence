@@ -8,7 +8,7 @@ import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
-import type { Env, ExecutionContext, MessageBatch, ScheduledEvent } from '@shared/types';
+import type { Env } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';

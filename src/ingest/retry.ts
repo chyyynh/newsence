@@ -1,6 +1,6 @@
 import { getIncompleteWorkflowTargetIds, USER_FILES_TABLE } from '@shared/article-store';
 import { withDbClient } from '@shared/db';
-import type { Env, ExecutionContext } from '@shared/types';
+import type { Env } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 
 // ─────────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import { USER_FILES_TABLE } from '@shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
-import type { Env, ExecutionContext } from '@shared/types';
+import type { Env } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import type { DocumentContent } from '@worker-contracts/core-rpc';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';

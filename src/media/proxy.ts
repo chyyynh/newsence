@@ -35,7 +35,7 @@
  *   options — comma-separated key=value (w, q). Pass `passthrough` for raw.
  */
 
-import type { Env, ExecutionContext } from '@shared/types';
+import type { Env } from '@shared/types';
 import { assertExternalFetchable } from '@shared/web';
 import { getProxySigningSecret, verifyProxySignature } from './sign-url';
 

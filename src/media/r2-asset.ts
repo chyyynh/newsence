@@ -15,7 +15,7 @@
  * when only PDF.js byte-range streaming benefits.
  */
 
-import type { Env, ExecutionContext } from '@shared/types';
+import type { Env } from '@shared/types';
 import { getProxySigningSecret, verifyR2KeySignature } from './sign-url';
 
 const CONTENT_TYPE_FALLBACKS: Record<string, string> = {

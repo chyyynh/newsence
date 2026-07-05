@@ -1,10 +1,5 @@
 import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
 
-type WorkerScheduledEvent = ScheduledEvent;
-type WorkerExecutionContext = ExecutionContext;
-type WorkerQueue = Queue;
-type WorkerMessageBatch<T = unknown> = MessageBatch<T>;
-
 /**
  * Environment bindings.
  * Extends wrangler-generated Cloudflare.Env (from worker-configuration.d.ts)
@@ -124,11 +119,3 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 	retweetedBy?: RetweetedByData;
 }
-
-// Exported handlers
-export type {
-	WorkerExecutionContext as ExecutionContext,
-	WorkerMessageBatch as MessageBatch,
-	WorkerQueue as Queue,
-	WorkerScheduledEvent as ScheduledEvent,
-};
