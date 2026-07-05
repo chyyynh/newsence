@@ -96,6 +96,13 @@ class PodcastNotFoundError extends Error {
 	}
 }
 
+class PodcastNotReadyError extends Error {
+	constructor() {
+		super('Podcast is not ready for synthesis');
+		this.name = 'PodcastNotReadyError';
+	}
+}
+
 function isUuid(value: string): boolean {
 	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -463,6 +470,7 @@ export async function startPodcastSynthesis(
 	env: Env,
 	input: { userId: string; podcastId: string },
 ): Promise<{ instanceId: string; podcastId: string }> {
+	await assertPodcastReadyForSynthesis(env, input);
 	const instanceId = `podcast-${input.podcastId}`;
 	await env.PODCAST_WORKFLOW.create({
 		id: instanceId,
@@ -471,18 +479,39 @@ export async function startPodcastSynthesis(
 	return { instanceId, podcastId: input.podcastId };
 }
 
+async function assertPodcastReadyForSynthesis(env: Env, params: PodcastWorkflowParams): Promise<void> {
+	await withDbClient(env, async (db) => {
+		const row = (
+			await db.query<{ id: string }>(
+				`SELECT id
+				 FROM user_podcasts
+				 WHERE id = $1
+				   AND user_id = $2
+				   AND status = 'synthesizing'
+				   AND script IS NOT NULL
+				 LIMIT 1`,
+				[params.podcastId, params.userId],
+			)
+		).rows[0];
+		if (!row) throw new PodcastNotReadyError();
+	});
+}
+
 async function loadPodcastForWorkflow(env: Env, params: PodcastWorkflowParams): Promise<PodcastForSynthesis> {
 	return withDbClient(env, async (db) => {
 		const row = (
 			await db.query<PodcastRow>(
 				`SELECT id, title, lang, script
 				 FROM user_podcasts
-				 WHERE id = $1 AND user_id = $2
+				 WHERE id = $1
+				   AND user_id = $2
+				   AND status = 'synthesizing'
+				   AND script IS NOT NULL
 				 LIMIT 1`,
 				[params.podcastId, params.userId],
 			)
 		).rows[0];
-		if (!row) throw new PodcastNotFoundError();
+		if (!row) throw new PodcastNotReadyError();
 		return {
 			id: row.id,
 			lang: parsePodcastLanguage(row.lang),
@@ -678,12 +707,12 @@ async function completePodcast(
 			await db.query<PodcastRow>(
 				`UPDATE user_podcasts
 				 SET status = 'complete', audio_url = $3, duration_sec = $4, error = NULL, updated_at = NOW()
-				 WHERE id = $1 AND user_id = $2
+				 WHERE id = $1 AND user_id = $2 AND status = 'synthesizing'
 				 RETURNING id, workspace_id, title, status, audio_url, duration_sec, lang, error, created_at, updated_at`,
 				[params.podcastId, params.userId, result.audioUrl, result.durationSec],
 			)
 		).rows[0];
-		if (!row) throw new PodcastNotFoundError();
+		if (!row) throw new PodcastNotReadyError();
 		await settlePodcastAudioUsage(db, {
 			userId: params.userId,
 			podcastId: params.podcastId,
