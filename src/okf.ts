@@ -6,7 +6,7 @@
 // the ingest pipeline stores with, so bundles never diverge from the DB gate.
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
+import { INTERNAL_CORS_HEADERS, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import { type DbClient, withDbClient } from '@shared/db';
 import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@shared/entities/normalize';
 import type { Env } from '@shared/types';
@@ -94,78 +94,6 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 		console.error({ tag: 'OKF_EXPORT', msg: 'export failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('INTERNAL_ERROR', 'OKF export failed', 500, OKF_EXPORT_CORS);
 	}
-}
-
-// JSON view of the same bundle, for MCP consumers (kcmd-style list-entries / lookup-entry).
-export async function handleOkfCollectionEntries(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, OKF_EXPORT_CORS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; collectionId?: string; path?: string }>(request, OKF_EXPORT_CORS);
-	if (body instanceof Response) return body;
-	const viewerId = body.userId?.trim() || null;
-	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
-		return jsonError('BAD_REQUEST', 'Missing collectionId', 400, OKF_EXPORT_CORS);
-	}
-
-	try {
-		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId: body.collectionId });
-		const files = [...bundle.files];
-		const path = body.path?.trim();
-		if (path) {
-			const file = files.find((entry) => entry.path === path);
-			if (!file) return jsonError('NOT_FOUND', 'Entry not found', 404, OKF_EXPORT_CORS);
-			return jsonData({ path: file.path, content: file.content }, OKF_EXPORT_CORS);
-		}
-		return jsonData(
-			{
-				bundle: bundle.slug,
-				count: files.length,
-				entries: files.map((file) => ({
-					path: file.path,
-					title: entryTitle(file),
-					type: entryType(file),
-					links: entryLinks(file),
-				})),
-			},
-			OKF_EXPORT_CORS,
-		);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Collection not found') {
-			return jsonError('NOT_FOUND', error.message, 404, OKF_EXPORT_CORS);
-		}
-		console.error({ tag: 'OKF_ENTRIES', msg: 'entries failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'OKF entries failed', 500, OKF_EXPORT_CORS);
-	}
-}
-
-function entryTitle(file: OkfFile): string | null {
-	return frontmatterString(file.content, 'title') ?? file.content.match(/^# (.+)$/m)?.[1] ?? null;
-}
-
-function entryType(file: OkfFile): string | null {
-	return frontmatterString(file.content, 'type');
-}
-
-function frontmatterString(content: string, key: string): string | null {
-	const match = content.match(new RegExp(`^${key}: (.+)$`, 'm'));
-	if (!match) return null;
-	try {
-		const parsed = JSON.parse(match[1]);
-		return typeof parsed === 'string' ? parsed : null;
-	} catch {
-		return null;
-	}
-}
-
-/** Outbound internal links, normalized to bundle-absolute paths without the leading slash. */
-function entryLinks(file: OkfFile): string[] {
-	const links = new Set<string>();
-	for (const match of file.content.matchAll(/\]\((\/?[^)#\s]+\.md)\)/g)) {
-		const href = match[1];
-		links.add(href.startsWith('/') ? href.slice(1) : href);
-	}
-	return [...links];
 }
 
 async function buildCollectionOkfBundle(
