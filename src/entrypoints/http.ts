@@ -3,8 +3,7 @@ import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth 
 import type { Env } from '@core-shared/types';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
-import { handleRetryCron } from '@ingest/retry';
-import { enqueueArticleBatchProcess } from '@ingest/workflows/queue';
+import { enqueueArticleBatchProcess, handleRetryCron } from '@ingest/workflows/queue';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import { handleExportCollectionOkf } from '../okf';
 import {

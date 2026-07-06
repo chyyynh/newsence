@@ -7,9 +7,8 @@ import { extractSource } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
-import { handleRetryCron } from '@ingest/retry';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
-import { createWorkflowsForQueueMessages, type QueueMessage } from '@ingest/workflows/queue';
+import { createWorkflowsForQueueMessages, handleRetryCron, type QueueMessage } from '@ingest/workflows/queue';
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 
