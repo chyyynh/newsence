@@ -1,4 +1,4 @@
-import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
+import type { QuotaExceededCode } from '@core-shared/billing-contracts';
 
 export interface ArticleSummary {
 	id: string;

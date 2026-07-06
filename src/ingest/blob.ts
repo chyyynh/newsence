@@ -15,6 +15,7 @@
  * compensating cleanup if the database commit fails.
  */
 
+import type { QuotaExceededCode } from '@core-shared/billing-contracts';
 import {
 	extensionFromMime,
 	isRasterImage,
@@ -36,7 +37,6 @@ import {
 } from '@core-shared/upload';
 import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@core-shared/web';
 import { createUserFileWorkflow } from '@core-shared/workflow-queue';
-import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
 import { persistBlobRow, putUserUpload } from './blob-persistence';
 
 const DEFAULT_IMAGE_TITLE = 'image';

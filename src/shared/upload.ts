@@ -1,4 +1,4 @@
-import { UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE, UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE } from '@worker-contracts/billing-contracts';
+import { UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE, UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE } from '@core-shared/billing-contracts';
 import type { DbClient } from './db';
 import { PDF_MIME } from './mime';
 import { buildMetadata } from './platform-metadata';

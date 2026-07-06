@@ -16,7 +16,6 @@
 		/* Path aliases for the feature-first src layout (shared / ingest / chat / media).
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
-			"@worker-contracts/*": ["../../packages/worker-contracts/*"],
 			"@core-rpc/*": ["./src/rpc/*"],
 			"@core-shared/*": ["./src/shared/*"],
 			"@ingest/*": ["./src/ingest/*"],
