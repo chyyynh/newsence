@@ -67,7 +67,7 @@ export async function fetchJsonWithTimeout<T>(
 	maxBytes = DEFAULT_TEXT_MAX_BYTES,
 ): Promise<T> {
 	try {
-		const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+		const response = await fetchWithTimeout(url, options, timeoutMs);
 		if (!response.ok) {
 			await response.body?.cancel();
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -109,14 +109,13 @@ export async function validateImageUrl(url: string | null | undefined, timeoutMs
 	if (!trimmed) return null;
 
 	const init: RequestInit = {
-		signal: AbortSignal.timeout(timeoutMs),
 		redirect: 'follow',
 		headers: { 'User-Agent': BROWSER_UA },
 	};
 	try {
-		let res = await fetch(trimmed, { ...init, method: 'HEAD' });
+		let res = await fetchWithTimeout(trimmed, { ...init, method: 'HEAD' }, timeoutMs);
 		if (res.status === 405 || res.status === 501) {
-			res = await fetch(trimmed, { ...init, method: 'GET', headers: { ...init.headers, Range: 'bytes=0-0' } });
+			res = await fetchWithTimeout(trimmed, { ...init, method: 'GET', headers: { ...init.headers, Range: 'bytes=0-0' } }, timeoutMs);
 		}
 		if (!res.ok) return null;
 		const ct = res.headers.get('content-type') ?? '';

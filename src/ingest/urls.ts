@@ -119,28 +119,24 @@ async function insertScrapedBlob(
 	env: Env,
 	userId: string,
 ): Promise<InsertOutcome> {
-	try {
-		const persisted = await persistSavedUrlBlob(env, {
-			userId,
-			body: blob.body,
-			contentLength: blob.contentLength,
-			contentType: blob.contentType,
-			suggestedFilename: blob.suggestedFilename,
-			sourceUrl: blob.sourceUrl,
-			normalizedSourceUrl: url,
-		});
-		if (!persisted.ok) return { error: persisted.message };
-		console.info({
-			tag: 'INGEST',
-			msg: 'Saved blob from URL',
-			title: persisted.title.slice(0, 50),
-			userFileId: persisted.userFileId,
-			contentType: blob.contentType,
-		});
-		return { kind: 'blob', userFileId: persisted.userFileId, fileType: blob.contentType };
-	} finally {
-		blob.dispose();
-	}
+	const persisted = await persistSavedUrlBlob(env, {
+		userId,
+		body: blob.body,
+		contentLength: blob.contentLength,
+		contentType: blob.contentType,
+		suggestedFilename: blob.suggestedFilename,
+		sourceUrl: blob.sourceUrl,
+		normalizedSourceUrl: url,
+	});
+	if (!persisted.ok) return { error: persisted.message };
+	console.info({
+		tag: 'INGEST',
+		msg: 'Saved blob from URL',
+		title: persisted.title.slice(0, 50),
+		userFileId: persisted.userFileId,
+		contentType: blob.contentType,
+	});
+	return { kind: 'blob', userFileId: persisted.userFileId, fileType: blob.contentType };
 }
 
 async function scrapeAndInsert(url: string, env: Env, userId: string): Promise<InsertOutcome> {

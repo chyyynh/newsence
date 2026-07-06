@@ -141,17 +141,13 @@ async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent>
 	const result = await scrapeUrl(url, { youtubeApiKey: env.YOUTUBE_API_KEY, kaitoApiKey: env.KAITO_API_KEY });
 	if (result.kind === 'page') return normalizeHtml(result.scraped, url);
 
-	// blob: stream the body into the appropriate extractor, then release the timer.
-	try {
-		if (result.contentType === PDF_MIME) {
-			const bytes = new Uint8Array(await new Response(result.body).arrayBuffer());
-			return normalizePdf(await parsePdf(bytes), result.sourceUrl);
-		}
-		await result.body.cancel();
-		return emptyResult(result.contentType, result.sourceUrl, 'needs_ocr');
-	} finally {
-		result.dispose();
+	// blob: stream the body into the appropriate extractor, or cancel it for unsupported extractors.
+	if (result.contentType === PDF_MIME) {
+		const bytes = new Uint8Array(await new Response(result.body).arrayBuffer());
+		return normalizePdf(await parsePdf(bytes), result.sourceUrl);
 	}
+	await result.body.cancel();
+	return emptyResult(result.contentType, result.sourceUrl, 'needs_ocr');
 }
 
 export async function extractSource(env: Env, input: ExtractInput): Promise<NormalizedContent> {

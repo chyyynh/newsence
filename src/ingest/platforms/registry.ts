@@ -28,7 +28,6 @@ export type ScrapeResult =
 			suggestedFilename: string;
 			/** From upstream `Content-Length` — null if absent or unparseable. */
 			contentLength: number | null;
-			dispose: () => void;
 	  };
 
 const DISPATCH_TIMEOUT_MS = 8_000;
@@ -74,51 +73,38 @@ function filenameFromUrl(url: string, fallback: string): string {
  * cancel the body and throw. Saves a subrequest vs HEAD-probe, and lets blob
  * paths stream directly to R2 without buffering.
  *
- * Timer scope: the AbortController stays armed through HTML body parsing and
- * blob streaming so a stalled origin can't hang the read. Blob callers must
- * call dispose() after R2 consumes or abandons the stream.
+ * Timeout scope: AbortSignal.timeout stays armed through HTML body parsing and
+ * blob streaming so a stalled origin can't hang the read.
  *
  * `scrapeWebPage` intentionally keeps a separate HTML fetch path for the
  * low-quality extraction retry behavior used by monitor flows.
  */
 async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS);
-	let releaseTimer = true;
-	const dispose = () => {
-		clearTimeout(timer);
-		controller.abort();
-	};
-	try {
-		const res = await fetch(url, { redirect: 'follow', signal: controller.signal, headers: DISPATCH_HEADERS });
-		if (!res.ok) {
-			await res.body?.cancel();
-			throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-		}
-
-		const ct = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
-
-		if (isHtmlLike(ct)) {
-			const scraped = await scrapeHtmlFromResponse(res, url);
-			return { kind: 'page', scraped };
-		}
-
-		if (ct === PDF_MIME || isRasterImage(ct)) {
-			if (!res.body) throw new Error('Response body is empty');
-			const lenRaw = res.headers.get('content-length');
-			const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
-			const finalUrl = res.url || url;
-			const cdName = parseContentDisposition(res.headers.get('content-disposition'));
-			const suggestedFilename = cdName ?? filenameFromUrl(finalUrl, ct === PDF_MIME ? 'document.pdf' : 'image');
-			releaseTimer = false;
-			return { kind: 'blob', body: res.body, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength, dispose };
-		}
-
+	const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS), headers: DISPATCH_HEADERS });
+	if (!res.ok) {
 		await res.body?.cancel();
-		throw new Error(`Unsupported content-type: ${ct}`);
-	} finally {
-		if (releaseTimer) clearTimeout(timer);
+		throw new Error(`HTTP ${res.status}: ${res.statusText}`);
 	}
+
+	const ct = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
+
+	if (isHtmlLike(ct)) {
+		const scraped = await scrapeHtmlFromResponse(res, url);
+		return { kind: 'page', scraped };
+	}
+
+	if (ct === PDF_MIME || isRasterImage(ct)) {
+		if (!res.body) throw new Error('Response body is empty');
+		const lenRaw = res.headers.get('content-length');
+		const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
+		const finalUrl = res.url || url;
+		const cdName = parseContentDisposition(res.headers.get('content-disposition'));
+		const suggestedFilename = cdName ?? filenameFromUrl(finalUrl, ct === PDF_MIME ? 'document.pdf' : 'image');
+		return { kind: 'blob', body: res.body, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength };
+	}
+
+	await res.body?.cancel();
+	throw new Error(`Unsupported content-type: ${ct}`);
 }
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
