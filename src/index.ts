@@ -2,7 +2,7 @@ import { WorkerEntrypoint, WorkflowEntrypoint, type WorkflowEvent, type Workflow
 import type { ArticleSearchInput, CoreRpc, ReadContextItem, ScrapedUrlContent, StoreGeneratedImageInput } from '@core-rpc/contracts';
 import type { Env } from '@core-shared/types';
 import { routeRequest } from '@entry/http';
-import { persistGeneratedImage } from '@ingest/blob-persistence';
+import { persistGeneratedImage } from '@ingest/blob';
 import { type ExtractInput, extractSource, isScrapeInputTempKey, type NormalizedContent } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';

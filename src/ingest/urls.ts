@@ -5,7 +5,7 @@ import type { Env } from '@core-shared/types';
 import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
-import { persistSavedUrlBlob } from './blob-persistence';
+import { persistSavedUrlBlob } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 import {
 	type ExistingUrlUserFile,
