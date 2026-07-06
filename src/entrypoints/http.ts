@@ -63,6 +63,7 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 
 const SCRAPE_PREFLIGHT_ROUTES = new Set(['/scrape', '/scrape/jobs']);
 const INTERNAL_PREFLIGHT_ROUTES = new Set(Object.keys(POST_ROUTES).filter((route) => !SCRAPE_PREFLIGHT_ROUTES.has(route)));
+const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 
 function internalPreflight(): Response {
 	return new Response(null, { headers: INTERNAL_CORS_HEADERS });
@@ -511,13 +512,32 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 	if (unauth) return unauth;
 
 	const encoder = new TextEncoder();
-	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+	const sleep = (ms: number) =>
+		new Promise<void>((resolve) => {
+			if (request.signal.aborted) {
+				resolve();
+				return;
+			}
+			const timeout = setTimeout(resolve, ms);
+			request.signal.addEventListener(
+				'abort',
+				() => {
+					clearTimeout(timeout);
+					resolve();
+				},
+				{ once: true },
+			);
+		});
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
-			const writeEvent = (data: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+			const writeEvent = (data: object) => {
+				if (request.signal.aborted) return false;
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+				return true;
+			};
 			try {
-				for (let i = 0; i < 40; i++) {
-					const instance = await env.MONITOR_WORKFLOW.get(instanceId);
+				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
+				while (!request.signal.aborted) {
 					const { status, error, output } = await instance.status();
 					const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
 
@@ -526,13 +546,12 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 						return;
 					}
 
-					writeEvent({ status, error });
+					if (!writeEvent({ status, error })) return;
 					if (isTerminal) return;
-					await sleep(3000);
+					await sleep(WORKFLOW_STREAM_INTERVAL_MS);
 				}
-				writeEvent({ status: 'timeout' });
 			} catch (err) {
-				writeEvent({ status: 'error', error: String(err) });
+				if (!request.signal.aborted) writeEvent({ status: 'error', error: String(err) });
 			} finally {
 				controller.close();
 			}
