@@ -31,8 +31,8 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		await handleArticleQueue(batch, this.env);
 	}
 
-	// ── Service-binding RPC for the chat worker ──────────────────────────────
-	// Thin delegates to core-owned domain facades.
+	// ── Service-binding RPC for engine capabilities ─────────────────────────
+	// Product-domain writes live on the app Worker's DomainRpc binding.
 
 	/** Persist a generated image into the canonical user_file blob store. */
 	storeGeneratedImage(input: CoreRpcArgs<'storeGeneratedImage'>[0]) {
