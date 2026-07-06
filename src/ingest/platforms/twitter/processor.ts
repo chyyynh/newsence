@@ -2,7 +2,7 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { generateObject } from '@core-shared/ai';
+import { generateObject } from '@core-ai/embedding';
 import type { ArticleCategory } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';

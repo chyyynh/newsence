@@ -2,7 +2,7 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
-import { generateText } from '@core-shared/ai';
+import { generateText } from '@core-ai/embedding';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article, Env } from '@core-shared/types';
 import { decodeHtmlEntities, htmlToText } from '@core-shared/web';

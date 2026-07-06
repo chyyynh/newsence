@@ -1,4 +1,4 @@
-import { CORE_JSON_MODEL, generateObject } from '@core-shared/ai';
+import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
 import { withDbClient } from '@core-shared/db';
 import type { Article, Env } from '@core-shared/types';
 import type { TranscriptSegment } from '@core-shared/web';
