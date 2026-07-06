@@ -15,8 +15,6 @@ import type {
 	WorkspaceCreationCapability,
 } from '@worker-contracts/core-rpc';
 
-const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
-
 type ResourceSource = { type: ResourceSourceType; id: string };
 type ResourceTarget = { type: ResourceTargetType; id: string };
 type WorkspaceCapabilityRow = { plan_id: string | null; workspace_count: string | number };
@@ -25,19 +23,6 @@ type WorkspaceCatalogRow = WorkspaceCapabilityRow & {
 	title: string | null;
 	description: string | null;
 	document_count: string | number | null;
-};
-
-type ResourceSummaryRow = {
-	id: string;
-	title: string | null;
-	title_cn: string | null;
-	summary: string | null;
-	summary_cn: string | null;
-};
-type WorkspaceSummaryDocumentRow = {
-	id: string;
-	title: string;
-	description: string | null;
 };
 
 function isUuid(value: string): boolean {
@@ -61,29 +46,6 @@ function cleanHttpUrls(urls: string[], limit = 20): string[] {
 			}
 		});
 	return [...new Set(cleaned)].slice(0, limit);
-}
-
-function resourceSummaryLine(
-	citation: { to_id: string; to_type: string },
-	articles: Map<string, ResourceSummaryRow>,
-	files: Map<string, ResourceSummaryRow>,
-): string | null {
-	const resource =
-		citation.to_type === 'article' ? articles.get(citation.to_id) : citation.to_type === 'user_file' ? files.get(citation.to_id) : null;
-	if (!resource) return null;
-	const title = resource.title_cn || resource.title || 'Untitled';
-	const summary = resource.summary_cn || resource.summary;
-	return `- ${title}${summary ? `: ${summary}` : ''}`;
-}
-
-function compactContextLine(value: string | null | undefined, fallback = ''): string {
-	return value?.replace(/\s+/g, ' ').trim() || fallback;
-}
-
-function workspaceDocumentSummaryLine(row: WorkspaceSummaryDocumentRow): string {
-	const title = compactContextLine(row.title, 'Untitled');
-	const description = compactContextLine(row.description);
-	return `- ${title} (document id: ${row.id})${description ? `: ${description}` : ''}`;
 }
 
 async function readWorkspaceCreationCapability(db: DbClient, userId: string): Promise<WorkspaceCreationCapability> {
@@ -148,88 +110,6 @@ export async function listWorkspaces(env: Env, userId: string): Promise<Workspac
 					documentCount: Number(row.document_count),
 				})),
 		};
-	});
-}
-
-export async function workspaceSummary(env: Env, userId: string, workspaceId: string): Promise<string | null> {
-	if (!isUuid(workspaceId)) return null;
-	return withDbClient(env, async (db) => {
-		const workspace = (
-			await db.query<{ id: string; title: string; description: string | null }>(
-				`SELECT id, title, description FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1`,
-				[workspaceId, userId],
-			)
-		).rows[0];
-		if (!workspace) return null;
-
-		const citations = await db.query<{ to_id: string; to_type: string }>(
-			`SELECT to_id, to_type
-			 FROM citations
-			 WHERE from_id = $1 AND from_type = 'workspace' AND user_id = $2
-			 ORDER BY created_at DESC
-			 LIMIT 12`,
-			[workspace.id, userId],
-		);
-		const articleIds = citations.rows.filter((row) => row.to_type === 'article' && isUuid(row.to_id)).map((row) => row.to_id);
-		const userFileIds = citations.rows.filter((row) => row.to_type === 'user_file' && isUuid(row.to_id)).map((row) => row.to_id);
-		const collectionIds = citations.rows.filter((row) => row.to_type === 'collection' && isUuid(row.to_id)).map((row) => row.to_id);
-		const [documents, articles, files, collections] = await Promise.all([
-			db.query<WorkspaceSummaryDocumentRow>(
-				`SELECT id, title, description
-				 FROM user_documents
-				 WHERE workspace_id = $1 AND user_id = $2
-				 ORDER BY updated_at DESC
-				 LIMIT $3`,
-				[workspace.id, userId, MAX_WORKSPACE_SUMMARY_DOCUMENTS],
-			),
-			articleIds.length
-				? db.query<ResourceSummaryRow>(`SELECT id, title, title_cn, summary, summary_cn FROM articles WHERE id = ANY($1::uuid[])`, [
-						articleIds,
-					])
-				: Promise.resolve({
-						rows: [] as ResourceSummaryRow[],
-					}),
-			userFileIds.length
-				? db.query<ResourceSummaryRow>(
-						`SELECT id, title, title_cn, summary, summary_cn FROM user_files WHERE id = ANY($1::uuid[]) AND user_id = $2`,
-						[userFileIds, userId],
-					)
-				: Promise.resolve({
-						rows: [] as ResourceSummaryRow[],
-					}),
-			collectionIds.length
-				? db.query<{ id: string; name: string; description: string | null; article_count: number }>(
-						`SELECT id, name, description, article_count FROM collections WHERE id = ANY($1::uuid[]) AND user_id = $2`,
-						[collectionIds, userId],
-					)
-				: Promise.resolve({
-						rows: [] as { id: string; name: string; description: string | null; article_count: number }[],
-					}),
-		]);
-		const articleById = new Map(articles.rows.map((row) => [row.id, row]));
-		const fileById = new Map(files.rows.map((row) => [row.id, row]));
-		const resources = citations.rows
-			.map((citation) => resourceSummaryLine(citation, articleById, fileById))
-			.filter((line): line is string => !!line);
-		const documentLines = documents.rows.map(workspaceDocumentSummaryLine);
-		const collectionLines = collections.rows.map(
-			(row) =>
-				`- ${row.name} (collection id: ${row.id}, ${row.article_count} articles)${row.description ? `: ${compactContextLine(row.description)}` : ''}`,
-		);
-
-		return [
-			`Workspace: ${workspace.title}`,
-			workspace.description ? `Description: ${workspace.description}` : '',
-			documentLines.length
-				? `Recent workspace documents (use read-context with type "document" and the document id when full content is needed):\n${documentLines.join('\n')}`
-				: '',
-			collectionLines.length
-				? `Pinned collections (use read-context with type "collection" and the collection id to read member articles):\n${collectionLines.join('\n')}`
-				: '',
-			resources.length ? `Pinned resources:\n${resources.join('\n')}` : '',
-		]
-			.filter(Boolean)
-			.join('\n\n');
 	});
 }
 

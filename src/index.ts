@@ -21,7 +21,6 @@ import {
 	removeResourceFromSource,
 	validateResourceSource,
 	workspaceCreationCapability,
-	workspaceSummary,
 } from './documents';
 import { deleteUserMediaFile } from './media/delete';
 
@@ -109,11 +108,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Workspace creation capability without loading the full workspace catalog. */
 	workspaceCreationCapability(userId: CoreRpcArgs<'workspaceCreationCapability'>[0]) {
 		return workspaceCreationCapability(this.env, userId);
-	}
-
-	/** Workspace pinned-resource summary for workspace-scoped chat context. */
-	workspaceSummary(userId: CoreRpcArgs<'workspaceSummary'>[0], workspaceId: CoreRpcArgs<'workspaceSummary'>[1]) {
-		return workspaceSummary(this.env, userId, workspaceId);
 	}
 }
 
