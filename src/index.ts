@@ -12,7 +12,6 @@ import type { Env } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
-import { listWorkspaces, workspaceCreationCapability } from './documents';
 import { deleteUserMediaFile } from './media/delete';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
@@ -59,16 +58,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Delete a user-owned blob media file and its R2 object. */
 	deleteUserMediaFile(input: CoreRpcArgs<'deleteUserMediaFile'>[0]) {
 		return deleteUserMediaFile(this.env, input);
-	}
-
-	/** Workspace catalog used by scope-free create-document decisions. */
-	listWorkspaces(userId: CoreRpcArgs<'listWorkspaces'>[0]) {
-		return listWorkspaces(this.env, userId);
-	}
-
-	/** Workspace creation capability without loading the full workspace catalog. */
-	workspaceCreationCapability(userId: CoreRpcArgs<'workspaceCreationCapability'>[0]) {
-		return workspaceCreationCapability(this.env, userId);
 	}
 }
 
