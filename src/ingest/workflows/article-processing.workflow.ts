@@ -20,7 +20,6 @@ import {
 	sourceDraftToArticle,
 	sourceDraftYoutubeTranscript,
 } from '@ingest/workflows/source-draft';
-import { measureImageDimensions } from '@media/dimensions';
 import { syncPaperGraph } from '@papers/sync';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
@@ -36,6 +35,8 @@ import { createPdfTextTemp, deletePdfTextTemp, type PdfTextTempResult, readPdfTe
 
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
+const IMAGE_DIMENSIONS_FETCH_TIMEOUT_MS = 10_000;
+const IMAGE_DIMENSIONS_MAX_BYTES = 12 * 1024 * 1024;
 
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
@@ -52,7 +53,7 @@ type OgImageResult = {
 	ogImageWidth: number | null;
 	ogImageHeight: number | null;
 };
-type OgImageDimensions = Awaited<ReturnType<typeof measureImageDimensions>>;
+type OgImageDimensions = { width: number; height: number };
 type OgImagePatch = {
 	ogImageUrl: string | null;
 	ogImageDimensions: OgImageDimensions | null;
@@ -391,6 +392,29 @@ async function resolveOgImageDimensions(
 	}
 
 	return measureImageDimensions(env, ogImageUrl);
+}
+
+async function measureImageDimensions(env: Env, imageUrl: string): Promise<OgImageDimensions | null> {
+	try {
+		const response = await fetch(imageUrl, {
+			headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' },
+			signal: AbortSignal.timeout(IMAGE_DIMENSIONS_FETCH_TIMEOUT_MS),
+		});
+		if (!response.ok || !response.body) return null;
+
+		const contentLength = Number(response.headers.get('content-length') ?? 0);
+		if (contentLength > IMAGE_DIMENSIONS_MAX_BYTES) {
+			response.body.cancel();
+			return null;
+		}
+
+		const info = await env.IMAGES.info(response.body);
+		if (!('width' in info) || !('height' in info) || !info.width || !info.height) return null;
+		return { width: info.width, height: info.height };
+	} catch (error) {
+		console.warn({ tag: 'IMAGE_DIMS', msg: 'Failed to measure image dimensions', imageUrl, error: String(error) });
+		return null;
+	}
 }
 
 async function prepareYoutubeHighlights(
