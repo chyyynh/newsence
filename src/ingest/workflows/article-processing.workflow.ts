@@ -30,8 +30,14 @@ import {
 	prepareYouTubeHighlightsFromTranscript,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
-import { persistWorkflowTarget, recordWorkflowFailure } from './article-persistence';
-import { createPdfTextTemp, deletePdfTextTemp, type PdfTextTempResult, readPdfTextTemp } from './pdf-text-temp';
+import {
+	createPdfTextTemp,
+	deletePdfTextTemp,
+	type PdfTextTempResult,
+	persistWorkflowTarget,
+	readPdfTextTemp,
+	recordWorkflowFailure,
+} from './article-persistence';
 
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;

@@ -9,13 +9,14 @@ import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platform
 import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@ingest/workflows/source-draft';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
+import { type PdfTextStatus, parsePdf } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
-import type { PdfTextTempResult } from './pdf-text-temp';
-import { readPdfTextTemp } from './pdf-text-temp';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from './user-file-state';
 
 const OG_IMAGE_UPDATE_KEY = 'og_image_url';
+const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
+const PDF_TEXT_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
 type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 
@@ -39,6 +40,40 @@ type SourceFinalInsert = {
 	article: SourceArticleDraft['article'];
 	updatePayload: Record<string, unknown>;
 };
+
+export interface PdfTextTempResult {
+	status: PdfTextStatus | 'failed';
+	chars: number;
+	pages: number;
+	textStorageKey?: string;
+}
+
+function assertPdfTextTempKey(key: string): void {
+	if (!key.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text temp object key: ${key}`);
+}
+
+export async function createPdfTextTemp(env: Env, articleId: string, storageKey: string): Promise<PdfTextTempResult> {
+	const obj = await env.R2.get(storageKey);
+	if (!obj) throw new Error(`PDF source object missing: ${storageKey}`);
+	const bytes = await obj.bytes();
+	const { text, status, chars, pages } = await parsePdf(bytes);
+	const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${articleId}/${crypto.randomUUID()}.md`;
+	await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: PDF_TEXT_CONTENT_TYPE } });
+	console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: articleId, status, chars, pages });
+	return { status, chars, pages, textStorageKey };
+}
+
+export async function readPdfTextTemp(env: Env, textStorageKey: string): Promise<string> {
+	assertPdfTextTempKey(textStorageKey);
+	const obj = await env.R2.get(textStorageKey);
+	if (!obj) throw new Error(`PDF text temp object missing: ${textStorageKey}`);
+	return obj.text();
+}
+
+export async function deletePdfTextTemp(env: Env, textStorageKey: string): Promise<void> {
+	assertPdfTextTempKey(textStorageKey);
+	await env.R2.delete(textStorageKey);
+}
 
 export async function persistWorkflowTarget(
 	env: Env,
