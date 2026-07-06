@@ -5,10 +5,10 @@ export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiBinding = Env['AI'];
-type AiGatewayMetadata = Record<string, string>;
-type AiGatewayOptions = { gateway?: { id: string; collectLog?: boolean; metadata?: AiGatewayMetadata } };
-type AiRun = (model: string, inputs: Record<string, unknown>, options?: AiGatewayOptions) => Promise<unknown>;
+type AiRun = (model: string, inputs: Record<string, unknown>, options?: AiOptions) => Promise<unknown>;
 type AiMessage = { role: 'system' | 'user'; content: string };
+type GeminiTextResponse = { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+type OpenAIChatResponse = { choices?: Array<{ message?: { content?: string } }> };
 
 export interface AiTask {
 	name: string;
@@ -45,12 +45,12 @@ function gatewayId(value?: string): string {
 	return value?.trim() || DEFAULT_AI_GATEWAY_ID;
 }
 
-function taskMetadata(task?: AiTask): Record<string, string> | undefined {
+function taskMetadata(task?: AiTask): NonNullable<AiOptions['gateway']>['metadata'] | undefined {
 	if (!task) return undefined;
 	return { app: 'newsence', task: task.name, taskVersion: task.version };
 }
 
-function gatewayOptions(gatewayIdValue?: string, task?: AiTask): AiGatewayOptions {
+function gatewayOptions(gatewayIdValue?: string, task?: AiTask): AiOptions {
 	return { gateway: { id: gatewayId(gatewayIdValue), collectLog: true, ...(task && { metadata: taskMetadata(task) }) } };
 }
 
@@ -85,48 +85,13 @@ function errorDetails(error: unknown): Record<string, unknown> {
 	return details;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
+function geminiText(response: GeminiTextResponse): string | null {
+	const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
+	return text?.trim() || null;
 }
 
-function partText(content: unknown): string | null {
-	if (!isRecord(content) || !Array.isArray(content.parts)) return null;
-	const text = content.parts.map((part) => (isRecord(part) && typeof part.text === 'string' ? part.text : '')).join('');
-	return text.trim() || null;
-}
-
-function choicesText(choices: unknown): string | null {
-	if (!Array.isArray(choices)) return null;
-	for (const choice of choices) {
-		if (!isRecord(choice)) continue;
-		const message = choice.message;
-		if (isRecord(message) && typeof message.content === 'string') return message.content;
-		if (typeof choice.text === 'string') return choice.text;
-	}
-	return null;
-}
-
-function candidatesText(candidates: unknown): string | null {
-	if (!Array.isArray(candidates)) return null;
-	for (const candidate of candidates) {
-		if (!isRecord(candidate)) continue;
-		const text = partText(candidate.content);
-		if (text) return text;
-	}
-	return null;
-}
-
-function responseText(response: unknown): string | null {
-	if (typeof response === 'string') return response;
-	if (!isRecord(response)) return null;
-	if (typeof response.response === 'string') return response.response;
-	if (isRecord(response.response)) return responseText(response.response);
-	return (
-		(typeof response.text === 'string' && response.text) ||
-		(typeof response.output_text === 'string' && response.output_text) ||
-		choicesText(response.choices) ||
-		candidatesText(response.candidates)
-	);
+function openAIText(response: OpenAIChatResponse): string | null {
+	return response.choices?.[0]?.message?.content?.trim() || null;
 }
 
 function extractJson(text: string): unknown {
@@ -144,19 +109,11 @@ function extractJson(text: string): unknown {
 	}
 }
 
-function structuredPayload(response: unknown): unknown {
-	const text = responseText(response);
-	if (text) return extractJson(text);
-	if (!isRecord(response)) return response;
-	if (isRecord(response.response)) return response.response;
-	return response;
-}
-
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
 
 	try {
-		const response = await (ai.run as AiRun)(
+		const response = (await (ai.run as AiRun)(
 			CORE_TEXT_MODEL,
 			{
 				contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -164,8 +121,8 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 				generationConfig: geminiSettings(options),
 			},
 			gatewayOptions(gatewayIdValue, task),
-		);
-		return responseText(response)?.trim() || null;
+		)) as GeminiTextResponse;
+		return geminiText(response);
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, ...errorDetails(error) });
 		return null;
@@ -176,7 +133,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 	const { gatewayId: gatewayIdValue, schema, schemaName = 'AI structured output', systemPrompt, task } = options;
 
 	try {
-		const response = await (ai.run as AiRun)(
+		const response = (await (ai.run as AiRun)(
 			CORE_JSON_MODEL,
 			{
 				messages: messages(prompt, systemPrompt),
@@ -191,8 +148,11 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 				},
 			},
 			gatewayOptions(gatewayIdValue, task),
-		);
-		const parsed = schema.safeParse(structuredPayload(response));
+		)) as OpenAIChatResponse;
+		const text = openAIText(response);
+		if (!text) throw new Error('No text content found in model response');
+
+		const parsed = schema.safeParse(extractJson(text));
 		if (!parsed.success) throw parsed.error;
 		return parsed.data;
 	} catch (error) {
