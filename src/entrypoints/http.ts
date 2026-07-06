@@ -13,7 +13,6 @@ import {
 	handlePruneOrphanEntities,
 	handleRepairEntityLinks,
 } from './entity-maintenance';
-import { handleBackfillPaperGraph } from './paper-maintenance';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
@@ -27,7 +26,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/entities/quality': (req, env) => handleEntityQuality(req, env),
 	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
 	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
-	'/papers/backfill-graph': (req, env) => handleBackfillPaperGraph(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
 };
@@ -60,7 +58,6 @@ const HELP_TEXT =
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
 	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB; optional {sourceType}\n' +
 	'POST /okf/collections/export              - Export a collection as an OKF v0.1 bundle tar.gz (internal token) -> gzip stream\n' +
-	'POST /papers/backfill-graph               - Internal: promote paper platform_metadata into papers/paper_references; {table?:articles|user_files, limit?, cursorId?}\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +

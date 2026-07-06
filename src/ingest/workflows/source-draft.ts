@@ -1,7 +1,7 @@
 import type { InsertArticleData } from '@core-shared/article-store';
 import type { TwitterMedia } from '@core-shared/platform-metadata';
 import type { Article, Env, Tweet } from '@core-shared/types';
-import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/types';
+import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 
