@@ -8,19 +8,12 @@ import { USER_FILES_TABLE } from '@shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
-import type { DocumentContent } from '@worker-contracts/core-rpc';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import {
 	addResourceToSource,
 	addResourceUrlsToSource,
-	createWorkspaceDocument,
-	DocumentEmptyContentBlockedError,
-	DocumentVersionConflictError,
-	deleteDocument,
 	deleteResource,
 	removeResourceFromSource,
-	saveDocument,
-	updateDocumentShare,
 	validateResourceSource,
 } from '../documents';
 import { handleExportCollectionOkf } from '../okf';
@@ -52,10 +45,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/resources/delete': (req, env) => handleDeleteResource(req, env),
 	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
 	'/resources/validate-source': (req, env) => handleValidateResourceSource(req, env),
-	'/documents/create': (req, env) => handleCreateWorkspaceDocument(req, env),
-	'/documents/delete': (req, env) => handleDeleteDocument(req, env),
-	'/documents/save': (req, env) => handleSaveDocument(req, env),
-	'/documents/share': (req, env) => handleUpdateDocumentShare(req, env),
 	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
@@ -90,10 +79,6 @@ const HELP_TEXT =
 	'POST /resources/delete                    - Remove a user-owned citation by citation id (internal token) -> {success,data:{id}}\n' +
 	'POST /resources/remove                    - Remove a user-owned citation by source/target (internal token) -> {success,data:{id}}\n' +
 	'POST /resources/validate-source           - Validate source ownership before upload/linking (internal token) -> {success,data}\n' +
-	'POST /documents/create                    - Create an empty workspace document (internal token) -> {success,data}\n' +
-	'POST /documents/delete                    - Delete a user-owned document (internal token) -> {success,data:{id}}\n' +
-	'POST /documents/save                      - Save editor content and snapshot previous versions (internal token) -> {success,data}\n' +
-	'POST /documents/share                     - Update document share settings (internal token) -> {success,data}\n' +
 	'POST /media/delete-user-file              - Delete a user-owned blob user_file and R2 object (internal token) -> {success,data}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
@@ -341,147 +326,6 @@ async function handleValidateResourceSource(request: Request, env: Env): Promise
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return jsonError('INTERNAL_ERROR', 'Resource source validation failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleCreateWorkspaceDocument(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; workspaceId?: string; title?: string }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !body.workspaceId?.trim()) {
-		return jsonError('BAD_REQUEST', 'Missing userId or workspaceId', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await createWorkspaceDocument(env, { userId: body.userId, workspaceId: body.workspaceId, title: body.title });
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Workspace not found') {
-			return jsonError('NOT_FOUND', 'Workspace not found', 404, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'DOCUMENT_CREATE', msg: 'create failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Document create failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleDeleteDocument(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; documentId?: string }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !body.documentId?.trim()) {
-		return jsonError('BAD_REQUEST', 'Missing userId or documentId', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await deleteDocument(env, { userId: body.userId, documentId: body.documentId });
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Document not found') {
-			return jsonError('NOT_FOUND', 'Document not found', 404, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'DOCUMENT_DELETE', msg: 'delete failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Document delete failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleSaveDocument(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		userId?: string;
-		documentId?: string;
-		title?: string;
-		content?: unknown;
-		allowEmptyContentOverwrite?: boolean;
-		expectedVersion?: number;
-		source?: 'auto-save' | 'ai-edit' | 'restore';
-		forceSnapshot?: boolean;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !body.documentId?.trim() || typeof body.title !== 'string' || body.content === undefined) {
-		return jsonError('BAD_REQUEST', 'Missing userId, documentId, title, or content', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await saveDocument(env, {
-			userId: body.userId,
-			documentId: body.documentId,
-			title: body.title,
-			content: body.content as DocumentContent,
-			allowEmptyContentOverwrite: body.allowEmptyContentOverwrite,
-			expectedVersion: body.expectedVersion,
-			source: body.source,
-			forceSnapshot: body.forceSnapshot,
-		});
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof DocumentVersionConflictError) {
-			return jsonError('DOCUMENT_VERSION_CONFLICT', error.message, 409, INTERNAL_CORS_HEADERS, {
-				clientVersion: error.clientVersion,
-				serverVersion: error.serverVersion,
-			});
-		}
-		if (error instanceof DocumentEmptyContentBlockedError) {
-			return jsonError('EMPTY_CONTENT_BLOCKED', error.message, 409, INTERNAL_CORS_HEADERS);
-		}
-		if (error instanceof Error) {
-			if (error.message === 'Document not found') return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
-			if (error.message === 'Images are still uploading') return jsonError('BAD_REQUEST', error.message, 400, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'DOCUMENT_SAVE', msg: 'save failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Document save failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleUpdateDocumentShare(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		userId?: string;
-		documentId?: string;
-		shareEnabled?: boolean;
-		shareSlug?: string | null;
-		description?: string | null;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !body.documentId?.trim() || typeof body.shareEnabled !== 'boolean') {
-		return jsonError('BAD_REQUEST', 'Missing userId, documentId, or shareEnabled', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await updateDocumentShare(env, {
-			userId: body.userId,
-			documentId: body.documentId,
-			shareEnabled: body.shareEnabled,
-			shareSlug: body.shareSlug,
-			description: body.description,
-		});
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error) {
-			if (
-				error.message === 'Document not found' ||
-				error.message === 'Set a username before sharing.' ||
-				error.message === 'Invalid share URL.' ||
-				error.message === 'This URL is already in use.'
-			) {
-				return error.message === 'Document not found'
-					? jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS)
-					: jsonError('BAD_REQUEST', error.message, 400, INTERNAL_CORS_HEADERS);
-			}
-		}
-		console.error({ tag: 'DOCUMENT_SHARE', msg: 'update failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Document share update failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 

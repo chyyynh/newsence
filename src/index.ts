@@ -16,14 +16,9 @@ import {
 	addResource,
 	addResourceToSource,
 	addResourceUrlsToSource,
-	createDocument,
-	createWorkspaceDocument,
-	deleteDocument,
 	deleteResource,
 	listWorkspaces,
 	removeResourceFromSource,
-	saveDocument,
-	updateDocumentShare,
 	validateResourceSource,
 	workspaceCreationCapability,
 	workspaceSummary,
@@ -71,34 +66,9 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		return readCorpusItems(this.env, items, userId);
 	}
 
-	/** Persist AI-generated document JSON. */
-	createDocument(input: CoreRpcArgs<'createDocument'>[0]) {
-		return createDocument(this.env, input);
-	}
-
-	/** Create an empty compose-mode document in a workspace. */
-	createWorkspaceDocument(input: CoreRpcArgs<'createWorkspaceDocument'>[0]) {
-		return createWorkspaceDocument(this.env, input);
-	}
-
-	/** Delete a user-owned document. */
-	deleteDocument(input: CoreRpcArgs<'deleteDocument'>[0]) {
-		return deleteDocument(this.env, input);
-	}
-
 	/** Delete a user-owned blob media file and its R2 object. */
 	deleteUserMediaFile(input: CoreRpcArgs<'deleteUserMediaFile'>[0]) {
 		return deleteUserMediaFile(this.env, input);
-	}
-
-	/** Save editor content with optimistic-version checks and snapshots. */
-	saveDocument(input: CoreRpcArgs<'saveDocument'>[0]) {
-		return saveDocument(this.env, input);
-	}
-
-	/** Update public-share settings for a user-owned document. */
-	updateDocumentShare(input: CoreRpcArgs<'updateDocumentShare'>[0]) {
-		return updateDocumentShare(this.env, input);
 	}
 
 	/** Pin article/file/URL resources to a document's workspace. */

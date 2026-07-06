@@ -1,43 +1,24 @@
 import { ingestUrls } from '@ingest/urls';
 import type { DbClient } from '@shared/db';
-import { withDbClient, withDbTransaction } from '@shared/db';
+import { withDbClient } from '@shared/db';
 import type { Env } from '@shared/types';
-import {
-	canCreateWorkspaceForPlan,
-	WORKSPACE_QUOTA_EXCEEDED_CODE,
-	WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
-	workspaceLimitForPlan,
-} from '@worker-contracts/billing-contracts';
+import { canCreateWorkspaceForPlan } from '@worker-contracts/billing-contracts';
 import type {
 	AddDocumentResourceResult,
 	AddResourceToSourceResult,
 	AddResourceUrlsToSourceResult,
-	CreateDocumentResult,
-	DeleteDocumentResult,
-	DocumentContent,
-	DocumentSnapshotSource,
 	RemoveResourceResult,
 	ResourceSourceType,
 	ResourceTargetType,
-	SaveDocumentResult,
-	UpdateDocumentShareResult,
 	ValidateResourceSourceResult,
 	WorkspaceCatalogResult,
 	WorkspaceCreationCapability,
-	WorkspaceDecision,
-	WorkspaceDocumentResult,
 } from '@worker-contracts/core-rpc';
 
 const MAX_WORKSPACE_SUMMARY_DOCUMENTS = 10;
-const SNAPSHOT_THROTTLE_MS = 10 * 60 * 1000;
-const SHARE_SLUG_FORMAT = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-const EMPTY_DOCUMENT_CONTENT = { type: 'doc', content: [{ type: 'paragraph' }] } satisfies DocumentContent;
 
 type ResourceSource = { type: ResourceSourceType; id: string };
 type ResourceTarget = { type: ResourceTargetType; id: string };
-type CreateWorkspaceResult =
-	| { ok: true; id: string }
-	| { ok: false; code: typeof WORKSPACE_QUOTA_EXCEEDED_CODE; message: typeof WORKSPACE_QUOTA_EXCEEDED_MESSAGE };
 type WorkspaceCapabilityRow = { plan_id: string | null; workspace_count: string | number };
 type WorkspaceCatalogRow = WorkspaceCapabilityRow & {
 	id: string | null;
@@ -46,15 +27,6 @@ type WorkspaceCatalogRow = WorkspaceCapabilityRow & {
 	document_count: string | number | null;
 };
 
-type DocumentRow = {
-	id: string;
-	title: string;
-	content: DocumentContent | null;
-	version: number;
-	workspace_id: string;
-	created_at: Date | string;
-	updated_at: Date | string;
-};
 type ResourceSummaryRow = {
 	id: string;
 	title: string | null;
@@ -67,166 +39,13 @@ type WorkspaceSummaryDocumentRow = {
 	title: string;
 	description: string | null;
 };
-type WorkspaceDocumentRow = {
-	id: string;
-	workspace_id: string | null;
-	title: string;
-	description: string | null;
-	content: DocumentContent | null;
-	version: number;
-	share_enabled: boolean;
-	share_slug: string | null;
-	username: string | null;
-	updated_at: Date | string;
-};
-type DocumentShareRow = {
-	id: string;
-	title: string;
-	share_slug: string | null;
-	published_at: Date | string | null;
-	username: string | null;
-};
-type DocumentShareUpdateRow = {
-	id: string;
-	share_enabled: boolean;
-	share_slug: string | null;
-	description: string | null;
-	published_at: Date | string | null;
-	updated_at: Date | string;
-	username: string | null;
-};
-type SaveDocumentRow = {
-	id: string;
-	title: string;
-	content: DocumentContent | null;
-	version: number;
-	updated_at: Date | string;
-};
-
-export class DocumentVersionConflictError extends Error {
-	constructor(
-		readonly serverVersion: number,
-		readonly clientVersion: number,
-	) {
-		super('Document version conflict');
-		this.name = 'DocumentVersionConflictError';
-	}
-}
-
-export class DocumentEmptyContentBlockedError extends Error {
-	constructor() {
-		super('Empty document content was blocked');
-		this.name = 'DocumentEmptyContentBlockedError';
-	}
-}
 
 function isUuid(value: string): boolean {
 	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function hasTransientImageSrc(node: unknown): boolean {
-	if (Array.isArray(node)) return node.some(hasTransientImageSrc);
-	if (!node || typeof node !== 'object') return false;
-	const record = node as Record<string, unknown>;
-	if (typeof record.src === 'string' && (record.src.startsWith('blob:') || record.src.startsWith('data:'))) return true;
-	return Object.values(record).some(hasTransientImageSrc);
-}
-
-function nodeChildren(node: unknown): unknown[] | undefined {
-	if (!node || typeof node !== 'object') return undefined;
-	const content = (node as Record<string, unknown>).content;
-	return Array.isArray(content) ? content : undefined;
-}
-
-function contentHasMeaningfulNode(nodes: unknown[] | undefined): boolean {
-	return !!nodes?.some((node) => {
-		if (!node || typeof node !== 'object') return false;
-		const record = node as Record<string, unknown>;
-		if (typeof record.text === 'string' && record.text.trim()) return true;
-		if (typeof record.type === 'string' && !['doc', 'paragraph', 'hardBreak', 'text'].includes(record.type)) return true;
-		return contentHasMeaningfulNode(nodeChildren(record));
-	});
-}
-
-function isEmptyEditorContent(content: unknown): boolean {
-	if (content === null || content === undefined) return true;
-	return !contentHasMeaningfulNode(nodeChildren(content));
-}
-
-function asDocumentContent(content: unknown): DocumentContent {
-	if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('Invalid document content');
-	return content as DocumentContent;
-}
-
 function dateIso(value: Date | string): string {
 	return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
-
-function serializeWorkspaceDocument(row: WorkspaceDocumentRow): WorkspaceDocumentResult {
-	return {
-		id: row.id,
-		workspaceId: row.workspace_id,
-		title: row.title,
-		description: row.description,
-		content: row.content ?? EMPTY_DOCUMENT_CONTENT,
-		version: row.version,
-		shareEnabled: row.share_enabled,
-		shareSlug: row.share_slug,
-		username: row.username,
-		updatedAt: dateIso(row.updated_at),
-	};
-}
-
-function serializeDocumentShareUpdate(row: DocumentShareUpdateRow): UpdateDocumentShareResult {
-	return {
-		id: row.id,
-		shareEnabled: row.share_enabled,
-		shareSlug: row.share_slug,
-		description: row.description,
-		publishedAt: row.published_at ? dateIso(row.published_at) : null,
-		updatedAt: dateIso(row.updated_at),
-		username: row.username,
-	};
-}
-
-function serializeSaveDocument(row: SaveDocumentRow): SaveDocumentResult {
-	return {
-		id: row.id,
-		title: row.title,
-		content: row.content ?? EMPTY_DOCUMENT_CONTENT,
-		version: row.version,
-		updatedAt: dateIso(row.updated_at),
-	};
-}
-
-function sameJson(a: unknown, b: unknown): boolean {
-	return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function generateShareSlugFromTitle(title: string): string {
-	const trimmed = title.trim();
-	if (!trimmed) return 'untitled';
-	const slug = trimmed
-		.toLowerCase()
-		.replace(/[^\w\s-]/g, '')
-		.replace(/[_\s]+/g, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 100);
-	return slug.length >= 3 ? slug : `article-${Date.now()}`;
-}
-
-async function generateUniqueShareSlugTx(db: DbClient, title: string, userId: string): Promise<string> {
-	await db.query('SELECT pg_advisory_xact_lock(823947, hashtext($1))', [userId]);
-	const baseSlug = generateShareSlugFromTitle(title);
-	for (let index = 1; index <= 100; index += 1) {
-		const slug = index === 1 ? baseSlug : `${baseSlug}-${index}`;
-		const taken = (
-			await db.query<{ id: string }>('SELECT id FROM user_documents WHERE user_id = $1 AND share_slug = $2 LIMIT 1', [userId, slug])
-		).rows[0];
-		if (!taken) return slug;
-	}
-	return `${baseSlug}-${Date.now()}`;
 }
 
 function cleanHttpUrls(urls: string[], limit = 20): string[] {
@@ -242,12 +61,6 @@ function cleanHttpUrls(urls: string[], limit = 20): string[] {
 			}
 		});
 	return [...new Set(cleaned)].slice(0, limit);
-}
-
-async function workspaceQuotaLimitTx(db: DbClient, userId: string): Promise<number | null> {
-	await db.query('SELECT pg_advisory_xact_lock(581203, hashtext($1))', [userId]);
-	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
-	return workspaceLimitForPlan(settings.rows[0]?.plan_id ?? 'free');
 }
 
 function resourceSummaryLine(
@@ -338,36 +151,6 @@ export async function listWorkspaces(env: Env, userId: string): Promise<Workspac
 	});
 }
 
-export async function createWorkspace(
-	env: Env,
-	params: { userId: string; title: string; description?: string | null },
-): Promise<CreateWorkspaceResult> {
-	return withDbTransaction(env, 'create workspace', async (db) => {
-		const limit = await workspaceQuotaLimitTx(db, params.userId);
-		if (limit !== null) {
-			const count = Number((await db.query('SELECT COUNT(*) FROM workspaces WHERE user_id = $1', [params.userId])).rows[0]?.count ?? 0);
-			if (count >= limit) {
-				return {
-					ok: false,
-					code: WORKSPACE_QUOTA_EXCEEDED_CODE,
-					message: WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
-				};
-			}
-		}
-
-		const workspace = (
-			await db.query<{ id: string }>(
-				`INSERT INTO workspaces (user_id, title, description)
-				 VALUES ($1, $2, $3)
-				 RETURNING id`,
-				[params.userId, params.title.trim().slice(0, 120) || 'Workspace', params.description?.trim().slice(0, 500) || null],
-			)
-		).rows[0];
-		if (!workspace) throw new Error('Workspace not created');
-		return { ok: true, id: workspace.id };
-	});
-}
-
 export async function workspaceSummary(env: Env, userId: string, workspaceId: string): Promise<string | null> {
 	if (!isUuid(workspaceId)) return null;
 	return withDbClient(env, async (db) => {
@@ -448,300 +231,6 @@ export async function workspaceSummary(env: Env, userId: string, workspaceId: st
 			.filter(Boolean)
 			.join('\n\n');
 	});
-}
-
-export async function createDocument(
-	env: Env,
-	params: { userId: string; title: string; content: DocumentContent; workspace: WorkspaceDecision },
-): Promise<CreateDocumentResult> {
-	const content = asDocumentContent(params.content);
-	if (isEmptyEditorContent(content)) throw new Error('Generated document content is empty');
-	if (hasTransientImageSrc(content)) throw new Error('Images are still uploading');
-	const normalizedTitle = params.title.trim().slice(0, 200) || 'Untitled';
-
-	return withDbTransaction(env, 'create document', async (db) => {
-		if (params.workspace.mode === 'existing') {
-			if (!isUuid(params.workspace.workspaceId)) throw new Error('Workspace not found');
-			const workspace = (
-				await db.query<{ id: string; title: string }>(`SELECT id, title FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1`, [
-					params.workspace.workspaceId,
-					params.userId,
-				])
-			).rows[0];
-			if (!workspace) throw new Error('Workspace not found');
-			const document = await insertDocument(db, {
-				content,
-				title: normalizedTitle,
-				userId: params.userId,
-				workspaceId: workspace.id,
-			});
-			return {
-				ok: true,
-				documentId: document.id,
-				workspaceId: document.workspace_id,
-				workspaceTitle: workspace.title,
-				workspaceCreated: false,
-			};
-		}
-
-		const limit = await workspaceQuotaLimitTx(db, params.userId);
-		if (limit !== null) {
-			const count = Number((await db.query(`SELECT COUNT(*) FROM workspaces WHERE user_id = $1`, [params.userId])).rows[0]?.count ?? 0);
-			if (count >= limit) {
-				return {
-					ok: false,
-					code: WORKSPACE_QUOTA_EXCEEDED_CODE,
-					message: WORKSPACE_QUOTA_EXCEEDED_MESSAGE,
-				};
-			}
-		}
-
-		const workspace = (
-			await db.query<{ id: string; title: string }>(
-				`INSERT INTO workspaces (user_id, title, description)
-				 VALUES ($1, $2, $3)
-				 RETURNING id, title`,
-				[
-					params.userId,
-					params.workspace.title.trim().slice(0, 120) || 'Workspace',
-					params.workspace.description?.trim().slice(0, 500) || null,
-				],
-			)
-		).rows[0];
-		if (!workspace) throw new Error('Workspace not created');
-		const document = await insertDocument(db, {
-			content,
-			title: normalizedTitle,
-			userId: params.userId,
-			workspaceId: workspace.id,
-		});
-		return {
-			ok: true,
-			documentId: document.id,
-			workspaceId: document.workspace_id,
-			workspaceTitle: workspace.title,
-			workspaceCreated: true,
-		};
-	});
-}
-
-export async function createWorkspaceDocument(
-	env: Env,
-	params: { userId: string; workspaceId: string; title?: string },
-): Promise<WorkspaceDocumentResult> {
-	if (!isUuid(params.workspaceId)) throw new Error('Workspace not found');
-	const title = params.title?.trim().slice(0, 200) || 'Untitled';
-	const content = JSON.stringify(EMPTY_DOCUMENT_CONTENT);
-
-	return withDbClient(env, async (db) => {
-		const row = (
-			await db.query<WorkspaceDocumentRow>(
-				`WITH workspace AS (
-				   SELECT id FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1
-				 ), inserted AS (
-				   INSERT INTO user_documents (user_id, workspace_id, title, content)
-				   SELECT $2, id, $3, $4::jsonb FROM workspace
-				   RETURNING id, workspace_id, title, description, content, version, share_enabled, share_slug, updated_at, user_id
-				 ), touched AS (
-				   UPDATE workspaces w
-				      SET updated_at = NOW()
-				     FROM inserted
-				    WHERE w.id = inserted.workspace_id AND w.user_id = $2
-				RETURNING w.id
-				 )
-				 SELECT inserted.id, inserted.workspace_id, inserted.title, inserted.description, inserted.content,
-				        inserted.version, inserted.share_enabled, inserted.share_slug, inserted.updated_at, u.username
-				   FROM inserted
-				   LEFT JOIN touched t ON t.id = inserted.workspace_id
-				   LEFT JOIN "user" u ON u.id = inserted.user_id`,
-				[params.workspaceId, params.userId, title, content],
-			)
-		).rows[0];
-		if (!row) throw new Error('Workspace not found');
-		return serializeWorkspaceDocument(row);
-	});
-}
-
-export async function deleteDocument(env: Env, params: { userId: string; documentId: string }): Promise<DeleteDocumentResult> {
-	if (!isUuid(params.documentId)) throw new Error('Document not found');
-	return withDbClient(env, async (db) => {
-		const row = (
-			await db.query<{ id: string }>(`DELETE FROM user_documents WHERE id = $1 AND user_id = $2 RETURNING id`, [
-				params.documentId,
-				params.userId,
-			])
-		).rows[0];
-		if (!row) throw new Error('Document not found');
-		return { id: row.id };
-	});
-}
-
-export async function saveDocument(
-	env: Env,
-	params: {
-		userId: string;
-		documentId: string;
-		title: string;
-		content: DocumentContent;
-		allowEmptyContentOverwrite?: boolean;
-		expectedVersion?: number;
-		source?: DocumentSnapshotSource;
-		forceSnapshot?: boolean;
-	},
-): Promise<SaveDocumentResult> {
-	if (!isUuid(params.documentId)) throw new Error('Document not found');
-	return withDbTransaction(env, 'save document', async (db) => {
-		const existing = (
-			await db.query<DocumentRow>(
-				`SELECT id, title, content, version, workspace_id, created_at, updated_at
-				 FROM user_documents
-				 WHERE id = $1 AND user_id = $2
-				 LIMIT 1`,
-				[params.documentId, params.userId],
-			)
-		).rows[0];
-		if (!existing) throw new Error('Document not found');
-		if (params.expectedVersion !== undefined && params.expectedVersion !== existing.version) {
-			throw new DocumentVersionConflictError(existing.version, params.expectedVersion);
-		}
-
-		const incomingContent = asDocumentContent(params.content);
-		const incomingEmpty = isEmptyEditorContent(incomingContent);
-		const existingHasContent = !isEmptyEditorContent(existing.content);
-		if (hasTransientImageSrc(incomingContent)) throw new Error('Images are still uploading');
-		if (incomingEmpty && existingHasContent && params.allowEmptyContentOverwrite !== true) {
-			throw new DocumentEmptyContentBlockedError();
-		}
-
-		const contentChanged = !sameJson(existing.content, incomingContent);
-		const updated = (
-			await db.query<SaveDocumentRow>(
-				`UPDATE user_documents
-				 SET title = $3,
-				     content = $4::jsonb,
-				     version = CASE WHEN $5 THEN version + 1 ELSE version END,
-				     updated_at = NOW()
-				 WHERE id = $1 AND user_id = $2
-				 RETURNING id, title, content, version, updated_at`,
-				[existing.id, params.userId, params.title.trim().slice(0, 200) || 'Untitled', JSON.stringify(incomingContent), contentChanged],
-			)
-		).rows[0];
-		if (!updated) throw new Error('Document not found');
-
-		const source = params.source ?? 'auto-save';
-		if (contentChanged || params.forceSnapshot) {
-			await createDocumentVersionSnapshot(
-				db,
-				{
-					content: existing.content ?? EMPTY_DOCUMENT_CONTENT,
-					documentId: existing.id,
-					source,
-					title: existing.title,
-					version: existing.version,
-				},
-				source === 'auto-save' && !params.forceSnapshot ? { minIntervalMs: SNAPSHOT_THROTTLE_MS } : undefined,
-			);
-		}
-
-		return serializeSaveDocument(updated);
-	});
-}
-
-export async function updateDocumentShare(
-	env: Env,
-	params: { userId: string; documentId: string; shareEnabled: boolean; shareSlug?: string | null; description?: string | null },
-): Promise<UpdateDocumentShareResult> {
-	if (!isUuid(params.documentId)) throw new Error('Document not found');
-	return withDbTransaction(env, 'update document share', async (db) => {
-		const document = (
-			await db.query<DocumentShareRow>(
-				`SELECT d.id, d.title, d.share_slug, d.published_at, u.username
-				   FROM user_documents d
-				   LEFT JOIN "user" u ON u.id = d.user_id
-				  WHERE d.id = $1 AND d.user_id = $2
-				  LIMIT 1`,
-				[params.documentId, params.userId],
-			)
-		).rows[0];
-		if (!document) throw new Error('Document not found');
-		if (params.shareEnabled && !document.username) throw new Error('Set a username before sharing.');
-
-		let shareSlug = params.shareSlug?.trim() || document.share_slug;
-		if (params.shareEnabled && !shareSlug) {
-			shareSlug = await generateUniqueShareSlugTx(db, document.title, params.userId);
-		}
-		if (shareSlug && shareSlug !== document.share_slug && !SHARE_SLUG_FORMAT.test(shareSlug)) {
-			throw new Error('Invalid share URL.');
-		}
-		if (shareSlug && shareSlug !== document.share_slug) {
-			const existing = (
-				await db.query<{ id: string }>('SELECT id FROM user_documents WHERE user_id = $1 AND share_slug = $2 AND id <> $3 LIMIT 1', [
-					params.userId,
-					shareSlug,
-					params.documentId,
-				])
-			).rows[0];
-			if (existing) throw new Error('This URL is already in use.');
-		}
-
-		const publishedAt = params.shareEnabled && !document.published_at ? new Date() : document.published_at;
-		const updated = (
-			await db.query<DocumentShareUpdateRow>(
-				`UPDATE user_documents d
-				    SET share_enabled = $3,
-				        share_slug = $4,
-				        description = $5,
-				        published_at = $6,
-				        updated_at = now()
-				   FROM "user" u
-				  WHERE d.id = $1 AND d.user_id = $2 AND u.id = d.user_id
-				RETURNING d.id, d.share_enabled, d.share_slug, d.description, d.published_at, d.updated_at, u.username`,
-				[params.documentId, params.userId, params.shareEnabled, shareSlug, params.description?.trim().slice(0, 300) || null, publishedAt],
-			)
-		).rows[0];
-		if (!updated) throw new Error('Document not found');
-		return serializeDocumentShareUpdate(updated);
-	});
-}
-
-async function insertDocument(
-	db: DbClient,
-	input: { userId: string; workspaceId: string; title: string; content: DocumentContent },
-): Promise<{ id: string; workspace_id: string }> {
-	const row = (
-		await db.query<{ id: string; workspace_id: string }>(
-			`INSERT INTO user_documents (user_id, workspace_id, title, content, creation_mode, version)
-			 VALUES ($1, $2, $3, $4::jsonb, 'generate', 1)
-			 RETURNING id, workspace_id`,
-			[input.userId, input.workspaceId, input.title, JSON.stringify(input.content)],
-		)
-	).rows[0];
-	if (!row) throw new Error('Document not created');
-	await db.query(`UPDATE workspaces SET updated_at = NOW() WHERE id = $1 AND user_id = $2`, [input.workspaceId, input.userId]);
-	return row;
-}
-
-async function createDocumentVersionSnapshot(
-	db: DbClient,
-	input: { documentId: string; content: DocumentContent; title: string; version: number; source: DocumentSnapshotSource },
-	options?: { minIntervalMs?: number },
-): Promise<void> {
-	const latest = (
-		await db.query<{ content: DocumentContent | null; created_at: Date | string }>(
-			`SELECT content, created_at FROM document_versions WHERE document_id = $1 ORDER BY created_at DESC LIMIT 1`,
-			[input.documentId],
-		)
-	).rows[0];
-	if (latest && sameJson(latest.content, input.content)) return;
-	if (options?.minIntervalMs && latest?.created_at) {
-		const elapsed = Date.now() - new Date(latest.created_at).getTime();
-		if (elapsed < options.minIntervalMs) return;
-	}
-	await db.query(
-		`INSERT INTO document_versions (document_id, content, title, version, source)
-		 VALUES ($1, $2::jsonb, $3, $4, $5)`,
-		[input.documentId, JSON.stringify(input.content), input.title, input.version, input.source],
-	);
 }
 
 export async function addResource(
