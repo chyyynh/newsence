@@ -10,14 +10,12 @@ import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.wo
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
 import type { Env } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
-import type { CoreRpc } from '@worker-contracts/core-rpc';
+import type { ArticleSearchInput, ReadContextItem, StoreGeneratedImageInput } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
-type CoreRpcArgs<Method extends keyof CoreRpc> = Parameters<CoreRpc[Method]>;
-
-export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
+export default class CoreWorker extends WorkerEntrypoint<Env> {
 	override async fetch(request: Request): Promise<Response> {
 		return routeRequest(request, this.env, this.ctx);
 	}
@@ -35,22 +33,22 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	// Product-domain writes live on the app Worker's DomainRpc binding.
 
 	/** Persist a generated image into the canonical user_file blob store. */
-	storeGeneratedImage(input: CoreRpcArgs<'storeGeneratedImage'>[0]) {
+	storeGeneratedImage(input: StoreGeneratedImageInput) {
 		return persistGeneratedImage(this.env, input);
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
-	searchArticles(input: CoreRpcArgs<'searchArticles'>[0]) {
+	searchArticles(input: ArticleSearchInput) {
 		return searchCorpusArticles(this.env, input);
 	}
 
 	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
-	scrapeUrl(url: CoreRpcArgs<'scrapeUrl'>[0]): Promise<NormalizedContent> {
+	scrapeUrl(url: string): Promise<NormalizedContent> {
 		return extractSource(this.env, { kind: 'url', url });
 	}
 
 	/** Read article/collection/url resources from the core corpus. */
-	readCorpusItems(items: CoreRpcArgs<'readCorpusItems'>[0], userId: CoreRpcArgs<'readCorpusItems'>[1]) {
+	readCorpusItems(items: ReadContextItem[], userId: string) {
 		return readCorpusItems(this.env, items, userId);
 	}
 }
