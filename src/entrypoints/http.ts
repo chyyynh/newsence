@@ -8,6 +8,7 @@ import { USER_FILES_TABLE } from '@shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
+import { isTerminalWorkflowStatus, type WorkflowStreamEvent, workflowStreamEvent } from '@worker-contracts/workflow-contracts';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import { handleExportCollectionOkf } from '../okf';
 import {
@@ -166,7 +167,7 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 		});
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
-			const writeEvent = (data: object) => {
+			const writeEvent = (data: WorkflowStreamEvent) => {
 				if (request.signal.aborted) return false;
 				controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 				return true;
@@ -175,19 +176,20 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 				const instance = await env.MONITOR_WORKFLOW.get(instanceId);
 				while (!request.signal.aborted) {
 					const { status, error, output } = await instance.status();
-					const isTerminal = status === 'complete' || status === 'errored' || status === 'terminated';
+					const streamStatus = String(status);
+					const isTerminal = isTerminalWorkflowStatus(streamStatus);
 
-					if (status === 'complete') {
-						writeEvent({ status: 'complete', output });
+					if (streamStatus === 'complete') {
+						writeEvent(workflowStreamEvent({ status: 'complete', output }));
 						return;
 					}
 
-					if (!writeEvent({ status, error })) return;
+					if (!writeEvent(workflowStreamEvent({ status: streamStatus, error }))) return;
 					if (isTerminal) return;
 					await sleep(WORKFLOW_STREAM_INTERVAL_MS);
 				}
 			} catch (err) {
-				if (!request.signal.aborted) writeEvent({ status: 'error', error: String(err) });
+				if (!request.signal.aborted) writeEvent(workflowStreamEvent({ status: 'error', error: String(err) }));
 			} finally {
 				controller.close();
 			}
