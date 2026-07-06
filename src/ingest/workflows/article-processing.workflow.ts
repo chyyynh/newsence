@@ -8,7 +8,6 @@ import {
 	USER_FILES_TABLE,
 } from '@core-shared/article-store';
 import { generateArticleEmbedding } from '@core-shared/embedding';
-import { syncPaperGraph } from '@core-shared/papers/sync';
 import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
 import {
 	cleanupSourceArticleDraftRef,
@@ -22,6 +21,7 @@ import { isExtractablePdfFile } from '@core-shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
 import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { measureImageDimensions } from '@media/dimensions';
+import { syncPaperGraph } from '@papers/sync';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';

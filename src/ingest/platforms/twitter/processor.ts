@@ -3,9 +3,9 @@
 // ─────────────────────────────────────────────────────────────
 
 import { generateObject } from '@core-shared/ai';
-import { entityExtractionExclusionNames } from '@core-shared/entities/normalize';
 import type { ArticleCategory } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
+import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 import {
 	type ArticleProcessor,

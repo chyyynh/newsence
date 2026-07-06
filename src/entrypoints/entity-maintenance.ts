@@ -4,14 +4,14 @@
 
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { withDbTransaction } from '@core-shared/db';
+import type { Env } from '@core-shared/types';
 import {
 	getArticlesMissingEntities,
 	type MaintenanceCursor,
 	pruneOrphanEntities,
 	repairMissingArticleEntityLinks,
-} from '@core-shared/entities/maintenance';
-import { getEntityQualitySnapshot } from '@core-shared/entities/quality-report';
-import type { Env } from '@core-shared/types';
+} from '@entities/maintenance';
+import { getEntityQualitySnapshot } from '@entities/quality-report';
 import { enqueueArticleBatchProcess } from '@ingest/workflows/queue';
 
 function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): number {

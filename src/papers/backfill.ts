@@ -4,10 +4,10 @@
 // Reuses syncPaperGraph so the upsert logic has one source of truth.
 // ─────────────────────────────────────────────────────────────
 
-import { ARTICLES_TABLE, type ProcessableTable, USER_FILES_TABLE } from '../article-store';
-import { withDbClient } from '../db';
-import type { PaperMetadata } from '../platform-metadata';
-import type { Env } from '../types';
+import { ARTICLES_TABLE, type ProcessableTable, USER_FILES_TABLE } from '@core-shared/article-store';
+import { withDbClient } from '@core-shared/db';
+import type { PaperMetadata } from '@core-shared/platform-metadata';
+import type { Env } from '@core-shared/types';
 import { syncPaperGraph } from './sync';
 
 // user_files stores the envelope in `metadata`; articles in `platform_metadata`.

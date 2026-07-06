@@ -7,7 +7,7 @@
 // maintenance/repair endpoints.
 // ─────────────────────────────────────────────────────────────
 
-import { ENTITY_TYPES, type EntityType } from '../types';
+import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
 
 export type ArticleEntityInput = { name: string; name_cn: string; type: string };
 export type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };

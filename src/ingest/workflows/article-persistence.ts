@@ -1,12 +1,12 @@
 import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, updateProcessedArticle } from '@core-shared/article-store';
 import { withDbTransaction } from '@core-shared/db';
-import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@core-shared/entities/normalize';
-import { syncArticleEntities } from '@core-shared/entities/sync';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@core-shared/source-draft';
 import type { Article, Env } from '@core-shared/types';
 import { validateImageUrl } from '@core-shared/web';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@core-shared/youtube-transcripts';
+import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
+import { syncArticleEntities } from '@entities/sync';
 import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';

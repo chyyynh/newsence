@@ -4,9 +4,9 @@
 // Read-only; nothing here mutates data.
 // ─────────────────────────────────────────────────────────────
 
-import { ARTICLES_TABLE } from '../article-store';
-import type { DbClient } from '../db';
-import { ENTITY_TYPES } from '../types';
+import { ARTICLES_TABLE } from '@core-shared/article-store';
+import type { DbClient } from '@core-shared/db';
+import { ENTITY_TYPES } from '@core-shared/types';
 import { GENERIC_ENTITY_CANONICALS, MAX_ENTITIES_PER_ARTICLE } from './normalize';
 
 const ENTITY_QUALITY_TOP_LIMIT = 10;

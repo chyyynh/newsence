@@ -3,8 +3,8 @@
 // Driven by the internal /entities/* HTTP endpoints.
 // ─────────────────────────────────────────────────────────────
 
-import { ARTICLES_TABLE } from '../article-store';
-import type { DbClient } from '../db';
+import { ARTICLES_TABLE } from '@core-shared/article-store';
+import type { DbClient } from '@core-shared/db';
 import { isArticleEntityInput, normalizeArticleEntitiesForStorage } from './normalize';
 import { syncArticleEntities } from './sync';
 

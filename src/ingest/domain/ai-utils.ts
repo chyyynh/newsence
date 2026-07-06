@@ -4,9 +4,9 @@
 
 import { generateObject, generateText } from '@core-shared/ai';
 import type { ProcessableTable } from '@core-shared/article-store';
-import { entityExtractionExclusionNames } from '@core-shared/entities/normalize';
 import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@core-shared/types';
+import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────

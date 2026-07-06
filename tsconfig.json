@@ -18,7 +18,9 @@
 		"paths": {
 			"@core-rpc/*": ["./src/rpc/*"],
 			"@core-shared/*": ["./src/shared/*"],
+			"@entities/*": ["./src/entities/*"],
 			"@ingest/*": ["./src/ingest/*"],
+			"@papers/*": ["./src/papers/*"],
 			"@chat/*": ["./src/chat/*"],
 			"@media/*": ["./src/media/*"],
 			"@entry/*": ["./src/entrypoints/*"]

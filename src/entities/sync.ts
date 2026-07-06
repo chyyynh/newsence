@@ -3,7 +3,7 @@
 // with an article's normalized entity list.
 // ─────────────────────────────────────────────────────────────
 
-import type { DbClient } from '../db';
+import type { DbClient } from '@core-shared/db';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from './normalize';
 
 export async function syncArticleEntities(

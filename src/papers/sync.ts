@@ -8,10 +8,10 @@
 // without one are skipped (no stable node identity).
 // ─────────────────────────────────────────────────────────────
 
-import type { DbClient } from '../db';
-import { withDbTransaction } from '../db';
-import type { PaperMetadata, PaperReference } from '../platform-metadata';
-import type { Env } from '../types';
+import type { DbClient } from '@core-shared/db';
+import { withDbTransaction } from '@core-shared/db';
+import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
+import type { Env } from '@core-shared/types';
 
 const MAX_EDGES = 50;
 
