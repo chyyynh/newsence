@@ -36,6 +36,8 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 const SCRAPE_PREFLIGHT_ROUTES = new Set(['/scrape', '/scrape/jobs']);
 const INTERNAL_PREFLIGHT_ROUTES = new Set(Object.keys(POST_ROUTES).filter((route) => !SCRAPE_PREFLIGHT_ROUTES.has(route)));
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
+const SCRAPE_JOB_ROUTE = new URLPattern({ pathname: '/scrape/jobs/:jobId' });
+const WORKFLOW_STREAM_ROUTE = new URLPattern({ pathname: '/stream/:instanceId' });
 
 function internalPreflight(): Response {
 	return new Response(null, { headers: INTERNAL_CORS_HEADERS });
@@ -61,8 +63,11 @@ const HELP_TEXT =
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
 
 function scrapeJobId(pathname: string): string | null {
-	if (!pathname.startsWith('/scrape/jobs/')) return null;
-	return pathname.slice('/scrape/jobs/'.length) || null;
+	return SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId || null;
+}
+
+function workflowStreamInstanceId(pathname: string): string | null {
+	return WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId || null;
 }
 
 function health(): Response {
@@ -181,10 +186,9 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 }
 
 function routePrefixGet(request: Request, pathname: string, env: Env): Response | Promise<Response> | null {
-	if (pathname.startsWith('/stream/')) {
-		const id = pathname.slice('/stream/'.length);
-		if (id) return handleWorkflowStream(request, id, env);
-	}
+	const instanceId = workflowStreamInstanceId(pathname);
+	if (instanceId) return handleWorkflowStream(request, instanceId, env);
+
 	const id = scrapeJobId(pathname);
 	if (id) return handleScrapeJobStatus(request, id, env);
 	return null;
