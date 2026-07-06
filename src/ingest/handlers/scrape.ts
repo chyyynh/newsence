@@ -2,7 +2,7 @@ import { parseJsonBody, requireAuth } from '@core-shared/auth';
 import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
 import { deleteScrapeInputTemp, putScrapeInputTemp } from '@core-shared/r2-temp';
 import type { Env } from '@core-shared/types';
-import { MAX_UPLOAD_BYTES } from '@core-shared/upload';
+import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/upload';
 import { extractSource } from '../extract';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
@@ -81,11 +81,18 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 		return { kind: 'url', url };
 	}
 
-	const bytes = new Uint8Array(await request.arrayBuffer());
+	if (!request.body) return Response.json({ error: 'Empty body — POST {url} JSON or raw bytes' }, { status: 400, headers: CORS_HEADERS });
+	const limited = streamWithByteLimit(request.body, MAX_UPLOAD_BYTES);
+	let bytes: Uint8Array;
+	try {
+		bytes = new Uint8Array(await new Response(limited.stream).arrayBuffer());
+	} catch (error) {
+		if (error instanceof PayloadTooLargeError)
+			return Response.json({ error: `Body exceeds ${MAX_UPLOAD_BYTES} bytes` }, { status: 413, headers: CORS_HEADERS });
+		throw error;
+	}
 	if (bytes.byteLength === 0)
 		return Response.json({ error: 'Empty body — POST {url} JSON or raw bytes' }, { status: 400, headers: CORS_HEADERS });
-	if (bytes.byteLength > MAX_UPLOAD_BYTES)
-		return Response.json({ error: `Body exceeds ${MAX_UPLOAD_BYTES} bytes` }, { status: 413, headers: CORS_HEADERS });
 	return { kind: 'bytes', bytes };
 }
 

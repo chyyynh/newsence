@@ -1,6 +1,7 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import { readTempBytes } from '@core-shared/r2-temp';
 import type { Env } from '@core-shared/types';
+import { MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/upload';
 import type { ScrapedContent } from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
@@ -143,7 +144,8 @@ async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent>
 
 	// blob: stream the body into the appropriate extractor, or cancel it for unsupported extractors.
 	if (result.contentType === PDF_MIME) {
-		const bytes = new Uint8Array(await new Response(result.body).arrayBuffer());
+		const limited = streamWithByteLimit(result.body, MAX_UPLOAD_BYTES);
+		const bytes = new Uint8Array(await new Response(limited.stream).arrayBuffer());
 		return normalizePdf(await parsePdf(bytes), result.sourceUrl);
 	}
 	await result.body.cancel();
