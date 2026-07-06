@@ -4,7 +4,7 @@ import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@core-shared/source-draft';
 import type { Env, Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@core-shared/web';
-import { enqueueArticleProcess, startSourceArticleWorkflow } from '@core-shared/workflow-queue';
+import { enqueueArticleProcess, startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,

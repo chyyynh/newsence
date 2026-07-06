@@ -20,7 +20,7 @@ import {
 import type { Article, Env } from '@core-shared/types';
 import { isExtractablePdfFile } from '@core-shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
-import type { WorkflowQueueTarget } from '@core-shared/workflow-queue';
+import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { measureImageDimensions } from '@media/dimensions';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';

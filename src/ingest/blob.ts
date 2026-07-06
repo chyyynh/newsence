@@ -36,7 +36,7 @@ import {
 	userUploadKey,
 } from '@core-shared/upload';
 import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@core-shared/web';
-import { createUserFileWorkflow } from '@core-shared/workflow-queue';
+import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { persistBlobRow, putUserUpload } from './blob-persistence';
 
 const DEFAULT_IMAGE_TITLE = 'image';

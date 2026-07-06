@@ -1,40 +1,34 @@
-import { ARTICLES_TABLE, type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from './article-store';
+import { type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from '@core-shared/article-store';
 import {
 	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
 	type SourceArticleDraft,
 	type SourceArticleDraftRef,
 	sourceArticleDraftUrl,
-} from './source-draft';
-import type { Env } from './types';
-import { getUserFileWorkflowInstanceId, recordUserFileWorkflowInstanceId } from './user-file-workflow-state';
+} from '@core-shared/source-draft';
+import type { Env } from '@core-shared/types';
+import { getUserFileWorkflowInstanceId, recordUserFileWorkflowInstanceId } from './user-file-state';
 
 export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
 	| { kind: 'source'; sourceArticle: SourceArticleDraftRef };
 
 type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
-export type QueueMessage = { type: 'workflow_process'; target: RowWorkflowTarget };
-export type ParsedQueueMessage = { messageId: string; target: RowWorkflowTarget };
+export type QueueMessage = RowWorkflowTarget;
+export type QueueDelivery = { id: string; body: QueueMessage };
 export type QueueResult = { count: number; created: number; existing: number };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
 export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
-	await env.ARTICLE_QUEUE.send({
-		type: 'workflow_process',
-		target: rowWorkflowTarget(articleId, targetTable),
-	});
+	await env.ARTICLE_QUEUE.send(rowWorkflowTarget(articleId, targetTable));
 }
 
 export async function enqueueArticleBatchProcess(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<void> {
 	if (!articleIds.length) return;
 	await env.ARTICLE_QUEUE.sendBatch(
 		articleIds.map((articleId) => ({
-			body: {
-				type: 'workflow_process',
-				target: rowWorkflowTarget(articleId, targetTable),
-			},
+			body: rowWorkflowTarget(articleId, targetTable),
 		})),
 	);
 }
@@ -60,33 +54,14 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 	}
 }
 
-export function parseWorkflowQueueMessage(messageId: string, body: unknown): ParsedQueueMessage | null {
-	if (!isRecord(body) || body.type !== 'workflow_process' || !isWorkflowQueueTarget(body.target)) return null;
-	return { messageId, target: body.target };
-}
-
-function isWorkflowQueueTarget(target: unknown): target is RowWorkflowTarget {
-	if (!isRecord(target)) return false;
-	return (
-		target.kind === 'row' &&
-		typeof target.articleId === 'string' &&
-		target.articleId.length > 0 &&
-		(target.targetTable === undefined || target.targetTable === ARTICLES_TABLE || target.targetTable === USER_FILES_TABLE)
-	);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-export async function ensureWorkflowsForQueueMessages(env: Env, messages: ParsedQueueMessage[]): Promise<QueueResult> {
+export async function createWorkflowsForQueueMessages(env: Env, messages: readonly QueueDelivery[]): Promise<QueueResult> {
 	if (!messages.length) return { count: 0, created: 0, existing: 0 };
 
 	const instances = await env.MONITOR_WORKFLOW.createBatch(
-		messages.map(({ messageId, target }) => {
+		messages.map(({ id, body: target }) => {
 			const targetTable = resolveProcessableTable(target.targetTable);
 			return {
-				id: articleWorkflowId(messageId, targetTable, target.articleId),
+				id: articleWorkflowId(id, targetTable, target.articleId),
 				params: { target: rowWorkflowTarget(target.articleId, targetTable) },
 			};
 		}),

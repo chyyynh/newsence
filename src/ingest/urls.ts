@@ -3,8 +3,8 @@ import { PDF_MIME } from '@core-shared/mime';
 import { parsePlatformMetadata } from '@core-shared/platform-metadata';
 import type { Env } from '@core-shared/types';
 import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@core-shared/web';
-import { createUserFileWorkflow } from '@core-shared/workflow-queue';
 import { upsertYoutubeTranscript } from '@core-shared/youtube-transcripts';
+import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { persistSavedUrlBlob } from './blob-persistence';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 import {

@@ -5,15 +5,15 @@ import { syncArticleEntities } from '@core-shared/entities/sync';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@core-shared/source-draft';
 import type { Article, Env } from '@core-shared/types';
-import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from '@core-shared/user-file-workflow-state';
 import { validateImageUrl } from '@core-shared/web';
-import type { WorkflowQueueTarget } from '@core-shared/workflow-queue';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@core-shared/youtube-transcripts';
+import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
 import type { PdfTextTempResult } from './pdf-text-temp';
 import { readPdfTextTemp } from './pdf-text-temp';
+import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from './user-file-state';
 
 const OG_IMAGE_UPDATE_KEY = 'og_image_url';
 

@@ -1,11 +1,10 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
 import type { Env } from '@core-shared/types';
-import { isTerminalWorkflowStatus, type WorkflowStreamEvent, workflowStreamEvent } from '@core-shared/workflow-contracts';
-import { enqueueArticleBatchProcess } from '@core-shared/workflow-queue';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleRetryCron } from '@ingest/retry';
+import { enqueueArticleBatchProcess } from '@ingest/workflows/queue';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import { handleExportCollectionOkf } from '../okf';
 import {
@@ -38,6 +37,13 @@ const INTERNAL_PREFLIGHT_ROUTES = new Set(Object.keys(POST_ROUTES).filter((route
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SCRAPE_JOB_ROUTE = new URLPattern({ pathname: '/scrape/jobs/:jobId' });
 const WORKFLOW_STREAM_ROUTE = new URLPattern({ pathname: '/stream/:instanceId' });
+const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'terminated', 'timeout']);
+
+type WorkflowStreamEvent = {
+	error?: unknown;
+	output?: unknown;
+	status: string;
+};
 
 function internalPreflight(): Response {
 	return new Response(null, { headers: INTERNAL_CORS_HEADERS });
@@ -76,6 +82,10 @@ function health(): Response {
 		worker: 'newsence-core',
 		timestamp: new Date().toISOString(),
 	});
+}
+
+function isTerminalWorkflowStatus(status: string): boolean {
+	return TERMINAL_WORKFLOW_STATUSES.has(status);
 }
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {
@@ -159,16 +169,16 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 					const isTerminal = isTerminalWorkflowStatus(streamStatus);
 
 					if (streamStatus === 'complete') {
-						writeEvent(workflowStreamEvent({ status: 'complete', output }));
+						writeEvent({ status: 'complete', output });
 						return;
 					}
 
-					if (!writeEvent(workflowStreamEvent({ status: streamStatus, error }))) return;
+					if (!writeEvent({ status: streamStatus, error })) return;
 					if (isTerminal) return;
 					await scheduler.wait(WORKFLOW_STREAM_INTERVAL_MS, { signal: request.signal }).catch(() => undefined);
 				}
 			} catch (err) {
-				if (!request.signal.aborted) writeEvent(workflowStreamEvent({ status: 'error', error: String(err) }));
+				if (!request.signal.aborted) writeEvent({ status: 'error', error: String(err) });
 			} finally {
 				controller.close();
 			}

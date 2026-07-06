@@ -5,7 +5,7 @@ import { youtubeTranscriptAttachment } from '@core-shared/source-draft';
 import { listSourceFeedsByType, markSourceFeedScrapedById } from '@core-shared/source-feed-state';
 import type { Env, RSSFeed } from '@core-shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
-import { startSourceArticleWorkflow } from '@core-shared/workflow-queue';
+import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
 import { scrapeYouTube } from './scraper';
 
