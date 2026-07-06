@@ -5,7 +5,6 @@ import {
 	createSourceArticleDraftRef,
 	type SourceArticleDraft,
 	type SourceArticleDraftRef,
-	sourceArticleDraftUrl,
 } from '@ingest/workflows/source-draft';
 import { getUserFileWorkflowInstanceId, recordUserFileWorkflowInstanceId } from './user-file-state';
 
@@ -15,7 +14,6 @@ export type WorkflowQueueTarget =
 
 type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 export type QueueMessage = RowWorkflowTarget;
-export type QueueDelivery = { id: string; body: QueueMessage };
 export type QueueResult = { count: number; created: number; existing: number };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
@@ -45,7 +43,7 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 	const sourceArticle = await createSourceArticleDraftRef(env, draft);
 
 	try {
-		const workflowId = await sourceArticleWorkflowId(sourceArticleDraftUrl(sourceArticle));
+		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
 		const result = await ensureSourceArticleWorkflow(env, workflowId, sourceArticle);
 		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, sourceArticle, result.id);
 	} catch (err) {
@@ -54,7 +52,7 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 	}
 }
 
-export async function createWorkflowsForQueueMessages(env: Env, messages: readonly QueueDelivery[]): Promise<QueueResult> {
+export async function createWorkflowsForQueueMessages(env: Env, messages: readonly Message<QueueMessage>[]): Promise<QueueResult> {
 	if (!messages.length) return { count: 0, created: 0, existing: 0 };
 
 	const instances = await env.MONITOR_WORKFLOW.createBatch(

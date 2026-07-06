@@ -32,19 +32,8 @@ export type SourceArticleDraftRef = { url: string; r2Key: string };
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 
-function sourceArticleDraftKey(): string {
-	return `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
-}
-
 function assertSourceArticleDraftKey(key: string): void {
 	if (!key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${key}`);
-}
-
-async function getSourceArticleDraftObject(env: Env, key: string): Promise<R2ObjectBody> {
-	assertSourceArticleDraftKey(key);
-	const obj = await env.R2.get(key);
-	if (!obj) throw new Error(`source article draft missing: ${key}`);
-	return obj;
 }
 
 export function youtubeTranscriptAttachment(transcript: YoutubeTranscriptRow): SourceArticleAttachment {
@@ -79,22 +68,15 @@ function normalizeSourceArticleDraft(draft: LegacySourceArticleDraft): SourceArt
 
 export async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
 	const normalizedDraft = normalizeSourceArticleDraft(draft);
-	const serialized = JSON.stringify(normalizedDraft);
-	return writeSourceArticleDraft(env, draft.article.url, serialized);
-}
-
-async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleDraftRef> {
-	const r2Key = sourceArticleDraftKey();
-	await env.R2.put(r2Key, serialized, { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
-	return { url, r2Key };
-}
-
-export function sourceArticleDraftUrl(ref: SourceArticleDraftRef): string {
-	return ref.url;
+	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
+	await env.R2.put(r2Key, JSON.stringify(normalizedDraft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
+	return { url: draft.article.url, r2Key };
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
-	const obj = await getSourceArticleDraftObject(env, ref.r2Key);
+	assertSourceArticleDraftKey(ref.r2Key);
+	const obj = await env.R2.get(ref.r2Key);
+	if (!obj) throw new Error(`source article draft missing: ${ref.r2Key}`);
 	return normalizeSourceArticleDraft(await obj.json<LegacySourceArticleDraft>());
 }
 
@@ -119,25 +101,21 @@ export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
 	};
 }
 
-async function deleteSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<void> {
-	assertSourceArticleDraftKey(ref.r2Key);
-	await env.R2.delete(ref.r2Key);
-}
-
 export async function cleanupSourceArticleDraftRef(
 	env: Env,
 	ref: SourceArticleDraftRef,
 	context: { reason: string; workflowId?: string; logTag?: string },
 ): Promise<void> {
 	try {
-		await deleteSourceArticleDraft(env, ref);
+		assertSourceArticleDraftKey(ref.r2Key);
+		await env.R2.delete(ref.r2Key);
 	} catch (err) {
 		console.warn({
 			tag: context.logTag ?? 'SOURCE-DRAFT',
 			msg: 'Failed to cleanup source article draft',
 			reason: context.reason,
 			workflowId: context.workflowId,
-			sourceUrl: sourceArticleDraftUrl(ref),
+			sourceUrl: ref.url,
 			error: String(err),
 		});
 	}

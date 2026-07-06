@@ -66,20 +66,13 @@ export async function fetchJsonWithTimeout<T>(
 	timeoutMs = 15_000,
 	maxBytes = DEFAULT_TEXT_MAX_BYTES,
 ): Promise<T> {
-	try {
-		const response = await fetchWithTimeout(url, options, timeoutMs);
-		if (!response.ok) {
-			await response.body?.cancel();
-			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-		}
-		const text = await readTextWithLimit(response, maxBytes);
-		return JSON.parse(text) as T;
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
-		}
-		throw err;
+	const response = await fetchWithTimeout(url, options, timeoutMs);
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
+	const text = await readTextWithLimit(response, maxBytes);
+	return JSON.parse(text) as T;
 }
 
 /**
