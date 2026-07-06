@@ -5,8 +5,8 @@ export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiBinding = Env['AI'];
-type AiRun = (model: string, inputs: Record<string, unknown>, options?: AiOptions) => Promise<unknown>;
 type AiMessage = { role: 'system' | 'user'; content: string };
+type GatewayRun = <Response>(model: string, inputs: object, options?: AiOptions) => Promise<Response>;
 type GeminiTextResponse = { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
 type OpenAIChatResponse = { choices?: Array<{ message?: { content?: string } }> };
 
@@ -24,26 +24,24 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 
 const DEFAULT_AI_GATEWAY_ID = 'default';
 
-function gatewayId(value?: string): string {
-	return value?.trim() || DEFAULT_AI_GATEWAY_ID;
-}
-
-function gatewayOptions(gatewayIdValue?: string, task?: string): AiOptions {
+function gatewayOptions(gatewayName?: string, task?: string): AiOptions {
 	return {
 		gateway: {
-			id: gatewayId(gatewayIdValue),
+			id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
 			collectLog: true,
 			...(task && { metadata: { app: 'newsence', task } }),
 		},
 	};
 }
 
-function schemaId(name: string): string {
-	return name.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'structured_output';
+function runGatewayModel<Response>(ai: AiBinding, model: string, inputs: object, options?: AiOptions): Promise<Response> {
+	// Generated Worker types strongly type Workers AI catalog models, while AI
+	// Gateway also accepts third-party `{provider}/{model}` names from docs.
+	return (ai.run as unknown as GatewayRun)<Response>(model, inputs, options);
 }
 
-function messages(prompt: string, systemPrompt?: string): AiMessage[] {
-	return [...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []), { role: 'user' as const, content: prompt }];
+function schemaId(name: string): string {
+	return name.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'structured_output';
 }
 
 function errorDetails(error: unknown): Record<string, unknown> {
@@ -68,7 +66,8 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
 
 	try {
-		const response = (await (ai.run as AiRun)(
+		const response = await runGatewayModel<GeminiTextResponse>(
+			ai,
 			CORE_TEXT_MODEL,
 			{
 				contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -79,7 +78,7 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 				},
 			},
 			gatewayOptions(gatewayIdValue, task),
-		)) as GeminiTextResponse;
+		);
 		return geminiText(response);
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, ...errorDetails(error) });
@@ -89,12 +88,17 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
 	const { gatewayId: gatewayIdValue, schema, systemPrompt, task } = options;
+	const messages: AiMessage[] = [
+		...(systemPrompt ? [{ role: 'system', content: systemPrompt } as const] : []),
+		{ role: 'user', content: prompt },
+	];
 
 	try {
-		const response = (await (ai.run as AiRun)(
+		const response = await runGatewayModel<OpenAIChatResponse>(
+			ai,
 			CORE_JSON_MODEL,
 			{
-				messages: messages(prompt, systemPrompt),
+				messages,
 				...(options.maxTokens != null && { max_tokens: options.maxTokens }),
 				temperature: options.temperature ?? 0.3,
 				response_format: {
@@ -107,7 +111,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 				},
 			},
 			gatewayOptions(gatewayIdValue, task),
-		)) as OpenAIChatResponse;
+		);
 		const text = openAIText(response);
 		if (!text) throw new Error('No text content found in model response');
 
