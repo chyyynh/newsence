@@ -12,16 +12,7 @@ import type { Env } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
-import {
-	addResource,
-	addResourceToSource,
-	addResourceUrlsToSource,
-	deleteResource,
-	listWorkspaces,
-	removeResourceFromSource,
-	validateResourceSource,
-	workspaceCreationCapability,
-} from './documents';
+import { listWorkspaces, workspaceCreationCapability } from './documents';
 import { deleteUserMediaFile } from './media/delete';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
@@ -68,36 +59,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Delete a user-owned blob media file and its R2 object. */
 	deleteUserMediaFile(input: CoreRpcArgs<'deleteUserMediaFile'>[0]) {
 		return deleteUserMediaFile(this.env, input);
-	}
-
-	/** Pin article/file/URL resources to a document's workspace. */
-	addDocumentResource(input: CoreRpcArgs<'addDocumentResource'>[0]) {
-		return addResource(this.env, input);
-	}
-
-	/** Pin a resource target to a workspace or collection source. */
-	addResourceToSource(input: CoreRpcArgs<'addResourceToSource'>[0]) {
-		return addResourceToSource(this.env, input);
-	}
-
-	/** Remove a user-owned citation by citation id. */
-	deleteResource(input: CoreRpcArgs<'deleteResource'>[0]) {
-		return deleteResource(this.env, input);
-	}
-
-	/** Remove a user-owned citation by source and target. */
-	removeResourceFromSource(input: CoreRpcArgs<'removeResourceFromSource'>[0]) {
-		return removeResourceFromSource(this.env, input);
-	}
-
-	/** Validate that a user can pin resources to a source. */
-	validateResourceSource(input: CoreRpcArgs<'validateResourceSource'>[0]) {
-		return validateResourceSource(this.env, input);
-	}
-
-	/** Ingest URLs and pin the resulting user files to a workspace or collection. */
-	addResourceUrlsToSource(input: CoreRpcArgs<'addResourceUrlsToSource'>[0]) {
-		return addResourceUrlsToSource(this.env, input);
 	}
 
 	/** Workspace catalog used by scope-free create-document decisions. */

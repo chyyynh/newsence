@@ -9,13 +9,6 @@ import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth 
 import type { Env } from '@shared/types';
 import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
-import {
-	addResourceToSource,
-	addResourceUrlsToSource,
-	deleteResource,
-	removeResourceFromSource,
-	validateResourceSource,
-} from '../documents';
 import { handleExportCollectionOkf } from '../okf';
 import {
 	handleBackfillMissingEntities,
@@ -40,11 +33,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/papers/backfill-graph': (req, env) => handleBackfillPaperGraph(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
-	'/resources/add': (req, env) => handleAddResourceToSource(req, env),
-	'/resources/add-urls': (req, env) => handleAddResourceUrls(req, env),
-	'/resources/delete': (req, env) => handleDeleteResource(req, env),
-	'/resources/remove': (req, env) => handleRemoveResourceFromSource(req, env),
-	'/resources/validate-source': (req, env) => handleValidateResourceSource(req, env),
 	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
 	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
@@ -74,11 +62,6 @@ const HELP_TEXT =
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
-	'POST /resources/add                       - Pin a resource target to a workspace/collection (internal token) -> {success,data}\n' +
-	'POST /resources/add-urls                  - Ingest URLs and pin user files to a workspace/collection (internal token) -> {success,data}\n' +
-	'POST /resources/delete                    - Remove a user-owned citation by citation id (internal token) -> {success,data:{id}}\n' +
-	'POST /resources/remove                    - Remove a user-owned citation by source/target (internal token) -> {success,data:{id}}\n' +
-	'POST /resources/validate-source           - Validate source ownership before upload/linking (internal token) -> {success,data}\n' +
 	'POST /media/delete-user-file              - Delete a user-owned blob user_file and R2 object (internal token) -> {success,data}\n' +
 	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
@@ -89,14 +72,6 @@ const HELP_TEXT =
 function scrapeJobId(pathname: string): string | null {
 	if (!pathname.startsWith('/scrape/jobs/')) return null;
 	return pathname.slice('/scrape/jobs/'.length) || null;
-}
-
-function isResourceTargetType(value: unknown): value is 'article' | 'user_file' | 'document' | 'collection' {
-	return value === 'article' || value === 'user_file' || value === 'document' || value === 'collection';
-}
-
-function isResourceSourceType(value: unknown): value is 'workspace' | 'collection' | 'user' {
-	return value === 'workspace' || value === 'collection' || value === 'user';
 }
 
 function health(): Response {
@@ -145,187 +120,6 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
 		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleAddResourceUrls(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		userId?: string;
-		sourceType?: string;
-		sourceId?: string;
-		urls?: string[];
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (
-		!body.userId?.trim() ||
-		(body.sourceType !== 'workspace' && body.sourceType !== 'collection') ||
-		!body.sourceId?.trim() ||
-		!Array.isArray(body.urls)
-	) {
-		return jsonError('BAD_REQUEST', 'Missing userId, source, or urls', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await addResourceUrlsToSource(env, {
-			userId: body.userId,
-			sourceType: body.sourceType,
-			sourceId: body.sourceId,
-			urls: body.urls,
-		});
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Source not found') {
-			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
-		}
-		if (error instanceof Error && error.message === 'Add at least one valid URL') {
-			return jsonError('BAD_REQUEST', error.message, 400, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'RESOURCE_ADD_URLS', msg: 'add urls failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Resource URL add failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleAddResourceToSource(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		userId?: string;
-		sourceType?: string;
-		sourceId?: string;
-		targetType?: string;
-		targetId?: string;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (
-		!body.userId?.trim() ||
-		!isResourceSourceType(body.sourceType) ||
-		!body.sourceId?.trim() ||
-		!isResourceTargetType(body.targetType) ||
-		!body.targetId?.trim()
-	) {
-		return jsonError('BAD_REQUEST', 'Missing source or target', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await addResourceToSource(env, {
-			userId: body.userId,
-			sourceType: body.sourceType,
-			sourceId: body.sourceId,
-			targetType: body.targetType,
-			targetId: body.targetId,
-		});
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Resource not found') {
-			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'RESOURCE_ADD', msg: 'add failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Resource add failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleDeleteResource(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; citationId?: string }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !body.citationId?.trim()) {
-		return jsonError('BAD_REQUEST', 'Missing userId or citationId', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await deleteResource(env, { userId: body.userId, citationId: body.citationId });
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Resource not found') {
-			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'RESOURCE_DELETE', msg: 'delete failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Resource delete failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleRemoveResourceFromSource(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		userId?: string;
-		sourceType?: string;
-		sourceId?: string;
-		targetType?: string;
-		targetId?: string;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (
-		!body.userId?.trim() ||
-		!isResourceSourceType(body.sourceType) ||
-		!body.sourceId?.trim() ||
-		!isResourceTargetType(body.targetType) ||
-		!body.targetId?.trim()
-	) {
-		return jsonError('BAD_REQUEST', 'Missing source or target', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await removeResourceFromSource(env, {
-			userId: body.userId,
-			sourceType: body.sourceType,
-			sourceId: body.sourceId,
-			targetType: body.targetType,
-			targetId: body.targetId,
-		});
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Resource not found') {
-			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
-		}
-		console.error({ tag: 'RESOURCE_REMOVE', msg: 'remove failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'Resource remove failed', 500, INTERNAL_CORS_HEADERS);
-	}
-}
-
-async function handleValidateResourceSource(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{
-		userId?: string;
-		sourceType?: string;
-		sourceId?: string;
-	}>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.userId?.trim() || !isResourceSourceType(body.sourceType) || !body.sourceId?.trim()) {
-		return jsonError('BAD_REQUEST', 'Missing source', 400, INTERNAL_CORS_HEADERS);
-	}
-
-	try {
-		const result = await validateResourceSource(env, {
-			userId: body.userId,
-			sourceType: body.sourceType,
-			sourceId: body.sourceId,
-		});
-		return jsonData(result, INTERNAL_CORS_HEADERS);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Source not found') {
-			return jsonError('NOT_FOUND', error.message, 404, INTERNAL_CORS_HEADERS);
-		}
-		console.error({
-			tag: 'RESOURCE_VALIDATE_SOURCE',
-			msg: 'validate source failed',
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return jsonError('INTERNAL_ERROR', 'Resource source validation failed', 500, INTERNAL_CORS_HEADERS);
 	}
 }
 
