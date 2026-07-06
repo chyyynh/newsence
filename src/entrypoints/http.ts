@@ -139,22 +139,6 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 	if (unauth) return unauth;
 
 	const encoder = new TextEncoder();
-	const sleep = (ms: number) =>
-		new Promise<void>((resolve) => {
-			if (request.signal.aborted) {
-				resolve();
-				return;
-			}
-			const timeout = setTimeout(resolve, ms);
-			request.signal.addEventListener(
-				'abort',
-				() => {
-					clearTimeout(timeout);
-					resolve();
-				},
-				{ once: true },
-			);
-		});
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			const writeEvent = (data: WorkflowStreamEvent) => {
@@ -176,7 +160,7 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 
 					if (!writeEvent(workflowStreamEvent({ status: streamStatus, error }))) return;
 					if (isTerminal) return;
-					await sleep(WORKFLOW_STREAM_INTERVAL_MS);
+					await scheduler.wait(WORKFLOW_STREAM_INTERVAL_MS, { signal: request.signal }).catch(() => undefined);
 				}
 			} catch (err) {
 				if (!request.signal.aborted) writeEvent(workflowStreamEvent({ status: 'error', error: String(err) }));
