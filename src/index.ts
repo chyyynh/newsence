@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import type { ArticleSearchInput, ReadContextItem, StoreGeneratedImageInput } from '@core-rpc/contracts';
 import type { Env } from '@core-shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@core-shared/workflow-queue';
 import { routeRequest } from '@entry/http';
@@ -10,7 +11,6 @@ import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { handleRetryCron } from '@ingest/retry';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
 import { ScrapeWorkflow } from '@ingest/workflows/scrape.workflow';
-import type { ArticleSearchInput, ReadContextItem, StoreGeneratedImageInput } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
