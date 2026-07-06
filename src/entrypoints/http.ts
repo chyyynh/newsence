@@ -1,7 +1,6 @@
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleRetryCron } from '@ingest/retry';
-import { handleDeleteAsset, handleDeleteUserMediaFile } from '@media/delete';
 import { handleProxy } from '@media/proxy';
 import { handleR2Asset } from '@media/r2-asset';
 import { USER_FILES_TABLE } from '@shared/article-store';
@@ -34,8 +33,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/papers/backfill-graph': (req, env) => handleBackfillPaperGraph(req, env),
 	'/scrape': (req, env) => handleScrape(req, env),
 	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
-	'/media/delete-user-file': (req, env) => handleDeleteUserMediaFile(req, env),
-	'/media/delete': (req, env) => handleDeleteAsset(req, env),
 };
 
 const SCRAPE_PREFLIGHT_ROUTES = new Set(['/scrape', '/scrape/jobs']);
@@ -63,8 +60,6 @@ const HELP_TEXT =
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
-	'POST /media/delete-user-file              - Delete a user-owned blob user_file and R2 object (internal token) -> {success,data}\n' +
-	'POST /media/delete                        - Batch-delete user-file R2 objects by storage key (#162) -> {success,data}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
 	'\nSigned media:\n' +
 	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +

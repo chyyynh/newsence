@@ -12,7 +12,6 @@ import type { Env } from '@shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@shared/workflow-queue';
 import type { CoreRpc } from '@worker-contracts/core-rpc';
 import { readCorpusItems, searchCorpusArticles } from './corpus';
-import { deleteUserMediaFile } from './media/delete';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
@@ -53,11 +52,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Read article/collection/url resources from the core corpus. */
 	readCorpusItems(items: CoreRpcArgs<'readCorpusItems'>[0], userId: CoreRpcArgs<'readCorpusItems'>[1]) {
 		return readCorpusItems(this.env, items, userId);
-	}
-
-	/** Delete a user-owned blob media file and its R2 object. */
-	deleteUserMediaFile(input: CoreRpcArgs<'deleteUserMediaFile'>[0]) {
-		return deleteUserMediaFile(this.env, input);
 	}
 }
 
