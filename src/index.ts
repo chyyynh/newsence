@@ -25,11 +25,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		return routeRequest(request, this.env, this.ctx);
 	}
 
-	scheduled(event: ScheduledEvent): void {
+	override scheduled(event: ScheduledController): void {
 		handleScheduled(event, this.env, this.ctx);
 	}
 
-	async queue(batch: MessageBatch<QueueMessage>): Promise<void> {
+	override async queue(batch: MessageBatch<QueueMessage>): Promise<void> {
 		console.info({ tag: 'CORE', msg: 'Queue received', queue: batch.queue, count: batch.messages.length });
 		await handleArticleQueue(batch, this.env);
 	}
@@ -58,7 +58,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	}
 }
 
-function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
+function handleScheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): void {
 	console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
 
 	if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
