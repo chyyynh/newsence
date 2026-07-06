@@ -1,4 +1,5 @@
-import type { QuotaExceededCode } from '@core-shared/billing-contracts';
+export const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
+export type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
 
 export interface ArticleSummary {
 	id: string;
@@ -73,3 +74,10 @@ export type StoreGeneratedImageResult =
 			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
 			message: string;
 	  };
+
+export interface CoreRpc {
+	storeGeneratedImage(input: StoreGeneratedImageInput): Promise<StoreGeneratedImageResult>;
+	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]>;
+	scrapeUrl(url: string): Promise<ScrapedUrlContent>;
+	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]>;
+}

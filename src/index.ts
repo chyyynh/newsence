@@ -1,10 +1,10 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { ArticleSearchInput, ReadContextItem, StoreGeneratedImageInput } from '@core-rpc/contracts';
+import type { ArticleSearchInput, CoreRpc, ReadContextItem, ScrapedUrlContent, StoreGeneratedImageInput } from '@core-rpc/contracts';
 import type { Env } from '@core-shared/types';
 import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@core-shared/workflow-queue';
 import { routeRequest } from '@entry/http';
 import { persistGeneratedImage } from '@ingest/blob-persistence';
-import { extractSource, type NormalizedContent } from '@ingest/extract';
+import { extractSource } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -15,7 +15,7 @@ import { readCorpusItems, searchCorpusArticles } from './corpus';
 
 export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
-export default class CoreWorker extends WorkerEntrypoint<Env> {
+export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
 	override async fetch(request: Request): Promise<Response> {
 		return routeRequest(request, this.env, this.ctx);
 	}
@@ -43,7 +43,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> {
 	}
 
 	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
-	scrapeUrl(url: string): Promise<NormalizedContent> {
+	scrapeUrl(url: string): Promise<ScrapedUrlContent> {
 		return extractSource(this.env, { kind: 'url', url });
 	}
 
