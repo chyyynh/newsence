@@ -2,7 +2,7 @@ import { CORE_JSON_MODEL, generateObject } from '@core-shared/ai';
 import { withDbClient } from '@core-shared/db';
 import type { Article, Env } from '@core-shared/types';
 import type { TranscriptSegment } from '@core-shared/web';
-import { getYoutubeTranscriptForHighlights } from '@core-shared/youtube-transcripts';
+import { getYoutubeTranscriptForHighlights } from '@ingest/platforms/youtube/transcripts';
 import { z } from 'zod';
 
 interface YouTubeHighlight {

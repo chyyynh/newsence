@@ -1,12 +1,12 @@
 import { type ProcessableTable, resolveProcessableTable, USER_FILES_TABLE } from '@core-shared/article-store';
+import type { Env } from '@core-shared/types';
 import {
 	cleanupSourceArticleDraftRef,
 	createSourceArticleDraftRef,
 	type SourceArticleDraft,
 	type SourceArticleDraftRef,
 	sourceArticleDraftUrl,
-} from '@core-shared/source-draft';
-import type { Env } from '@core-shared/types';
+} from '@ingest/workflows/source-draft';
 import { getUserFileWorkflowInstanceId, recordUserFileWorkflowInstanceId } from './user-file-state';
 
 export type WorkflowQueueTarget =

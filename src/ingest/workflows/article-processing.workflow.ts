@@ -9,17 +9,17 @@ import {
 	USER_FILES_TABLE,
 } from '@core-shared/article-store';
 import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
+import type { Article, Env } from '@core-shared/types';
+import { isExtractablePdfFile } from '@core-shared/upload';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
+import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import {
 	cleanupSourceArticleDraftRef,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
 	sourceDraftToArticle,
 	sourceDraftYoutubeTranscript,
-} from '@core-shared/source-draft';
-import type { Article, Env } from '@core-shared/types';
-import { isExtractablePdfFile } from '@core-shared/upload';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
-import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
+} from '@ingest/workflows/source-draft';
 import { measureImageDimensions } from '@media/dimensions';
 import { syncPaperGraph } from '@papers/sync';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';

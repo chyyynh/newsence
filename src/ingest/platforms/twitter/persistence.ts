@@ -1,10 +1,10 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@core-shared/source-draft';
 import type { Env, Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl, type ScrapedContent } from '@core-shared/web';
 import { enqueueArticleProcess, startSourceArticleWorkflow } from '@ingest/workflows/queue';
+import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@ingest/workflows/source-draft';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,

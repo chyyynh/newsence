@@ -1,10 +1,10 @@
 import { getExistingUrls } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
 import { buildMetadata, type YouTubeMetadata } from '@core-shared/platform-metadata';
-import { youtubeTranscriptAttachment } from '@core-shared/source-draft';
 import type { Env, RSSFeed } from '@core-shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
+import { youtubeTranscriptAttachment } from '@ingest/workflows/source-draft';
 import { XMLParser } from 'fast-xml-parser';
 import { listSourceFeedsByType, markSourceFeedScrapedById } from '../source-feeds';
 import { scrapeYouTube } from './scraper';

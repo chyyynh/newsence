@@ -1,12 +1,5 @@
-import type { DbClient } from './db';
-
-export interface YoutubeTranscriptRow {
-	videoId: string;
-	segments: unknown[];
-	language: string | null;
-	chapters?: unknown;
-	chaptersFromDescription?: unknown;
-}
+import type { DbClient } from '@core-shared/db';
+import type { YoutubeTranscriptRow } from './types';
 
 export interface YoutubeTranscriptForHighlights {
 	transcript: Array<{ startTime: number; endTime: number; text: string }> | null;
