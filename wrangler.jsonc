@@ -143,7 +143,19 @@
 	/**
 	 * `AI_GATEWAY_NAME` — AI Gateway name used by Workers AI text generation.
 	 *   `default` is auto-created by Cloudflare on first use.
+	 *
+	 * Required secret:
+	 * - CORE_WORKER_INTERNAL_TOKEN protects direct HTTP maintenance endpoints.
+	 *
+	 * Optional secrets:
+	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
+	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
+	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
+	 * - POSTHOG_API_KEY enables server analytics.
 	 */
+	"secrets": {
+		"required": ["CORE_WORKER_INTERNAL_TOKEN"]
+	},
 	"vars": {
 		"AI_GATEWAY_NAME": "default",
 		"POSTHOG_HOST": "https://us.i.posthog.com"
