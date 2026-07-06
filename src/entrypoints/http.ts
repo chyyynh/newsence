@@ -1,8 +1,6 @@
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { handleRetryCron } from '@ingest/retry';
-import { handleProxy } from '@media/proxy';
-import { handleR2Asset } from '@media/r2-asset';
 import { USER_FILES_TABLE } from '@shared/article-store';
 import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
 import type { Env } from '@shared/types';
@@ -60,10 +58,7 @@ const HELP_TEXT =
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
-	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n' +
-	'\nSigned media:\n' +
-	'GET  /media/external/{options}/{mediaUrl} - Upstream image/video passthrough with edge cache\n' +
-	'GET  /media/asset/{key}?sig=&exp=         - Authenticated R2 asset\n';
+	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
 
 function scrapeJobId(pathname: string): string | null {
 	if (!pathname.startsWith('/scrape/jobs/')) return null;
@@ -211,28 +206,11 @@ function routePrefixGet(request: Request, pathname: string, env: Env): Response 
 	return null;
 }
 
-// Match `/prefix/...` for any method; also match exact `/prefix` for OPTIONS
-// so CORS preflights to the root URL still hit the handler.
-function matchesEndpoint(pathname: string, method: string, ...prefixes: string[]): boolean {
-	for (const p of prefixes) {
-		if (pathname.startsWith(`${p}/`)) return true;
-		if (method === 'OPTIONS' && pathname === p) return true;
-	}
-	return false;
-}
-
 export function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
 	const { pathname } = new URL(request.url);
 	const { method } = request;
 
 	if (pathname === '/health') return health();
-	if (matchesEndpoint(pathname, method, '/media/external')) {
-		return handleProxy(request, env, ctx);
-	}
-	if (matchesEndpoint(pathname, method, '/media/asset')) {
-		return handleR2Asset(request, env);
-	}
-
 	if (method === 'OPTIONS') {
 		if (SCRAPE_PREFLIGHT_ROUTES.has(pathname)) return POST_ROUTES[pathname](request, env, ctx);
 		if (INTERNAL_PREFLIGHT_ROUTES.has(pathname)) return internalPreflight();

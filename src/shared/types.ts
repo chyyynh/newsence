@@ -12,8 +12,6 @@ export interface Env extends Cloudflare.Env {
 	// here would widen the type and conflict (TS2430). Don't add them back.
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	/** HMAC secret for signing /media/external/ and /media/asset URLs. */
-	IMAGE_PROXY_SECRET?: string;
 	/** Exa client key. Optional; the `search-web` tool refuses to run without it. */
 	EXA_API_KEY?: string;
 	/** PostHog project key (server). Set via `wrangler secret put POSTHOG_API_KEY`. */

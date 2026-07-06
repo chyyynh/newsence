@@ -112,19 +112,11 @@
 	 * `R2` — user_file blob storage (PDF/image uploads + chat-generated images).
 	 *   Also written by the Next.js frontend via S3 API; the worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
-	 *
-	 * `IMAGE_CACHE` — durable L2 cache for env.IMAGES transforms. Dedicated
-	 *   bucket (not `R2`) so its metrics, lifecycle rules, and blast radius
-	 *   stay isolated from user uploads. See proxy.ts for the L1/L2 flow.
 	 */
 	"r2_buckets": [
 		{
 			"binding": "R2",
 			"bucket_name": "newsence"
-		},
-		{
-			"binding": "IMAGE_CACHE",
-			"bucket_name": "newsence-image-cache"
 		}
 	],
 	/**
@@ -149,20 +141,10 @@
 		}
 	],
 	/**
-	 * `APP_ORIGINS` — comma-separated CORS allowlist for `/media/asset/*` responses.
-	 *   The HMAC signature is the real access control; this just limits which
-	 *   origins can read response bytes from JS after a signed URL leaks.
-	 *   When unset, falls back to `*` (with a one-time console warning).
-	 *
 	 * `AI_GATEWAY_NAME` — AI Gateway name used by Workers AI text generation.
 	 *   `default` is auto-created by Cloudflare on first use.
-	 *
-	 * Secret (set via `wrangler secret put`):
-	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
-	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
 	 */
 	"vars": {
-		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
 		"AI_GATEWAY_NAME": "default",
 		"POSTHOG_HOST": "https://us.i.posthog.com"
 	}
