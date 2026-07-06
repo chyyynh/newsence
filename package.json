@@ -5,6 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"deploy": "wrangler deploy",
+		"deploy:dry-run": "pnpm run typecheck && wrangler deploy --dry-run",
+		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
 		"start": "wrangler dev --test-scheduled",
 		"cf-typegen": "wrangler types",
