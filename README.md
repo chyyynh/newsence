@@ -224,7 +224,7 @@ src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
 ├── entrypoints/          # HTTP router + scheduled + queue dispatch, health
 ├── shared/               # cross-subsystem base — used by both pipelines below
-│   ├── auth/             # internal-token middleware for /ingest, /search, /media/*
+│   ├── auth/             # internal-token middleware for ingest/search/maintenance HTTP endpoints
 │   ├── ai.ts             # Workers AI text + JSON helpers
 │   ├── db.ts             # Hyperdrive clients + article/user_file helpers
 │   ├── embedding.ts      # BGE-M3 wrapper (Workers AI)
@@ -246,8 +246,8 @@ src/
 │   ├── handlers/         # ingest / scrape HTTP handlers
 │   ├── monitors/         # cross-platform scheduled maintenance
 │   └── urls.ts · blob.ts · image-url.ts   # ingestion entrypoints (URL / blob / image)
-├── chat/                 # ── AI chat surface ── tools, billing, editor, workspace, sessions
-└── media/                # ── asset serving ── image proxy, signed R2 assets, AI image gen
+├── media/                # OG image dimension helpers used by ingestion
+└── corpus.ts · okf.ts     # engine read/search/export helpers
 ```
 
 ## Environment Variables & Bindings
@@ -260,6 +260,7 @@ Bindings (in `wrangler.jsonc`):
 | `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
 | `AI`               | Workers AI (Qwen3 analysis + BGE-M3 embeddings) |
+| `IMAGES`           | Cloudflare Images metadata/dimension inspection |
 | `BROWSER`          | Cloudflare Browser Rendering (reserved)      |
 
 Secrets (via `wrangler secret put`):

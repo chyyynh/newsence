@@ -188,7 +188,7 @@ src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
 ├── entrypoints/          # HTTP router + scheduled + queue dispatch、health
 ├── shared/               # 跨子系統共用基礎 — 下面兩條 pipeline 都用
-│   ├── auth/             # /ingest、/search、/media/* internal-token middleware
+│   ├── auth/             # ingest/search/maintenance HTTP endpoints 的 internal-token middleware
 │   ├── ai.ts             # Workers AI 文字 + JSON helpers
 │   ├── db.ts             # Hyperdrive clients + article/user_file helpers
 │   ├── embedding.ts      # BGE-M3 wrapper（Workers AI）
@@ -210,8 +210,8 @@ src/
 │   ├── handlers/         # ingest / scrape HTTP handlers
 │   ├── monitors/         # 跨平台排程維護
 │   └── urls.ts · blob.ts · image-url.ts   # 入庫進入點（URL / blob / 圖片）
-├── chat/                 # ── AI chat 介面 ── tools、billing、editor、workspace、sessions
-└── media/                # ── 媒體服務 ── 圖片 proxy、簽名 R2 asset、AI 生圖
+├── media/                # 入庫使用的 OG 圖片尺寸輔助
+└── corpus.ts · okf.ts     # engine 讀取、搜尋、匯出輔助
 ```
 
 ## 環境變數與 Bindings
@@ -224,6 +224,7 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | `ARTICLE_QUEUE`    | `article-processing-queue-core` 的 producer |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
 | `AI`               | Workers AI（Qwen3 分析 + BGE-M3 向量生成） |
+| `IMAGES`           | Cloudflare Images metadata / 尺寸檢查       |
 | `BROWSER`          | Cloudflare Browser Rendering（預留）        |
 
 Secrets（透過 `wrangler secret put` 設定）：
