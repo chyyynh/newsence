@@ -16,7 +16,7 @@ export type WorkflowQueueTarget =
 type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 export type QueueMessage = { type: 'workflow_process'; target: RowWorkflowTarget };
 export type ParsedQueueMessage = { messageId: string; target: RowWorkflowTarget };
-export type QueueResult = { count: number; created: number; existing: number; skipped: number };
+export type QueueResult = { count: number; created: number; existing: number };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
@@ -80,7 +80,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export async function ensureWorkflowsForQueueMessages(env: Env, messages: ParsedQueueMessage[]): Promise<QueueResult> {
-	if (!messages.length) return { count: 0, created: 0, existing: 0, skipped: 0 };
+	if (!messages.length) return { count: 0, created: 0, existing: 0 };
 
 	const instances = await env.MONITOR_WORKFLOW.createBatch(
 		messages.map(({ messageId, target }) => {
@@ -92,7 +92,7 @@ export async function ensureWorkflowsForQueueMessages(env: Env, messages: Parsed
 		}),
 	);
 
-	return { count: messages.length, created: instances.length, existing: messages.length - instances.length, skipped: 0 };
+	return { count: messages.length, created: instances.length, existing: messages.length - instances.length };
 }
 
 function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string): string {
