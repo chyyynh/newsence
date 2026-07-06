@@ -2,14 +2,9 @@ import { Client } from 'pg';
 import type { Env } from './types';
 export type DbClient = Client;
 
-export async function createDbClient(env: Env): Promise<Client> {
-	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await client.connect();
-	return client;
-}
-
 export async function withDbClient<T>(env: Env, fn: (db: DbClient) => Promise<T>): Promise<T> {
-	const db = await createDbClient(env);
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
 	try {
 		return await fn(db);
 	} finally {
