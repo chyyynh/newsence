@@ -6,12 +6,12 @@ import {
 } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@core-shared/source-feed-state';
 import type { Env, RSSFeed } from '@core-shared/types';
 import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
+import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '../source-feeds';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	extractImageFromItem,

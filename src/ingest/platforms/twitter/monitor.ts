@@ -1,6 +1,6 @@
-import { listSourceFeedsByType, markSourceFeedsScrapedByIds } from '@core-shared/source-feed-state';
 import type { Env, RSSFeed, Tweet } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
+import { listSourceFeedsByType, markSourceFeedsScrapedByIds } from '../source-feeds';
 import { saveTweetGroups } from './persistence';
 import { normalizeRetweet } from './source-events';
 

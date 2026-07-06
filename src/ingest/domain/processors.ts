@@ -1,4 +1,4 @@
-import { prepareArticleTextForEmbedding } from '@core-shared/embedding';
+import { prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
 	type ArticleCategory,
 	type PlatformEnrichments,

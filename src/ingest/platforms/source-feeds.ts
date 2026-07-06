@@ -1,5 +1,5 @@
-import { type DbClient, withDbClient } from './db';
-import type { Env, RSSFeed } from './types';
+import { type DbClient, withDbClient } from '@core-shared/db';
+import type { Env, RSSFeed } from '@core-shared/types';
 
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 

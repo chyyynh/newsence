@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { generateArticleEmbedding } from '@core-ai/embedding';
 import {
 	ARTICLES_TABLE,
 	loadProcessableArticle,
@@ -7,7 +8,6 @@ import {
 	type ProcessableTable,
 	USER_FILES_TABLE,
 } from '@core-shared/article-store';
-import { generateArticleEmbedding } from '@core-shared/embedding';
 import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
 import {
 	cleanupSourceArticleDraftRef,

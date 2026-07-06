@@ -1,4 +1,4 @@
-import type { Article } from './types';
+import type { Article } from '@core-shared/types';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;

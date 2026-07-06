@@ -1,6 +1,6 @@
+import { generateArticleEmbedding } from '@core-ai/embedding';
 import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@core-rpc/contracts';
 import { createDbClient } from '@core-shared/db';
-import { generateArticleEmbedding } from '@core-shared/embedding';
 import type { Env } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import type { Client } from 'pg';
