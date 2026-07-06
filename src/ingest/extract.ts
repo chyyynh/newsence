@@ -1,5 +1,5 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
-import { readTempBytes } from '@core-shared/r2-temp';
+import { readScrapeInputTemp } from '@core-shared/r2-temp';
 import type { Env } from '@core-shared/types';
 import { MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/upload';
 import type { ScrapedContent } from '@core-shared/web';
@@ -159,7 +159,7 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 		case 'bytes':
 			return extractFromBytes(input.bytes, input.contentType);
 		case 'r2': {
-			const { bytes, contentType } = await readTempBytes(env, input.key, { label: 'extract input temp object' });
+			const { bytes, contentType } = await readScrapeInputTemp(env, input.key);
 			return extractFromBytes(bytes, contentType);
 		}
 	}

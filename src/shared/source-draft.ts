@@ -1,6 +1,5 @@
 import type { InsertArticleData } from './article-store';
 import type { TwitterMedia } from './platform-metadata';
-import { deleteTempObject, putRandomSerializedTempJson, readTempJson } from './r2-temp';
 import type { Article, Env, Tweet } from './types';
 import type { YoutubeTranscriptRow } from './youtube-transcripts';
 
@@ -31,6 +30,22 @@ type LegacySourceArticleDraft = SourceArticleDraft & {
 export type SourceArticleDraftRef = { url: string; r2Key: string };
 
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
+const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
+
+function sourceArticleDraftKey(): string {
+	return `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
+}
+
+function assertSourceArticleDraftKey(key: string): void {
+	if (!key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${key}`);
+}
+
+async function getSourceArticleDraftObject(env: Env, key: string): Promise<R2ObjectBody> {
+	assertSourceArticleDraftKey(key);
+	const obj = await env.R2.get(key);
+	if (!obj) throw new Error(`source article draft missing: ${key}`);
+	return obj;
+}
 
 export function youtubeTranscriptAttachment(transcript: YoutubeTranscriptRow): SourceArticleAttachment {
 	return { kind: 'youtube-transcript', transcript };
@@ -69,7 +84,8 @@ export async function createSourceArticleDraftRef(env: Env, draft: SourceArticle
 }
 
 async function writeSourceArticleDraft(env: Env, url: string, serialized: string): Promise<SourceArticleDraftRef> {
-	const r2Key = await putRandomSerializedTempJson(env, SOURCE_ARTICLE_DRAFT_PREFIX, serialized);
+	const r2Key = sourceArticleDraftKey();
+	await env.R2.put(r2Key, serialized, { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
 	return { url, r2Key };
 }
 
@@ -78,9 +94,8 @@ export function sourceArticleDraftUrl(ref: SourceArticleDraftRef): string {
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
-	return normalizeSourceArticleDraft(
-		await readTempJson<LegacySourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' }),
-	);
+	const obj = await getSourceArticleDraftObject(env, ref.r2Key);
+	return normalizeSourceArticleDraft(await obj.json<LegacySourceArticleDraft>());
 }
 
 export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
@@ -105,7 +120,8 @@ export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
 }
 
 async function deleteSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<void> {
-	await deleteTempObject(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' });
+	assertSourceArticleDraftKey(ref.r2Key);
+	await env.R2.delete(ref.r2Key);
 }
 
 export async function cleanupSourceArticleDraftRef(
