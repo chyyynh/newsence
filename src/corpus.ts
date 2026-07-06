@@ -1,7 +1,7 @@
-import { createDbClient } from '@shared/db';
-import { generateArticleEmbedding } from '@shared/embedding';
-import type { Env } from '@shared/types';
-import { normalizeUrl } from '@shared/web';
+import { createDbClient } from '@core-shared/db';
+import { generateArticleEmbedding } from '@core-shared/embedding';
+import type { Env } from '@core-shared/types';
+import { normalizeUrl } from '@core-shared/web';
 import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@worker-contracts/core-rpc';
 import type { Client } from 'pg';
 

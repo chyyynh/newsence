@@ -2,11 +2,11 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateObject, generateText } from '@shared/ai';
-import type { ProcessableTable } from '@shared/article-store';
-import { entityExtractionExclusionNames } from '@shared/entities/normalize';
-import type { ArticleCategory, PlatformEnrichments } from '@shared/platform-metadata';
-import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@shared/types';
+import { AI_TASKS, generateObject, generateText } from '@core-shared/ai';
+import type { ProcessableTable } from '@core-shared/article-store';
+import { entityExtractionExclusionNames } from '@core-shared/entities/normalize';
+import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform-metadata';
+import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@core-shared/types';
 import { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────

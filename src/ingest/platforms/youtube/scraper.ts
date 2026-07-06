@@ -2,8 +2,8 @@
 // YouTube Scraper
 // ─────────────────────────────────────────────────────────────
 
-import type { YouTubeMetadata } from '@shared/platform-metadata';
-import { fetchWithTimeout, readTextWithLimit, type ScrapedContent, type TranscriptSegment, type YouTubeChapter } from '@shared/web';
+import type { YouTubeMetadata } from '@core-shared/platform-metadata';
+import { fetchWithTimeout, readTextWithLimit, type ScrapedContent, type TranscriptSegment, type YouTubeChapter } from '@core-shared/web';
 
 interface YouTubeVideoItem {
 	id: string;

@@ -23,8 +23,8 @@ import {
 	sniffMediaType,
 	sniffMediaTypeStream,
 	UnsupportedMediaError,
-} from '@shared/mime';
-import type { Env } from '@shared/types';
+} from '@core-shared/mime';
+import type { Env } from '@core-shared/types';
 import {
 	buildPdfMetadata,
 	deriveFileTitle,
@@ -33,9 +33,9 @@ import {
 	storageKeyToAssetUrl,
 	streamWithByteLimit,
 	userUploadKey,
-} from '@shared/upload';
-import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@shared/web';
-import { createUserFileWorkflow } from '@shared/workflow-queue';
+} from '@core-shared/upload';
+import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@core-shared/web';
+import { createUserFileWorkflow } from '@core-shared/workflow-queue';
 import type { QuotaExceededCode } from '@worker-contracts/billing-contracts';
 import { persistBlobRow, putUserUpload } from './blob-persistence';
 

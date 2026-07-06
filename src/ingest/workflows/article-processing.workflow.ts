@@ -1,5 +1,4 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { measureImageDimensions } from '@media/dimensions';
 import {
 	ARTICLES_TABLE,
 	loadProcessableArticle,
@@ -7,21 +6,22 @@ import {
 	type ProcessableArticleShell,
 	type ProcessableTable,
 	USER_FILES_TABLE,
-} from '@shared/article-store';
-import { generateArticleEmbedding } from '@shared/embedding';
-import { syncPaperGraph } from '@shared/papers/sync';
-import { hasOgDimensions, type PaperMetadata } from '@shared/platform-metadata';
+} from '@core-shared/article-store';
+import { generateArticleEmbedding } from '@core-shared/embedding';
+import { syncPaperGraph } from '@core-shared/papers/sync';
+import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
 import {
 	cleanupSourceArticleDraftRef,
 	readSourceArticleDraft,
 	type SourceArticleDraft,
 	sourceDraftToArticle,
 	sourceDraftYoutubeTranscript,
-} from '@shared/source-draft';
-import type { Article, Env } from '@shared/types';
-import { isExtractablePdfFile } from '@shared/upload';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@shared/web';
-import type { WorkflowQueueTarget } from '@shared/workflow-queue';
+} from '@core-shared/source-draft';
+import type { Article, Env } from '@core-shared/types';
+import { isExtractablePdfFile } from '@core-shared/upload';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
+import type { WorkflowQueueTarget } from '@core-shared/workflow-queue';
+import { measureImageDimensions } from '@media/dimensions';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';

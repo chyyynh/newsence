@@ -2,8 +2,8 @@
 // Web Scraper (cheerio + Readability hybrid)
 // ─────────────────────────────────────────────────────────────
 
+import { BROWSER_UA, fetchWithTimeout, readTextWithLimit, type ScrapedContent } from '@core-shared/web';
 import { Readability } from '@mozilla/readability';
-import { BROWSER_UA, fetchWithTimeout, readTextWithLimit, type ScrapedContent } from '@shared/web';
 import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';

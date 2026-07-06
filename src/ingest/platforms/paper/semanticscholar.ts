@@ -5,8 +5,8 @@
 // dedicated per-key rate. S2 also returns richer reference metadata (DOI +
 // author) in a single call.
 
-import type { PaperMetadata, PaperReference } from '@shared/platform-metadata';
-import { fetchWithTimeout } from '@shared/web';
+import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
+import { fetchWithTimeout } from '@core-shared/web';
 import { type PaperId, titlesMatch } from './detect';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';

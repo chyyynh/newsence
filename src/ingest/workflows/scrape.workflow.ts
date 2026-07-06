@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { deleteScrapeInputTemp, isScrapeInputTempKey } from '@shared/r2-temp';
-import type { Env } from '@shared/types';
+import { deleteScrapeInputTemp, isScrapeInputTempKey } from '@core-shared/r2-temp';
+import type { Env } from '@core-shared/types';
 import { type ExtractInput, extractSource, type NormalizedContent } from '../extract';
 
 // Bytes can't fit Workflow params, so the job path only ever passes a URL or a

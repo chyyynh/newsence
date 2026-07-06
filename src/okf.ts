@@ -2,14 +2,14 @@
 // OKF (Open Knowledge Format v0.1) collection export — issue #197 Phase 1.
 // Streams a collection as a tar.gz bundle of markdown + YAML frontmatter:
 // index.md (okf_version) / articles/*.md / entities/*.md / log.md.
-// Entity quality gate reuses @shared/entities/normalize — the same rules
+// Entity quality gate reuses @core-shared/entities/normalize — the same rules
 // the ingest pipeline stores with, so bundles never diverge from the DB gate.
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
-import { type DbClient, withDbClient } from '@shared/db';
-import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@shared/entities/normalize';
-import type { Env } from '@shared/types';
+import { INTERNAL_CORS_HEADERS, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { type DbClient, withDbClient } from '@core-shared/db';
+import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@core-shared/entities/normalize';
+import type { Env } from '@core-shared/types';
 
 type OkfFile = { path: string; content: string };
 

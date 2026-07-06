@@ -1,4 +1,4 @@
-import { isRasterImage, PDF_MIME } from '@shared/mime';
+import { isRasterImage, PDF_MIME } from '@core-shared/mime';
 import {
 	assertExternalFetchable,
 	BROWSER_UA,
@@ -7,7 +7,7 @@ import {
 	extractTweetId,
 	extractYouTubeId,
 	type ScrapedContent,
-} from '@shared/web';
+} from '@core-shared/web';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
 import { scrapeHtmlFromResponse } from './web-scraper';

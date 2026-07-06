@@ -1,12 +1,12 @@
-import { prepareArticleTextForEmbedding } from '@shared/embedding';
+import { prepareArticleTextForEmbedding } from '@core-shared/embedding';
 import {
 	type ArticleCategory,
 	type PlatformEnrichments,
 	type PlatformMetadata,
 	withClassification,
 	withOgDimensions,
-} from '@shared/platform-metadata';
-import type { Article } from '@shared/types';
+} from '@core-shared/platform-metadata';
+import type { Article } from '@core-shared/types';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
 
 export type { ProcessorResult } from './ai-utils';

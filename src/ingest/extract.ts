@@ -1,9 +1,9 @@
+import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
+import { readTempBytes } from '@core-shared/r2-temp';
+import type { Env } from '@core-shared/types';
+import type { ScrapedContent } from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
-import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@shared/mime';
-import { readTempBytes } from '@shared/r2-temp';
-import type { Env } from '@shared/types';
-import type { ScrapedContent } from '@shared/web';
 import { scrapeUrl } from './platforms/registry';
 
 // Shared extraction core: one input → one normalized shape. Wraps the existing

@@ -2,10 +2,10 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateObject } from '@shared/ai';
-import { entityExtractionExclusionNames } from '@shared/entities/normalize';
-import type { ArticleCategory } from '@shared/platform-metadata';
-import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@shared/types';
+import { AI_TASKS, generateObject } from '@core-shared/ai';
+import { entityExtractionExclusionNames } from '@core-shared/entities/normalize';
+import type { ArticleCategory } from '@core-shared/platform-metadata';
+import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
 import { z } from 'zod';
 import {
 	type ArticleProcessor,

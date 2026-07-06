@@ -1,8 +1,8 @@
-import { parseJsonBody, requireAuth } from '@shared/auth';
-import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@shared/mime';
-import { deleteScrapeInputTemp, putScrapeInputTemp } from '@shared/r2-temp';
-import type { Env } from '@shared/types';
-import { MAX_UPLOAD_BYTES } from '@shared/upload';
+import { parseJsonBody, requireAuth } from '@core-shared/auth';
+import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
+import { deleteScrapeInputTemp, putScrapeInputTemp } from '@core-shared/r2-temp';
+import type { Env } from '@core-shared/types';
+import { MAX_UPLOAD_BYTES } from '@core-shared/upload';
 import { extractSource } from '../extract';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the

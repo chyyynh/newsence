@@ -2,17 +2,17 @@
 // Internal /entities/* maintenance endpoints (registered in http.ts).
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
-import { withDbTransaction } from '@shared/db';
+import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { withDbTransaction } from '@core-shared/db';
 import {
 	getArticlesMissingEntities,
 	type MaintenanceCursor,
 	pruneOrphanEntities,
 	repairMissingArticleEntityLinks,
-} from '@shared/entities/maintenance';
-import { getEntityQualitySnapshot } from '@shared/entities/quality-report';
-import type { Env } from '@shared/types';
-import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
+} from '@core-shared/entities/maintenance';
+import { getEntityQualitySnapshot } from '@core-shared/entities/quality-report';
+import type { Env } from '@core-shared/types';
+import { enqueueArticleBatchProcess } from '@core-shared/workflow-queue';
 
 function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): number {
 	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);

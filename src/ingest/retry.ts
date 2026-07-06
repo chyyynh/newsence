@@ -1,7 +1,7 @@
-import { getIncompleteWorkflowTargetIds, USER_FILES_TABLE } from '@shared/article-store';
-import { withDbClient } from '@shared/db';
-import type { Env } from '@shared/types';
-import { enqueueArticleBatchProcess } from '@shared/workflow-queue';
+import { getIncompleteWorkflowTargetIds, USER_FILES_TABLE } from '@core-shared/article-store';
+import { withDbClient } from '@core-shared/db';
+import type { Env } from '@core-shared/types';
+import { enqueueArticleBatchProcess } from '@core-shared/workflow-queue';
 
 // ─────────────────────────────────────────────────────────────
 // Retry Failed Articles

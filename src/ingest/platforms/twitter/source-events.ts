@@ -1,6 +1,6 @@
-import type { DbClient } from '@shared/db';
-import type { RetweetedByData, TwitterMedia } from '@shared/platform-metadata';
-import type { Tweet } from '@shared/types';
+import type { DbClient } from '@core-shared/db';
+import type { RetweetedByData, TwitterMedia } from '@core-shared/platform-metadata';
+import type { Tweet } from '@core-shared/types';
 import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';

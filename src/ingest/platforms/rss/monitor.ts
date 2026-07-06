@@ -3,13 +3,13 @@ import {
 	type ExistingArticleRecord,
 	getExistingArticlesByUrl,
 	updateArticleSourceByUrl,
-} from '@shared/article-store';
-import { withDbClient } from '@shared/db';
-import type { PlatformMetadata } from '@shared/platform-metadata';
-import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@shared/source-feed-state';
-import type { Env, RSSFeed } from '@shared/types';
-import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@shared/web';
-import { startSourceArticleWorkflow } from '@shared/workflow-queue';
+} from '@core-shared/article-store';
+import { withDbClient } from '@core-shared/db';
+import type { PlatformMetadata } from '@core-shared/platform-metadata';
+import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '@core-shared/source-feed-state';
+import type { Env, RSSFeed } from '@core-shared/types';
+import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { startSourceArticleWorkflow } from '@core-shared/workflow-queue';
 import { XMLParser } from 'fast-xml-parser';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web-scraper';

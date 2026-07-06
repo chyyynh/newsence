@@ -9,8 +9,8 @@ import {
 	type RetweetedByData,
 	type TwitterAuthorFields,
 	type TwitterMedia,
-} from '@shared/platform-metadata';
-import { fetchJsonWithTimeout, type ScrapedContent } from '@shared/web';
+} from '@core-shared/platform-metadata';
+import { fetchJsonWithTimeout, type ScrapedContent } from '@core-shared/web';
 
 interface TwitterUrlEntity {
 	expanded_url?: string;

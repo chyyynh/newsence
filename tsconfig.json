@@ -17,7 +17,7 @@
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
 			"@worker-contracts/*": ["../../packages/worker-contracts/*"],
-			"@shared/*": ["./src/shared/*"],
+			"@core-shared/*": ["./src/shared/*"],
 			"@ingest/*": ["./src/ingest/*"],
 			"@chat/*": ["./src/chat/*"],
 			"@media/*": ["./src/media/*"],

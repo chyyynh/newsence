@@ -2,9 +2,9 @@
 // Internal /papers/* maintenance endpoints (registered in http.ts).
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, jsonData, parseJsonBody, requireAuth } from '@shared/auth';
-import { backfillPaperGraph, parseBackfillTable } from '@shared/papers/backfill';
-import type { Env } from '@shared/types';
+import { INTERNAL_CORS_HEADERS, jsonData, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { backfillPaperGraph, parseBackfillTable } from '@core-shared/papers/backfill';
+import type { Env } from '@core-shared/types';
 
 function boundedLimit(value: unknown, fallback = 100, max = 500): number {
 	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);

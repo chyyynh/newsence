@@ -1,5 +1,5 @@
-import { deleteTempObject, putTempText, readTempBytes, readTempText } from '@shared/r2-temp';
-import type { Env } from '@shared/types';
+import { deleteTempObject, putTempText, readTempBytes, readTempText } from '@core-shared/r2-temp';
+import type { Env } from '@core-shared/types';
 import { type PdfTextStatus, parsePdf } from '../extract';
 
 const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';

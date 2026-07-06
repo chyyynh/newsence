@@ -1,7 +1,7 @@
-import { USER_FILES_TABLE } from '@shared/article-store';
-import { type DbClient, withDbTransaction } from '@shared/db';
-import { extensionFromMime, isRasterImage } from '@shared/mime';
-import type { Env } from '@shared/types';
+import { USER_FILES_TABLE } from '@core-shared/article-store';
+import { type DbClient, withDbTransaction } from '@core-shared/db';
+import { extensionFromMime, isRasterImage } from '@core-shared/mime';
+import type { Env } from '@core-shared/types';
 import {
 	assertBlobUploadQuotaTx,
 	buildPdfMetadata,
@@ -13,7 +13,7 @@ import {
 	UploadQuotaExceededError,
 	userGeneratedImageKey,
 	userUploadKey,
-} from '@shared/upload';
+} from '@core-shared/upload';
 import { QUOTA_EXCEEDED_CODE, type QuotaExceededCode } from '@worker-contracts/billing-contracts';
 
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';

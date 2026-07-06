@@ -1,6 +1,6 @@
-import { USER_FILES_TABLE } from '@shared/article-store';
-import type { DbClient } from '@shared/db';
-import { normalizeUrl } from '@shared/web';
+import { USER_FILES_TABLE } from '@core-shared/article-store';
+import type { DbClient } from '@core-shared/db';
+import { normalizeUrl } from '@core-shared/web';
 
 export interface InsertUrlUserFileData {
 	url: string;

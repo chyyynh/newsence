@@ -19,8 +19,8 @@
  * cosmetic loss (one layout snap), never worth failing the processing workflow.
  */
 
-import type { Env } from '@shared/types';
-import { BROWSER_UA } from '@shared/web';
+import type { Env } from '@core-shared/types';
+import { BROWSER_UA } from '@core-shared/web';
 
 export interface ImageDimensions {
 	width: number;

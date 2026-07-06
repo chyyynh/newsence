@@ -9,8 +9,8 @@
 // reference list is just short. All failures degrade to null; callers treat this
 // step as best-effort and never fail the workflow on it.
 
-import type { PaperMetadata, PaperReference } from '@shared/platform-metadata';
-import { fetchWithTimeout } from '@shared/web';
+import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
+import { fetchWithTimeout } from '@core-shared/web';
 import { type PaperId, titlesMatch } from './detect';
 
 const OPENALEX_BASE = 'https://api.openalex.org/works';

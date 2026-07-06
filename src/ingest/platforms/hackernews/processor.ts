@@ -2,10 +2,10 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateText } from '@shared/ai';
-import type { PlatformEnrichments } from '@shared/platform-metadata';
-import type { Article, Env } from '@shared/types';
-import { decodeHtmlEntities, htmlToText } from '@shared/web';
+import { AI_TASKS, generateText } from '@core-shared/ai';
+import type { PlatformEnrichments } from '@core-shared/platform-metadata';
+import type { Article, Env } from '@core-shared/types';
+import { decodeHtmlEntities, htmlToText } from '@core-shared/web';
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
