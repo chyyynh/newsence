@@ -1,7 +1,12 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { ArticleSearchInput, CoreRpc, ReadContextItem, ScrapedUrlContent, StoreGeneratedImageInput } from '@core-rpc/contracts';
 import type { Env } from '@core-shared/types';
-import { ensureWorkflowsForQueueMessage, type QueueMessage } from '@core-shared/workflow-queue';
+import {
+	ensureWorkflowsForQueueMessages,
+	type ParsedQueueMessage,
+	parseWorkflowQueueMessage,
+	type QueueMessage,
+} from '@core-shared/workflow-queue';
 import { routeRequest } from '@entry/http';
 import { persistGeneratedImage } from '@ingest/blob-persistence';
 import { extractSource } from '@ingest/extract';
@@ -65,14 +70,25 @@ function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext)
 async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
 	console.info({ tag: 'ARTICLE-QUEUE', msg: 'Received batch', count: batch.messages.length });
 
+	const messages: ParsedQueueMessage[] = [];
+	let skipped = 0;
 	for (const message of batch.messages) {
-		try {
-			const { count, created, existing, skipped } = await ensureWorkflowsForQueueMessage(env, message.id, message.body);
-			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', count, created, existing, skipped });
+		const parsed = parseWorkflowQueueMessage(message.id, message.body);
+		if (parsed) {
+			messages.push(parsed);
+		} else {
+			skipped++;
+			console.warn({ tag: 'ARTICLE-QUEUE', msg: 'Skipping invalid queue message', messageId: message.id });
 			message.ack();
-		} catch (err) {
-			console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling message, retrying', error: String(err) });
-			message.retry();
 		}
+	}
+
+	try {
+		const result = await ensureWorkflowsForQueueMessages(env, messages);
+		console.info({ tag: 'ARTICLE-QUEUE', msg: 'Ensured workflows', ...result, skipped });
+		batch.ackAll();
+	} catch (err) {
+		console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling batch, retrying', error: String(err) });
+		batch.retryAll();
 	}
 }

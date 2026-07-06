@@ -15,7 +15,8 @@ export type WorkflowQueueTarget =
 
 export type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 export type QueueMessage = { type: 'workflow_process'; target: RowWorkflowTarget };
-type QueueResult = { count: number; created: number; existing: number; skipped: number };
+export type ParsedQueueMessage = { messageId: string; target: RowWorkflowTarget };
+export type QueueResult = { count: number; created: number; existing: number; skipped: number };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
@@ -59,20 +60,9 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 	}
 }
 
-export async function ensureWorkflowsForQueueMessage(env: Env, messageId: string, body: unknown): Promise<QueueResult> {
-	const message = parseQueueMessage(body);
-	if (!message) {
-		console.warn({ tag: 'ARTICLE-QUEUE', msg: 'Skipping invalid queue message', messageId });
-		return { count: 0, created: 0, existing: 0, skipped: 1 };
-	}
-
-	const result = await ensureWorkflowForQueueTarget(env, messageId, message.target);
-	return { count: 1, created: result.created ? 1 : 0, existing: result.created ? 0 : 1, skipped: 0 };
-}
-
-function parseQueueMessage(body: unknown): QueueMessage | null {
+export function parseWorkflowQueueMessage(messageId: string, body: unknown): ParsedQueueMessage | null {
 	if (!isRecord(body) || body.type !== 'workflow_process' || !isWorkflowQueueTarget(body.target)) return null;
-	return { type: 'workflow_process', target: body.target };
+	return { messageId, target: body.target };
 }
 
 function isWorkflowQueueTarget(target: unknown): target is RowWorkflowTarget {
@@ -89,14 +79,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function ensureWorkflowForQueueTarget(
-	env: Env,
-	messageId: string,
-	target: RowWorkflowTarget,
-): Promise<{ id: string; created: boolean }> {
-	const targetTable = resolveProcessableTable(target.targetTable);
-	const workflowId = articleWorkflowId(messageId, targetTable, target.articleId);
-	return ensureArticleWorkflow(env, workflowId, target.articleId, targetTable);
+export async function ensureWorkflowsForQueueMessages(env: Env, messages: ParsedQueueMessage[]): Promise<QueueResult> {
+	if (!messages.length) return { count: 0, created: 0, existing: 0, skipped: 0 };
+
+	const instances = await env.MONITOR_WORKFLOW.createBatch(
+		messages.map(({ messageId, target }) => {
+			const targetTable = resolveProcessableTable(target.targetTable);
+			return {
+				id: articleWorkflowId(messageId, targetTable, target.articleId),
+				params: { target: rowWorkflowTarget(target.articleId, targetTable) },
+			};
+		}),
+	);
+
+	return { count: messages.length, created: instances.length, existing: messages.length - instances.length, skipped: 0 };
 }
 
 function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string): string {
@@ -161,25 +157,6 @@ async function cleanupSourceWorkflowDraft(
 	context: { reason: string; workflowId?: string },
 ): Promise<void> {
 	await cleanupSourceArticleDraftRef(env, sourceArticle, { ...context, logTag: 'SOURCE-WORKFLOW' });
-}
-
-async function ensureArticleWorkflow(
-	env: Env,
-	workflowId: string,
-	articleId: string,
-	targetTable: ProcessableTable,
-): Promise<{ id: string; created: boolean }> {
-	const existing = await getMonitorWorkflowStatus(env, workflowId);
-	if (existing.status !== 'unknown') return { id: existing.id, created: false };
-
-	try {
-		const id = await createMonitorWorkflow(env, workflowId, rowWorkflowTarget(articleId, targetTable));
-		return { id, created: true };
-	} catch (err) {
-		const raced = await getMonitorWorkflowStatus(env, workflowId);
-		if (raced.status !== 'unknown') return { id: raced.id, created: false };
-		throw err;
-	}
 }
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
