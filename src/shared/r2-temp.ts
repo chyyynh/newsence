@@ -42,7 +42,7 @@ export async function putRandomSerializedTempJson(env: Env, prefix: string, json
 	return key;
 }
 
-export async function putTempBytes(env: Env, key: string, bytes: Uint8Array, contentType: string): Promise<void> {
+async function putTempBytes(env: Env, key: string, bytes: Uint8Array, contentType: string): Promise<void> {
 	await putTempObject(env, key, bytes, contentType);
 }
 

@@ -1,7 +1,7 @@
 import { type ZodType, z } from 'zod';
 import type { Env } from './types';
 
-export const CORE_TEXT_MODEL = 'google/gemini-3-flash';
+const CORE_TEXT_MODEL = 'google/gemini-3-flash';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiBinding = Env['AI'];

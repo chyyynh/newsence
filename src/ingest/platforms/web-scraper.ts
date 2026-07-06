@@ -192,7 +192,7 @@ function isLowQualityContent(content: string): boolean {
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 
-export const HTML_FETCH_HEADERS: HeadersInit = {
+const HTML_FETCH_HEADERS: HeadersInit = {
 	'User-Agent': BROWSER_UA,
 	Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',

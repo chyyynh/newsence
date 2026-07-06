@@ -1,5 +1,5 @@
-export const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
-export type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
+const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
+type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
 
 export interface ArticleSummary {
 	id: string;
@@ -16,8 +16,6 @@ export type ArticleSearchInput = {
 	daysAgo?: number;
 	limit?: number;
 };
-
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export interface ReadContextItem {
 	type: 'article' | 'collection' | 'url';
@@ -52,7 +50,7 @@ export interface ScrapedUrlContent {
 	status: 'ok' | 'needs_ocr' | 'failed';
 }
 
-export interface StoredGeneratedImage {
+interface StoredGeneratedImage {
 	userFileId: string;
 	storageKey: string;
 	assetUrl: string;
@@ -67,7 +65,7 @@ export type StoreGeneratedImageInput = {
 	title: string;
 };
 
-export type StoreGeneratedImageResult =
+type StoreGeneratedImageResult =
 	| { ok: true; result: StoredGeneratedImage }
 	| {
 			ok: false;

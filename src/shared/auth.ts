@@ -34,7 +34,7 @@ async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
 	return crypto.subtle.timingSafeEqual(hashA, hashB);
 }
 
-export async function isInternalRequestAuthorized(request: Request, env: Env): Promise<boolean> {
+async function isInternalRequestAuthorized(request: Request, env: Env): Promise<boolean> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
 		// Fail closed: a missing server secret must never make the protected

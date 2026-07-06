@@ -27,12 +27,12 @@ export interface HnItem {
 	children?: HnComment[];
 }
 
-export function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
+function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
 	if (type === 'ask' || type === 'show' || type === 'job') return type;
 	return 'story';
 }
 
-export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
+function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author ?? '',

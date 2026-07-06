@@ -13,7 +13,7 @@ export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
 	| { kind: 'source'; sourceArticle: SourceArticleDraftRef };
 
-export type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
+type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 export type QueueMessage = { type: 'workflow_process'; target: RowWorkflowTarget };
 export type ParsedQueueMessage = { messageId: string; target: RowWorkflowTarget };
 export type QueueResult = { count: number; created: number; existing: number; skipped: number };

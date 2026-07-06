@@ -20,7 +20,7 @@ import { fetchHnItem, type HnComment, type HnItem } from './scraper';
 // Types
 // ─────────────────────────────────────────────────────────────
 
-export interface HnCollectedComment {
+interface HnCollectedComment {
 	id?: number;
 	author?: string;
 	text: string;

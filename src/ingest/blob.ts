@@ -41,7 +41,7 @@ import { persistBlobRow, putUserUpload } from './blob-persistence';
 
 const DEFAULT_IMAGE_TITLE = 'image';
 
-export interface BlobIngestResult {
+interface BlobIngestResult {
 	userFileId: string;
 	storageKey: string;
 	assetUrl: string;
@@ -52,7 +52,7 @@ export interface BlobIngestResult {
 	instanceId?: string;
 }
 
-export type IngestBlobErrorCode =
+type IngestBlobErrorCode =
 	| 'BAD_REQUEST'
 	| 'RATE_LIMITED'
 	| 'PAYLOAD_TOO_LARGE'

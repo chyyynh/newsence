@@ -61,7 +61,7 @@ export interface Article {
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-export interface ExtractedEntity {
+interface ExtractedEntity {
 	name: string;
 	name_cn: string;
 	type: EntityType;

@@ -77,17 +77,6 @@ export function sourceArticleDraftUrl(ref: SourceArticleDraftRef): string {
 	return ref.url;
 }
 
-export function isSourceArticleDraftRef(ref: unknown): ref is SourceArticleDraftRef {
-	if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return false;
-	const candidate = ref as Partial<Record<keyof SourceArticleDraftRef, unknown>>;
-	return (
-		typeof candidate.url === 'string' &&
-		candidate.url.length > 0 &&
-		typeof candidate.r2Key === 'string' &&
-		candidate.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)
-	);
-}
-
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
 	return normalizeSourceArticleDraft(
 		await readTempJson<LegacySourceArticleDraft>(env, ref.r2Key, { prefix: SOURCE_ARTICLE_DRAFT_PREFIX, label: 'source article draft' }),

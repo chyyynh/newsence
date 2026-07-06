@@ -215,9 +215,9 @@ const DOMAIN_ALIASES: Record<string, string> = {
 };
 
 /** YouTube hostnames that use ?v= parameter */
-export const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com']);
+const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com']);
 /** YouTube shortlink hosts that use path-based video ID */
-export const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
+const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
 
 export function buildYouTubeWatchUrl(videoId: string): string {
 	return `https://youtube.com/watch?v=${videoId}`;

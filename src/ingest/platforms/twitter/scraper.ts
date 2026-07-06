@@ -42,7 +42,7 @@ export interface TwitterLikeTweet {
 	retweetedBy?: RetweetedByData;
 }
 
-export function extractTweetAuthor(tweet: TwitterLikeTweet): TwitterAuthorFields {
+function extractTweetAuthor(tweet: TwitterLikeTweet): TwitterAuthorFields {
 	return {
 		authorName: tweet.author?.name || '',
 		authorUserName: tweet.author?.userName || '',

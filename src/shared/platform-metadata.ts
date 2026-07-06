@@ -47,7 +47,7 @@ export interface RetweetedByData {
  * `'shared'` (external link — adds tweetText/externalUrl/externalOgImage/externalTitle),
  * and `'article'` (long-form — author only). Constructed via `buildMetadata('twitter', …)`.
  */
-export interface TwitterMetadata extends TwitterAuthorFields {
+interface TwitterMetadata extends TwitterAuthorFields {
 	variant?: 'shared' | 'article';
 	tweetId?: string;
 	media?: TwitterMedia[];
@@ -97,7 +97,7 @@ export interface HackerNewsMetadata {
  * authoritative column); the URL is derived from it at read time, so renaming
  * the asset route never rots persisted data.
  */
-export interface PdfMetadata {
+interface PdfMetadata {
 	fileName: string;
 	fileSize: number;
 }
@@ -159,19 +159,19 @@ export interface PlatformEnrichments {
 // ─────────────────────────────────────────────────────────────
 
 /** Optional OG image dimensions stored at the envelope level (cross-platform). */
-export interface OgImageDimensions {
+interface OgImageDimensions {
 	ogImageWidth?: number | null;
 	ogImageHeight?: number | null;
 }
 
 export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
 
-export interface ClassificationMetadata {
+interface ClassificationMetadata {
 	category?: ArticleCategory;
 	classifiedAt?: string;
 }
 
-export interface ClassificationEnvelope {
+interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
