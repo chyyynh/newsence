@@ -2,7 +2,7 @@
 // Twitter Processor
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateObject } from '@core-shared/ai';
+import { generateObject } from '@core-shared/ai';
 import { entityExtractionExclusionNames } from '@core-shared/entities/normalize';
 import type { ArticleCategory } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
@@ -181,8 +181,7 @@ async function translateTweet(tweetText: string, article: Article, env: Processo
 	try {
 		const result = await generateObject<TweetAnalysis>(env.AI, buildTweetContextPrompt(tweetText, article), {
 			schema: TweetAnalysisSchema,
-			schemaName: 'tweet analysis',
-			task: AI_TASKS.tweetAnalysis,
+			task: 'tweet-analysis',
 			gatewayId: env.AI_GATEWAY_NAME,
 			maxTokens: 600,
 			systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,

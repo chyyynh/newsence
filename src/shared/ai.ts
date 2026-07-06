@@ -10,33 +10,16 @@ type AiMessage = { role: 'system' | 'user'; content: string };
 type GeminiTextResponse = { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
 type OpenAIChatResponse = { choices?: Array<{ message?: { content?: string } }> };
 
-export interface AiTask {
-	name: string;
-	version: string;
-}
-
-export const AI_TASKS = {
-	articleTranslation: { name: 'article-translation', version: '1' },
-	articleContentCleanup: { name: 'article-content-cleanup', version: '1' },
-	articleContentTranslation: { name: 'article-content-translation', version: '1' },
-	articleClassification: { name: 'article-classification', version: '1' },
-	tweetAnalysis: { name: 'tweet-analysis', version: '1' },
-	youtubeHighlights: { name: 'youtube-highlights', version: '1' },
-	hnEditorialCn: { name: 'hn-editorial-cn', version: '1' },
-	hnEditorialEn: { name: 'hn-editorial-en', version: '1' },
-} as const satisfies Record<string, AiTask>;
-
 interface GenerateTextOptions {
 	gatewayId?: string;
 	maxTokens?: number;
 	temperature?: number;
 	systemPrompt?: string;
-	task?: AiTask;
+	task?: string;
 }
 
 interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
-	schemaName?: string;
 }
 
 const DEFAULT_AI_GATEWAY_ID = 'default';
@@ -45,26 +28,13 @@ function gatewayId(value?: string): string {
 	return value?.trim() || DEFAULT_AI_GATEWAY_ID;
 }
 
-function taskMetadata(task?: AiTask): NonNullable<AiOptions['gateway']>['metadata'] | undefined {
-	if (!task) return undefined;
-	return { app: 'newsence', task: task.name, taskVersion: task.version };
-}
-
-function gatewayOptions(gatewayIdValue?: string, task?: AiTask): AiOptions {
-	return { gateway: { id: gatewayId(gatewayIdValue), collectLog: true, ...(task && { metadata: taskMetadata(task) }) } };
-}
-
-function geminiSettings(options: GenerateTextOptions) {
+function gatewayOptions(gatewayIdValue?: string, task?: string): AiOptions {
 	return {
-		...(options.maxTokens != null && { maxOutputTokens: options.maxTokens }),
-		temperature: options.temperature ?? 0.3,
-	};
-}
-
-function openAIChatSettings(options: GenerateTextOptions) {
-	return {
-		...(options.maxTokens != null && { max_tokens: options.maxTokens }),
-		temperature: options.temperature ?? 0.3,
+		gateway: {
+			id: gatewayId(gatewayIdValue),
+			collectLog: true,
+			...(task && { metadata: { app: 'newsence', task } }),
+		},
 	};
 }
 
@@ -94,21 +64,6 @@ function openAIText(response: OpenAIChatResponse): string | null {
 	return response.choices?.[0]?.message?.content?.trim() || null;
 }
 
-function extractJson(text: string): unknown {
-	const trimmed = text
-		.trim()
-		.replace(/^```(?:json)?\s*/i, '')
-		.replace(/\s*```$/i, '');
-	try {
-		return JSON.parse(trimmed);
-	} catch {
-		const start = trimmed.search(/[[{]/);
-		const end = Math.max(trimmed.lastIndexOf('}'), trimmed.lastIndexOf(']'));
-		if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-		throw new Error('No JSON object found in model response');
-	}
-}
-
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
 
@@ -118,7 +73,10 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 			{
 				contents: [{ role: 'user', parts: [{ text: prompt }] }],
 				...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
-				generationConfig: geminiSettings(options),
+				generationConfig: {
+					...(options.maxTokens != null && { maxOutputTokens: options.maxTokens }),
+					temperature: options.temperature ?? 0.3,
+				},
 			},
 			gatewayOptions(gatewayIdValue, task),
 		)) as GeminiTextResponse;
@@ -130,18 +88,19 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 }
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
-	const { gatewayId: gatewayIdValue, schema, schemaName = 'AI structured output', systemPrompt, task } = options;
+	const { gatewayId: gatewayIdValue, schema, systemPrompt, task } = options;
 
 	try {
 		const response = (await (ai.run as AiRun)(
 			CORE_JSON_MODEL,
 			{
 				messages: messages(prompt, systemPrompt),
-				...openAIChatSettings(options),
+				...(options.maxTokens != null && { max_tokens: options.maxTokens }),
+				temperature: options.temperature ?? 0.3,
 				response_format: {
 					type: 'json_schema',
 					json_schema: {
-						name: schemaId(task?.name ?? schemaName),
+						name: schemaId(task ?? 'structured-output'),
 						schema: z.toJSONSchema(schema),
 						strict: true,
 					},
@@ -152,7 +111,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 		const text = openAIText(response);
 		if (!text) throw new Error('No text content found in model response');
 
-		const parsed = schema.safeParse(extractJson(text));
+		const parsed = schema.safeParse(JSON.parse(text));
 		if (!parsed.success) throw parsed.error;
 		return parsed.data;
 	} catch (error) {
@@ -160,7 +119,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 			tag: 'AI',
 			msg: 'AI Gateway structured output failed',
 			model: CORE_JSON_MODEL,
-			schema: schemaName,
+			schema: task,
 			task,
 			...errorDetails(error),
 		});

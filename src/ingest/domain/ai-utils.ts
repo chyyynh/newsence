@@ -2,7 +2,7 @@
 // AI Utility Functions & Shared Processor Types
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateObject, generateText } from '@core-shared/ai';
+import { generateObject, generateText } from '@core-shared/ai';
 import type { ProcessableTable } from '@core-shared/article-store';
 import { entityExtractionExclusionNames } from '@core-shared/entities/normalize';
 import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform-metadata';
@@ -204,8 +204,7 @@ function validateCleanedContent(original: string, cleaned: string | null): strin
 async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
 	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleTranslationSchema,
-		schemaName: 'article translation',
-		task: AI_TASKS.articleTranslation,
+		task: 'article-translation',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 700,
 		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
@@ -216,8 +215,7 @@ async function generateArticleTranslation(article: Article, env: Env): Promise<A
 async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject | null> {
 	const result = await generateObject<ArticleClassificationObject>(env.AI, buildArticleContextPrompt(article), {
 		schema: ArticleClassificationSchema,
-		schemaName: 'article classification',
-		task: AI_TASKS.articleClassification,
+		task: 'article-classification',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 500,
 		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
@@ -229,7 +227,7 @@ async function generateArticleContentCleanup(article: Article, env: Env): Promis
 	if (!shouldCleanArticleContent(article)) return null;
 	const content = article.content!.trim().slice(0, MAX_CONTENT_CLEANUP_LENGTH);
 	const cleaned = await generateText(env.AI, `原文 Markdown:\n${content}`, {
-		task: AI_TASKS.articleContentCleanup,
+		task: 'article-content-cleanup',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 6000,
 		temperature: 0.1,
@@ -242,7 +240,7 @@ async function generateArticleContentTranslation(article: Article, env: Env): Pr
 	if (!shouldTranslateArticleContent(article)) return null;
 	const content = article.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH);
 	return generateText(env.AI, `原文 Markdown:\n${content}`, {
-		task: AI_TASKS.articleContentTranslation,
+		task: 'article-content-translation',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 6000,
 		temperature: 0.2,

@@ -2,7 +2,7 @@
 // HackerNews Processor
 // ─────────────────────────────────────────────────────────────
 
-import { AI_TASKS, generateText } from '@core-shared/ai';
+import { generateText } from '@core-shared/ai';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article, Env } from '@core-shared/types';
 import { decodeHtmlEntities, htmlToText } from '@core-shared/web';
@@ -172,8 +172,8 @@ async function generateHnEditorial(
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
 
 	const [cn, en] = await Promise.all([
-		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: AI_TASKS.hnEditorialCn, gatewayId: env.AI_GATEWAY_NAME }),
-		generateText(env.AI, enPrompt.user, { systemPrompt: enPrompt.system, task: AI_TASKS.hnEditorialEn, gatewayId: env.AI_GATEWAY_NAME }),
+		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: 'hn-editorial-cn', gatewayId: env.AI_GATEWAY_NAME }),
+		generateText(env.AI, enPrompt.user, { systemPrompt: enPrompt.system, task: 'hn-editorial-en', gatewayId: env.AI_GATEWAY_NAME }),
 	]);
 
 	return { en, cn };

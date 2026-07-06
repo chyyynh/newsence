@@ -96,7 +96,7 @@ async function fetchTweetsForBatch(
 		if (!apiRes.has_next_page) break;
 		cursor = apiRes.next_cursor || '';
 		if (!cursor) break;
-		await new Promise((r) => setTimeout(r, 1000));
+		await scheduler.wait(1000);
 	}
 
 	return { tweets, completed: true };

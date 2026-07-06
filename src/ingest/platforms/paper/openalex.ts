@@ -64,7 +64,7 @@ async function fetchJson<T>(url: string): Promise<T | null> {
 			if (res.status === 429 && attempt < 2) {
 				const retryAfter = Math.min(Number.parseInt(res.headers.get('retry-after') ?? '', 10) || 2, 5);
 				await res.body?.cancel();
-				await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+				await scheduler.wait(retryAfter * 1000);
 				continue;
 			}
 			console.warn({ tag: 'OPENALEX', msg: 'non-ok', status: res.status, url: url.slice(0, 100) });

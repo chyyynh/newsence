@@ -1,4 +1,4 @@
-import { AI_TASKS, CORE_TEXT_MODEL, generateObject } from '@core-shared/ai';
+import { CORE_JSON_MODEL, generateObject } from '@core-shared/ai';
 import { withDbClient } from '@core-shared/db';
 import type { Article, Env } from '@core-shared/types';
 import type { TranscriptSegment } from '@core-shared/web';
@@ -65,8 +65,7 @@ async function generateYouTubeHighlights(
 
 	const result = await generateObject<YouTubeHighlightsResult>(env.AI, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
 		schema: YouTubeHighlightsSchema,
-		schemaName: 'youtube highlights',
-		task: AI_TASKS.youtubeHighlights,
+		task: 'youtube-highlights',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 2000,
 		temperature: 0.3,
@@ -109,7 +108,7 @@ export async function prepareYouTubeHighlightsFromTranscript(
 		videoId,
 		value: {
 			version: '1.0',
-			model: CORE_TEXT_MODEL,
+			model: CORE_JSON_MODEL,
 			highlights: highlights.highlights,
 			generatedAt,
 		},

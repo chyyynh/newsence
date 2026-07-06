@@ -71,7 +71,7 @@ async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 			if (res.status === 429 && attempt < 2) {
 				const retryAfter = Math.min(Number.parseInt(res.headers.get('retry-after') ?? '', 10) || 2, 5);
 				await res.body?.cancel();
-				await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+				await scheduler.wait(retryAfter * 1000);
 				continue;
 			}
 			console.warn({ tag: 'S2', msg: 'non-ok', status: res.status, path: path.slice(0, 80) });
