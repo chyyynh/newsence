@@ -4,9 +4,6 @@ const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;
 const DEFAULT_AI_GATEWAY_ID = 'default';
 
-type AiGatewayOptions = { gateway?: { id: string; collectLog?: boolean; metadata?: Record<string, string> } };
-type AiRun = (model: string, inputs: Record<string, unknown>, options?: AiGatewayOptions) => Promise<unknown>;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -41,7 +38,7 @@ export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName
 	if (!sanitizedText) return null;
 
 	try {
-		const result = await (ai.run as AiRun)(
+		const result = await ai.run(
 			EMBEDDING_MODEL,
 			{ text: [sanitizedText.slice(0, MAX_TEXT_LENGTH)] },
 			{
