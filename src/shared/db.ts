@@ -5,11 +5,7 @@ export type DbClient = Client;
 export async function withDbClient<T>(env: Env, fn: (db: DbClient) => Promise<T>): Promise<T> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	try {
-		return await fn(db);
-	} finally {
-		await db.end();
-	}
+	return fn(db);
 }
 
 export async function withDbTransaction<T>(env: Env, rollbackContext: string, fn: (db: DbClient) => Promise<T>): Promise<T> {
