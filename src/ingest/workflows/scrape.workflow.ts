@@ -1,7 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { deleteScrapeInputTemp, isScrapeInputTempKey } from '@core-shared/r2-temp';
 import type { Env } from '@core-shared/types';
-import { type ExtractInput, extractSource, type NormalizedContent } from '../extract';
+import { type ExtractInput, extractSource, isScrapeInputTempKey, type NormalizedContent } from '../extract';
 
 // Bytes can't fit Workflow params, so the job path only ever passes a URL or a
 // staged R2 key — never inline bytes.
@@ -21,9 +20,7 @@ export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ScrapeWorkflowParams
 		);
 
 		if (input.kind === 'r2' && isScrapeInputTempKey(input.key)) {
-			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
-				deleteScrapeInputTemp(this.env, input.key),
-			);
+			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () => this.env.R2.delete(input.key));
 		}
 
 		console.info({ tag: 'SCRAPE_WORKFLOW', msg: 'Completed', kind: input.kind, status: result.status, chars: result.metadata.chars });

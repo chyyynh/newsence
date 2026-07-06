@@ -1,5 +1,4 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
-import { readScrapeInputTemp } from '@core-shared/r2-temp';
 import type { Env } from '@core-shared/types';
 import { MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/upload';
 import type { ScrapedContent } from '@core-shared/web';
@@ -11,6 +10,8 @@ import { scrapeUrl } from './platforms/registry';
 // engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)
 // — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and the core RPC
 // surface for future chat agents all produce identical output.
+
+export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 
 export type ExtractInput =
 	| { kind: 'url'; url: string }
@@ -131,6 +132,10 @@ function emptyResult(contentType: string, sourceUrl: string | null, status: 'nee
 	return { sourceUrl, contentType, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status };
 }
 
+export function isScrapeInputTempKey(key: string): boolean {
+	return key.startsWith(SCRAPE_INPUT_TEMP_PREFIX);
+}
+
 async function extractFromBytes(bytes: Uint8Array, declaredType?: string): Promise<NormalizedContent> {
 	const sniffed = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES));
 	const type = sniffed ?? declaredType ?? 'application/octet-stream';
@@ -159,8 +164,10 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 		case 'bytes':
 			return extractFromBytes(input.bytes, input.contentType);
 		case 'r2': {
-			const { bytes, contentType } = await readScrapeInputTemp(env, input.key);
-			return extractFromBytes(bytes, contentType);
+			if (!isScrapeInputTempKey(input.key)) throw new Error(`Invalid scrape input temp object key: ${input.key}`);
+			const obj = await env.R2.get(input.key);
+			if (!obj) throw new Error(`scrape input temp object missing: ${input.key}`);
+			return extractFromBytes(await obj.bytes(), obj.httpMetadata?.contentType);
 		}
 	}
 }

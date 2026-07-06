@@ -1,9 +1,8 @@
 import { parseJsonBody, requireAuth } from '@core-shared/auth';
-import { MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
-import { deleteScrapeInputTemp, putScrapeInputTemp } from '@core-shared/r2-temp';
+import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
 import type { Env } from '@core-shared/types';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/upload';
-import { extractSource } from '../extract';
+import { extractSource, isScrapeInputTempKey, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
 // same wildcard CORS and 10 MB body cap. The actual extraction lives in
@@ -106,13 +105,15 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 	const sniffed = sniffMediaType(input.bytes.subarray(0, MAGIC_SNIFF_BYTES));
 	if (!sniffed) return Response.json({ error: 'Unrecognized file type' }, { status: 415, headers: CORS_HEADERS });
 
-	return putScrapeInputTemp(env, input.bytes, sniffed);
+	const key = `${SCRAPE_INPUT_TEMP_PREFIX}${crypto.randomUUID()}.${extensionFromMime(sniffed)}`;
+	await env.R2.put(key, input.bytes, { httpMetadata: { contentType: sniffed } });
+	return { kind: 'r2', key };
 }
 
 async function cleanupStagedScrapeInput(env: Env, params: { kind: 'url'; url: string } | { kind: 'r2'; key: string }): Promise<void> {
 	if (params.kind !== 'r2') return;
 	try {
-		await deleteScrapeInputTemp(env, params.key);
+		if (isScrapeInputTempKey(params.key)) await env.R2.delete(params.key);
 	} catch (error) {
 		console.warn({ tag: 'SCRAPE_JOB', msg: 'Failed to cleanup staged scrape input', key: params.key, error: String(error) });
 	}
