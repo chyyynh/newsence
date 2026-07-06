@@ -15,7 +15,6 @@
  * compensating cleanup if the database commit fails.
  */
 
-import type { QuotaExceededCode } from '@core-shared/billing-contracts';
 import {
 	extensionFromMime,
 	isRasterImage,
@@ -31,6 +30,7 @@ import {
 	deriveFileTitle,
 	MAX_UPLOAD_BYTES,
 	PayloadTooLargeError,
+	type QuotaExceededCode,
 	storageKeyToAssetUrl,
 	streamWithByteLimit,
 	userUploadKey,

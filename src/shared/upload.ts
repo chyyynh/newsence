@@ -1,7 +1,12 @@
-import { UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE, UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE } from '@core-shared/billing-contracts';
 import type { DbClient } from './db';
 import { PDF_MIME } from './mime';
 import { buildMetadata } from './platform-metadata';
+
+export const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
+export type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
+
+const UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE = 'Upload file quota exceeded';
+const UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE = 'Upload storage quota exceeded';
 
 // Single source of truth for the blob-ingest size cap. Every path that accepts a
 // user file — multipart upload, URL→blob, external image URL, and the /scrape
@@ -28,10 +33,6 @@ export function buildPdfMetadata(args: { fileType: string; fileName: string; fil
 		fileName: args.fileName,
 		fileSize: args.fileSize,
 	});
-}
-
-export function isExtractablePdfFile(args: { originType?: string | null; fileType?: string | null; storageKey?: string | null }): boolean {
-	return (args.originType === 'upload' || args.originType === 'saved_url') && args.fileType === PDF_MIME && !!args.storageKey;
 }
 
 export function storageKeyToAssetUrl(key: string): string {

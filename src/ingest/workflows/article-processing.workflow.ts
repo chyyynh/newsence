@@ -8,9 +8,9 @@ import {
 	type ProcessableTable,
 	USER_FILES_TABLE,
 } from '@core-shared/article-store';
+import { PDF_MIME } from '@core-shared/mime';
 import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article, Env } from '@core-shared/types';
-import { isExtractablePdfFile } from '@core-shared/upload';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
 import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import {
@@ -234,7 +234,8 @@ async function stagePdfExtraction(
 		table !== USER_FILES_TABLE ||
 		article.has_content ||
 		!storageKey ||
-		!isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey })
+		!(article.origin_type === 'upload' || article.origin_type === 'saved_url') ||
+		article.file_type !== PDF_MIME
 	) {
 		return null;
 	}

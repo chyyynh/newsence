@@ -1,6 +1,6 @@
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
-import { QUOTA_EXCEEDED_CODE } from '@core-shared/billing-contracts';
 import type { Env } from '@core-shared/types';
+import { QUOTA_EXCEEDED_CODE } from '@core-shared/upload';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
 import { ingestUrls } from '../urls';
 

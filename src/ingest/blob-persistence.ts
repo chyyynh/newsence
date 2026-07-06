@@ -1,5 +1,4 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
-import { QUOTA_EXCEEDED_CODE, type QuotaExceededCode } from '@core-shared/billing-contracts';
 import { type DbClient, withDbTransaction } from '@core-shared/db';
 import { extensionFromMime, isRasterImage } from '@core-shared/mime';
 import type { Env } from '@core-shared/types';
@@ -9,6 +8,8 @@ import {
 	deriveFileTitle,
 	MAX_UPLOAD_BYTES,
 	PayloadTooLargeError,
+	QUOTA_EXCEEDED_CODE,
+	type QuotaExceededCode,
 	storageKeyToAssetUrl,
 	streamWithByteLimit,
 	UploadQuotaExceededError,
