@@ -228,21 +228,23 @@ async function stagePdfExtraction(
 	step: WorkflowStep,
 ): Promise<PdfTextTempResult | null> {
 	const { target, table } = context;
+	const storageKey = article.storage_key;
 	if (
 		target.kind !== 'row' ||
 		table !== USER_FILES_TABLE ||
 		article.has_content ||
-		!isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey: article.storage_key })
+		!storageKey ||
+		!isExtractablePdfFile({ originType: article.origin_type, fileType: article.file_type, storageKey })
 	) {
 		return null;
 	}
 
 	try {
-		const pdfTextTemp = (await step.do(
+		const pdfTextTemp = await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => createPdfTextTemp(env, target.articleId, article.storage_key as string),
-		)) as PdfTextTempResult;
+			() => createPdfTextTemp(env, target.articleId, storageKey),
+		);
 		console.info({
 			tag: 'WORKFLOW',
 			msg: 'PDF extraction staged',
@@ -280,7 +282,7 @@ async function enrichPaperMetadata(
 	if (!hasStagedText && !isPdfRow && !detectPaperId(shell.url, null, { scanContent: false }).hasAcademicMarker) return null;
 
 	try {
-		return (await step.do(
+		return step.do(
 			'enrich-paper-metadata',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
@@ -318,7 +320,7 @@ async function enrichPaperMetadata(
 				}
 				return paper;
 			},
-		)) as PaperMetadata | null;
+		);
 	} catch (error) {
 		console.warn({ tag: 'WORKFLOW', msg: 'Paper enrichment failed, continuing', url: shell.url, error: String(error) });
 		return null;
@@ -332,11 +334,11 @@ async function enrichPaperMetadata(
 async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: PaperMetadata | null, step: WorkflowStep): Promise<void> {
 	if (!paperEnrichment?.openAlexId) return;
 	try {
-		const summary = (await step.do(
+		const summary = await step.do(
 			'sync-paper-graph',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			() => syncPaperGraph(env, articleId, paperEnrichment),
-		)) as { edges: number } | null;
+		);
 		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', article_id: articleId, edges: summary?.edges ?? 0 });
 	} catch (error) {
 		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', article_id: articleId, error: String(error) });
@@ -356,9 +358,9 @@ function mergeProcessorResult(result: ProcessorResult, { ogImageUrl, ogImageDime
 
 async function resolveWorkflowOgImagePatch(env: Env, article: Article, result: ProcessorResult, step: WorkflowStep): Promise<OgImagePatch> {
 	if (!shouldResolveOgImagePatch(article, result)) return EMPTY_OG_IMAGE_PATCH;
-	return (await step.do('resolve-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '25 seconds' }, () =>
+	return step.do('resolve-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '25 seconds' }, () =>
 		resolveOgImagePatch(env, article, result),
-	)) as OgImagePatch;
+	);
 }
 
 function shouldResolveOgImagePatch(article: Article, result: ProcessorResult): boolean {
@@ -400,14 +402,14 @@ async function prepareYoutubeHighlights(
 	const input = await prepareYoutubeHighlightsInput(context, article, sourceType);
 	if (!input) return null;
 
-	return (await step.do(
+	return step.do(
 		'generate-youtube-highlights',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 		() =>
 			input.kind === 'transcript'
 				? prepareYouTubeHighlightsFromTranscript(env, input.videoId, input.segments)
 				: prepareYouTubeHighlights(env, input.article),
-	)) as YouTubeHighlightsUpdate | null;
+	);
 }
 
 async function prepareYoutubeHighlightsInput(
@@ -471,11 +473,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
 		const context = createWorkflowRunContext(this.env, event.payload.target);
 		try {
-			const article = (await step.do(
+			const article = await step.do(
 				context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() => loadTargetShell(this.env, context),
-			)) as ProcessableArticleShell;
+			);
 			const sourceType = article.source_type ?? 'default';
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });
@@ -484,17 +486,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			const paperEnrichment = await enrichPaperMetadata(this.env, context, article, pdfTextTemp, step);
 
-			const processorResult = (await step.do(
+			const processorResult = await step.do(
 				'ai-analysis',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 				() => analyzeArticle(this.env, context, sourceType, pdfTextTemp),
-			)) as ProcessorResult;
+			);
 
-			const embedding = (await step.do(
+			const embedding = await step.do(
 				'generate-embedding',
 				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 				() => generateWorkflowEmbedding(this.env, context, processorResult, pdfTextTemp),
-			)) as number[] | null;
+			);
 
 			const finalProcessorResult = mergeProcessorResult(
 				processorResult,
@@ -502,7 +504,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			);
 
 			const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, sourceType, step);
-			const articleId = (await step.do(
+			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() =>
@@ -514,7 +516,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 						youtubeHighlights,
 						paperEnrichment,
 					}),
-			)) as string;
+			);
 
 			await syncPaperGraphStep(this.env, articleId, paperEnrichment, step);
 

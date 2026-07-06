@@ -14,11 +14,11 @@ export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ScrapeWorkflowParams
 	async run(event: WorkflowEvent<ScrapeWorkflowParams>, step: WorkflowStep): Promise<NormalizedContent> {
 		const input = event.payload;
 
-		const result = (await step.do(
+		const result = await step.do(
 			'extract',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 			() => extractSource(this.env, input),
-		)) as NormalizedContent;
+		);
 
 		if (input.kind === 'r2' && isScrapeInputTempKey(input.key)) {
 			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () =>
