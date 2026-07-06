@@ -1,9 +1,20 @@
-import { embed } from 'ai';
-import { createCoreAI } from './ai';
 import type { Article } from './types';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const MAX_TEXT_LENGTH = 8000;
+const DEFAULT_AI_GATEWAY_ID = 'default';
+
+type AiGatewayOptions = { gateway?: { id: string; collectLog?: boolean; metadata?: Record<string, string> } };
+type AiRun = (model: string, inputs: Record<string, unknown>, options?: AiGatewayOptions) => Promise<unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function firstEmbedding(response: unknown): number[] | null {
+	if (!isRecord(response) || !Array.isArray(response.data) || !Array.isArray(response.data[0])) return null;
+	return response.data[0].every((value) => typeof value === 'number') ? response.data[0] : null;
+}
 
 // Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
 // translations dilutes the budget without adding recall.
@@ -30,20 +41,27 @@ export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName
 	if (!sanitizedText) return null;
 
 	try {
-		const workersai = createCoreAI(ai, gatewayName, { app: 'newsence', task: 'article-embedding' });
-		const result = await embed({
-			model: workersai.textEmbedding(EMBEDDING_MODEL),
-			value: sanitizedText.slice(0, MAX_TEXT_LENGTH),
-		});
+		const result = await (ai.run as AiRun)(
+			EMBEDDING_MODEL,
+			{ text: [sanitizedText.slice(0, MAX_TEXT_LENGTH)] },
+			{
+				gateway: {
+					id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
+					collectLog: true,
+					metadata: { app: 'newsence', task: 'article-embedding' },
+				},
+			},
+		);
+		const embedding = firstEmbedding(result);
 
-		if (!result.embedding.length) {
+		if (!embedding?.length) {
 			console.error({ tag: 'EMBEDDING', msg: 'Invalid response format' });
 			return null;
 		}
 
 		// bge-m3 output is stored/queried with pgvector cosine (`<=>`,
 		// vector_cosine_ops), which is scale-invariant — no L2 normalization needed.
-		return result.embedding;
+		return embedding;
 	} catch (error: unknown) {
 		console.error({ tag: 'EMBEDDING', msg: 'Workers AI error', error: (error as Error).message });
 		return null;
