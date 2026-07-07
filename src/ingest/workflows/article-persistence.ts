@@ -61,18 +61,6 @@ export async function createPdfTextTemp(env: Env, articleId: string, storageKey:
 	return { status, chars, pages, textStorageKey };
 }
 
-export async function readPdfTextTemp(env: Env, textStorageKey: string): Promise<string> {
-	if (!textStorageKey.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text temp object key: ${textStorageKey}`);
-	const obj = await env.R2.get(textStorageKey);
-	if (!obj) throw new Error(`PDF text temp object missing: ${textStorageKey}`);
-	return obj.text();
-}
-
-export async function deletePdfTextTemp(env: Env, textStorageKey: string): Promise<void> {
-	if (!textStorageKey.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text temp object key: ${textStorageKey}`);
-	await env.R2.delete(textStorageKey);
-}
-
 export async function persistWorkflowTarget(
 	env: Env,
 	context: WorkflowPersistenceContext,
@@ -151,7 +139,10 @@ function prepareSourceFinalInsert(
 }
 
 async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableTable, input: WorkflowPersistenceInput): Promise<string> {
-	const extractedPdfText = input.pdfTextTemp?.textStorageKey ? await readPdfTextTemp(env, input.pdfTextTemp.textStorageKey) : null;
+	const pdfTextObj = input.pdfTextTemp?.textStorageKey ? await env.R2.get(input.pdfTextTemp.textStorageKey) : null;
+	if (input.pdfTextTemp?.textStorageKey && !pdfTextObj)
+		throw new Error(`PDF text temp object missing: ${input.pdfTextTemp.textStorageKey}`);
+	const extractedPdfText = pdfTextObj ? await pdfTextObj.text() : null;
 	const finalResult: ProcessorResult = {
 		...input.result,
 		updateData: {

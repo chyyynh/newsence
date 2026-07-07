@@ -26,14 +26,7 @@ import {
 	prepareYouTubeHighlightsFromTranscript,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
-import {
-	createPdfTextTemp,
-	deletePdfTextTemp,
-	type PdfTextTempResult,
-	persistWorkflowTarget,
-	readPdfTextTemp,
-	recordWorkflowFailure,
-} from './article-persistence';
+import { createPdfTextTemp, type PdfTextTempResult, persistWorkflowTarget, recordWorkflowFailure } from './article-persistence';
 
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
@@ -98,7 +91,10 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 		context.target.kind === 'source'
 			? await context.readSourceArticle()
 			: await loadProcessableArticle(env, context.table, context.target.articleId);
-	return pdfTextTemp?.textStorageKey ? { ...article, content: await readPdfTextTemp(env, pdfTextTemp.textStorageKey) } : article;
+	if (!pdfTextTemp?.textStorageKey) return article;
+	const pdfTextObj = await env.R2.get(pdfTextTemp.textStorageKey);
+	if (!pdfTextObj) throw new Error(`PDF text temp object missing: ${pdfTextTemp.textStorageKey}`);
+	return { ...article, content: await pdfTextObj.text() };
 }
 
 async function stagePdfExtraction(
@@ -266,7 +262,7 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 
 	if (pdfTextTemp?.textStorageKey) {
 		try {
-			await deletePdfTextTemp(env, pdfTextTemp.textStorageKey);
+			await env.R2.delete(pdfTextTemp.textStorageKey);
 		} catch (error) {
 			failures.push({ object: 'pdf_text', key: pdfTextTemp.textStorageKey, error: String(error) });
 		}
