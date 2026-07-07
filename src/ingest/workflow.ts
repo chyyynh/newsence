@@ -18,7 +18,7 @@ import { syncArticleEntities } from '@entities/sync';
 import { syncPaperGraph } from '@papers/sync';
 import { Client } from 'pg';
 import { articleProcessors, buildProcessorUpdatePayload, type ProcessorResult } from './domain/processors';
-import { type PdfTextTempResult, stagePdfTextExtraction } from './pdf';
+import { extractPdfTextToTemp, type PdfTextTempResult, preparePdfTextExtraction } from './pdf';
 import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
 import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
 import {
@@ -300,6 +300,38 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 	return { ...article, content: await pdfTextObj.text() };
 }
 
+async function stagePdfExtraction(
+	env: Env,
+	context: WorkflowRunContext,
+	article: ProcessableArticleShell,
+	step: WorkflowStep,
+	workflowInstanceId: string,
+): Promise<PdfTextTempResult | null> {
+	if (context.target.kind !== 'row') return null;
+	const request = preparePdfTextExtraction({
+		articleId: context.target.articleId,
+		isUserFile: context.table === USER_FILES_TABLE,
+		hasContent: 'has_content' in article && !!article.has_content,
+		storageKey: article.storage_key,
+		originType: article.origin_type,
+		fileType: article.file_type,
+		tempId: workflowIdPart(workflowInstanceId),
+	});
+	if (!request) return null;
+
+	try {
+		const result = await step.do(
+			'extract-pdf-text',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => extractPdfTextToTemp(env, request),
+		);
+		return result;
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: request.articleId, error: String(error) });
+		return { status: 'failed', chars: 0, pages: 0 };
+	}
+}
+
 async function enrichPaperMetadataStep(
 	env: Env,
 	context: WorkflowRunContext,
@@ -515,18 +547,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
-			const pdfTextTemp =
-				context.target.kind === 'row'
-					? await stagePdfTextExtraction(this.env, step, {
-							articleId: context.target.articleId,
-							isUserFile: context.table === USER_FILES_TABLE,
-							hasContent: 'has_content' in article && !!article.has_content,
-							storageKey: article.storage_key,
-							originType: article.origin_type,
-							fileType: article.file_type,
-							tempId: workflowIdPart(event.instanceId),
-						})
-					: null;
+			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step, event.instanceId);
 
 			const paperEnrichment = await enrichPaperMetadataStep(this.env, context, article, pdfTextTemp, step);
 
