@@ -164,28 +164,8 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 		}
 
-		const baseId = `user-file-${workflowIdPart(userFileId)}`;
-		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
-		let instanceId: string;
-		try {
-			const instance = await env.MONITOR_WORKFLOW.create({
-				id: workflowId,
-				params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
-			});
-			instanceId = instance.id;
-		} catch (err) {
-			const existing = await getMonitorWorkflowStatus(env, workflowId);
-			if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
-				instanceId = existing.id;
-			} else {
-				if (existing.status === 'unknown') throw err;
-				const instance = await env.MONITOR_WORKFLOW.create({
-					id: `${workflowId}-${crypto.randomUUID()}`,
-					params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
-				});
-				instanceId = instance.id;
-			}
-		}
+		const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: USER_FILES_TABLE });
+		if (!instanceId) throw new Error(`Failed to create user_file workflow: ${userFileId}`);
 		await patchUserFileWorkflowMetadata(client, userFileId, {
 			monitor_instance_id: instanceId,
 			monitor_status: 'running',
