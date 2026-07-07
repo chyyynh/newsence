@@ -1,13 +1,12 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
-import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { decodeHtmlEntities, FEED_UA, fetchWithTimeout, htmlToText, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
 import { Client } from 'pg';
 import { resolveDiscussionPlatformMetadata } from '../registry';
 import { scrapeWebPage } from '../web-scraper';
-import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, type RSSItem, stripHtml, toPlainText } from './parser';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -16,7 +15,115 @@ import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, type R
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
+type RSSItem = Record<string, unknown>;
 type FeedItemWithUrl = { item: RSSItem; url: string };
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function attr(record: Record<string, unknown>, name: string): string | undefined {
+	return asString(record[`@_${name}`]) ?? asString(record[name]);
+}
+
+function getPath(value: unknown, path: string[]): unknown {
+	let current: unknown = value;
+	for (const key of path) {
+		const record = asRecord(current);
+		if (!record) return undefined;
+		current = record[key];
+	}
+	return current;
+}
+
+function normalizeItems(value: unknown): RSSItem[] {
+	const values = Array.isArray(value) ? value : value ? [value] : [];
+	return values.filter((item): item is RSSItem => asRecord(item) !== undefined);
+}
+
+function toPlainText(value: unknown): string {
+	if (value === null || value === undefined) return '';
+	if (typeof value === 'string') return value;
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	if (Array.isArray(value)) return value.map(toPlainText).filter(Boolean).join(' ');
+	if (typeof value === 'object') {
+		const record = value as Record<string, unknown>;
+		for (const key of ['#text', '_text', 'text', 'value', 'content', 'summary', 'description']) {
+			const text = toPlainText(record[key]);
+			if (text) return text;
+		}
+		return Object.values(record).map(toPlainText).filter(Boolean).join(' ');
+	}
+	return '';
+}
+
+function stripHtml(raw: unknown): string {
+	return htmlToText(toPlainText(raw));
+}
+
+function htmlToMarkdown(html: string): string {
+	const markdown = html
+		.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
+		.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
+		.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
+		.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
+		.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n\n##### $1\n\n')
+		.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n\n###### $1\n\n')
+		.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
+		.replace(/<\/?[ou]l[^>]*>/gi, '\n')
+		.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+		.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+		.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
+		.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
+		.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+		.replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '^($1)')
+		.replace(/<br\s*\/?>/gi, '\n')
+		.replace(/<\/p>/gi, '\n\n')
+		.replace(/<hr\s*\/?>/gi, '\n\n---\n\n')
+		.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) =>
+			content
+				.trim()
+				.split('\n')
+				.map((line: string) => `> ${line}`)
+				.join('\n'),
+		)
+		.replace(/<[^>]*>/g, '');
+	return decodeHtmlEntities(markdown)
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+}
+
+function extractRssFullContent(item: RSSItem): string {
+	const raw = toPlainText(item['content:encoded']) || toPlainText(item.content) || toPlainText(item.description);
+	if (!raw || raw.length < 800) return '';
+	return htmlToMarkdown(raw);
+}
+
+function extractUrlFromItem(item: RSSItem): string | null {
+	const directLink = asString(item.link);
+	if (directLink) return directLink;
+
+	const links = normalizeItems(item.link);
+	const primaryLink =
+		links.find((link) => (attr(link, 'rel') ?? 'alternate').toLowerCase() === 'alternate' && (attr(link, 'type') ?? '').includes('html')) ??
+		links.find((link) => (attr(link, 'rel') ?? 'alternate').toLowerCase() === 'alternate') ??
+		links[0];
+
+	return (primaryLink ? attr(primaryLink, 'href') : undefined) ?? asString(item.url) ?? null;
+}
+
+function extractItemsFromFeed(data: unknown): RSSItem[] {
+	const source =
+		getPath(data, ['rss', 'channel', 'item']) ??
+		getPath(data, ['feed', 'entry']) ??
+		getPath(data, ['channel', 'item']) ??
+		getPath(data, ['rdf:RDF', 'item']);
+	return normalizeItems(source);
+}
 
 async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<boolean> {
 	let sourceType = 'rss';
