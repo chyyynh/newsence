@@ -41,12 +41,13 @@ async function fetchProcessableArticle<T extends Article>(
 	});
 }
 
-export function loadProcessableArticle(env: Env, table: ProcessableTable, articleId: string): Promise<Article> {
-	return fetchProcessableArticle(env, table, articleId, ARTICLE_FIELDS[table]);
-}
-
-export function loadProcessableArticleShell(env: Env, table: ProcessableTable, articleId: string): Promise<ProcessableArticleShell> {
-	return fetchProcessableArticle(env, table, articleId, ARTICLE_SHELL_FIELDS[table]);
+export function loadProcessableArticle(
+	env: Env,
+	table: ProcessableTable,
+	articleId: string,
+	shell = false,
+): Promise<ProcessableArticleShell> {
+	return fetchProcessableArticle(env, table, articleId, shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]);
 }
 
 export interface InsertArticleData {

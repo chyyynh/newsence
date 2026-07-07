@@ -3,7 +3,6 @@ import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-
 import {
 	ARTICLES_TABLE,
 	loadProcessableArticle,
-	loadProcessableArticleShell,
 	type ProcessableArticleShell,
 	type ProcessableTable,
 	USER_FILES_TABLE,
@@ -101,7 +100,7 @@ function targetLogContext(context: WorkflowRunContext, article: Article): Record
 }
 
 async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ProcessableArticleShell> {
-	if (context.target.kind !== 'source') return loadProcessableArticleShell(env, context.table, context.target.articleId);
+	if (context.target.kind !== 'source') return loadProcessableArticle(env, context.table, context.target.articleId, true);
 	return { ...(await context.readSourceArticle()), content: null };
 }
 
