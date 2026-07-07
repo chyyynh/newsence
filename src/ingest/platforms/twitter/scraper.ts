@@ -86,8 +86,8 @@ export function extractQuotedTweet(tweet: TwitterLikeTweet): QuotedTweetData | u
 	};
 }
 
-export function findTwitterArticleUrl(urls: string[]): string | undefined {
-	return urls.find((u) => /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
+export function findTwitterArticleUrl(urls: string[], tweetUrl?: string): string | undefined {
+	return [tweetUrl, ...urls].find((u) => u && /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
 }
 
 export function findExternalUrl(urls: string[]): string | undefined {
@@ -196,10 +196,10 @@ interface KaitoTweet {
 }
 
 interface TwitterArticle {
-	title: string;
-	preview_text: string;
+	title?: string;
+	preview_text?: string;
 	cover_media_img_url?: string;
-	contents: Array<{ text: string }>;
+	contents?: Array<{ text?: string; content?: string }>;
 	author?: {
 		userName: string;
 		name: string;
@@ -219,7 +219,7 @@ export async function scrapeTwitterArticle(
 ): Promise<(ScrapedContent & { metadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
-	let data: { article?: TwitterArticle; status: string; message?: string };
+	let data: { article?: TwitterArticle; status?: string; msg?: string; message?: string };
 	try {
 		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
 			headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
@@ -228,39 +228,80 @@ export async function scrapeTwitterArticle(
 			await response.body?.cancel();
 			return null;
 		}
-		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterArticle; status: string; message?: string };
+		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterArticle; status?: string; msg?: string; message?: string };
 	} catch {
 		return null;
 	}
-	if (data.status !== 'success' || !data.article) return null;
+	if ((data.status && data.status !== 'success') || !data.article) return null;
 
 	const article = data.article;
-	const contentText = article.contents.map((c) => c.text).join('\n\n');
+	const contentText = (article.contents ?? [])
+		.map((c) => c.text ?? c.content ?? '')
+		.filter(Boolean)
+		.join('\n\n');
+	if (!article.title && !contentText) return null;
+	const title = article.title || `Twitter Article ${tweetId}`;
+	const summary = article.preview_text || contentText.slice(0, 280);
 
-	let md = `# ${article.title}\n\n`;
+	let md = `# ${title}\n\n`;
 	if (article.author) {
 		md += `**Author:** ${article.author.name || article.author.userName}`;
 		if (article.author.isBlueVerified) md += ' ✓';
-		md += ` (@${article.author.userName})\n\n`;
+		if (article.author.userName) md += ` (@${article.author.userName})`;
+		md += '\n\n';
 	}
 	if (article.cover_media_img_url) md += `![Cover](${article.cover_media_img_url})\n\n`;
 	md += `${contentText}\n\n---\n\n**Engagement:**\n`;
-	md += `- Views: ${(article.viewCount || 0).toLocaleString()}\n`;
-	md += `- Likes: ${(article.likeCount || 0).toLocaleString()}\n`;
-	md += `- Replies: ${(article.replyCount || 0).toLocaleString()}\n`;
+	if (article.viewCount !== undefined) md += `- Views: ${article.viewCount.toLocaleString()}\n`;
+	if (article.likeCount !== undefined) md += `- Likes: ${article.likeCount.toLocaleString()}\n`;
+	if (article.replyCount !== undefined) md += `- Replies: ${article.replyCount.toLocaleString()}\n`;
 
-	console.info({ tag: 'TWITTER', msg: 'Article fetched', title: article.title });
+	console.info({ tag: 'TWITTER', msg: 'Article fetched', title });
 
 	return {
-		title: article.title,
+		title,
 		content: md,
-		summary: article.preview_text,
+		summary,
 		ogImageUrl: article.cover_media_img_url || article.author?.profilePicture || null,
 		siteName: 'Twitter',
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
 		metadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
 	};
+}
+
+async function scrapeExternalLinkTweet(
+	tweet: KaitoTweet,
+	externalUrl: string,
+	media: TwitterMedia[],
+	tweetText: string,
+	ogImageUrl: string | null,
+): Promise<ScrapedContent> {
+	console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
+	try {
+		const linked = await scrapeWebPage(externalUrl);
+		if (!linked.content || linked.content.length <= 100) throw new Error('Linked article content too short');
+		console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
+		return {
+			title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
+			content: linked.content,
+			summary: linked.summary || tweet.text,
+			ogImageUrl: linked.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
+			siteName: linked.siteName || 'Twitter',
+			author: tweet.author?.userName || linked.author || null,
+			publishedDate: tweet.createdAt,
+			metadata: buildTweetPlatformMetadata(tweet, {
+				media,
+				tweetText,
+				externalUrl,
+				externalOgImage: linked.ogImageUrl || null,
+				externalTitle: linked.title || null,
+				originalTweetUrl: tweet.url,
+			}),
+		};
+	} catch (error) {
+		throw new Error(`Failed to scrape linked URL ${externalUrl}: ${String(error)}`);
+	}
 }
 
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
@@ -284,49 +325,18 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	const expandedUrls = extractExpandedUrls(tweet);
 	const tweetText = stripTweetUrls(tweet.text);
 
-	const articleUrl = findTwitterArticleUrl(expandedUrls);
+	const articleUrl = findTwitterArticleUrl(expandedUrls, tweet.url);
 	const externalUrl = findExternalUrl(expandedUrls);
 
-	// 1. Twitter Article — detected by expanded_url containing /i/article/
-	if (articleUrl) {
-		console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', articleUrl });
+	if (articleUrl || !externalUrl) {
+		if (articleUrl) console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', articleUrl });
 		const articleContent = await scrapeTwitterArticle(tweetId, apiKey);
 		if (articleContent) return articleContent;
-		throw new Error('Twitter Article API failed');
+		if (articleUrl) throw new Error('Twitter Article API failed');
 	}
 
-	// 2. Tweet has external link — scrape the linked page directly
-	if (externalUrl) {
-		console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
-		try {
-			const linked = await scrapeWebPage(externalUrl);
-			if (!linked.content || linked.content.length <= 100) {
-				throw new Error('Linked article content too short');
-			}
-			console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
-			return {
-				title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
-				content: linked.content,
-				summary: linked.summary || tweet.text,
-				ogImageUrl: linked.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
-				siteName: linked.siteName || 'Twitter',
-				author: tweet.author?.userName || linked.author || null,
-				publishedDate: tweet.createdAt,
-				metadata: buildTweetPlatformMetadata(tweet, {
-					media,
-					tweetText,
-					externalUrl,
-					externalOgImage: linked.ogImageUrl || null,
-					externalTitle: linked.title || null,
-					originalTweetUrl: tweet.url,
-				}),
-			};
-		} catch (error) {
-			throw new Error(`Failed to scrape linked URL ${externalUrl}: ${String(error)}`);
-		}
-	}
+	if (externalUrl) return scrapeExternalLinkTweet(tweet, externalUrl, media, tweetText, ogImageUrl);
 
-	// 3. Regular tweet — no full content, summary carries the tweet text
 	const title = buildTweetTitle(tweet, 80);
 
 	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });

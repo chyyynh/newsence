@@ -189,9 +189,12 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 		return false;
 	}
 
-	const articleUrl = findTwitterArticleUrl(expandedUrls);
+	const articleUrl = findTwitterArticleUrl(expandedUrls, tweet.url);
 	const tweetId = tweet.id || tweet.url.split('/').pop();
 	if (articleUrl) return tweetId ? saveTwitterArticleTweet(db, env, tweet, tweetUrl, tweetId, textWithoutUrls) : false;
+	if (!externalUrl && textWithoutUrls.length < MIN_TWEET_LENGTH && tweetId) {
+		if (await saveTwitterArticleTweet(db, env, tweet, tweetUrl, tweetId, textWithoutUrls)) return true;
+	}
 	if (externalUrl) return saveSharedLinkTweet(db, env, tweet, externalUrl, textWithoutUrls);
 	return saveStandaloneTweet(db, env, tweet, tweetUrl, textWithoutUrls);
 }

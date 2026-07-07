@@ -180,7 +180,7 @@ export function detectUrlKind(url: string): UrlKind {
 export function extractTweetId(url: string): string | null {
 	const parsed = parseUrl(url);
 	if (!parsed || !hostMatches(canonicalHost(parsed.hostname), TWITTER_HOSTS)) return null;
-	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? null;
+	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? parsed.pathname.match(/^\/i\/article\/(\d+)/)?.[1] ?? null;
 }
 
 export function extractYouTubeId(url: string): string | null {
