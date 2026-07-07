@@ -10,7 +10,7 @@ import {
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article, TranscriptSegment } from '@core-shared/types';
-import type { SourceArticleDraft, WorkflowQueueTarget } from '@ingest/workflows/queue';
+import { recordUserFileWorkflowFailed, type SourceArticleDraft, type WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
 import { articleProcessors } from '../domain/processors';
 import { parsePdf } from '../extract';
@@ -22,7 +22,7 @@ import {
 	prepareYouTubeHighlightsFromTranscript,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
-import { type PdfTextTempResult, persistWorkflowTarget, recordWorkflowFailure } from './article-persistence';
+import { type PdfTextTempResult, persistWorkflowTarget } from './article-persistence';
 
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
@@ -367,7 +367,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 			return { success: true, article_id: articleId };
 		} catch (error) {
-			await recordWorkflowFailure(this.env, context, error);
+			if (context.target.kind === 'row' && context.table === USER_FILES_TABLE) {
+				try {
+					await recordUserFileWorkflowFailed(this.env, context.target.articleId, String(error));
+				} catch (metadataError) {
+					console.warn({
+						tag: 'WORKFLOW',
+						msg: 'Failed to record user_file workflow failure',
+						article_id: context.target.articleId,
+						error: String(metadataError),
+					});
+				}
+			}
 			throw error;
 		}
 	}

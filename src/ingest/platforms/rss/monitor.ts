@@ -1,12 +1,12 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
-import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { detectUrlKind, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import TurndownService from 'turndown';
-import { resolveDiscussionPlatformMetadata } from '../registry';
+import { buildHnMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web-scraper';
 
 // ─────────────────────────────────────────────────────────────
@@ -47,10 +47,12 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 	let sourceType = 'rss';
 	let platformMetadata: PlatformMetadata | null = null;
 	const commentsUrl = toPlainText(item.comments) || undefined;
-	if (commentsUrl) {
+	const hnItemId = commentsUrl && detectUrlKind(commentsUrl) === 'hackernews' ? extractHackerNewsId(commentsUrl) : null;
+	if (hnItemId) {
 		try {
-			platformMetadata = await resolveDiscussionPlatformMetadata(commentsUrl);
-			sourceType = platformMetadata?.type ?? sourceType;
+			const hnItem = await fetchHnItem(hnItemId);
+			platformMetadata = { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(hnItem, commentsUrl) };
+			sourceType = 'hackernews';
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
 		}

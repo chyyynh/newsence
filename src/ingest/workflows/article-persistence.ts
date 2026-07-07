@@ -4,12 +4,7 @@ import type { Article } from '@core-shared/types';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
-import {
-	recordUserFileWorkflowComplete,
-	recordUserFileWorkflowFailed,
-	type SourceArticleDraft,
-	type WorkflowQueueTarget,
-} from '@ingest/workflows/queue';
+import { recordUserFileWorkflowComplete, type SourceArticleDraft, type WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import type { PdfTextStatus } from '../extract';
@@ -48,20 +43,6 @@ export async function persistWorkflowTarget(
 ): Promise<string> {
 	if (context.target.kind === 'source') return persistSourceTarget(env, context, input);
 	return persistRowTarget(env, context.target, context.table, input);
-}
-
-export async function recordWorkflowFailure(env: Env, context: WorkflowPersistenceContext, error: unknown): Promise<void> {
-	if (context.target.kind !== 'row' || context.table !== USER_FILES_TABLE) return;
-	try {
-		await recordUserFileWorkflowFailed(env, context.target.articleId, String(error));
-	} catch (metadataError) {
-		console.warn({
-			tag: 'WORKFLOW',
-			msg: 'Failed to record user_file workflow failure',
-			article_id: context.target.articleId,
-			error: String(metadataError),
-		});
-	}
 }
 
 async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext, input: WorkflowPersistenceInput): Promise<string> {

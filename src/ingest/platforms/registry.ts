@@ -1,5 +1,4 @@
 import { isRasterImage, PDF_MIME } from '@core-shared/mime';
-import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import {
 	assertExternalFetchable,
@@ -9,7 +8,7 @@ import {
 	extractTweetId,
 	extractYouTubeId,
 } from '@core-shared/web';
-import { buildHnMetadata, fetchHnItem, scrapeHackerNews } from './hackernews/scraper';
+import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
 import { scrapeHtmlFromResponse } from './web-scraper';
 import { scrapeYouTube } from './youtube/scraper';
@@ -94,18 +93,6 @@ async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
 
 	await res.body?.cancel();
 	throw new Error(`Unsupported content-type: ${ct}`);
-}
-
-export async function resolveDiscussionPlatformMetadata(url: string): Promise<PlatformMetadata | null> {
-	if (detectUrlKind(url) !== 'hackernews') return null;
-	const itemId = extractHackerNewsId(url);
-	if (!itemId) return null;
-	const item = await fetchHnItem(itemId);
-	return {
-		type: 'hackernews',
-		fetchedAt: new Date().toISOString(),
-		data: buildHnMetadata(item, url),
-	};
 }
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
