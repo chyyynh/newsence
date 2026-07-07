@@ -1,13 +1,6 @@
 import { isRasterImage, PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
-import {
-	assertExternalFetchable,
-	BROWSER_UA,
-	detectUrlKind,
-	extractHackerNewsId,
-	extractTweetId,
-	extractYouTubeId,
-} from '@core-shared/web';
+import { BROWSER_UA, detectUrlKind, extractHackerNewsId, extractTweetId, extractYouTubeId, type UrlKind } from '@core-shared/web';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
 import { scrapeHtmlFromResponse } from './web-scraper';
@@ -40,6 +33,28 @@ const DISPATCH_HEADERS: HeadersInit = {
 	'User-Agent': BROWSER_UA,
 	Accept: '*/*',
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+};
+
+type PageScraper = (url: string, options: ScrapeOptions) => Promise<ScrapedContent>;
+
+const PLATFORM_SCRAPERS: Partial<Record<UrlKind, PageScraper>> = {
+	youtube: async (url, options) => {
+		const videoId = extractYouTubeId(url);
+		if (!videoId) throw new Error('Invalid YouTube URL');
+		if (!options.youtubeApiKey) throw new Error('YouTube API key required');
+		return scrapeYouTube(videoId, options.youtubeApiKey);
+	},
+	twitter: async (url, options) => {
+		const tweetId = extractTweetId(url);
+		if (!tweetId) throw new Error('Invalid Twitter URL');
+		if (!options.kaitoApiKey) throw new Error('Kaito API key required');
+		return scrapeTweet(tweetId, options.kaitoApiKey);
+	},
+	hackernews: async (url) => {
+		const itemId = extractHackerNewsId(url);
+		if (!itemId) throw new Error('Invalid HackerNews URL');
+		return scrapeHackerNews(itemId);
+	},
 };
 
 function parseContentDisposition(header: string | null): string | null {
@@ -96,31 +111,16 @@ async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
 }
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
-	const urlKind = detectUrlKind(url);
+	const scraper = PLATFORM_SCRAPERS[detectUrlKind(url)];
+	if (scraper) return { kind: 'page', scraped: await scraper(url, options) };
 
-	switch (urlKind) {
-		case 'youtube': {
-			const videoId = extractYouTubeId(url);
-			if (!videoId) throw new Error('Invalid YouTube URL');
-			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-			return { kind: 'page', scraped: await scrapeYouTube(videoId, options.youtubeApiKey) };
-		}
-
-		case 'twitter': {
-			const tweetId = extractTweetId(url);
-			if (!tweetId) throw new Error('Invalid Twitter URL');
-			if (!options.kaitoApiKey) throw new Error('Kaito API key required');
-			return { kind: 'page', scraped: await scrapeTweet(tweetId, options.kaitoApiKey) };
-		}
-
-		case 'hackernews': {
-			const itemId = extractHackerNewsId(url);
-			if (!itemId) throw new Error('Invalid HackerNews URL');
-			return { kind: 'page', scraped: await scrapeHackerNews(itemId) };
-		}
-
-		default:
-			assertExternalFetchable(url);
-			return fetchAndDispatch(url);
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error('Invalid URL');
 	}
+	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
+	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+	return fetchAndDispatch(url);
 }

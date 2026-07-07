@@ -146,14 +146,6 @@ export function streamWithByteLimit(body: ReadableStream<Uint8Array>, maxBytes: 
 	);
 }
 
-export function assertExternalFetchable(rawUrl: string): URL {
-	const parsed = parseUrl(rawUrl);
-	if (!parsed) throw new Error('Invalid URL');
-	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
-	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
-	return parsed;
-}
-
 export function isSocialMediaUrl(url: string): boolean {
 	const parsed = parseUrl(url);
 	return parsed ? hostMatches(canonicalHost(parsed.hostname), SOCIAL_MEDIA_HOSTS) : false;
