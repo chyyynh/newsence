@@ -94,26 +94,6 @@ class UploadQuotaExceededError extends Error {
 	}
 }
 
-function buildBlobResult(args: {
-	userFileId: string;
-	storageKey: string;
-	fileType: string;
-	fileSize: number;
-	title: string | null;
-	instanceId?: string;
-}): BlobIngestResult {
-	return {
-		userFileId: args.userFileId,
-		storageKey: args.storageKey,
-		assetUrl: storageKeyToAssetUrl(args.storageKey),
-		fileType: args.fileType,
-		fileSize: args.fileSize,
-		title: args.title,
-		originType: 'upload',
-		instanceId: args.instanceId,
-	};
-}
-
 function storageKeyToAssetUrl(key: string): string {
 	const encodedPath = key
 		.split('/')
@@ -285,7 +265,19 @@ export async function ingestUploadedFile(env: Env, args: IngestUploadedFileArgs)
 		fileType,
 		fileSize: args.bytes.byteLength,
 	});
-	return { ok: true, result: buildBlobResult({ ...persisted, storageKey, fileType, fileSize: args.bytes.byteLength, title, instanceId }) };
+	return {
+		ok: true,
+		result: {
+			userFileId: persisted.userFileId,
+			storageKey,
+			assetUrl: storageKeyToAssetUrl(storageKey),
+			fileType,
+			fileSize: args.bytes.byteLength,
+			title,
+			originType: 'upload',
+			instanceId,
+		},
+	};
 }
 
 export async function persistSavedUrlBlob(

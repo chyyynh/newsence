@@ -2,6 +2,7 @@ import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ing
 import { handleExportCollectionOkf } from '../okf';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
+type PostRoute = { handler: RouteHandler; cors: HeadersInit; optionsThroughHandler?: boolean };
 
 const ENCODER = new TextEncoder();
 const INTERNAL_CORS_HEADERS: Record<string, string> = {
@@ -16,14 +17,12 @@ const SCRAPE_CORS_HEADERS: Record<string, string> = {
 };
 const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
 
-const POST_ROUTES: Record<string, RouteHandler> = {
-	'/okf/collections/export': handleExportCollectionOkf,
-	'/scrape': handleScrape,
-	'/scrape/jobs': handleScrapeJobCreate,
+const POST_ROUTES: Record<string, PostRoute> = {
+	'/okf/collections/export': { handler: handleExportCollectionOkf, cors: OKF_EXPORT_CORS },
+	'/scrape': { handler: handleScrape, cors: SCRAPE_CORS_HEADERS, optionsThroughHandler: true },
+	'/scrape/jobs': { handler: handleScrapeJobCreate, cors: SCRAPE_CORS_HEADERS, optionsThroughHandler: true },
 };
 
-const SCRAPE_PREFLIGHT_ROUTES = new Set(['/scrape', '/scrape/jobs']);
-const INTERNAL_PREFLIGHT_ROUTES = new Set(Object.keys(POST_ROUTES).filter((route) => !SCRAPE_PREFLIGHT_ROUTES.has(route)));
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SCRAPE_JOB_ROUTE = new URLPattern({ pathname: '/scrape/jobs/:jobId' });
 const WORKFLOW_STREAM_ROUTE = new URLPattern({ pathname: '/stream/:instanceId' });
@@ -34,13 +33,6 @@ type WorkflowStreamEvent = {
 	output?: unknown;
 	status: string;
 };
-
-function routeAuthHeaders(pathname: string): HeadersInit | undefined {
-	if (pathname === '/scrape' || pathname.startsWith('/scrape/jobs')) return SCRAPE_CORS_HEADERS;
-	if (pathname === '/okf/collections/export') return OKF_EXPORT_CORS;
-	if (POST_ROUTES[pathname]) return INTERNAL_CORS_HEADERS;
-	return undefined;
-}
 
 async function unauthorizedInternalRequest(request: Request, env: Env, pathname: string): Promise<Response | null> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
@@ -63,7 +55,7 @@ async function unauthorizedInternalRequest(request: Request, env: Env, pathname:
 		? null
 		: Response.json(
 				{ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' },
-				{ status: 401, headers: routeAuthHeaders(pathname) },
+				{ status: 401, headers: POST_ROUTES[pathname]?.cors ?? (pathname.startsWith('/scrape/jobs') ? SCRAPE_CORS_HEADERS : undefined) },
 			);
 }
 
@@ -123,6 +115,7 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 export async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const { pathname } = new URL(request.url);
 	const { method } = request;
+	const postRoute = POST_ROUTES[pathname];
 	const scrapeJobId = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
 	const streamInstanceId = WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId;
 
@@ -134,22 +127,19 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
 		});
 	}
 	if (method === 'OPTIONS') {
-		if (SCRAPE_PREFLIGHT_ROUTES.has(pathname)) return POST_ROUTES[pathname](request, env, ctx);
-		if (INTERNAL_PREFLIGHT_ROUTES.has(pathname)) return new Response(null, { headers: INTERNAL_CORS_HEADERS });
+		if (postRoute?.optionsThroughHandler) return postRoute.handler(request, env, ctx);
+		if (postRoute) return new Response(null, { headers: postRoute.cors });
 
 		if (scrapeJobId) return handleScrapeJobStatus(request, scrapeJobId, env);
 	}
 
-	const needsAuth = (method === 'POST' && !!POST_ROUTES[pathname]) || (method === 'GET' && (!!streamInstanceId || !!scrapeJobId));
+	const needsAuth = (method === 'POST' && !!postRoute) || (method === 'GET' && (!!streamInstanceId || !!scrapeJobId));
 	if (needsAuth) {
 		const unauthorized = await unauthorizedInternalRequest(request, env, pathname);
 		if (unauthorized) return unauthorized;
 	}
 
-	if (method === 'POST') {
-		const handler = POST_ROUTES[pathname];
-		if (handler) return handler(request, env, ctx);
-	}
+	if (method === 'POST' && postRoute) return postRoute.handler(request, env, ctx);
 
 	if (method === 'GET') {
 		if (streamInstanceId) return handleWorkflowStream(request, streamInstanceId, env);
