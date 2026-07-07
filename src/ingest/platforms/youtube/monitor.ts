@@ -1,7 +1,7 @@
-import { getExistingUrls } from '@core-shared/article-store';
+import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import type { YouTubeMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
-import { FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
+import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
 import { Client } from 'pg';
@@ -90,7 +90,8 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 			}
 
 			const videoUrls = videos.map(({ url }) => url);
-			const existingSet = await getExistingUrls(db, videoUrls);
+			const existingRecords = await getExistingArticlesByUrl(db, videoUrls);
+			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 
 			if (!newVideos.length) {

@@ -1,6 +1,5 @@
 import { Client } from 'pg';
 import type { Article } from './types';
-import { normalizeUrl } from './web';
 
 export const ARTICLES_TABLE = 'articles';
 export const USER_FILES_TABLE = 'user_files';
@@ -177,19 +176,6 @@ export async function updateArticleTextForReprocessing(
 		 WHERE id = $4`,
 		[update.summary, update.content, JSON.stringify(update.platformMetadata), articleId],
 	);
-}
-
-export async function getExistingUrls(db: Client, urls: string[], table: string = ARTICLES_TABLE, batchSize = 50): Promise<Set<string>> {
-	const existing = new Set<string>();
-	if (urls.length === 0) return existing;
-	for (let i = 0; i < urls.length; i += batchSize) {
-		const batch = urls.slice(i, i + batchSize);
-		const result = await db.query(`SELECT url FROM ${table} WHERE url = ANY($1)`, [batch]);
-		for (const row of result.rows as { url: string }[]) {
-			existing.add(normalizeUrl(row.url));
-		}
-	}
-	return existing;
 }
 
 export type IncompleteWorkflowTargetIds = {
