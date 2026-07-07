@@ -13,31 +13,6 @@ type RssSource = {
 	RSSLink: string;
 };
 
-async function queueRssItem(env: Env, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
-	const pubDate = item.published ?? '';
-	const description = item.description ?? '';
-
-	await startSourceArticleWorkflow(env, {
-		article: {
-			url,
-			title: item.title || 'No Title',
-			source: feed.name,
-			publishedDate: pubDate ? new Date(pubDate) : new Date(),
-			summary: description,
-			sourceType: 'rss',
-			content: description || null,
-			ogImageUrl: null,
-			platformMetadata: null,
-		},
-	});
-}
-
-function parseFeedItems(xml: string): FeedEntry[] {
-	return (extractFromXml(xml, {
-		descriptionMaxLen: 0,
-	}).entries ?? []) as FeedEntry[];
-}
-
 async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void> {
 	let res: Response;
 	try {
@@ -52,7 +27,11 @@ async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void>
 	}
 	if (!res.ok) return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
 
-	const items = parseFeedItems(await readTextWithLimit(res, MAX_FEED_BYTES)).slice(0, 30);
+	const items = (
+		extractFromXml(await readTextWithLimit(res, MAX_FEED_BYTES), {
+			descriptionMaxLen: 0,
+		}).entries ?? []
+	).slice(0, 30) as FeedEntry[];
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
 		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
@@ -69,7 +48,20 @@ async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void>
 	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			await queueRssItem(env, feed, item, url);
+			const description = item.description ?? '';
+			await startSourceArticleWorkflow(env, {
+				article: {
+					url,
+					title: item.title || 'No Title',
+					source: feed.name,
+					publishedDate: item.published ? new Date(item.published) : new Date(),
+					summary: description,
+					sourceType: 'rss',
+					content: description || null,
+					ogImageUrl: null,
+					platformMetadata: null,
+				},
+			});
 			queued++;
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });
