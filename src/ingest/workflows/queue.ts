@@ -9,8 +9,8 @@ import type { Tweet } from '@core-shared/types';
 import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
 import { Client } from 'pg';
 
-export type ArticleQueueMessage = { kind: 'row'; articleId: string; targetTable?: ProcessableTable };
-export type WorkflowTarget = ArticleQueueMessage | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
+export type ArticleQueueMessage = { articleId: string; targetTable?: ProcessableTable };
+export type WorkflowTarget = ({ kind: 'row' } & ArticleQueueMessage) | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 export type TwitterSourceEventDraft = {
 	tweet: Tweet;
@@ -35,7 +35,7 @@ async function enqueueArticleBatchProcess(env: Env, articleIds: string[], target
 	if (!articleIds.length) return;
 	await env.ARTICLE_QUEUE.sendBatch(
 		articleIds.map((articleId) => ({
-			body: { kind: 'row', articleId, ...(targetTable ? { targetTable } : {}) },
+			body: { articleId, ...(targetTable ? { targetTable } : {}) },
 		})),
 	);
 }

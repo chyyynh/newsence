@@ -114,7 +114,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 	const existingArticle = await findArticleByUrl(db, resolvedUrl);
 	if (existingArticle) {
 		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text });
-		if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingArticle.id });
+		if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ articleId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 		return false;
 	}
@@ -185,7 +185,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 			eventType: externalUrl ? 'share' : 'tweet',
 			text: textWithoutUrls,
 		});
-		if (!existingTweetArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingTweetArticle.id });
+		if (!existingTweetArticle.summary_cn) await env.ARTICLE_QUEUE.send({ articleId: existingTweetArticle.id });
 		return false;
 	}
 
@@ -226,7 +226,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 			media: allMedia,
 			raw: { tweets: sorted },
 		});
-		await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingId });
+		await env.ARTICLE_QUEUE.send({ articleId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}

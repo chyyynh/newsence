@@ -26,7 +26,6 @@ type RSSItem = FeedEntry & {
 	comments?: unknown;
 	rawContent?: unknown;
 };
-type FeedItemWithUrl = { item: RSSItem; url: string };
 
 function toPlainText(value: unknown): string {
 	if (value === null || value === undefined) return '';
@@ -43,7 +42,7 @@ function extractRssFullContent(item: RSSItem): string {
 	return turndown.turndown(raw).trim();
 }
 
-async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<boolean> {
+async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<void> {
 	let sourceType = 'rss';
 	let platformMetadata: PlatformMetadata | null = null;
 	const commentsUrl = toPlainText(item.comments) || undefined;
@@ -88,7 +87,6 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 			platformMetadata,
 		},
 	});
-	return true;
 }
 
 function parseFeedItems(xml: string): RSSItem[] {
@@ -115,20 +113,14 @@ async function processFeed(env: Env, db: Client, feed: RSSFeed): Promise<void> {
 	}
 	if (!res.ok) return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
 
-	let items = parseFeedItems(await readTextWithLimit(res, MAX_FEED_BYTES));
+	const items = parseFeedItems(await readTextWithLimit(res, MAX_FEED_BYTES)).slice(0, 30);
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
 		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 		return;
 	}
 
-	if (items.length > 30) items = items.slice(0, 30);
-
-	const itemUrls: FeedItemWithUrl[] = [];
-	for (const item of items) {
-		const rawUrl = item.link;
-		if (rawUrl) itemUrls.push({ item, url: normalizeUrl(rawUrl) });
-	}
+	const itemUrls = items.flatMap((item) => (item.link ? [{ item, url: normalizeUrl(item.link) }] : []));
 	const urls = itemUrls.map(({ url }) => url);
 	const existingRecords = await getExistingArticlesByUrl(db, urls);
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
@@ -138,7 +130,8 @@ async function processFeed(env: Env, db: Client, feed: RSSFeed): Promise<void> {
 	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			if (await queueRssItem(env, feed, item, url)) queued++;
+			await queueRssItem(env, feed, item, url);
+			queued++;
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });
 		}
