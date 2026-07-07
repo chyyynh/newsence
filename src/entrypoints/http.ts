@@ -1,19 +1,11 @@
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus, SCRAPE_CORS_HEADERS } from '@ingest/handlers/scrape';
-import { handleExportCollectionOkf } from '../okf';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 type PostRoute = { handler: RouteHandler; cors: HeadersInit };
 
 const ENCODER = new TextEncoder();
-const INTERNAL_CORS_HEADERS: Record<string, string> = {
-	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
-};
-const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
 
 const POST_ROUTES: Record<string, PostRoute> = {
-	'/okf/collections/export': { handler: handleExportCollectionOkf, cors: OKF_EXPORT_CORS },
 	'/scrape': { handler: handleScrape, cors: SCRAPE_CORS_HEADERS },
 	'/scrape/jobs': { handler: handleScrapeJobCreate, cors: SCRAPE_CORS_HEADERS },
 };
@@ -58,7 +50,6 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints:\n' +
 	'GET  /health\n' +
-	'POST /okf/collections/export              - Export a collection as an OKF v0.1 bundle tar.gz (internal token) -> gzip stream\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +

@@ -61,6 +61,11 @@ export interface ScrapedUrlContent {
 	status: 'ok' | 'needs_ocr' | 'failed';
 }
 
+export type ExportCollectionOkfInput = {
+	collectionId: string;
+	userId?: string | null;
+};
+
 interface StoredGeneratedImage {
 	userFileId: string;
 	storageKey: string;
@@ -140,5 +145,6 @@ export interface CoreRpc {
 	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;
 	relatedArticleIds(input: RelatedArticleSearchInput): Promise<string[]>;
 	scrapeUrl(url: string): Promise<ScrapedUrlContent>;
+	exportCollectionOkf(input: ExportCollectionOkfInput): Promise<Response>;
 	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]>;
 }

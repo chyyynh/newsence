@@ -4,6 +4,7 @@ import type {
 	ArticleSearchInput,
 	CoreRpc,
 	CoreUploadedFileInput,
+	ExportCollectionOkfInput,
 	ReadContextItem,
 	RelatedArticleSearchInput,
 	ScrapedUrlContent,
@@ -19,6 +20,7 @@ import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.wo
 import { handleRetryCron } from '@ingest/workflows/queue';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
+import { exportCollectionOkf } from './okf';
 
 export { NewsenceMonitorWorkflow };
 
@@ -94,6 +96,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
 	scrapeUrl(url: string): Promise<ScrapedUrlContent> {
 		return extractUrl(this.env, url);
+	}
+
+	/** Stream a collection as an OKF tar.gz bundle for the app Worker. */
+	exportCollectionOkf(input: ExportCollectionOkfInput): Promise<Response> {
+		return exportCollectionOkf(this.env, input);
 	}
 
 	/** Read article/collection/url resources from the core corpus. */

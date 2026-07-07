@@ -6,6 +6,7 @@
 // the ingest pipeline stores with, so bundles never diverge from the DB gate.
 // ─────────────────────────────────────────────────────────────
 
+import type { ExportCollectionOkfInput } from '@core-rpc/contracts';
 import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@entities/normalize';
 import { Client } from 'pg';
 
@@ -57,35 +58,23 @@ type ExportQuality = {
 	unknownTypes: Record<string, number>;
 };
 
-const OKF_EXPORT_CORS = {
-	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
-	'Access-Control-Expose-Headers': 'Content-Disposition',
-};
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const OKF_ENTITY_TYPES = new Set(['person', 'organization', 'product', 'technology', 'event', 'location']);
 const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
 
-export async function handleExportCollectionOkf(request: Request, env: Env): Promise<Response> {
-	let body: { userId?: string; collectionId?: string };
-	try {
-		body = (await request.json()) as typeof body;
-	} catch {
-		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid JSON body' }, { status: 400, headers: OKF_EXPORT_CORS });
-	}
-	const viewerId = body.userId?.trim() || null;
-	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
-		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400, headers: OKF_EXPORT_CORS });
+export async function exportCollectionOkf(env: Env, input: ExportCollectionOkfInput): Promise<Response> {
+	const collectionId = input.collectionId.trim();
+	const viewerId = input.userId?.trim() || null;
+	if (!collectionId || !UUID_RE.test(collectionId)) {
+		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400 });
 	}
 
 	try {
-		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId: body.collectionId });
+		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId });
 		return new Response(tarGzipStream(bundle.files), {
 			headers: {
-				...OKF_EXPORT_CORS,
 				'Content-Type': 'application/gzip',
 				'Content-Disposition': `attachment; filename="${bundle.slug}.okf.tar.gz"`,
 				'Cache-Control': 'no-store',
@@ -93,10 +82,10 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 		});
 	} catch (error) {
 		if (error instanceof Error && error.message === 'Collection not found') {
-			return Response.json({ code: 'NOT_FOUND', message: error.message }, { status: 404, headers: OKF_EXPORT_CORS });
+			return Response.json({ code: 'NOT_FOUND', message: error.message }, { status: 404 });
 		}
 		console.error({ tag: 'OKF_EXPORT', msg: 'export failed', error: error instanceof Error ? error.message : String(error) });
-		return Response.json({ code: 'INTERNAL_ERROR', message: 'OKF export failed' }, { status: 500, headers: OKF_EXPORT_CORS });
+		return Response.json({ code: 'INTERNAL_ERROR', message: 'OKF export failed' }, { status: 500 });
 	}
 }
 
