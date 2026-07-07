@@ -9,7 +9,6 @@ import type {
 	ScrapedUrlContent,
 	StoreGeneratedImageInput,
 } from '@core-rpc/contracts';
-import { ARTICLES_TABLE } from '@core-shared/article-store';
 import { routeRequest } from '@entry/http';
 import { ingestUploadedFile, persistGeneratedImage } from '@ingest/blob';
 import { type ExtractInput, extractSource, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';
@@ -17,7 +16,7 @@ import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
-import { type ArticleQueueMessage, handleRetryCron } from '@ingest/workflows/queue';
+import { handleRetryCron } from '@ingest/workflows/queue';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
 
@@ -26,10 +25,6 @@ export { NewsenceMonitorWorkflow };
 // Bytes can't fit Workflow params, so the job path only ever passes a URL or a
 // staged R2 key — never inline bytes.
 type ScrapeWorkflowParams = Extract<ExtractInput, { kind: 'url' } | { kind: 'r2' }>;
-
-function workflowIdPart(value: string): string {
-	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
-}
 
 // Non-persisting scrape job. Unlike NewsenceMonitorWorkflow this creates no DB
 // row — the result is returned as the Workflow `output`, polled via
@@ -65,33 +60,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
 		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env));
-	}
-
-	override async queue(batch: MessageBatch<ArticleQueueMessage>): Promise<void> {
-		console.info({ tag: 'CORE', msg: 'Queue received', queue: batch.queue, count: batch.messages.length });
-
-		try {
-			const instances = await this.env.MONITOR_WORKFLOW.createBatch(
-				batch.messages.map(({ id, body: target }) => {
-					const targetTable = target.targetTable ?? ARTICLES_TABLE;
-					return {
-						id: ['article', workflowIdPart(id), workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'),
-						params: { target: { kind: 'row', articleId: target.articleId, targetTable } },
-					};
-				}),
-			);
-			console.info({
-				tag: 'ARTICLE-QUEUE',
-				msg: 'Created workflows',
-				count: batch.messages.length,
-				created: instances.length,
-				existing: batch.messages.length - instances.length,
-			});
-			batch.ackAll();
-		} catch (err) {
-			console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling batch, retrying', error: String(err) });
-			batch.retryAll();
-		}
 	}
 
 	// ── Service-binding RPC for engine capabilities ─────────────────────────

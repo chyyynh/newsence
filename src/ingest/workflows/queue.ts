@@ -1,4 +1,5 @@
 import {
+	ARTICLES_TABLE,
 	getIncompleteWorkflowTargetIds,
 	type InsertArticleData,
 	type ProcessableTable,
@@ -9,8 +10,9 @@ import type { Tweet } from '@core-shared/types';
 import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
 import { Client } from 'pg';
 
-export type ArticleQueueMessage = { articleId: string; targetTable?: ProcessableTable };
-export type WorkflowTarget = ({ kind: 'row' } & ArticleQueueMessage) | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
+export type WorkflowTarget =
+	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
+	| { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 export type TwitterSourceEventDraft = {
 	tweet: Tweet;
@@ -31,13 +33,12 @@ const RETRY_BATCH_SIZE = 20;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 
-async function enqueueArticleBatchProcess(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<void> {
-	if (!articleIds.length) return;
-	await env.ARTICLE_QUEUE.sendBatch(
-		articleIds.map((articleId) => ({
-			body: { articleId, ...(targetTable ? { targetTable } : {}) },
-		})),
+async function startRowWorkflowBatch(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<number> {
+	if (!articleIds.length) return 0;
+	const instanceIds = await Promise.all(
+		articleIds.map((articleId) => startRowWorkflow(env, { articleId, ...(targetTable ? { targetTable } : {}) })),
 	);
+	return instanceIds.reduce((count, instanceId) => count + (instanceId ? 1 : 0), 0);
 }
 
 export async function handleRetryCron(env: Env): Promise<void> {
@@ -49,19 +50,39 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	const total = articleIds.length + userFileIds.length;
 
 	if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
+	let started = 0;
 	for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
-		await enqueueArticleBatchProcess(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
+		started += await startRowWorkflowBatch(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
 	}
 	for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-		await enqueueArticleBatchProcess(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE);
+		started += await startRowWorkflowBatch(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE);
 	}
 	console.info({
 		tag: 'RETRY',
-		msg: 'Queued articles for retry',
+		msg: 'Started workflows for retry',
 		articles: articleIds.length,
 		userFiles: userFileIds.length,
+		started,
 		batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
 	});
+}
+
+export async function startRowWorkflow(
+	env: Env,
+	target: { articleId: string; targetTable?: ProcessableTable },
+): Promise<string | undefined> {
+	const targetTable = target.targetTable ?? ARTICLES_TABLE;
+	const workflowTarget: WorkflowTarget = { kind: 'row', articleId: target.articleId, targetTable };
+	const workflowId = ['article', workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-');
+	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
+	if (created[0]) return created[0].id;
+
+	const existing = await getMonitorWorkflowStatus(env, workflowId);
+	if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
+
+	const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
+	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId, params: { target: workflowTarget } }]);
+	return retried[0]?.id;
 }
 
 export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<void> {

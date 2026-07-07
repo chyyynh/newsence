@@ -35,27 +35,6 @@
 		]
 	},
 	/**
-	 * Queue Bindings
-	 * https://developers.cloudflare.com/queues/configuration/configure-queues/
-	 */
-	"queues": {
-		"consumers": [
-			{
-				"queue": "article-processing-queue-core",
-				"max_batch_size": 10,
-				"max_batch_timeout": 30,
-				"max_retries": 3,
-				"dead_letter_queue": "article-processing-dlq-core"
-			}
-		],
-		"producers": [
-			{
-				"binding": "ARTICLE_QUEUE",
-				"queue": "article-processing-queue-core"
-			}
-		]
-	},
-	/**
 	 * Workflows
 	 * https://developers.cloudflare.com/workflows/
 	 */
