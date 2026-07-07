@@ -92,7 +92,7 @@
 	 * R2 buckets.
 	 *
 	 * `R2` — user_file blob storage (PDF/image uploads + chat-generated images).
-	 *   Also written by the Next.js frontend via S3 API; the worker reads
+	 *   Also written by the app worker; the core worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 */
 	"r2_buckets": [

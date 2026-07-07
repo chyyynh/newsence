@@ -1,11 +1,9 @@
 // ─────────────────────────────────────────────────────────────
 // Canonical Platform Metadata Types + Builder
 //
-// The worker WRITES platform_metadata (articles) / metadata (user_files) JSONB;
-// the frontend READS it via frontend/src/types/platform-metadata.ts. Keep the
-// persisted envelope + per-platform data shapes compatible. Frontend may add
-// projection-only fields (for example derived URLs), but those must not be
-// written back to the DB.
+// The worker writes persisted platform_metadata (articles) / metadata
+// (user_files) JSONB. Keep this envelope stable for app-worker reads; UI-only
+// projections should be derived there instead of written back to the DB.
 // ─────────────────────────────────────────────────────────────
 
 // ── Twitter ──────────────────────────────────────────────────
@@ -43,7 +41,7 @@ export interface RetweetedByData {
 }
 
 /**
- * Flat shape (mirrors the frontend). `variant` discriminates standard (omitted),
+ * Flat persisted Twitter shape. `variant` discriminates standard (omitted),
  * `'shared'` (external link — adds tweetText/externalUrl/externalOgImage/externalTitle),
  * and `'article'` (long-form — author only). Constructed via `buildMetadata('twitter', …)`.
  */

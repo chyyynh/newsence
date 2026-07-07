@@ -38,7 +38,7 @@ type WorkflowStreamEvent = {
 
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
-	'HTTP endpoints (frontend):\n' +
+	'HTTP endpoints:\n' +
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
