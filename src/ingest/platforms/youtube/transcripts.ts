@@ -1,5 +1,5 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import type { Article, TranscriptSegment } from '@core-shared/types';
+import type { Article, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { Client } from 'pg';
 import { z } from 'zod';
 
@@ -22,10 +22,10 @@ export interface YouTubeHighlightsUpdate {
 
 export interface YoutubeTranscriptRow {
 	videoId: string;
-	segments: unknown[];
+	segments: TranscriptSegment[];
 	language: string | null;
-	chapters?: unknown;
-	chaptersFromDescription?: unknown;
+	chapters?: YouTubeChapter[];
+	chaptersFromDescription?: boolean;
 }
 
 type YoutubeTranscriptAttachment = {

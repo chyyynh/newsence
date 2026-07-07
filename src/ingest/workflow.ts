@@ -13,7 +13,7 @@ import {
 } from '@core-shared/article-store';
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article, TranscriptSegment } from '@core-shared/types';
+import type { Article } from '@core-shared/types';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { syncPaperGraph } from '@papers/sync';
@@ -270,9 +270,6 @@ type WorkflowRunContext = {
 	readSourceDraft(): Promise<SourceArticleDraft>;
 	readSourceArticle(): Promise<Article>;
 };
-type YoutubeHighlightsInput =
-	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
-	| { kind: 'article'; article: Article };
 type RowTarget = Extract<WorkflowTarget, { kind: 'row' }>;
 type WorkflowPersistenceInput = {
 	article: Article;
@@ -470,30 +467,23 @@ async function prepareYoutubeHighlights(
 	sourceType: string,
 	step: WorkflowStep,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	if (article.platform_metadata?.type !== 'youtube') return null;
-
-	let input: YoutubeHighlightsInput | null = null;
-	if (context.target.kind === 'source') {
-		const draft = await context.readSourceDraft();
-		const transcript = draft.attachments?.find(isYoutubeTranscriptAttachment)?.transcript;
-		if (!transcript) return null;
-		input = {
-			kind: 'transcript',
-			videoId: article.platform_metadata.data.videoId,
-			segments: transcript.segments as TranscriptSegment[],
-		};
-	} else if (sourceType === 'youtube') {
-		input = { kind: 'article', article };
-	}
-	if (!input) return null;
+	const platformMetadata = article.platform_metadata;
+	if (platformMetadata?.type !== 'youtube') return null;
+	const videoId = platformMetadata.data.videoId;
+	if (!videoId) return null;
+	if (context.target.kind !== 'source' && sourceType !== 'youtube') return null;
 
 	return step.do(
 		'generate-youtube-highlights',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-		() =>
-			input.kind === 'transcript'
-				? prepareYouTubeHighlightsFromTranscript(env, input.videoId, input.segments)
-				: prepareYouTubeHighlights(env, input.article),
+		async () => {
+			if (context.target.kind === 'source') {
+				const draft = await context.readSourceDraft();
+				const transcript = draft.attachments?.find(isYoutubeTranscriptAttachment)?.transcript;
+				return transcript ? prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments) : null;
+			}
+			return sourceType === 'youtube' ? prepareYouTubeHighlights(env, article) : null;
+		},
 	);
 }
 
