@@ -164,10 +164,10 @@ async function enrichPaperMetadata(
 	step: WorkflowStep,
 ): Promise<PaperMetadata | null> {
 	const hasStagedText = !!pdfTextTemp?.textStorageKey;
-	const isPdfRow = shell.file_type === 'application/pdf';
+	const isPdfRow = shell.file_type === PDF_MIME;
 	// Bail before scheduling a step unless this could be a paper: staged PDF text
 	// (fresh upload), an already-extracted PDF row (retry), or a URL paper signal.
-	if (!hasStagedText && !isPdfRow && !detectPaperId(shell.url, null, { scanContent: false }).hasAcademicMarker) return null;
+	if (!hasStagedText && !isPdfRow && !detectPaperId(shell.url, null, false).hasAcademicMarker) return null;
 
 	try {
 		return step.do(
@@ -177,7 +177,7 @@ async function enrichPaperMetadata(
 				// Content comes from the staged temp (fresh) or the persisted
 				// extracted_text (retry); loadFullTargetArticle resolves both.
 				const content = (await loadFullTargetArticle(env, context, pdfTextTemp)).content;
-				const detection = detectPaperId(shell.url, content, { scanContent: !!content });
+				const detection = detectPaperId(shell.url, content, !!content);
 				// Prefer the title parsed from the PDF body over the (often noisy,
 				// filename-derived) row title — the latter rarely matches a search. For
 				// uploaded PDFs, a title search is attempted even without a DOI marker

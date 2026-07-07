@@ -4,7 +4,7 @@
 
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
 import { fetchWithTimeout } from '@core-shared/web';
-import { type PaperId, titlesMatch } from './detect';
+import type { PaperId } from './detect';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -87,6 +87,19 @@ function authorNames(authors: S2Author[] | undefined): string[] {
 	return authors.map((a) => a.name).filter((name): name is string => !!name);
 }
 
+function titleTokens(title: string): Set<string> {
+	return new Set(title.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+}
+
+function titlesMatch(query: string, candidate: string): boolean {
+	const a = titleTokens(query);
+	const b = titleTokens(candidate);
+	if (a.size < 3 || b.size < 3) return false;
+	let overlap = 0;
+	for (const token of a) if (b.has(token)) overlap++;
+	return (2 * overlap) / (a.size + b.size) >= 0.75;
+}
+
 function normalizeReferences(references: S2Ref[] | undefined): PaperReference[] {
 	if (!references) return [];
 	return references.slice(0, MAX_REFERENCES).map((ref) => ({
@@ -133,8 +146,8 @@ export async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<Pape
  * Resolve a paper by title. Two calls: (1) the title-match endpoint returns the
  * single best fuzzy match's id (it does NOT support `references.*` fields and
  * 400s on some punctuation, so query a lite, punctuation-stripped title), then
- * (2) fetch full metadata + references by paperId. titlesMatch verifies the
- * match against the original title.
+ * (2) fetch full metadata + references by paperId, then verify the match
+ * against the original title.
  */
 export async function enrichS2ByTitle(title: string, apiKey?: string): Promise<PaperMetadata | null> {
 	const trimmed = title.trim();

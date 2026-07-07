@@ -1,19 +1,6 @@
-// Identify academic papers from a URL and (optionally) extracted PDF text.
-// URL detection is always safe (arxiv.org / doi.org hosts, or an arXiv id in the
-// path). Full-text DOI scanning is opt-in (`scanContent`) and limited to the
-// document head — a news article merely *mentioning* a DOI must not be mislabeled
-// a paper, so we only scan content for uploads that we know are PDFs.
-
 export type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string };
 
-/**
- * Detection result. `id` is a resolvable DOI/arXiv id (null when only a
- * placeholder or no id was found). `hasAcademicMarker` is true when the text
- * carries *any* DOI/arXiv signal — including an unassigned ACM template
- * placeholder (`10.1145/nnnnnnn.nnnnnnn`) — which tells the enricher this is a
- * paper worth resolving by title even though no id resolved.
- */
-export type PaperDetection = { id: PaperId | null; hasAcademicMarker: boolean };
+type PaperDetection = { id: PaperId | null; hasAcademicMarker: boolean };
 
 const ARXIV_URL_RE = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/i;
 const ARXIV_INLINE_RE = /arxiv[:\s]\s*(\d{4}\.\d{4,5})(?:v\d+)?/i;
@@ -46,24 +33,6 @@ function extractDoi(text: string): { value: string | null; marker: boolean } {
 	return isPlaceholderDoi(doi) ? { value: null, marker: true } : { value: doi, marker: true };
 }
 
-function titleTokens(title: string): Set<string> {
-	return new Set(title.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-}
-
-/**
- * Guard against title-search false positives without demanding an exact match:
- * Dice coefficient over word sets tolerates minor extraction noise while
- * unrelated papers score far below the threshold.
- */
-export function titlesMatch(query: string, candidate: string): boolean {
-	const a = titleTokens(query);
-	const b = titleTokens(candidate);
-	if (a.size < 3 || b.size < 3) return false;
-	let overlap = 0;
-	for (const token of a) if (b.has(token)) overlap++;
-	return (2 * overlap) / (a.size + b.size) >= 0.75;
-}
-
 const TITLE_STOP_RE = /^(abstract|introduction|keywords|ccs concepts|acm reference|permission|copyright)/i;
 
 /**
@@ -93,11 +62,7 @@ export function extractPaperTitle(content: string): string | null {
 	return title.length >= 12 ? title : null;
 }
 
-/**
- * Resolve a paper identity from an article. Prefers the URL (unambiguous), then
- * scans the head of the extracted text when `scanContent` is set.
- */
-export function detectPaperId(url: string | null | undefined, content: string | null, opts: { scanContent: boolean }): PaperDetection {
+export function detectPaperId(url: string | null | undefined, content: string | null, scanContent: boolean): PaperDetection {
 	// Blob uploads have a null source_url — never call String.match on null.
 	const safeUrl = typeof url === 'string' ? url : '';
 	let host = '';
@@ -115,7 +80,7 @@ export function detectPaperId(url: string | null | undefined, content: string | 
 		if (urlDoi.value) return { id: { kind: 'doi', value: urlDoi.value }, hasAcademicMarker: true };
 	}
 
-	if (opts.scanContent && content) {
+	if (scanContent && content) {
 		const head = content.slice(0, CONTENT_SCAN_CHARS);
 		const arxiv = extractArxivId(head);
 		if (arxiv) return { id: { kind: 'arxiv', value: arxiv }, hasAcademicMarker: true };
