@@ -222,7 +222,7 @@ export async function scrapeTwitterArticle(
 	let data: { article?: TwitterArticle; status: string; message?: string };
 	try {
 		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
-			headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+			headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
 		});
 		if (!response.ok) {
 			await response.body?.cancel();
@@ -267,7 +267,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
 
 	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
-		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+		headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
 	});
 	if (!response.ok) {
 		await response.body?.cancel();

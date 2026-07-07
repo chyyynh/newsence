@@ -90,7 +90,7 @@ async function fetchTweetsForBatch(
 		try {
 			const response = await fetchWithTimeout(
 				`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
-				{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
+				{ headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' } },
 				20_000,
 			);
 			if (!response.ok) {
@@ -173,7 +173,7 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 	let processed = 0;
 	let allCompleted = true;
 	for (const batch of batches) {
-		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY || '', batch, sinceTime);
+		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
 		if (!completed) allCompleted = false;
 		const groups = groupTweetsIntoThreads(tweets);
 		processed += await saveTweetGroups(db, env, groups);

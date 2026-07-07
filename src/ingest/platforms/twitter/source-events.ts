@@ -3,14 +3,15 @@ import type { Tweet } from '@core-shared/types';
 import type { Client } from 'pg';
 import { extractTweetMedia, stripTweetUrls } from './scraper';
 
-type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
+type TwitterSourceEventInputType = 'tweet' | 'thread' | 'share' | 'article';
+type TwitterSourceEventType = TwitterSourceEventInputType | 'quote' | 'retweet';
 
 export async function upsertTwitterSourceEvent(
 	db: Client,
 	tweet: Tweet,
 	options: {
 		articleId: string | null;
-		eventType: TwitterSourceEventType;
+		eventType: TwitterSourceEventInputType;
 		text?: string | null;
 		media?: TwitterMedia[];
 		raw?: unknown;
@@ -29,7 +30,7 @@ export async function upsertTwitterSourceEvent(
 			}
 		: tweet.author;
 	const createdAt = tweet.retweetedBy?.retweetedAt ?? tweet.createdAt;
-	let eventType = options.eventType;
+	let eventType: TwitterSourceEventType = options.eventType;
 	if (tweet.retweetedBy) eventType = 'retweet';
 	else if (eventType === 'tweet' && tweet.quoted_tweet) eventType = 'quote';
 	const text = options.text ?? stripTweetUrls(tweet.text);

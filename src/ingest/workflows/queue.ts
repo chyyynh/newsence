@@ -16,7 +16,7 @@ export type WorkflowTarget =
 
 export type TwitterSourceEventDraft = {
 	tweet: Tweet;
-	eventType: 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
+	eventType: 'tweet' | 'thread' | 'share' | 'article';
 	text?: string | null;
 	media?: TwitterMedia[];
 	raw?: unknown;
