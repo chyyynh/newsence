@@ -70,15 +70,6 @@ export class PayloadTooLargeError extends Error {
 	}
 }
 
-function timeoutSignal(options: RequestInit, timeoutMs: number): AbortSignal {
-	const timeout = AbortSignal.timeout(timeoutMs);
-	return options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-}
-
-function isTimeoutError(err: unknown): boolean {
-	return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
-}
-
 function hostMatches(hostname: string, hosts: ReadonlySet<string>): boolean {
 	if (hosts.has(hostname)) return true;
 	for (const host of hosts) {
@@ -106,9 +97,12 @@ function parseUrl(rawUrl: string): URL | null {
 
 export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
 	try {
-		return await fetch(url, { ...options, signal: timeoutSignal(options, timeoutMs) });
+		const timeout = AbortSignal.timeout(timeoutMs);
+		return await fetch(url, { ...options, signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
 	} catch (err) {
-		if (isTimeoutError(err)) throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+		if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+		}
 		throw err;
 	}
 }

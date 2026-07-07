@@ -43,10 +43,6 @@ const DISPATCH_HEADERS: HeadersInit = {
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
 
-function isHtmlLike(ct: string): boolean {
-	return ct.includes('text/html') || ct.includes('text/xml') || ct.includes('application/xhtml');
-}
-
 function parseContentDisposition(header: string | null): string | null {
 	if (!header) return null;
 	const match = header.match(/filename\*=UTF-8''([^;]+)|filename=("([^"]+)"|([^;]+))/i);
@@ -89,7 +85,7 @@ async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
 
 	const ct = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
 
-	if (isHtmlLike(ct)) {
+	if (ct.includes('text/html') || ct.includes('text/xml') || ct.includes('application/xhtml')) {
 		const scraped = await scrapeHtmlFromResponse(res, url);
 		return { kind: 'page', scraped };
 	}
