@@ -174,11 +174,7 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
 }
 
-async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
-	const url = normalizeUrl(rawUrl);
-
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
+async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
 	const existingRow = await getUrlUserFileByNormalizedSourceUrl(db, userId, url);
 	if (existingRow) {
 		return returnExisting(db, url, existingRow, env);
@@ -248,10 +244,12 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 
 	console.info({ tag: 'INGEST', msg: 'Processing URLs', count: args.urls.length, uniqueCount: uniqueUrls.length, userId: args.userId });
 	const userId = args.userId;
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
 	const uniqueResults: IngestResult[] = [];
 	for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {
 		const batch = uniqueUrls.slice(i, i + INGEST_URL_CONCURRENCY);
-		uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(url, env, userId)))));
+		uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(db, url, env, userId)))));
 	}
 	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
 	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
