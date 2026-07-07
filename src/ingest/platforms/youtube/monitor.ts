@@ -1,24 +1,24 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
-import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import { parseDurationSeconds, scrapeYouTube } from './scraper';
 
-// ─────────────────────────────────────────────────────────────
-// YouTube Channel Monitor
-// ─────────────────────────────────────────────────────────────
-
 interface YouTubeFeedVideo {
 	videoId: string;
 	url: string;
 }
 type YouTubeFeedEntry = FeedEntry & { videoId?: unknown };
+type YouTubeChannelSource = {
+	id: string;
+	name: string;
+	RSSLink: string | null;
+};
 
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
-const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
+const SOURCE_FEED_FIELDS = 'id, name, "RSSLink"';
 
 function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
 	const entries = (extractFromXml(xml, {
@@ -33,33 +33,6 @@ function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
 	);
 }
 
-async function queueYouTubeVideo(env: Env, apiKey: string, channel: RSSFeed, video: YouTubeFeedVideo): Promise<boolean> {
-	const scraped = await scrapeYouTube(video.videoId, apiKey, { minDurationSecondsForTranscript: SHORTS_MAX_SECONDS });
-	const youtubeMetadata = scraped.metadata.data;
-	const duration = youtubeMetadata.duration;
-	if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
-		return false;
-	}
-
-	await startSourceArticleWorkflow(env, {
-		article: {
-			url: video.url,
-			title: scraped.title,
-			source: youtubeMetadata.channelName,
-			publishedDate: scraped.publishedDate as string,
-			summary: scraped.summary ?? '',
-			sourceType: 'youtube',
-			content: scraped.content,
-			ogImageUrl: scraped.ogImageUrl,
-			platformMetadata: scraped.metadata,
-		},
-		...(scraped.youtubeTranscript ? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] } : {}),
-	});
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
-	return true;
-}
-
 export async function handleYouTubeCron(env: Env): Promise<void> {
 	if (!env.YOUTUBE_API_KEY) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipped — YOUTUBE_API_KEY not configured' });
@@ -68,7 +41,9 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const channels = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])).rows;
+	const channels = (
+		await db.query<YouTubeChannelSource>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])
+	).rows;
 
 	let totalQueued = 0;
 	for (const channel of channels) {
@@ -98,7 +73,34 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 
 			for (const video of newVideos) {
 				try {
-					if (await queueYouTubeVideo(env, env.YOUTUBE_API_KEY, channel, video)) totalQueued++;
+					const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
+						minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
+					});
+					const youtubeMetadata = scraped.metadata.data;
+					const duration = youtubeMetadata.duration;
+					if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
+						console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
+						continue;
+					}
+
+					await startSourceArticleWorkflow(env, {
+						article: {
+							url: video.url,
+							title: scraped.title,
+							source: youtubeMetadata.channelName,
+							publishedDate: scraped.publishedDate as string,
+							summary: scraped.summary ?? '',
+							sourceType: 'youtube',
+							content: scraped.content,
+							ogImageUrl: scraped.ogImageUrl,
+							platformMetadata: scraped.metadata,
+						},
+						...(scraped.youtubeTranscript
+							? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }
+							: {}),
+					});
+					totalQueued++;
+					console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
 				} catch (err) {
 					console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
 				}

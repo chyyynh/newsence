@@ -151,54 +151,50 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 export async function handleTwitterCron(env: Env): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await db.connect();
-		const users = (await db.query<TwitterSourceFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows;
-		if (!users.length) {
-			console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
-			return;
-		}
-
-		const monitoredUsers: MonitoredTwitterUser[] = [];
-		for (const user of users) {
-			const twitterUserName = normalizeTwitterUserName(user.RSSLink);
-			if (twitterUserName) monitoredUsers.push({ ...user, twitterUserName });
-		}
-		const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
-		if (userNames.length === 0) {
-			console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
-			return;
-		}
-		const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
-		const batches: string[][] = [];
-		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
-			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
-		}
-
-		console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
-
-		let processed = 0;
-		let allCompleted = true;
-		for (const batch of batches) {
-			const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
-			if (!completed) allCompleted = false;
-			const groups = groupTweetsIntoThreads(tweets);
-			processed += await saveTweetGroups(db, env, groups);
-		}
-
-		if (allCompleted) {
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
-		}
-
-		console.info({
-			tag: 'TWITTER',
-			msg: 'end',
-			processed,
-			users: users.length,
-			validUsers: monitoredUsers.length,
-			batches: batches.length,
-		});
-	} finally {
-		await db.end().catch((error) => console.warn({ tag: 'TWITTER', msg: 'Failed to close db client', error: String(error) }));
+	await db.connect();
+	const users = (await db.query<TwitterSourceFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows;
+	if (!users.length) {
+		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
+		return;
 	}
+
+	const monitoredUsers: MonitoredTwitterUser[] = [];
+	for (const user of users) {
+		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
+		if (twitterUserName) monitoredUsers.push({ ...user, twitterUserName });
+	}
+	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
+	if (userNames.length === 0) {
+		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
+		return;
+	}
+	const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
+	const batches: string[][] = [];
+	for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
+		batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
+	}
+
+	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
+
+	let processed = 0;
+	let allCompleted = true;
+	for (const batch of batches) {
+		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
+		if (!completed) allCompleted = false;
+		const groups = groupTweetsIntoThreads(tweets);
+		processed += await saveTweetGroups(db, env, groups);
+	}
+
+	if (allCompleted) {
+		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
+	}
+
+	console.info({
+		tag: 'TWITTER',
+		msg: 'end',
+		processed,
+		users: users.length,
+		validUsers: monitoredUsers.length,
+		batches: batches.length,
+	});
 }

@@ -3,13 +3,12 @@ import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
-import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
+import { saveYouTubeHighlights, upsertYoutubeTranscript, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
 import { recordUserFileWorkflowComplete, type SourceArticleDraft, type WorkflowTarget } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import type { PdfTextStatus } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/persistence';
-import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
 
 type RowTarget = Extract<WorkflowTarget, { kind: 'row' }>;
 

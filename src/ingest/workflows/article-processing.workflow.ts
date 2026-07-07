@@ -20,7 +20,7 @@ import {
 	prepareYouTubeHighlights,
 	prepareYouTubeHighlightsFromTranscript,
 	type YouTubeHighlightsUpdate,
-} from '../platforms/youtube/highlights';
+} from '../platforms/youtube/transcripts';
 import { type PdfTextTempResult, persistWorkflowTarget } from './article-persistence';
 
 type WorkflowParams = {
