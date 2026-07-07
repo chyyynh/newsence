@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { generateObject, generateText } from '@core-ai/embedding';
-import type { ProcessableTable } from '@core-shared/article-store';
+import type { ArticleStoreTable } from '@core-shared/article-store';
 import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
@@ -31,7 +31,7 @@ export interface ProcessorResult {
 
 export interface ProcessorContext {
 	env: Env;
-	table: ProcessableTable;
+	table: ArticleStoreTable;
 }
 
 export interface ArticleProcessor {

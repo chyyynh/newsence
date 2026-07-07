@@ -1,4 +1,3 @@
-import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { detectUrlKind, normalizeUrl } from '@core-shared/web';
@@ -77,7 +76,7 @@ async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: strin
 	try {
 		const inserted = await db.query(
 			`WITH inserted AS (
-				INSERT INTO ${USER_FILES_TABLE}
+				INSERT INTO user_files
 				(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
 				 summary, extracted_text, og_image_url, keywords, tags, metadata,
 				 user_id)
@@ -90,7 +89,7 @@ async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: strin
 			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, created FROM inserted
 			UNION ALL
 			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, FALSE AS created
-			FROM ${USER_FILES_TABLE}
+			FROM user_files
 			WHERE user_id = $11
 			  AND normalized_source_url = $3
 			  AND resource_kind = 'url'
@@ -209,7 +208,7 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
 	const existing = await db.query<ExistingUrlUserFile>(
-		`SELECT ${EXISTING_URL_USER_FILE_FIELDS} FROM ${USER_FILES_TABLE}
+		`SELECT ${EXISTING_URL_USER_FILE_FIELDS} FROM user_files
 		 WHERE user_id = $1
 		   AND normalized_source_url = $2
 		 LIMIT 1`,

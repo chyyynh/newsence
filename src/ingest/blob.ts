@@ -1,4 +1,3 @@
-import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { extensionFromMime, isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/web';
 import { createUserFileWorkflow } from '@ingest/workflow';
@@ -138,7 +137,7 @@ async function assertBlobUploadQuotaTx(db: Client, userId: string, incomingBytes
 async function insertBlobUserFile(db: Client, data: InsertBlobUserFileData): Promise<{ id: string }> {
 	const title = data.title ? data.title.slice(0, 200) : null;
 	const result = await db.query(
-		`INSERT INTO ${USER_FILES_TABLE}
+		`INSERT INTO user_files
 			(file_name, file_type, file_size, storage_key, resource_kind, origin_type, platform_type,
 			 source_url, normalized_source_url, title, metadata, user_id)
 		 VALUES ($1, $2, $3, $4, 'blob', $5, NULL, $6, $7, $8, $9, $10)

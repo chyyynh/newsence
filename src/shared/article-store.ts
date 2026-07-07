@@ -1,39 +1,38 @@
 import { Client } from 'pg';
 import type { Article } from './types';
 
-export const ARTICLES_TABLE = 'articles';
-export const USER_FILES_TABLE = 'user_files';
-export type ProcessableTable = typeof ARTICLES_TABLE | typeof USER_FILES_TABLE;
+export type ArticleStoreTable = 'articles' | 'user_files';
 
-export type ProcessableArticleShell = Article & { has_content?: boolean };
+export type ArticleForProcessing = Article & { has_content?: boolean };
 
-const ARTICLE_FIELDS: Record<ProcessableTable, string> = {
-	[ARTICLES_TABLE]:
+const ARTICLE_FIELDS: Record<ArticleStoreTable, string> = {
+	articles:
 		'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities',
-	[USER_FILES_TABLE]:
+	user_files:
 		'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
 };
 
-const ARTICLE_SHELL_FIELDS: Record<ProcessableTable, string> = {
-	[ARTICLES_TABLE]:
+const ARTICLE_SHELL_FIELDS: Record<ArticleStoreTable, string> = {
+	articles:
 		'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities',
-	[USER_FILES_TABLE]:
+	user_files:
 		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
 };
 
-export async function loadProcessableArticle(
+export async function loadArticleForProcessing(
 	env: Env,
-	table: ProcessableTable,
+	table: ArticleStoreTable,
 	articleId: string,
 	shell = false,
-): Promise<ProcessableArticleShell> {
+): Promise<ArticleForProcessing> {
+	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
 		articleId,
 	]);
 	if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-	return result.rows[0] as ProcessableArticleShell;
+	return result.rows[0] as ArticleForProcessing;
 }
 
 export interface InsertArticleData {
@@ -50,7 +49,7 @@ export interface InsertArticleData {
 	tags?: string[];
 }
 
-export type ProcessedArticleUpdate = Record<string, unknown>;
+export type ArticleProcessingUpdate = Record<string, unknown>;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
@@ -60,17 +59,18 @@ const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	scraped_date: 'created_at',
 };
 
-export async function updateProcessedArticle(
+export async function updateArticleAfterProcessing(
 	db: Client,
-	table: ProcessableTable,
+	table: ArticleStoreTable,
 	articleId: string,
-	updatePayload: ProcessedArticleUpdate,
+	updatePayload: ArticleProcessingUpdate,
 ): Promise<void> {
+	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
 	const columns = Object.keys(updatePayload);
 	if (columns.length === 0) return;
 
 	const setClauses = columns
-		.map((col, i) => `${table === USER_FILES_TABLE ? (ARTICLES_TO_USER_FILES_COLUMN_MAP[col] ?? col) : col} = $${i + 1}`)
+		.map((col, i) => `${table === 'user_files' ? (ARTICLES_TO_USER_FILES_COLUMN_MAP[col] ?? col) : col} = $${i + 1}`)
 		.join(', ');
 	const values = columns.map((col) => {
 		const value = updatePayload[col];
@@ -88,13 +88,13 @@ export async function updateProcessedArticle(
 export async function insertFinalSourceArticle(
 	db: Client,
 	base: InsertArticleData,
-	updatePayload: ProcessedArticleUpdate,
+	updatePayload: ArticleProcessingUpdate,
 ): Promise<string> {
 	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
 	const entities = updatePayload.entities ?? null;
 	const ogImageUrl = Object.hasOwn(updatePayload, 'og_image_url') ? updatePayload.og_image_url : base.ogImageUrl;
 	const inserted = await db.query<{ id: string }>(
-		`INSERT INTO ${ARTICLES_TABLE} (
+		`INSERT INTO articles (
 			url, title, title_cn, source, published_date, scraped_date, keywords, tags, tokens,
 			summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, entities, embedding
 		)
@@ -123,8 +123,7 @@ export async function insertFinalSourceArticle(
 		],
 	);
 	const articleId =
-		inserted.rows[0]?.id ??
-		(await db.query<{ id: string }>(`SELECT id FROM ${ARTICLES_TABLE} WHERE url = $1 LIMIT 1`, [base.url])).rows[0]?.id;
+		inserted.rows[0]?.id ?? (await db.query<{ id: string }>('SELECT id FROM articles WHERE url = $1 LIMIT 1', [base.url])).rows[0]?.id;
 	if (!articleId) throw new Error(`Failed to insert finalized article for ${base.url}`);
 	return articleId;
 }
@@ -144,7 +143,7 @@ export async function getExistingArticlesByUrl(db: Client, urls: string[], batch
 	for (let i = 0; i < urls.length; i += batchSize) {
 		const batch = urls.slice(i, i + batchSize);
 		const result = await db.query<ExistingArticleRecord>(
-			`SELECT id, url, source, source_type, summary_cn FROM ${ARTICLES_TABLE} WHERE url = ANY($1)`,
+			'SELECT id, url, source, source_type, summary_cn FROM articles WHERE url = ANY($1)',
 			[batch],
 		);
 		records.push(...result.rows);
@@ -165,7 +164,7 @@ export async function updateArticleTextForReprocessing(
 	update: ArticleReprocessingTextUpdate,
 ): Promise<void> {
 	await db.query(
-		`UPDATE ${ARTICLES_TABLE}
+		`UPDATE articles
 		 SET summary = $1,
 		     content = $2,
 		     platform_metadata = $3,
@@ -185,7 +184,7 @@ export type IncompleteWorkflowTargetIds = {
 
 export async function getIncompleteWorkflowTargetIds(db: Client, since: Date | string): Promise<IncompleteWorkflowTargetIds> {
 	const articleResult = await db.query<{ id: string }>(
-		`SELECT id FROM ${ARTICLES_TABLE}
+		`SELECT id FROM articles
 		 WHERE scraped_date >= $1
 		   AND (
 		     title_cn IS NULL
@@ -197,7 +196,7 @@ export async function getIncompleteWorkflowTargetIds(db: Client, since: Date | s
 	);
 
 	const userFileResult = await db.query<{ id: string }>(
-		`SELECT id FROM ${USER_FILES_TABLE}
+		`SELECT id FROM user_files
 		 WHERE created_at >= $1
 		   AND (
 		     (resource_kind = 'url' AND (

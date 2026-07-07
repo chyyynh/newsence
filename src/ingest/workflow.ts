@@ -1,15 +1,13 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
-	ARTICLES_TABLE,
+	type ArticleForProcessing,
+	type ArticleStoreTable,
 	getIncompleteWorkflowTargetIds,
 	type InsertArticleData,
 	insertFinalSourceArticle,
-	loadProcessableArticle,
-	type ProcessableArticleShell,
-	type ProcessableTable,
-	USER_FILES_TABLE,
-	updateProcessedArticle,
+	loadArticleForProcessing,
+	updateArticleAfterProcessing,
 } from '@core-shared/article-store';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
@@ -29,7 +27,7 @@ import {
 } from './platforms/youtube/transcripts';
 
 export type WorkflowTarget =
-	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
+	| { kind: 'row'; articleId: string; targetTable?: ArticleStoreTable }
 	| { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 export interface SourceArticleDraft {
@@ -43,7 +41,7 @@ const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 const WORKFLOW_ID_MAX_LENGTH = 100;
 
-async function startRowWorkflowBatch(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<number> {
+async function startRowWorkflowBatch(env: Env, articleIds: string[], targetTable?: ArticleStoreTable): Promise<number> {
 	if (!articleIds.length) return 0;
 	const targets = articleIds.map((articleId) => rowWorkflowTarget({ articleId, ...(targetTable ? { targetTable } : {}) }));
 	const created = await env.MONITOR_WORKFLOW.createBatch(
@@ -82,7 +80,7 @@ export async function handleRetryCron(env: Env): Promise<void> {
 		started += await startRowWorkflowBatch(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
 	}
 	for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startRowWorkflowBatch(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE);
+		started += await startRowWorkflowBatch(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), 'user_files');
 	}
 	console.info({
 		tag: 'RETRY',
@@ -94,7 +92,7 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function startRowWorkflow(env: Env, target: { articleId: string; targetTable?: ProcessableTable }): Promise<string> {
+export async function startRowWorkflow(env: Env, target: { articleId: string; targetTable?: ArticleStoreTable }): Promise<string> {
 	const { workflowId, workflowTarget } = rowWorkflowTarget(target);
 	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 	if (created[0]) return created[0].id;
@@ -154,11 +152,11 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function rowWorkflowTarget(target: { articleId: string; targetTable?: ProcessableTable }): {
+function rowWorkflowTarget(target: { articleId: string; targetTable?: ArticleStoreTable }): {
 	workflowId: string;
 	workflowTarget: WorkflowTarget;
 } {
-	const targetTable = target.targetTable ?? ARTICLES_TABLE;
+	const targetTable = target.targetTable ?? 'articles';
 	const workflowTarget: WorkflowTarget = { kind: 'row', articleId: target.articleId, targetTable };
 	return { workflowId: ['article', workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'), workflowTarget };
 }
@@ -180,10 +178,9 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string> {
 	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	if (!db) await client.connect();
-	const result = await client.query(
-		`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
-		[userFileId],
-	);
+	const result = await client.query(`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM user_files WHERE id = $1`, [
+		userFileId,
+	]);
 	const row = result.rows[0] as { instance_id?: string | null } | undefined;
 	const storedInstanceId = row?.instance_id ?? null;
 	if (storedInstanceId) {
@@ -191,7 +188,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 	}
 
-	const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: USER_FILES_TABLE });
+	const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: 'user_files' });
 	await patchUserFileWorkflowMetadata(client, userFileId, {
 		monitor_instance_id: instanceId,
 		monitor_status: 'running',
@@ -202,7 +199,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 
 async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: Record<string, string>): Promise<void> {
 	await db.query(
-		`UPDATE ${USER_FILES_TABLE}
+		`UPDATE user_files
 		 SET metadata = jsonb_set(
 		   COALESCE(metadata, '{}'::jsonb),
 		   '{workflow}',
@@ -227,7 +224,7 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 
 type WorkflowRunContext = {
 	target: WorkflowTarget;
-	table: ProcessableTable;
+	table: ArticleStoreTable;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 };
 type WorkflowPersistenceInput = {
@@ -249,7 +246,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 
 	return {
 		target,
-		table: target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE,
+		table: target.kind === 'row' ? (target.targetTable ?? 'articles') : 'articles',
 		readSourceDraft,
 	};
 }
@@ -278,7 +275,7 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 	const article =
 		context.target.kind === 'source'
 			? sourceDraftToArticle((await context.readSourceDraft()).article)
-			: await loadProcessableArticle(env, context.table, context.target.articleId);
+			: await loadArticleForProcessing(env, context.table, context.target.articleId);
 	if (!pdfTextTemp?.textStorageKey) return article;
 	const pdfTextObj = await env.R2.get(pdfTextTemp.textStorageKey);
 	if (!pdfTextObj) throw new Error(`PDF text temp object missing: ${pdfTextTemp.textStorageKey}`);
@@ -288,11 +285,11 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 async function stagePdfExtraction(
 	env: Env,
 	context: WorkflowRunContext,
-	article: ProcessableArticleShell,
+	article: ArticleForProcessing,
 	step: WorkflowStep,
 	workflowInstanceId: string,
 ): Promise<PdfTextTempResult | null> {
-	if (context.target.kind !== 'row' || context.table !== USER_FILES_TABLE) return null;
+	if (context.target.kind !== 'row' || context.table !== 'user_files') return null;
 	const request = preparePdfTextExtraction({
 		articleId: context.target.articleId,
 		hasContent: 'has_content' in article && !!article.has_content,
@@ -318,7 +315,7 @@ async function stagePdfExtraction(
 async function enrichPaperMetadataStep(
 	env: Env,
 	context: WorkflowRunContext,
-	shell: ProcessableArticleShell,
+	shell: ArticleForProcessing,
 	pdfTextTemp: PdfTextTempResult | null,
 	step: WorkflowStep,
 ): Promise<PaperMetadata | null> {
@@ -416,7 +413,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 async function persistRowTarget(
 	env: Env,
 	target: Extract<WorkflowTarget, { kind: 'row' }>,
-	table: ProcessableTable,
+	table: ArticleStoreTable,
 	input: WorkflowPersistenceInput,
 ): Promise<string> {
 	const pdfTextObj = input.pdfTextTemp?.textStorageKey ? await env.R2.get(input.pdfTextTemp.textStorageKey) : null;
@@ -455,14 +452,14 @@ async function persistRowTarget(
 	await db.connect();
 	await db.query('BEGIN');
 	try {
-		await updateProcessedArticle(db, table, target.articleId, updatePayload);
-		if (table === USER_FILES_TABLE)
+		await updateArticleAfterProcessing(db, table, target.articleId, updatePayload);
+		if (table === 'user_files')
 			await patchUserFileWorkflowMetadata(db, target.articleId, {
 				monitor_status: 'complete',
 				monitor_completed_at: new Date().toISOString(),
 				article_id: target.articleId,
 			});
-		if (table !== USER_FILES_TABLE && entities)
+		if (table !== 'user_files' && entities)
 			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
 		await persistYouTubeWorkflowData(db, { highlights: input.youtubeHighlights });
 		await db.query('COMMIT');
@@ -496,7 +493,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				async () =>
 					context.target.kind === 'source'
 						? { ...sourceDraftToArticle((await context.readSourceDraft()).article), content: null }
-						: loadProcessableArticle(this.env, context.table, context.target.articleId, true),
+						: loadArticleForProcessing(this.env, context.table, context.target.articleId, true),
 			);
 			const sourceType = article.source_type ?? 'default';
 			const logContext =
@@ -574,7 +571,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 			return { success: true, article_id: articleId };
 		} catch (error) {
-			if (context.target.kind === 'row' && context.table === USER_FILES_TABLE) {
+			if (context.target.kind === 'row' && context.table === 'user_files') {
 				const failedUserFileId = context.target.articleId;
 				try {
 					await step.do(
