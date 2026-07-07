@@ -235,16 +235,11 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 	}
 }
 
-type WorkflowParams = {
-	target: WorkflowTarget;
-};
-
 type WorkflowRunContext = {
 	target: WorkflowTarget;
 	table: ProcessableTable;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 };
-type RowTarget = Extract<WorkflowTarget, { kind: 'row' }>;
 type WorkflowPersistenceInput = {
 	article: Article;
 	result: ProcessorResult;
@@ -394,26 +389,18 @@ async function prepareYoutubeHighlights(
 }
 
 async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<void> {
-	const { target } = context;
-	const failures: Array<{ object: string; key: string; error: string }> = [];
+	const tempObjects: Array<{ object: string; key: string }> = [];
 
-	if (pdfTextTemp?.textStorageKey) {
+	if (pdfTextTemp?.textStorageKey) tempObjects.push({ object: 'pdf_text', key: pdfTextTemp.textStorageKey });
+	if (context.target.kind === 'source') tempObjects.push({ object: 'source_article_draft', key: context.target.sourceArticle.r2Key });
+
+	for (const tempObject of tempObjects) {
 		try {
-			await env.R2.delete(pdfTextTemp.textStorageKey);
+			await env.R2.delete(tempObject.key);
 		} catch (error) {
-			failures.push({ object: 'pdf_text', key: pdfTextTemp.textStorageKey, error: String(error) });
+			console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup failed', ...tempObject, error: String(error) });
 		}
 	}
-
-	if (target.kind === 'source') {
-		try {
-			await env.R2.delete(target.sourceArticle.r2Key);
-		} catch (error) {
-			failures.push({ object: 'source_article_draft', key: target.sourceArticle.r2Key, error: String(error) });
-		}
-	}
-
-	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });
 }
 
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
@@ -451,7 +438,12 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	}
 }
 
-async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableTable, input: WorkflowPersistenceInput): Promise<string> {
+async function persistRowTarget(
+	env: Env,
+	target: Extract<WorkflowTarget, { kind: 'row' }>,
+	table: ProcessableTable,
+	input: WorkflowPersistenceInput,
+): Promise<string> {
 	const pdfTextObj = input.pdfTextTemp?.textStorageKey ? await env.R2.get(input.pdfTextTemp.textStorageKey) : null;
 	if (input.pdfTextTemp?.textStorageKey && !pdfTextObj)
 		throw new Error(`PDF text temp object missing: ${input.pdfTextTemp.textStorageKey}`);
@@ -519,8 +511,8 @@ function entityUpdatePayload(
 	return entities;
 }
 
-export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
-	async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep) {
+export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: WorkflowTarget }> {
+	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
 		const context = createWorkflowRunContext(this.env, event.payload.target);
 		try {
 			const article = await step.do(
