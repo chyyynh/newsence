@@ -13,7 +13,6 @@ export interface Env {
 	HYPERDRIVE: Hyperdrive;
 	ARTICLE_QUEUE: Queue;
 	USER_INGEST_LIMITER: RateLimit;
-	BROWSER: Fetcher;
 	AI: Ai;
 	MONITOR_WORKFLOW: Workflow<unknown>;
 	SCRAPE_WORKFLOW: Workflow<unknown>;

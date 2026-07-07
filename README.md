@@ -259,7 +259,6 @@ Bindings (in `wrangler.jsonc`):
 | `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
 | `AI`               | Workers AI (Qwen3 analysis + BGE-M3 embeddings) |
-| `BROWSER`          | Cloudflare Browser Rendering (reserved)      |
 
 Secrets (via `wrangler secret put`):
 

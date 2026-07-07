@@ -78,9 +78,6 @@
 	"ai": {
 		"binding": "AI"
 	},
-	"browser": {
-		"binding": "BROWSER"
-	},
 	/**
 	 * Hyperdrive — PlanetScale PostgreSQL connection pooling
 	 * https://developers.cloudflare.com/hyperdrive/
