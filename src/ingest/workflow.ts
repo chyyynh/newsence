@@ -214,16 +214,6 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 	}
 }
 
-async function recordUserFileWorkflowFailed(env: Env, userFileId: string, error: string): Promise<void> {
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	await patchUserFileWorkflowMetadata(db, userFileId, {
-		monitor_status: 'failed',
-		monitor_failed_at: new Date().toISOString(),
-		error: error.slice(0, 500),
-	});
-}
-
 async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: Record<string, string>): Promise<void> {
 	await db.query(
 		`UPDATE ${USER_FILES_TABLE}
@@ -501,11 +491,6 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });
 }
 
-async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
-	if (context.target.kind === 'source') return persistSourceTarget(env, context, input);
-	return persistRowTarget(env, context.target, context.table, input);
-}
-
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = sourceDraftToArticle(draft.article);
@@ -674,15 +659,19 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() =>
-					persistWorkflowTarget(this.env, context, {
+				() => {
+					const input = {
 						article,
 						result: processorResult,
 						embedding,
 						pdfTextTemp,
 						youtubeHighlights,
 						paperEnrichment,
-					}),
+					};
+					return context.target.kind === 'source'
+						? persistSourceTarget(this.env, context, input)
+						: persistRowTarget(this.env, context.target, context.table, input);
+				},
 			);
 
 			await syncPaperGraphStep(this.env, articleId, paperEnrichment, step);
@@ -702,7 +691,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 					await step.do(
 						'record-user-file-workflow-failed',
 						{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
-						() => recordUserFileWorkflowFailed(this.env, failedUserFileId, String(error)),
+						async () => {
+							const db = new Client({ connectionString: this.env.HYPERDRIVE.connectionString });
+							await db.connect();
+							await patchUserFileWorkflowMetadata(db, failedUserFileId, {
+								monitor_status: 'failed',
+								monitor_failed_at: new Date().toISOString(),
+								error: String(error).slice(0, 500),
+							});
+						},
 					);
 				} catch (metadataError) {
 					console.warn({
