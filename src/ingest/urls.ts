@@ -139,18 +139,6 @@ async function insertScrapedBlob(
 	return { kind: 'blob', userFileId: persisted.userFileId, fileType: blob.contentType };
 }
 
-async function scrapeAndInsert(url: string, env: Env, userId: string): Promise<InsertOutcome> {
-	const result = await scrapeUrl(url, {
-		youtubeApiKey: env.YOUTUBE_API_KEY,
-		kaitoApiKey: env.KAITO_API_KEY,
-	});
-
-	if (result.kind === 'page') {
-		return insertScrapedPage(result.scraped, url, env, userId);
-	}
-	return insertScrapedBlob(result, url, env, userId);
-}
-
 function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instanceId?: string; alreadyExists: boolean }): IngestResult {
 	return {
 		url,
@@ -168,13 +156,9 @@ function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instance
 	};
 }
 
-function isWorkflowComplete(row: ExistingUrlUserFile): boolean {
-	return !!row.title_cn && !!row.summary_cn && row.has_embedding;
-}
-
 async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
 	if (row.resource_kind === 'blob') {
-		const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
+		const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id);
 		return {
 			url,
 			userFileId: row.id,
@@ -190,7 +174,7 @@ async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): 
 		};
 	}
 
-	const instanceId = isWorkflowComplete(row) ? undefined : await createUserFileWorkflow(env, row.id);
+	const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id);
 	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
 }
 
@@ -204,7 +188,14 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 
 	let result: InsertOutcome;
 	try {
-		result = await scrapeAndInsert(url, env, userId);
+		const scrapeResult = await scrapeUrl(url, {
+			youtubeApiKey: env.YOUTUBE_API_KEY,
+			kaitoApiKey: env.KAITO_API_KEY,
+		});
+		result =
+			scrapeResult.kind === 'page'
+				? await insertScrapedPage(scrapeResult.scraped, url, env, userId)
+				: await insertScrapedBlob(scrapeResult, url, env, userId);
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
