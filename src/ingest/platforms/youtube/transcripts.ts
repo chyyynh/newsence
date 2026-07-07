@@ -33,8 +33,12 @@ type YoutubeTranscriptAttachment = {
 	transcript: YoutubeTranscriptRow;
 };
 
-export function isYoutubeTranscriptAttachment(value: unknown): value is YoutubeTranscriptAttachment {
+function isYoutubeTranscriptAttachment(value: unknown): value is YoutubeTranscriptAttachment {
 	return !!value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'youtube-transcript';
+}
+
+function youtubeTranscriptAttachment(attachments?: unknown[]): YoutubeTranscriptRow | null {
+	return attachments?.find(isYoutubeTranscriptAttachment)?.transcript ?? null;
 }
 
 const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 YouTube 影片逐字稿，找出 5-8 個最重要的主題段落。
@@ -82,12 +86,21 @@ export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTra
 	);
 }
 
-export async function saveYouTubeHighlights(db: Client, update: YouTubeHighlightsUpdate): Promise<void> {
+async function saveYouTubeHighlights(db: Client, update: YouTubeHighlightsUpdate): Promise<void> {
 	await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
 		JSON.stringify(update.value),
 		update.value.generatedAt,
 		update.videoId,
 	]);
+}
+
+export async function persistYouTubeWorkflowData(
+	db: Client,
+	input: { attachments?: unknown[]; highlights?: YouTubeHighlightsUpdate | null },
+): Promise<void> {
+	const transcript = youtubeTranscriptAttachment(input.attachments);
+	if (transcript) await upsertYoutubeTranscript(db, transcript);
+	if (input.highlights) await saveYouTubeHighlights(db, input.highlights);
 }
 
 export async function prepareYouTubeHighlights(env: Env, article: Article): Promise<YouTubeHighlightsUpdate | null> {
@@ -109,7 +122,19 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 	return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
 }
 
-export async function prepareYouTubeHighlightsFromTranscript(
+export async function prepareYouTubeHighlightsFromAttachments(
+	env: Env,
+	article: Article,
+	attachments?: unknown[],
+): Promise<YouTubeHighlightsUpdate | null> {
+	if (article.platform_metadata?.type !== 'youtube') return null;
+	const videoId = article.platform_metadata.data.videoId;
+	if (!videoId) return null;
+	const transcript = youtubeTranscriptAttachment(attachments);
+	return transcript ? prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments) : null;
+}
+
+async function prepareYouTubeHighlightsFromTranscript(
 	env: Env,
 	videoId: string,
 	transcript: TranscriptSegment[],

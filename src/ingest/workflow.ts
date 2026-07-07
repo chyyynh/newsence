@@ -24,11 +24,9 @@ import { detectPaperId, extractPaperTitle } from './platforms/paper/detect';
 import { enrichS2ByTitle, enrichS2FromId } from './platforms/paper/semanticscholar';
 import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
 import {
-	isYoutubeTranscriptAttachment,
+	persistYouTubeWorkflowData,
 	prepareYouTubeHighlights,
-	prepareYouTubeHighlightsFromTranscript,
-	saveYouTubeHighlights,
-	upsertYoutubeTranscript,
+	prepareYouTubeHighlightsFromAttachments,
 	type YouTubeHighlightsUpdate,
 } from './platforms/youtube/transcripts';
 
@@ -460,8 +458,7 @@ async function prepareYoutubeHighlights(
 		async () => {
 			if (context.target.kind === 'source') {
 				const draft = await context.readSourceDraft();
-				const transcript = draft.attachments?.find(isYoutubeTranscriptAttachment)?.transcript;
-				return transcript ? prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments) : null;
+				return prepareYouTubeHighlightsFromAttachments(env, article, draft.attachments);
 			}
 			return sourceType === 'youtube' ? prepareYouTubeHighlights(env, article) : null;
 		},
@@ -508,15 +505,13 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	}
 	const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
 	const entities = entityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
-	const youtubeTranscript = draft.attachments?.find(isYoutubeTranscriptAttachment)?.transcript;
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
 	try {
 		const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
-		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
 		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
-		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
+		await persistYouTubeWorkflowData(db, { attachments: draft.attachments, highlights: input.youtubeHighlights });
 		await upsertTwitterSourceEventAttachment(db, articleId, draft.attachments);
 		await db.query('COMMIT');
 		return articleId;
@@ -574,7 +569,7 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 			});
 		if (table !== USER_FILES_TABLE && entities)
 			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
-		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
+		await persistYouTubeWorkflowData(db, { highlights: input.youtubeHighlights });
 		await db.query('COMMIT');
 		return target.articleId;
 	} catch (error) {
