@@ -82,7 +82,7 @@ Use this maintenance flow before changing schema:
 
 ```bash
 # Inspect monthly coverage, source-type coverage, monthly source-type dips,
-# extraction gap counts, sync gap examples, unknown type examples, top
+# sync gap examples, unknown type examples, top
 # self-source/generic offenders, over-cap rows, orphans, and DB extensions.
 curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
 
