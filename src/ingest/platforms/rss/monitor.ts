@@ -11,7 +11,6 @@ import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, nor
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
 import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
-import { listDefaultRssSourceFeeds, markSourceFeedScrapedById } from '../source-feeds';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	extractImageFromItem,
@@ -157,6 +156,7 @@ const SOURCE_PRIORITY: Record<string, number> = { Unknown: 0 };
 const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
 const DEFAULT_FEED_PRIORITY = 10;
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
+const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 type FeedItemWithUrl = { item: RSSItem; url: string };
 
@@ -218,7 +218,7 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	let items = extractItemsFromFeed(parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES)));
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
-		await markSourceFeedScrapedById(env, feed.id);
+		await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]));
 		return;
 	}
 
@@ -262,13 +262,16 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
-	await markSourceFeedScrapedById(env, feed.id);
+	await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]));
 }
 
 export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const parser = new XMLParser({ ignoreAttributes: false });
-	const feeds = await listDefaultRssSourceFeeds(env);
+	const feeds = await withDbClient(
+		env,
+		async (db) => (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows,
+	);
 	for (const feed of feeds) {
 		try {
 			await processFeed(env, feed, parser);

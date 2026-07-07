@@ -5,7 +5,6 @@ import type { Env, RSSFeed } from '@core-shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
-import { listSourceFeedsByType, markSourceFeedScrapedById } from '../source-feeds';
 import { scrapeYouTube } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
@@ -27,6 +26,7 @@ type FeedVideo = { videoId: string; url: string };
 
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
+const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 async function fetchChannelVideos(channel: RSSFeed, parser: XMLParser): Promise<FeedVideo[] | null> {
 	const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
@@ -88,7 +88,7 @@ async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLPars
 	if (videos === null) return 0;
 	if (videos.length === 0) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-		await markSourceFeedScrapedById(env, channel.id);
+		await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]));
 		return 0;
 	}
 
@@ -109,7 +109,7 @@ async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLPars
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 	}
 
-	await markSourceFeedScrapedById(env, channel.id);
+	await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]));
 	return queued;
 }
 
@@ -119,7 +119,10 @@ export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promi
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const channels = await listSourceFeedsByType(env, 'youtube_channel');
+	const channels = await withDbClient(
+		env,
+		async (db) => (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])).rows,
+	);
 	if (!channels.length) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel source feeds configured' });
 		return;

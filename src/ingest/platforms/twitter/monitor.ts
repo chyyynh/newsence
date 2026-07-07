@@ -1,6 +1,6 @@
+import { withDbClient } from '@core-shared/db';
 import type { Env, RSSFeed, Tweet } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
-import { listSourceFeedsByType, markSourceFeedsScrapedByIds } from '../source-feeds';
 import { saveTweetGroups } from './persistence';
 import { normalizeRetweet } from './source-events';
 
@@ -14,6 +14,7 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 const TWITTER_BATCH_SIZE = 20;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
+const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 type MonitoredTwitterUser = RSSFeed & { twitterUserName: string };
 
@@ -126,7 +127,10 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 
 export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
-	const users = await listSourceFeedsByType(env, 'twitter_user');
+	const users = await withDbClient(
+		env,
+		async (db) => (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows,
+	);
 	if (!users.length) {
 		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
 		return;
@@ -158,9 +162,8 @@ export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promi
 	// Advance scraped_at only if every batch completed — partial fetches would
 	// let the next cron skip tweets we failed to pull.
 	if (allCompleted) {
-		await markSourceFeedsScrapedByIds(
-			env,
-			monitoredUsers.map((u) => u.id),
+		await withDbClient(env, (db) =>
+			db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]),
 		);
 	}
 
