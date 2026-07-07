@@ -31,6 +31,14 @@ interface HnItem {
 	children?: HnComment[];
 }
 
+export function extractHackerNewsId(url: string): string | null {
+	try {
+		return new URL(url).searchParams.get('id')?.match(/^\d+$/)?.[0] ?? null;
+	} catch {
+		return null;
+	}
+}
+
 function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
 	if (type === 'ask' || type === 'show' || type === 'job') return type;
 	return 'story';

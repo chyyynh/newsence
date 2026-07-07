@@ -1,7 +1,7 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
 import type { PlatformMetadata, TwitterMedia } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
-import { extractTweetId, isSocialMediaUrl, normalizeUrl } from '@core-shared/web';
+import { normalizeUrl } from '@core-shared/web';
 import { startRowWorkflow, startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
@@ -11,12 +11,29 @@ import {
 	buildTwitterArticlePlatformMetadata,
 	extractExpandedUrls,
 	extractQuotedTweet,
+	extractTweetId,
 	extractTweetMedia,
 	findExternalUrl,
 	findTwitterArticleUrl,
 	scrapeTwitterArticle,
 	stripTweetUrls,
 } from './scraper';
+
+const SOCIAL_MEDIA_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
+
+function isSocialMediaUrl(url: string): boolean {
+	let hostname: string;
+	try {
+		hostname = new URL(url).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	if (hostname.startsWith('www.')) hostname = hostname.slice(4);
+	for (const host of SOCIAL_MEDIA_HOSTS) {
+		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
+	}
+	return false;
+}
 
 async function findArticleByUrl(db: Client, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
 	const [article] = await getExistingArticlesByUrl(db, [url]);

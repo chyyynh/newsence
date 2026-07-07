@@ -56,7 +56,6 @@ const DOMAIN_ALIASES: Record<string, string> = {
 	'www.x.com': 'x.com',
 };
 const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com']);
-const SOCIAL_MEDIA_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
 const TWITTER_HOSTS = new Set(['twitter.com', 'x.com']);
 const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
@@ -146,11 +145,6 @@ export function streamWithByteLimit(body: ReadableStream<Uint8Array>, maxBytes: 
 	);
 }
 
-export function isSocialMediaUrl(url: string): boolean {
-	const parsed = parseUrl(url);
-	return parsed ? hostMatches(canonicalHost(parsed.hostname), SOCIAL_MEDIA_HOSTS) : false;
-}
-
 export function normalizeUrl(url: string): string {
 	const parsed = parseUrl(url);
 	if (!parsed) return url;
@@ -177,12 +171,6 @@ export function detectUrlKind(url: string): UrlKind {
 	return 'web';
 }
 
-export function extractTweetId(url: string): string | null {
-	const parsed = parseUrl(url);
-	if (!parsed || !hostMatches(canonicalHost(parsed.hostname), TWITTER_HOSTS)) return null;
-	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? parsed.pathname.match(/^\/i\/article\/(\d+)/)?.[1] ?? null;
-}
-
 export function extractYouTubeId(url: string): string | null {
 	const parsed = parseUrl(url);
 	if (!parsed) return null;
@@ -194,11 +182,6 @@ export function extractYouTubeId(url: string): string | null {
 	if (hostMatches(canonicalHost(parsed.hostname), YOUTUBE_SHORT_HOSTS)) return parts[0]?.match(/^[a-zA-Z0-9_-]{11}$/)?.[0] ?? null;
 	if (['embed', 'shorts', 'live', 'v'].includes(parts[0] ?? '')) return parts[1]?.match(/^[a-zA-Z0-9_-]{11}$/)?.[0] ?? null;
 	return null;
-}
-
-export function extractHackerNewsId(url: string): string | null {
-	const id = parseUrl(url)?.searchParams.get('id');
-	return id?.match(/^\d+$/)?.[0] ?? null;
 }
 
 export function decodeHtmlEntities(str: string): string {

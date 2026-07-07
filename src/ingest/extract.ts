@@ -1,26 +1,12 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
-import {
-	BROWSER_UA,
-	detectUrlKind,
-	extractHackerNewsId,
-	extractTweetId,
-	extractYouTubeId,
-	MAX_UPLOAD_BYTES,
-	streamWithByteLimit,
-	type UrlKind,
-} from '@core-shared/web';
+import { BROWSER_UA, detectUrlKind, extractYouTubeId, MAX_UPLOAD_BYTES, streamWithByteLimit, type UrlKind } from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
-import { scrapeHackerNews } from './platforms/hackernews/scraper';
-import { scrapeTweet } from './platforms/twitter/scraper';
+import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
+import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
 import { scrapeHtmlFromResponse } from './platforms/web-scraper';
 import { scrapeYouTube } from './platforms/youtube/scraper';
-
-// Shared extraction core: one input → one normalized shape. Wraps the existing
-// engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)
-// — so the sync `/scrape` endpoint, the async ScrapeWorkflow, and the core RPC
-// surface for future chat agents all produce identical output.
 
 export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 
@@ -84,13 +70,9 @@ const EMPTY_METADATA: NormalizedContent['metadata'] = {
 	ogImageUrl: null,
 };
 
-// Digital PDFs with a real text layer yield plenty of characters; scanned or
-// image-only PDFs come back near-empty because LiteParse base does not OCR.
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
 
-// LiteParse WASM is instantiated once per isolate; the CompiledWasm wrangler
-// rule turns the import into a WebAssembly.Module.
 let pdfParserReady = false;
 
 const REMOTE_DISPATCH_TIMEOUT_MS = 8_000;
@@ -196,15 +178,13 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 	return fetchAndDispatchUrl(url);
 }
 
-// Lossy markdown → plain text. Cheap and good enough for the `text` field; we
-// don't need a real renderer, just the words without the syntax.
 function stripMarkdown(md: string): string {
 	return md
-		.replace(/!\[[^\]]*\]\([^)]*\)/g, '') // images
-		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links → label
-		.replace(/^#{1,6}\s+/gm, '') // headings
-		.replace(/(\*\*|__|\*|_|`)/g, '') // emphasis / inline code
-		.replace(/^\s*[-*+]\s+/gm, '') // bullet markers
+		.replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+		.replace(/^#{1,6}\s+/gm, '')
+		.replace(/(\*\*|__|\*|_|`)/g, '')
+		.replace(/^\s*[-*+]\s+/gm, '')
 		.replace(/\n{3,}/g, '\n\n')
 		.trim();
 }
@@ -240,8 +220,6 @@ function normalizePdf(parsed: ParsedPdf, sourceUrl: string | null): NormalizedCo
 	};
 }
 
-// Empty result for inputs with no extractable text layer: images (needs_ocr,
-// handled in #166) or unrecognized bytes (failed). No throw.
 function emptyResult(contentType: string, sourceUrl: string | null, status: 'needs_ocr' | 'failed'): NormalizedContent {
 	return { sourceUrl, contentType, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status };
 }
@@ -257,7 +235,6 @@ async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent>
 	const result = await scrapeUrl(url, { youtubeApiKey: env.YOUTUBE_API_KEY, kaitoApiKey: env.KAITO_API_KEY });
 	if (result.kind === 'page') return normalizeHtml(result.scraped, url);
 
-	// blob: stream the body into the appropriate extractor, or cancel it for unsupported extractors.
 	if (result.contentType === PDF_MIME) {
 		const limited = streamWithByteLimit(result.body, MAX_UPLOAD_BYTES);
 		const bytes = new Uint8Array(await new Response(limited).arrayBuffer());

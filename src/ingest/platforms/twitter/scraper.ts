@@ -33,6 +33,22 @@ export interface TwitterLikeTweet {
 	retweetedBy?: RetweetedByData;
 }
 
+function isTwitterHost(hostname: string): boolean {
+	const lower = hostname.toLowerCase();
+	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
+}
+
+export function extractTweetId(url: string): string | null {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return null;
+	}
+	if (!isTwitterHost(parsed.hostname)) return null;
+	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? parsed.pathname.match(/^\/i\/article\/(\d+)/)?.[1] ?? null;
+}
+
 function extractTweetAuthor(tweet: TwitterLikeTweet): TwitterAuthorFields {
 	return {
 		authorName: tweet.author?.name || '',
