@@ -3,8 +3,7 @@
 //
 // Everything that decides WHICH extracted entities are worth
 // storing and under WHAT canonical key. Consumed by the ingest
-// pipeline (persistence + prompt exclusion lists) and by the
-// maintenance/repair endpoints.
+// pipeline (persistence + prompt exclusion lists).
 // ─────────────────────────────────────────────────────────────
 
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
@@ -34,7 +33,7 @@ const SOURCE_FEED_SUFFIX_CANONICALS = new Set([
 ]);
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
-export const MAX_ENTITIES_PER_ARTICLE = 10;
+const MAX_ENTITIES_PER_ARTICLE = 10;
 const MAX_EXCLUSION_NAMES = 10;
 
 // Trailing side strips quotes only: `.`/`)`/`}`/`!` can be part of legit
