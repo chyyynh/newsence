@@ -1,7 +1,6 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { Env } from '@core-shared/types';
-import { MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/upload';
-import type { ScrapedContent } from '@core-shared/web';
+import { MAX_UPLOAD_BYTES, type ScrapedContent, streamWithByteLimit } from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 import { scrapeUrl } from './platforms/registry';

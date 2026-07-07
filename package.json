@@ -39,9 +39,5 @@
 		"@types/turndown": "^5.0.6",
 		"typescript": "^5.9.3",
 		"wrangler": "^4.69.0"
-	},
-	"packageManager": "pnpm@9.1.4",
-	"engines": {
-		"pnpm": "^9.1.4"
 	}
 }

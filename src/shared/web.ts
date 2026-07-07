@@ -11,6 +11,15 @@ export const FEED_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWeb
 export const BROWSER_UA =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+export class PayloadTooLargeError extends Error {
+	constructor(maxBytes: number) {
+		super(`Response body exceeded ${maxBytes} bytes`);
+		this.name = 'PayloadTooLargeError';
+	}
+}
+
 function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
 }
@@ -73,6 +82,26 @@ export async function fetchJsonWithTimeout<T>(
 	}
 	const text = await readTextWithLimit(response, maxBytes);
 	return JSON.parse(text) as T;
+}
+
+export function streamWithByteLimit(
+	body: ReadableStream<Uint8Array>,
+	maxBytes: number,
+): { stream: ReadableStream<Uint8Array>; getBytesSeen: () => number } {
+	let bytesSeen = 0;
+	const stream = body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				bytesSeen += chunk.byteLength;
+				if (bytesSeen > maxBytes) {
+					controller.error(new PayloadTooLargeError(maxBytes));
+					return;
+				}
+				controller.enqueue(chunk);
+			},
+		}),
+	);
+	return { stream, getBytesSeen: () => bytesSeen };
 }
 
 /**

@@ -22,26 +22,33 @@ import {
 	sniffMediaTypeStream,
 	UnsupportedMediaError,
 } from '@core-shared/mime';
+import { buildMetadata } from '@core-shared/platform-metadata';
 import type { Env } from '@core-shared/types';
 import {
-	assertBlobUploadQuotaTx,
-	buildPdfMetadata,
-	deriveFileTitle,
+	assertExternalFetchable,
+	BROWSER_UA,
+	fetchWithTimeout,
 	MAX_UPLOAD_BYTES,
 	PayloadTooLargeError,
-	QUOTA_EXCEEDED_CODE,
-	type QuotaExceededCode,
-	storageKeyToAssetUrl,
 	streamWithByteLimit,
-	UploadQuotaExceededError,
-	userGeneratedImageKey,
-	userUploadKey,
-} from '@core-shared/upload';
-import { assertExternalFetchable, BROWSER_UA, fetchWithTimeout } from '@core-shared/web';
+} from '@core-shared/web';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
+
+export const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
+type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
 
 const DEFAULT_IMAGE_TITLE = 'image';
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
+const UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE = 'Upload file quota exceeded';
+const UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE = 'Upload storage quota exceeded';
+const FREE_MAX_USER_FILE_STORAGE_BYTES = 100 * 1024 * 1024;
+const FREE_MAX_USER_FILES = 50;
+const UNLIMITED_UPLOAD_PLANS = new Set(['pro', 'test']);
+
+type BlobUploadQuota = {
+	maxUserFileStorageBytes: number | null;
+	maxUserFiles: number | null;
+};
 
 interface BlobIngestResult {
 	userFileId: string;
@@ -110,6 +117,16 @@ export type PersistSavedUrlBlobResult =
 	| { ok: true; userFileId: string; fileType: string; fileSize: number; title: string }
 	| { ok: false; code: 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'INTERNAL_ERROR'; message: string };
 
+class UploadQuotaExceededError extends Error {
+	constructor(
+		message: string,
+		readonly details: Record<string, unknown>,
+	) {
+		super(message);
+		this.name = 'UploadQuotaExceededError';
+	}
+}
+
 function buildBlobResult(args: {
 	userFileId: string;
 	storageKey: string;
@@ -130,9 +147,83 @@ function buildBlobResult(args: {
 	};
 }
 
+function deriveFileTitle(fileName: string): string {
+	return fileName.replace(/\.[a-z0-9]{1,8}$/i, '') || fileName;
+}
+
+function buildPdfMetadata(args: { fileType: string; fileName: string; fileSize: number }) {
+	if (args.fileType !== PDF_MIME) return null;
+	return buildMetadata('pdf', {
+		fileName: args.fileName,
+		fileSize: args.fileSize,
+	});
+}
+
+function storageKeyToAssetUrl(key: string): string {
+	const encodedPath = key
+		.split('/')
+		.map((segment) => encodeURIComponent(segment))
+		.join('/');
+	return `/api/media/asset/${encodedPath}`;
+}
+
+function userUploadKey(userId: string, extension: string): string {
+	return `users/${userId}/uploads/${crypto.randomUUID()}.${extension}`;
+}
+
+function userGeneratedImageKey(userId: string, extension: string): string {
+	return `users/${userId}/illustrations/${crypto.randomUUID()}.${extension}`;
+}
+
+function getBlobUploadQuota(planId: string): BlobUploadQuota {
+	if (UNLIMITED_UPLOAD_PLANS.has(planId)) {
+		return { maxUserFileStorageBytes: null, maxUserFiles: null };
+	}
+	return {
+		maxUserFileStorageBytes: FREE_MAX_USER_FILE_STORAGE_BYTES,
+		maxUserFiles: FREE_MAX_USER_FILES,
+	};
+}
+
 function serializeMetadata(metadata: unknown | null): string | null {
 	if (metadata === null || metadata === undefined) return null;
 	return JSON.stringify(metadata);
+}
+
+async function assertBlobUploadQuotaTx(db: DbClient, userId: string, incomingBytes: number): Promise<void> {
+	await db.query('SELECT pg_advisory_xact_lock(752617, hashtext($1))', [userId]);
+
+	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
+	const planId = settings.rows[0]?.plan_id ?? 'free';
+	const { maxUserFileStorageBytes, maxUserFiles } = getBlobUploadQuota(planId);
+	if (maxUserFileStorageBytes === null && maxUserFiles === null) return;
+
+	const usage = await db.query<{ total_bytes: string | null; total_files: string }>(
+		`SELECT COALESCE(SUM(file_size), 0)::text AS total_bytes, COUNT(*)::text AS total_files
+		 FROM user_files
+		 WHERE user_id = $1
+		   AND resource_kind = 'blob'`,
+		[userId],
+	);
+	const currentBytes = Number.parseInt(usage.rows[0]?.total_bytes ?? '0', 10);
+	const currentFiles = Number.parseInt(usage.rows[0]?.total_files ?? '0', 10);
+
+	if (maxUserFiles !== null && currentFiles >= maxUserFiles) {
+		throw new UploadQuotaExceededError(UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE, {
+			limit: maxUserFiles,
+			used: currentFiles,
+			planId,
+		});
+	}
+
+	if (maxUserFileStorageBytes !== null && currentBytes + incomingBytes > maxUserFileStorageBytes) {
+		throw new UploadQuotaExceededError(UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE, {
+			limit: maxUserFileStorageBytes,
+			used: currentBytes,
+			incoming: incomingBytes,
+			planId,
+		});
+	}
 }
 
 async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileData): Promise<{ id: string }> {

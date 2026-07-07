@@ -1,7 +1,6 @@
 import { jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
 import type { Env } from '@core-shared/types';
-import { QUOTA_EXCEEDED_CODE } from '@core-shared/upload';
-import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl } from '../blob';
+import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl, QUOTA_EXCEEDED_CODE } from '../blob';
 import { ingestUrls } from '../urls';
 
 // Matches `simple.period` in `wrangler.jsonc` `ratelimits[USER_INGEST_LIMITER]`.
