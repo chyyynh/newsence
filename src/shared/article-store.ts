@@ -61,18 +61,6 @@ const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	scraped_date: 'created_at',
 };
 
-function mapProcessedArticleColumn(column: string, table: ProcessableTable): string {
-	if (table !== USER_FILES_TABLE) return column;
-	return ARTICLES_TO_USER_FILES_COLUMN_MAP[column] ?? column;
-}
-
-function serializeProcessedArticleValue(column: string, value: unknown): unknown {
-	if (value !== null && typeof value === 'object' && column !== 'tags' && column !== 'keywords') {
-		return JSON.stringify(value);
-	}
-	return value;
-}
-
 export async function updateProcessedArticle(
 	db: Client,
 	table: ProcessableTable,
@@ -82,8 +70,13 @@ export async function updateProcessedArticle(
 	const columns = Object.keys(updatePayload);
 	if (columns.length === 0) return;
 
-	const setClauses = columns.map((col, i) => `${mapProcessedArticleColumn(col, table)} = $${i + 1}`).join(', ');
-	const values = columns.map((col) => serializeProcessedArticleValue(col, updatePayload[col]));
+	const setClauses = columns
+		.map((col, i) => `${table === USER_FILES_TABLE ? (ARTICLES_TO_USER_FILES_COLUMN_MAP[col] ?? col) : col} = $${i + 1}`)
+		.join(', ');
+	const values = columns.map((col) => {
+		const value = updatePayload[col];
+		return value !== null && typeof value === 'object' && col !== 'tags' && col !== 'keywords' ? JSON.stringify(value) : value;
+	});
 	values.push(articleId);
 
 	const sql = `UPDATE ${table} SET ${setClauses} WHERE id = $${values.length}`;

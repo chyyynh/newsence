@@ -9,7 +9,9 @@ const DEFAULT_AI_GATEWAY_ID = 'default';
 
 type AiBinding = Ai;
 type AiMessage = { role: 'system' | 'user'; content: string };
-type GatewayRun = <Response>(model: string, inputs: object, options?: AiOptions) => Promise<Response>;
+// Generated Worker types strongly type Workers AI catalog models, while AI
+// Gateway also accepts third-party `{provider}/{model}` names from docs.
+type GatewayAi = { run<Response>(model: string, inputs: object, options?: AiOptions): Promise<Response> };
 type GeminiTextResponse = { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
 type OpenAIChatResponse = { choices?: Array<{ message?: { content?: string } }> };
 
@@ -23,31 +25,6 @@ interface GenerateTextOptions {
 
 interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
-}
-
-function gatewayOptions(gatewayName?: string, task?: string): AiOptions {
-	return {
-		gateway: {
-			id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
-			collectLog: true,
-			...(task && { metadata: { app: 'newsence', task } }),
-		},
-	};
-}
-
-function runGatewayModel<Response>(ai: AiBinding, model: string, inputs: object, options?: AiOptions): Promise<Response> {
-	// Generated Worker types strongly type Workers AI catalog models, while AI
-	// Gateway also accepts third-party `{provider}/{model}` names from docs.
-	return (ai.run as unknown as GatewayRun)<Response>(model, inputs, options);
-}
-
-function errorDetails(error: unknown): Record<string, unknown> {
-	if (!(error instanceof Error)) return { error: String(error) };
-	const details: Record<string, unknown> = { error: String(error), name: error.name, message: error.message };
-	for (const key of ['statusCode', 'status', 'responseBody', 'data', 'url']) {
-		if (key in error) details[key] = (error as unknown as Record<string, unknown>)[key];
-	}
-	return details;
 }
 
 // Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
@@ -74,8 +51,7 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
 
 	try {
-		const response = await runGatewayModel<GeminiTextResponse>(
-			ai,
+		const response = await (ai as GatewayAi).run<GeminiTextResponse>(
 			CORE_TEXT_MODEL,
 			{
 				contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -85,12 +61,18 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 					temperature: options.temperature ?? 0.3,
 				},
 			},
-			gatewayOptions(gatewayIdValue, task),
+			{
+				gateway: {
+					id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
+					collectLog: true,
+					...(task && { metadata: { app: 'newsence', task } }),
+				},
+			},
 		);
 		const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
 		return text?.trim() || null;
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, ...errorDetails(error) });
+		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
 		return null;
 	}
 }
@@ -104,8 +86,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 	];
 
 	try {
-		const response = await runGatewayModel<OpenAIChatResponse>(
-			ai,
+		const response = await (ai as GatewayAi).run<OpenAIChatResponse>(
 			CORE_JSON_MODEL,
 			{
 				messages,
@@ -120,7 +101,13 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 					},
 				},
 			},
-			gatewayOptions(gatewayIdValue, task),
+			{
+				gateway: {
+					id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
+					collectLog: true,
+					...(task && { metadata: { app: 'newsence', task } }),
+				},
+			},
 		);
 		const text = response.choices?.[0]?.message?.content?.trim() || null;
 		if (!text) throw new Error('No text content found in model response');
@@ -135,7 +122,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 			model: CORE_JSON_MODEL,
 			schema: task,
 			task,
-			...errorDetails(error),
+			error: String(error),
 		});
 		return null;
 	}
@@ -149,7 +136,13 @@ export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName
 		const result = await ai.run(
 			EMBEDDING_MODEL,
 			{ text: [sanitizedText.slice(0, MAX_TEXT_LENGTH)] },
-			gatewayOptions(gatewayName, 'article-embedding'),
+			{
+				gateway: {
+					id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
+					collectLog: true,
+					metadata: { app: 'newsence', task: 'article-embedding' },
+				},
+			},
 		);
 		const record = typeof result === 'object' && result !== null && !Array.isArray(result) ? (result as Record<string, unknown>) : null;
 		const first = Array.isArray(record?.data) ? record.data[0] : null;

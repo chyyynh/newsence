@@ -7,15 +7,6 @@ import { type MaintenanceCursor, pruneOrphanEntities, repairMissingArticleEntity
 import { getEntityQualitySnapshot } from '@entities/quality-report';
 import { Client } from 'pg';
 
-function parseMaintenanceCursor(value: unknown): MaintenanceCursor | null {
-	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-	const record = value as Record<string, unknown>;
-	const publishedDate = typeof record.publishedDate === 'string' ? record.publishedDate.trim() : '';
-	const id = typeof record.id === 'string' ? record.id.trim() : '';
-	if (!publishedDate || !id || Number.isNaN(Date.parse(publishedDate))) return null;
-	return { id, publishedDate };
-}
-
 export async function handleRepairEntityLinks(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
@@ -35,7 +26,12 @@ export async function handleRepairEntityLinks(request: Request, env: Env): Promi
 	if (before && Number.isNaN(Date.parse(before))) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid before timestamp' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
-	const cursor = parseMaintenanceCursor(body.cursor);
+	const cursorRecord =
+		body.cursor && typeof body.cursor === 'object' && !Array.isArray(body.cursor) ? (body.cursor as Record<string, unknown>) : null;
+	const publishedDate = typeof cursorRecord?.publishedDate === 'string' ? cursorRecord.publishedDate.trim() : '';
+	const cursorId = typeof cursorRecord?.id === 'string' ? cursorRecord.id.trim() : '';
+	const cursor: MaintenanceCursor | null =
+		publishedDate && cursorId && !Number.isNaN(Date.parse(publishedDate)) ? { id: cursorId, publishedDate } : null;
 	if (body.cursor !== undefined && !cursor) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid cursor' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
