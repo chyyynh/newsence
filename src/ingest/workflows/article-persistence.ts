@@ -1,7 +1,6 @@
 import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, updateProcessedArticle } from '@core-shared/article-store';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
-import { validateImageUrl } from '@core-shared/web';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
@@ -138,19 +137,17 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	}
 }
 
-async function prepareSourceFinalInsert(
+function prepareSourceFinalInsert(
 	base: SourceArticleDraft['article'],
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
 	metadataPatch: Record<string, unknown> | undefined,
-): Promise<SourceFinalInsert> {
+): SourceFinalInsert {
 	const updatePayload = buildProcessorUpdatePayload(article, result, embedding, metadataPatch);
 	const hasPayloadOgImage = Object.hasOwn(updatePayload, OG_IMAGE_UPDATE_KEY);
-	const candidate = hasPayloadOgImage ? updatePayload[OG_IMAGE_UPDATE_KEY] : base.ogImageUrl;
-	const validated = await validateImageUrl(typeof candidate === 'string' ? candidate : null);
-	if (hasPayloadOgImage) return { article: base, updatePayload: { ...updatePayload, [OG_IMAGE_UPDATE_KEY]: validated } };
-	return { article: { ...base, ogImageUrl: validated }, updatePayload };
+	if (hasPayloadOgImage) return { article: base, updatePayload: { ...updatePayload, [OG_IMAGE_UPDATE_KEY]: null } };
+	return { article: { ...base, ogImageUrl: null }, updatePayload };
 }
 
 async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableTable, input: WorkflowPersistenceInput): Promise<string> {

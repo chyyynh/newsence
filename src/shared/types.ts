@@ -74,8 +74,6 @@ export interface ScrapedContent {
 	content: string;
 	summary?: string;
 	ogImageUrl: string | null;
-	ogImageWidth?: number | null;
-	ogImageHeight?: number | null;
 	siteName: string | null;
 	author: string | null;
 	publishedDate: string | null;

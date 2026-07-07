@@ -26,8 +26,6 @@ function isJunkImage(src: string, alt?: string): boolean {
 interface ArticleMetadata {
 	title: string;
 	ogImageUrl: string | null;
-	ogImageWidth: number | null;
-	ogImageHeight: number | null;
 	description: string | null;
 	siteName: string;
 	author: string | null;
@@ -56,17 +54,12 @@ function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 		ogImageUrl = ogImageUrl.replace(/^http:/i, 'https:');
 	}
 
-	const rawW = $('meta[property="og:image:width"]').attr('content');
-	const rawH = $('meta[property="og:image:height"]').attr('content');
-	const ogImageWidth = rawW ? parseInt(rawW, 10) || null : null;
-	const ogImageHeight = rawH ? parseInt(rawH, 10) || null : null;
-
 	const description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || null;
 	const siteName = $('meta[property="og:site_name"]').attr('content') || new URL(url).hostname;
 	const author = $('meta[name="author"]').attr('content') || $('meta[property="article:author"]').attr('content') || null;
 	const publishedDate = $('meta[property="article:published_time"]').attr('content') || $('time').attr('datetime') || null;
 
-	return { title: title.trim(), ogImageUrl, ogImageWidth, ogImageHeight, description, siteName, author, publishedDate };
+	return { title: title.trim(), ogImageUrl, description, siteName, author, publishedDate };
 }
 
 type CheerioEl = ReturnType<cheerio.CheerioAPI>;
@@ -224,8 +217,6 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 		content,
 		summary: metadata.description || undefined,
 		ogImageUrl: metadata.ogImageUrl,
-		ogImageWidth: metadata.ogImageWidth,
-		ogImageHeight: metadata.ogImageHeight,
 		siteName: metadata.siteName,
 		author: metadata.author,
 		publishedDate: metadata.publishedDate,

@@ -156,12 +156,6 @@ export interface PlatformEnrichments {
 // Top-level envelope (discriminated union)
 // ─────────────────────────────────────────────────────────────
 
-/** Optional OG image dimensions stored at the envelope level (cross-platform). */
-interface OgImageDimensions {
-	ogImageWidth?: number | null;
-	ogImageHeight?: number | null;
-}
-
 export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
 
 interface ClassificationMetadata {
@@ -174,15 +168,9 @@ interface ClassificationEnvelope {
 }
 
 export type PlatformMetadata =
-	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
-			ClassificationEnvelope)
-	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
-			ClassificationEnvelope)
-	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
-			ClassificationEnvelope)
-	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
-			ClassificationEnvelope)
-	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
-			ClassificationEnvelope)
-	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
-			ClassificationEnvelope);
+	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope);

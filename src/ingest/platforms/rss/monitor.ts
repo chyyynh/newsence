@@ -7,15 +7,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { Client } from 'pg';
 import { resolveDiscussionPlatformMetadata } from '../registry';
 import { scrapeWebPage } from '../web-scraper';
-import {
-	extractImageFromItem,
-	extractItemsFromFeed,
-	extractRssFullContent,
-	extractUrlFromItem,
-	type RSSItem,
-	stripHtml,
-	toPlainText,
-} from './parser';
+import { extractItemsFromFeed, extractRssFullContent, extractUrlFromItem, type RSSItem, stripHtml, toPlainText } from './parser';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -40,9 +32,6 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 	}
 
 	let crawledContent = '';
-	let fetchedOgImageUrl: string | null = null;
-	let ogImageWidth: number | null = null;
-	let ogImageHeight: number | null = null;
 	if (sourceType === 'rss') {
 		const rssContent = extractRssFullContent(item);
 		if (rssContent) {
@@ -51,9 +40,6 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 			try {
 				const scraped = await scrapeWebPage(url);
 				crawledContent = scraped.content;
-				fetchedOgImageUrl = scraped.ogImageUrl;
-				ogImageWidth = scraped.ogImageWidth ?? null;
-				ogImageHeight = scraped.ogImageHeight ?? null;
 			} catch (e) {
 				console.warn({ tag: 'RSS', msg: 'Scrape fallback failed', url, error: String(e) });
 			}
@@ -61,7 +47,6 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 	}
 
 	const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
-	const metadataToStore = platformMetadata ? { ...platformMetadata, ogImageWidth, ogImageHeight } : null;
 
 	await startSourceArticleWorkflow(env, {
 		article: {
@@ -72,8 +57,8 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 			summary: platformMetadata ? '' : stripHtml(item.description ?? item.summary ?? ''),
 			sourceType,
 			content: crawledContent || null,
-			ogImageUrl: fetchedOgImageUrl ?? extractImageFromItem(item),
-			platformMetadata: metadataToStore,
+			ogImageUrl: null,
+			platformMetadata,
 		},
 	});
 	return true;

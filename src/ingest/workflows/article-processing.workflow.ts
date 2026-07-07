@@ -84,7 +84,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): Workfl
 					tags: data.tags ?? [],
 					keywords: data.keywords ?? [],
 					source_type: data.sourceType,
-					og_image_url: data.ogImageUrl,
+					og_image_url: null,
 					platform_metadata: data.platformMetadata as Article['platform_metadata'],
 				};
 			});

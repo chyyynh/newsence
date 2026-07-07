@@ -112,59 +112,6 @@ export function extractUrlFromItem(item: RSSItem): string | null {
 	return (primaryLink ? attr(primaryLink, 'href') : undefined) ?? asString(item.url) ?? null;
 }
 
-function extractEnclosureImage(item: RSSItem): string | null {
-	const enclosure = asRecord(item.enclosure);
-	if (!enclosure) return null;
-	const url = attr(enclosure, 'url');
-	const type = attr(enclosure, 'type') ?? '';
-	return url && (!type || type.startsWith('image/')) ? url : null;
-}
-
-function extractImageFromMediaEntry(entryValue: unknown): string | null {
-	const entry = asRecord(entryValue);
-	if (!entry) return null;
-	const url = attr(entry, 'url');
-	if (url) return url;
-	const nested = entry['media:content'] ?? entry['media:thumbnail'];
-	for (const nestedValue of normalizeItems(nested)) {
-		const nestedUrl = attr(nestedValue, 'url');
-		if (nestedUrl) return nestedUrl;
-	}
-	return null;
-}
-
-function extractMediaImage(item: RSSItem): string | null {
-	for (const key of ['media:content', 'media:thumbnail', 'media:group']) {
-		for (const entry of normalizeItems(item[key])) {
-			const url = extractImageFromMediaEntry(entry);
-			if (url) return url;
-		}
-	}
-	return null;
-}
-
-function extractItunesImage(item: RSSItem): string | null {
-	if (typeof item['itunes:image'] === 'string') return item['itunes:image'];
-	const itunes = asRecord(item['itunes:image']);
-	if (!itunes) return null;
-	return attr(itunes, 'href') ?? null;
-}
-
-function extractEmbeddedImage(item: RSSItem): string | null {
-	const html = toPlainText(item.description) || toPlainText(item['content:encoded']);
-	if (!html) return null;
-	return html.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] ?? null;
-}
-
-/**
- * Extract an image URL from RSS item metadata.
- * Checks enclosure, media:content, media:thumbnail, itunes:image, and
- * first <img> in description/content.
- */
-export function extractImageFromItem(item: RSSItem): string | null {
-	return extractEnclosureImage(item) ?? extractMediaImage(item) ?? extractItunesImage(item) ?? extractEmbeddedImage(item);
-}
-
 export function extractItemsFromFeed(data: unknown): RSSItem[] {
 	const source =
 		getPath(data, ['rss', 'channel', 'item']) ??

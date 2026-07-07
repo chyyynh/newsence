@@ -159,29 +159,6 @@ export async function resolveUrl(url: string): Promise<string> {
 	}
 }
 
-export async function validateImageUrl(url: string | null | undefined, timeoutMs = 5_000): Promise<string | null> {
-	const trimmed = url?.trim();
-	if (!trimmed) return null;
-
-	const init: RequestInit = {
-		redirect: 'follow',
-		headers: { 'User-Agent': BROWSER_UA },
-	};
-	try {
-		let res = await fetchWithTimeout(trimmed, { ...init, method: 'HEAD' }, timeoutMs);
-		if (res.status === 405 || res.status === 501) {
-			res = await fetchWithTimeout(trimmed, { ...init, method: 'GET', headers: { ...init.headers, Range: 'bytes=0-0' } }, timeoutMs);
-		}
-		await res.body?.cancel();
-
-		if (!res.ok) return null;
-		const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
-		return !contentType || contentType.startsWith('image/') ? trimmed : null;
-	} catch {
-		return null;
-	}
-}
-
 export function assertExternalFetchable(rawUrl: string): URL {
 	const parsed = parseUrl(rawUrl);
 	if (!parsed) throw new Error('Invalid URL');

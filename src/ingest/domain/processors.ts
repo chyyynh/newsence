@@ -56,15 +56,7 @@ export function buildProcessorUpdatePayload(
 			? updatePayload.tags.find((tag): tag is ArticleCategory => typeof tag === 'string' && ARTICLE_CATEGORIES.has(tag as ArticleCategory))
 			: null);
 	const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-	const hasDims = !!result.ogImageDimensions && result.ogImageDimensions.width > 0 && result.ogImageDimensions.height > 0;
 	let mergedMetadata: PlatformMetadata | null = article.platform_metadata ?? null;
-	if (hasDims) {
-		mergedMetadata = {
-			...(mergedMetadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null }),
-			ogImageWidth: result.ogImageDimensions!.width,
-			ogImageHeight: result.ogImageDimensions!.height,
-		};
-	}
 	if (hasEnrichments && mergedMetadata) {
 		mergedMetadata = {
 			...mergedMetadata,

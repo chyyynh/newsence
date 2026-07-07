@@ -1,6 +1,6 @@
 import { PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
-import { detectUrlKind, normalizeUrl, validateImageUrl } from '@core-shared/web';
+import { detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
@@ -55,15 +55,6 @@ async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: strin
 	}
 
 	try {
-		const ogImageUrl = await validateImageUrl(scraped.ogImageUrl);
-		const platformMetadataToStore = scraped.metadata
-			? {
-					...scraped.metadata,
-					ogImageWidth: scraped.ogImageWidth ?? null,
-					ogImageHeight: scraped.ogImageHeight ?? null,
-				}
-			: null;
-
 		const userFile = await insertUrlUserFile(db, {
 			url,
 			normalizedUrl: url,
@@ -73,8 +64,8 @@ async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: strin
 			summary: scraped.summary || '',
 			platformType: urlKind,
 			content: scraped.content || null,
-			ogImageUrl,
-			platformMetadata: platformMetadataToStore,
+			ogImageUrl: null,
+			platformMetadata: scraped.metadata ?? null,
 			userId,
 		});
 
