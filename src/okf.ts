@@ -243,26 +243,22 @@ function* renderOkfFiles(
 	yield { path: 'index.md', content: renderRootIndex(collection, articles, entityById, articlePaths, entityPaths) };
 	yield {
 		path: 'articles/index.md',
-		content: renderDirectoryIndex(
-			'Resources',
-			articles.map((article) =>
-				indexEntry(
-					displayTitle(article),
-					stripDirectoryPrefix(articlePaths.get(resourceKey(article))!, 'articles'),
-					displayDescription(article),
-				),
+		content: compactMarkdown([
+			'# Resources',
+			...articles.map((article) =>
+				indexEntry(displayTitle(article), articlePaths.get(resourceKey(article))!.slice('articles/'.length), displayDescription(article)),
 			),
-		),
+		]),
 	};
 	if (entityById.size > 0) {
 		yield {
 			path: 'entities/index.md',
-			content: renderDirectoryIndex(
-				'Entities',
-				[...entityById.values()].map((entity) =>
-					indexEntry(entity.name, stripDirectoryPrefix(entityPaths.get(entity.id)!, 'entities'), entity.name_cn),
+			content: compactMarkdown([
+				'# Entities',
+				...[...entityById.values()].map((entity) =>
+					indexEntry(entity.name, entityPaths.get(entity.id)!.slice('entities/'.length), entity.name_cn),
 				),
-			),
+			]),
 		};
 	}
 	for (const article of articles) {
@@ -278,10 +274,6 @@ function* renderOkfFiles(
 		};
 	}
 	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size, quality) };
-}
-
-function stripDirectoryPrefix(path: string, prefix: string): string {
-	return path.startsWith(`${prefix}/`) ? path.slice(prefix.length + 1) : path;
 }
 
 function renderRootIndex(
@@ -312,10 +304,6 @@ function renderRootIndex(
 
 function resourceKey(article: ArticleRow): string {
 	return `${article.kind}:${article.id}`;
-}
-
-function renderDirectoryIndex(title: string, entries: string[]): string {
-	return compactMarkdown([`# ${title}`, ...entries]);
 }
 
 function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths: Map<string, string>): string {
