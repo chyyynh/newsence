@@ -152,10 +152,6 @@ function extractMetaName(html: string, name: string): string | null {
 	return raw ? decodeHtmlEntities(raw).trim() || null : null;
 }
 
-function targetTable(target: WorkflowQueueTarget): ProcessableTable {
-	return target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE;
-}
-
 function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): WorkflowRunContext {
 	let draft: Promise<SourceArticleDraft> | undefined;
 	let article: Promise<Article> | undefined;
@@ -172,7 +168,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): Workfl
 
 	return {
 		target,
-		table: targetTable(target),
+		table: target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE,
 		readSourceDraft,
 		readSourceArticle: () => {
 			article ??= readSourceDraft().then((draft) => {
@@ -216,13 +212,9 @@ async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<P
 	return { ...(await context.readSourceArticle()), content: null };
 }
 
-async function withPdfTextTemp(env: Env, article: Article, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
-	if (!pdfTextTemp?.textStorageKey) return article;
-	return { ...article, content: await readPdfTextTemp(env, pdfTextTemp.textStorageKey) };
-}
-
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
-	return withPdfTextTemp(env, await loadTargetArticle(env, context), pdfTextTemp);
+	const article = await loadTargetArticle(env, context);
+	return pdfTextTemp?.textStorageKey ? { ...article, content: await readPdfTextTemp(env, pdfTextTemp.textStorageKey) } : article;
 }
 
 async function analyzeArticle(env: Env, context: WorkflowRunContext, sourceType: string, pdfTextTemp: PdfTextTempResult | null) {
