@@ -373,14 +373,12 @@ async function prepareYoutubeHighlights(
 	env: Env,
 	context: WorkflowRunContext,
 	article: Article,
-	sourceType: string,
 	step: WorkflowStep,
 ): Promise<YouTubeHighlightsUpdate | null> {
 	const platformMetadata = article.platform_metadata;
 	if (platformMetadata?.type !== 'youtube') return null;
 	const videoId = platformMetadata.data.videoId;
 	if (!videoId) return null;
-	if (context.target.kind !== 'source' && sourceType !== 'youtube') return null;
 
 	return step.do(
 		'generate-youtube-highlights',
@@ -390,7 +388,7 @@ async function prepareYoutubeHighlights(
 				const draft = await context.readSourceDraft();
 				return prepareYouTubeHighlightsFromAttachments(env, article, draft.attachments);
 			}
-			return sourceType === 'youtube' ? prepareYouTubeHighlights(env, article) : null;
+			return prepareYouTubeHighlights(env, article);
 		},
 	);
 }
@@ -571,7 +569,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, sourceType, step);
+			const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, step);
 			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
