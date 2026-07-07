@@ -477,7 +477,7 @@ function assignPaths(items: Array<{ id: string; label: string }>, prefix: string
 	const used = new Set<string>();
 	const paths = new Map<string, string>();
 	for (const item of items) {
-		const base = slugify(item.label) || fallbackSlug(item.id);
+		const base = slugify(item.label) || slugify(item.id) || 'item';
 		let slug = base;
 		for (let i = 2; used.has(slug); i++) slug = `${base}-${i}`;
 		used.add(slug);
@@ -487,11 +487,7 @@ function assignPaths(items: Array<{ id: string; label: string }>, prefix: string
 }
 
 function uniqueSlug(label: string, id: string): string {
-	return `${slugify(label) || 'collection'}-${fallbackSlug(id)}`;
-}
-
-function fallbackSlug(id: string): string {
-	return slugify(id) || 'item';
+	return `${slugify(label) || 'collection'}-${slugify(id) || 'item'}`;
 }
 
 function slugify(value: string): string {

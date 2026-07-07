@@ -56,15 +56,6 @@ function parseContentDisposition(header: string | null): string | null {
 	}
 }
 
-function filenameFromUrl(url: string, fallback: string): string {
-	try {
-		const tail = new URL(url).pathname.split('/').filter(Boolean).pop();
-		return tail || fallback;
-	} catch {
-		return fallback;
-	}
-}
-
 /**
  * Single-fetch dispatch for arbitrary external URLs. The Response's headers
  * tell us whether to parse as HTML or stream as a blob; non-supported types
@@ -97,7 +88,8 @@ async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
 		const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
 		const finalUrl = res.url || url;
 		const cdName = parseContentDisposition(res.headers.get('content-disposition'));
-		const suggestedFilename = cdName ?? filenameFromUrl(finalUrl, ct === PDF_MIME ? 'document.pdf' : 'image');
+		const suggestedFilename =
+			cdName ?? new URL(finalUrl).pathname.split('/').filter(Boolean).pop() ?? (ct === PDF_MIME ? 'document.pdf' : 'image');
 		return { kind: 'blob', body: res.body, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength };
 	}
 
