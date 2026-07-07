@@ -2,8 +2,8 @@ import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import type { YouTubeMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
-import { XMLParser } from 'fast-xml-parser';
 import { Client } from 'pg';
 import { parseDurationSeconds, scrapeYouTube } from './scraper';
 
@@ -11,18 +11,28 @@ import { parseDurationSeconds, scrapeYouTube } from './scraper';
 // YouTube Channel Monitor
 // ─────────────────────────────────────────────────────────────
 
-interface YouTubeAtomEntry {
-	'yt:videoId'?: string;
-}
-
 interface YouTubeFeedVideo {
 	videoId: string;
 	url: string;
 }
+type YouTubeFeedEntry = FeedEntry & { videoId?: unknown };
 
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
+
+function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
+	const entries = (extractFromXml(xml, {
+		descriptionMaxLen: 0,
+		getExtraEntryFields: (entry) => ({ videoId: entry['yt:videoId'] }),
+	}).entries ?? []) as YouTubeFeedEntry[];
+
+	return entries.flatMap((entry) =>
+		typeof entry.videoId === 'string'
+			? [{ videoId: entry.videoId, url: normalizeUrl(entry.link ?? `https://youtube.com/watch?v=${entry.videoId}`) }]
+			: [],
+	);
+}
 
 async function queueYouTubeVideo(env: Env, apiKey: string, channel: RSSFeed, video: YouTubeFeedVideo): Promise<boolean> {
 	const scraped = await scrapeYouTube(video.videoId, apiKey, { minDurationSecondsForTranscript: SHORTS_MAX_SECONDS });
@@ -64,7 +74,6 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 	await db.connect();
 	const channels = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])).rows;
 
-	const parser = new XMLParser({ ignoreAttributes: false });
 	let totalQueued = 0;
 	for (const channel of channels) {
 		try {
@@ -75,14 +84,7 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 				continue;
 			}
 
-			const feed = parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES));
-			const rawEntries = feed?.feed?.entry;
-			const videos = rawEntries
-				? ((Array.isArray(rawEntries) ? rawEntries : [rawEntries]) as YouTubeAtomEntry[])
-						.map((entry) => entry['yt:videoId'])
-						.filter((videoId): videoId is string => !!videoId)
-						.map((videoId) => ({ videoId, url: `https://youtube.com/watch?v=${videoId}` }))
-				: [];
+			const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
 			if (videos.length === 0) {
 				console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
 				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);

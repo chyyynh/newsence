@@ -21,7 +21,6 @@
 		"@llamaindex/liteparse-wasm": "^2.1.1",
 		"@mozilla/readability": "^0.6.0",
 		"cheerio": "^1.2.0",
-		"fast-xml-parser": "^5.3.4",
 		"hpack": "^1.0.0",
 		"linkedom": "^0.18.12",
 		"node-forge": "^1.4.0",
