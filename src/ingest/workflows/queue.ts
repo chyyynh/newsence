@@ -41,24 +41,16 @@ const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 
 export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
-	await env.ARTICLE_QUEUE.send(rowWorkflowTarget(articleId, targetTable));
+	await env.ARTICLE_QUEUE.send({ kind: 'row', articleId, ...(targetTable ? { targetTable } : {}) });
 }
 
 export async function enqueueArticleBatchProcess(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<void> {
 	if (!articleIds.length) return;
 	await env.ARTICLE_QUEUE.sendBatch(
 		articleIds.map((articleId) => ({
-			body: rowWorkflowTarget(articleId, targetTable),
+			body: { kind: 'row', articleId, ...(targetTable ? { targetTable } : {}) },
 		})),
 	);
-}
-
-function rowWorkflowTarget(articleId: string, targetTable?: ProcessableTable): RowWorkflowTarget {
-	return {
-		kind: 'row',
-		articleId,
-		...(targetTable ? { targetTable } : {}),
-	};
 }
 
 export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -91,9 +83,14 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 	try {
 		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
 		const result = await ensureSourceArticleWorkflow(env, workflowId, sourceArticle);
-		if (!result.sourceRefUsed) await cleanupUnusedSourceArticleDraft(env, sourceArticle, result.id);
+		if (!result.sourceRefUsed)
+			await cleanupSourceArticleDraftRef(env, sourceArticle, {
+				reason: 'workflow already exists',
+				workflowId: result.id,
+				logTag: 'SOURCE-WORKFLOW',
+			});
 	} catch (err) {
-		await cleanupSourceWorkflowDraft(env, sourceArticle, { reason: 'workflow create failed' });
+		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow create failed', logTag: 'SOURCE-WORKFLOW' });
 		throw err;
 	}
 }
@@ -113,7 +110,7 @@ export async function createWorkflowsForQueueMessages(env: Env, messages: readon
 			const targetTable = resolveProcessableTable(target.targetTable);
 			return {
 				id: articleWorkflowId(id, targetTable, target.articleId),
-				params: { target: rowWorkflowTarget(target.articleId, targetTable) },
+				params: { target: { kind: 'row', articleId: target.articleId, targetTable } },
 			};
 		}),
 	);
@@ -149,7 +146,8 @@ async function ensureSourceArticleWorkflow(
 
 	if (existing.status === 'unknown') {
 		try {
-			const id = await createMonitorWorkflow(env, workflowId, { kind: 'source', sourceArticle });
+			const instance = await env.MONITOR_WORKFLOW.create({ id: workflowId, params: { target: { kind: 'source', sourceArticle } } });
+			const id = instance.id;
 			return { id, created: true, sourceRefUsed: true };
 		} catch {
 			const raced = await getMonitorWorkflowStatus(env, workflowId);
@@ -160,7 +158,8 @@ async function ensureSourceArticleWorkflow(
 
 	const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
 	try {
-		const id = await createMonitorWorkflow(env, retryWorkflowId, { kind: 'source', sourceArticle });
+		const instance = await env.MONITOR_WORKFLOW.create({ id: retryWorkflowId, params: { target: { kind: 'source', sourceArticle } } });
+		const id = instance.id;
 		return { id, created: true, sourceRefUsed: true };
 	} catch (err) {
 		const raced = await getMonitorWorkflowStatus(env, retryWorkflowId);
@@ -171,18 +170,6 @@ async function ensureSourceArticleWorkflow(
 
 function isReusableSourceWorkflowStatus(status: string): boolean {
 	return status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(status);
-}
-
-async function cleanupUnusedSourceArticleDraft(env: Env, sourceArticle: SourceArticleDraftRef, workflowId: string): Promise<void> {
-	await cleanupSourceWorkflowDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId });
-}
-
-async function cleanupSourceWorkflowDraft(
-	env: Env,
-	sourceArticle: SourceArticleDraftRef,
-	context: { reason: string; workflowId?: string },
-): Promise<void> {
-	await cleanupSourceArticleDraftRef(env, sourceArticle, { ...context, logTag: 'SOURCE-WORKFLOW' });
 }
 
 async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
@@ -289,13 +276,21 @@ function userFileWorkflowId(userFileId: string): string {
 
 async function createUserFileWorkflowInstance(env: Env, workflowId: string, userFileId: string): Promise<string> {
 	try {
-		return createMonitorWorkflow(env, workflowId, rowWorkflowTarget(userFileId, USER_FILES_TABLE));
+		const instance = await env.MONITOR_WORKFLOW.create({
+			id: workflowId,
+			params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
+		});
+		return instance.id;
 	} catch (err) {
 		const existing = await getMonitorWorkflowStatus(env, workflowId);
 		if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
 		if (existing.status === 'unknown') throw err;
 
-		return createMonitorWorkflow(env, `${workflowId}-${crypto.randomUUID()}`, rowWorkflowTarget(userFileId, USER_FILES_TABLE));
+		const instance = await env.MONITOR_WORKFLOW.create({
+			id: `${workflowId}-${crypto.randomUUID()}`,
+			params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
+		});
+		return instance.id;
 	}
 }
 
@@ -313,12 +308,4 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 		// surfaced via the create-conflict retry, so a transient get error is not lost.
 		return { id: workflowId, status: 'unknown' };
 	}
-}
-
-async function createMonitorWorkflow(env: Env, workflowId: string, target: WorkflowQueueTarget): Promise<string> {
-	const instance = await env.MONITOR_WORKFLOW.create({
-		id: workflowId,
-		params: { target },
-	});
-	return instance.id;
 }
