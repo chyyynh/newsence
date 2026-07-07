@@ -17,6 +17,7 @@
 	},
 	"dependencies": {
 		"@bufbuild/protobuf": "^1.10.0",
+		"@extractus/feed-extractor": "^7.2.1",
 		"@llamaindex/liteparse-wasm": "^2.1.1",
 		"@mozilla/readability": "^0.6.0",
 		"cheerio": "^1.2.0",
