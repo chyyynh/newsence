@@ -1,8 +1,8 @@
 import { withDbClient } from '@core-shared/db';
 import { PDF_MIME } from '@core-shared/mime';
 import { parsePlatformMetadata } from '@core-shared/platform-metadata';
-import type { Env } from '@core-shared/types';
-import { detectPlatformType, normalizeUrl, type ScrapedContent, validateImageUrl } from '@core-shared/web';
+import type { Env, ScrapedContent } from '@core-shared/types';
+import { detectPlatformType, normalizeUrl, validateImageUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { persistSavedUrlBlob } from './blob';

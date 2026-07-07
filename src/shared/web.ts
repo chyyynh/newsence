@@ -1,189 +1,10 @@
-// ─────────────────────────────────────────────────────────────
-// Fetch / URL Utilities
-// ─────────────────────────────────────────────────────────────
-
-// User-Agent strings for outbound fetches. Two flavors are kept on purpose:
-// FEED_UA is short enough that boring XML/Atom endpoints (RSS, YouTube
-// channel feeds) accept it without triggering bot heuristics; BROWSER_UA
-// looks like a real Chrome session and is the one to use when hitting
-// arbitrary HTML pages that often sit behind Cloudflare or similar.
 export const FEED_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 export const BROWSER_UA =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-export class PayloadTooLargeError extends Error {
-	constructor(maxBytes: number) {
-		super(`Response body exceeded ${maxBytes} bytes`);
-		this.name = 'PayloadTooLargeError';
-	}
-}
-
-function isTimeoutError(err: unknown): boolean {
-	return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
-}
-
-/**
- * `fetch` wrapped with a timeout signal so a stalled origin can't hang a
- * cron invocation until the Worker's own runtime timeout. All cron-path
- * outbound HTTP should go through this helper.
- */
-export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
-	try {
-		return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
-		}
-		throw err;
-	}
-}
-
 const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
-
-export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_TEXT_MAX_BYTES): Promise<string> {
-	const contentLength = Number(response.headers.get('content-length') || '0');
-	if (contentLength > maxBytes) throw new Error(`Response too large: ${contentLength} bytes`);
-	if (!response.body) return '';
-
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let text = '';
-	let totalBytes = 0;
-
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) {
-			text += decoder.decode();
-			break;
-		}
-		totalBytes += value.byteLength;
-		if (totalBytes > maxBytes) {
-			await reader.cancel();
-			throw new Error(`Response body exceeded ${maxBytes} bytes`);
-		}
-		text += decoder.decode(value, { stream: true });
-	}
-
-	return text;
-}
-
-export async function fetchJsonWithTimeout<T>(
-	url: string,
-	options: RequestInit = {},
-	timeoutMs = 15_000,
-	maxBytes = DEFAULT_TEXT_MAX_BYTES,
-): Promise<T> {
-	const response = await fetchWithTimeout(url, options, timeoutMs);
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-	}
-	const text = await readTextWithLimit(response, maxBytes);
-	return JSON.parse(text) as T;
-}
-
-export function streamWithByteLimit(
-	body: ReadableStream<Uint8Array>,
-	maxBytes: number,
-): { stream: ReadableStream<Uint8Array>; getBytesSeen: () => number } {
-	let bytesSeen = 0;
-	const stream = body.pipeThrough(
-		new TransformStream<Uint8Array, Uint8Array>({
-			transform(chunk, controller) {
-				bytesSeen += chunk.byteLength;
-				if (bytesSeen > maxBytes) {
-					controller.error(new PayloadTooLargeError(maxBytes));
-					return;
-				}
-				controller.enqueue(chunk);
-			},
-		}),
-	);
-	return { stream, getBytesSeen: () => bytesSeen };
-}
-
-/**
- * Resolves shortened URLs (t.co, bit.ly, etc.) to their final destination
- */
-export async function resolveUrl(url: string): Promise<string> {
-	try {
-		const response = await fetchWithTimeout(url, {
-			method: 'HEAD',
-			redirect: 'follow',
-			headers: { 'User-Agent': BROWSER_UA },
-		});
-		return response.url;
-	} catch {
-		return url;
-	}
-}
-
-/**
- * Liveness check for a scraped image URL — returns the trimmed URL if the
- * origin responds 2xx with an image content-type, else null. Used at ingest
- * to drop og:image URLs that 404 / point at non-images.
- */
-export async function validateImageUrl(url: string | null | undefined, timeoutMs = 5_000): Promise<string | null> {
-	if (!url) return null;
-	const trimmed = url.trim();
-	if (!trimmed) return null;
-
-	const init: RequestInit = {
-		redirect: 'follow',
-		headers: { 'User-Agent': BROWSER_UA },
-	};
-	try {
-		let res = await fetchWithTimeout(trimmed, { ...init, method: 'HEAD' }, timeoutMs);
-		if (res.status === 405 || res.status === 501) {
-			res = await fetchWithTimeout(trimmed, { ...init, method: 'GET', headers: { ...init.headers, Range: 'bytes=0-0' } }, timeoutMs);
-		}
-		if (!res.ok) return null;
-		const ct = res.headers.get('content-type') ?? '';
-		if (ct && !ct.toLowerCase().startsWith('image/')) return null;
-		return trimmed;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Gate for user-submitted URLs that the worker will fetch. CF runtime already
- * blocks private/loopback IPs and DNS rebinding — this catches the input-shape
- * issues the runtime doesn't: plaintext HTTP (token leakage via MITM) and
- * embedded credentials (`https://user:pass@host`, which leak via logs and
- * Referer). Throws on rejection so callers handle via existing try/catch.
- */
-export function assertExternalFetchable(rawUrl: string): URL {
-	let parsed: URL;
-	try {
-		parsed = new URL(rawUrl);
-	} catch {
-		throw new Error('Invalid URL');
-	}
-	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
-	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
-	return parsed;
-}
-
-/**
- * Checks if a URL is a social media link (should not follow)
- */
-export function isSocialMediaUrl(url: string): boolean {
-	const socialDomains = ['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net'];
-	try {
-		const hostname = new URL(url).hostname.toLowerCase();
-		return socialDomains.some((d) => hostname.includes(d));
-	} catch {
-		return false;
-	}
-}
-
-// ─────────────────────────────────────────────────────────────
-// URL Normalization
-// ─────────────────────────────────────────────────────────────
-
 const TRACKING_PARAMS = [
 	'utm_source',
 	'utm_medium',
@@ -224,134 +45,232 @@ const TRACKING_PARAMS = [
 	'vfff',
 	'ttt',
 	'triedRedirect',
-	's', // Twitter share tracking
+	's',
 	'ssr',
 ];
 
-/** Domain aliases that should be normalized to a canonical form */
 const DOMAIN_ALIASES: Record<string, string> = {
 	'twitter.com': 'x.com',
 	'www.twitter.com': 'x.com',
 	'mobile.twitter.com': 'x.com',
 	'www.x.com': 'x.com',
 };
+const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com']);
+const SOCIAL_MEDIA_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
+const TWITTER_HOSTS = new Set(['twitter.com', 'x.com']);
+const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
+const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
 
-/** YouTube hostnames that use ?v= parameter */
-const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com']);
-/** YouTube shortlink hosts that use path-based video ID */
-const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be', 'www.youtu.be']);
+export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
-export function buildYouTubeWatchUrl(videoId: string): string {
-	return `https://youtube.com/watch?v=${videoId}`;
+export class PayloadTooLargeError extends Error {
+	constructor(maxBytes: number) {
+		super(`Response body exceeded ${maxBytes} bytes`);
+		this.name = 'PayloadTooLargeError';
+	}
 }
 
-/**
- * Normalizes URL by:
- * 1. Canonicalizing domain aliases (twitter.com → x.com, etc.)
- * 2. Stripping www. prefix
- * 3. Removing tracking, auth, and cache-busting parameters
- * 4. YouTube: canonicalize to youtube.com/watch?v=VIDEO_ID
- */
-export function normalizeUrl(url: string): string {
+function timeoutSignal(options: RequestInit, timeoutMs: number): AbortSignal {
+	const timeout = AbortSignal.timeout(timeoutMs);
+	return options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+}
+
+function isTimeoutError(err: unknown): boolean {
+	return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
+function hostMatches(hostname: string, hosts: ReadonlySet<string>): boolean {
+	if (hosts.has(hostname)) return true;
+	for (const host of hosts) {
+		if (hostname.endsWith(`.${host}`)) return true;
+	}
+	return false;
+}
+
+function canonicalHost(hostname: string): string {
+	const lower = hostname.toLowerCase();
+	return DOMAIN_ALIASES[lower] ?? (lower.startsWith('www.') ? lower.slice(4) : lower);
+}
+
+function isYouTubeHost(hostname: string): boolean {
+	return hostMatches(hostname, YOUTUBE_WATCH_HOSTS) || hostMatches(hostname, YOUTUBE_SHORT_HOSTS);
+}
+
+function parseUrl(rawUrl: string): URL | null {
 	try {
-		const urlObj = new URL(url);
+		return new URL(rawUrl);
+	} catch {
+		return null;
+	}
+}
 
-		// Normalize domain aliases
-		const hostname = urlObj.hostname.toLowerCase();
-		const canonical = DOMAIN_ALIASES[hostname];
-		if (canonical) {
-			urlObj.hostname = canonical;
-		} else if (hostname.startsWith('www.')) {
-			urlObj.hostname = hostname.slice(4);
+export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+	try {
+		return await fetch(url, { ...options, signal: timeoutSignal(options, timeoutMs) });
+	} catch (err) {
+		if (isTimeoutError(err)) throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+		throw err;
+	}
+}
+
+export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_TEXT_MAX_BYTES): Promise<string> {
+	const contentLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
+	if (contentLength > maxBytes) throw new Error(`Response too large: ${contentLength} bytes`);
+	if (!response.body) return '';
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let text = '';
+	let totalBytes = 0;
+
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) return text + decoder.decode();
+
+		totalBytes += value.byteLength;
+		if (totalBytes > maxBytes) {
+			await reader.cancel();
+			throw new Error(`Response body exceeded ${maxBytes} bytes`);
 		}
+		text += decoder.decode(value, { stream: true });
+	}
+}
 
-		// YouTube → canonical youtube.com/watch?v=VIDEO_ID
-		if (YOUTUBE_WATCH_HOSTS.has(hostname) || YOUTUBE_SHORT_HOSTS.has(hostname)) {
-			const videoId = extractYouTubeId(urlObj.toString());
-			if (videoId) return buildYouTubeWatchUrl(videoId);
-		}
+export async function fetchJsonWithTimeout<T>(
+	url: string,
+	options: RequestInit = {},
+	timeoutMs = 15_000,
+	maxBytes = DEFAULT_TEXT_MAX_BYTES,
+): Promise<T> {
+	const response = await fetchWithTimeout(url, options, timeoutMs);
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return JSON.parse(await readTextWithLimit(response, maxBytes)) as T;
+}
 
-		for (const param of TRACKING_PARAMS) urlObj.searchParams.delete(param);
-		urlObj.searchParams.sort();
-		return urlObj.toString();
+export function streamWithByteLimit(
+	body: ReadableStream<Uint8Array>,
+	maxBytes: number,
+): { stream: ReadableStream<Uint8Array>; getBytesSeen: () => number } {
+	let bytesSeen = 0;
+	const stream = body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				bytesSeen += chunk.byteLength;
+				if (bytesSeen > maxBytes) {
+					controller.error(new PayloadTooLargeError(maxBytes));
+					return;
+				}
+				controller.enqueue(chunk);
+			},
+		}),
+	);
+	return { stream, getBytesSeen: () => bytesSeen };
+}
+
+export async function resolveUrl(url: string): Promise<string> {
+	try {
+		const response = await fetchWithTimeout(url, {
+			method: 'HEAD',
+			redirect: 'follow',
+			headers: { 'User-Agent': BROWSER_UA },
+		});
+		return response.url;
 	} catch {
 		return url;
 	}
 }
 
-export interface TranscriptSegment {
-	startTime: number;
-	endTime: number;
-	text: string;
-}
+export async function validateImageUrl(url: string | null | undefined, timeoutMs = 5_000): Promise<string | null> {
+	const trimmed = url?.trim();
+	if (!trimmed) return null;
 
-export interface YouTubeChapter {
-	title: string;
-	startTime: number;
-	endTime: number;
-}
-
-export interface ScrapedContent {
-	title: string;
-	content: string;
-	summary?: string;
-	ogImageUrl: string | null;
-	ogImageWidth?: number | null;
-	ogImageHeight?: number | null;
-	siteName: string | null;
-	author: string | null;
-	publishedDate: string | null;
-	metadata?: Record<string, unknown>;
-	youtubeTranscript?: {
-		videoId: string;
-		segments: TranscriptSegment[];
-		language: string | null;
-		chapters: YouTubeChapter[];
-		chaptersFromDescription: boolean;
+	const init: RequestInit = {
+		redirect: 'follow',
+		headers: { 'User-Agent': BROWSER_UA },
 	};
+	try {
+		let res = await fetchWithTimeout(trimmed, { ...init, method: 'HEAD' }, timeoutMs);
+		if (res.status === 405 || res.status === 501) {
+			res = await fetchWithTimeout(trimmed, { ...init, method: 'GET', headers: { ...init.headers, Range: 'bytes=0-0' } }, timeoutMs);
+		}
+		await res.body?.cancel();
+
+		if (!res.ok) return null;
+		const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
+		return !contentType || contentType.startsWith('image/') ? trimmed : null;
+	} catch {
+		return null;
+	}
 }
 
-export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
+export function assertExternalFetchable(rawUrl: string): URL {
+	const parsed = parseUrl(rawUrl);
+	if (!parsed) throw new Error('Invalid URL');
+	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
+	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+	return parsed;
+}
 
-const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com', 'www.ycombinator.com']);
-const TWITTER_HOSTS = new Set(['twitter.com', 'x.com', 'www.twitter.com', 'www.x.com', 'mobile.twitter.com']);
+export function isSocialMediaUrl(url: string): boolean {
+	const parsed = parseUrl(url);
+	return parsed ? hostMatches(canonicalHost(parsed.hostname), SOCIAL_MEDIA_HOSTS) : false;
+}
+
+export function buildYouTubeWatchUrl(videoId: string): string {
+	return `https://youtube.com/watch?v=${videoId}`;
+}
+
+export function normalizeUrl(url: string): string {
+	const parsed = parseUrl(url);
+	if (!parsed) return url;
+
+	parsed.hostname = canonicalHost(parsed.hostname);
+	if (isYouTubeHost(parsed.hostname)) {
+		const videoId = extractYouTubeId(parsed.toString());
+		if (videoId) return buildYouTubeWatchUrl(videoId);
+	}
+
+	for (const param of TRACKING_PARAMS) parsed.searchParams.delete(param);
+	parsed.searchParams.sort();
+	return parsed.toString();
+}
 
 export function detectPlatformType(url: string): PlatformType {
-	try {
-		const hostname = new URL(url).hostname.toLowerCase();
-		if (HACKERNEWS_HOSTS.has(hostname)) return 'hackernews';
-		if (YOUTUBE_WATCH_HOSTS.has(hostname) || YOUTUBE_SHORT_HOSTS.has(hostname)) return 'youtube';
-		if (TWITTER_HOSTS.has(hostname)) return 'twitter';
-		return 'web';
-	} catch {
-		return 'web';
-	}
+	const parsed = parseUrl(url);
+	if (!parsed) return 'web';
+
+	const hostname = canonicalHost(parsed.hostname);
+	if (hostMatches(hostname, HACKERNEWS_HOSTS)) return 'hackernews';
+	if (isYouTubeHost(hostname)) return 'youtube';
+	if (hostMatches(hostname, TWITTER_HOSTS)) return 'twitter';
+	return 'web';
 }
 
 export function extractTweetId(url: string): string | null {
-	const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
-	return match?.[1] ?? null;
+	const parsed = parseUrl(url);
+	if (!parsed || !hostMatches(canonicalHost(parsed.hostname), TWITTER_HOSTS)) return null;
+	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? null;
 }
 
 export function extractYouTubeId(url: string): string | null {
-	const patterns = [
-		/[?&]v=([a-zA-Z0-9_-]{11})/,
-		/youtu\.be\/([a-zA-Z0-9_-]{11})/,
-		/\/embed\/([a-zA-Z0-9_-]{11})/,
-		/\/shorts\/([a-zA-Z0-9_-]{11})/,
-		/\/live\/([a-zA-Z0-9_-]{11})/,
-		/\/v\/([a-zA-Z0-9_-]{11})/,
-	];
-	for (const pattern of patterns) {
-		const match = url.match(pattern);
-		if (match) return match[1];
-	}
+	const parsed = parseUrl(url);
+	if (!parsed) return null;
+
+	const watchId = parsed.searchParams.get('v');
+	if (watchId?.match(/^[a-zA-Z0-9_-]{11}$/)) return watchId;
+
+	const parts = parsed.pathname.split('/').filter(Boolean);
+	if (hostMatches(canonicalHost(parsed.hostname), YOUTUBE_SHORT_HOSTS)) return parts[0]?.match(/^[a-zA-Z0-9_-]{11}$/)?.[0] ?? null;
+	if (['embed', 'shorts', 'live', 'v'].includes(parts[0] ?? '')) return parts[1]?.match(/^[a-zA-Z0-9_-]{11}$/)?.[0] ?? null;
 	return null;
 }
 
 export function extractHackerNewsId(url: string): string | null {
-	const match = url.match(/[?&]id=(\d+)/);
-	return match?.[1] ?? null;
+	const id = parseUrl(url)?.searchParams.get('id');
+	return id?.match(/^\d+$/)?.[0] ?? null;
 }
 
 export function decodeHtmlEntities(str: string): string {
@@ -365,10 +284,8 @@ export function decodeHtmlEntities(str: string): string {
 		.replace(/&amp;/g, '&');
 }
 
-function stripHtmlTags(str: string): string {
-	return str.replace(/<[^>]*>/g, ' ');
-}
-
 export function htmlToText(str: string): string {
-	return decodeHtmlEntities(stripHtmlTags(str)).replace(/\s+/g, ' ').trim();
+	return decodeHtmlEntities(str.replace(/<[^>]*>/g, ' '))
+		.replace(/\s+/g, ' ')
+		.trim();
 }

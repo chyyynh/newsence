@@ -3,7 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { buildMetadata, type HackerNewsMetadata, type PlatformMetadata } from '@core-shared/platform-metadata';
-import { fetchJsonWithTimeout, type ScrapedContent } from '@core-shared/web';
+import type { ScrapedContent } from '@core-shared/types';
+import { fetchJsonWithTimeout } from '@core-shared/web';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 

@@ -1,4 +1,5 @@
 import { isRasterImage, PDF_MIME } from '@core-shared/mime';
+import type { ScrapedContent } from '@core-shared/types';
 import {
 	assertExternalFetchable,
 	BROWSER_UA,
@@ -6,7 +7,6 @@ import {
 	extractHackerNewsId,
 	extractTweetId,
 	extractYouTubeId,
-	type ScrapedContent,
 } from '@core-shared/web';
 import { scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';

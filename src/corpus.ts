@@ -1,7 +1,7 @@
 import { generateArticleEmbedding } from '@core-ai/embedding';
 import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@core-rpc/contracts';
 import { type DbClient, withDbClient } from '@core-shared/db';
-import type { Env } from '@core-shared/types';
+import type { Env, TranscriptSegment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 
 type SearchRanks = Map<string, number>;
@@ -36,7 +36,6 @@ interface ArticleContentRow extends ArticleSummaryRow {
 	source_type: string | null;
 }
 
-type TranscriptSegment = { startTime: number; endTime: number; text: string };
 type TranscriptHighlight = { title: string; startTime: number; endTime: number; summary: string };
 type Reader = (client: DbClient, ids: string[], userId: string) => Promise<Map<string, CorpusReadResult>>;
 

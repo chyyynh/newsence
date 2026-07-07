@@ -1,7 +1,6 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
 import { withDbClient } from '@core-shared/db';
-import type { Article, Env } from '@core-shared/types';
-import type { TranscriptSegment } from '@core-shared/web';
+import type { Article, Env, TranscriptSegment } from '@core-shared/types';
 import { getYoutubeTranscriptForHighlights } from '@ingest/platforms/youtube/transcripts';
 import { z } from 'zod';
 

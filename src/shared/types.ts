@@ -90,6 +90,38 @@ export interface RSSFeed {
 	avatar_url?: string;
 }
 
+export interface TranscriptSegment {
+	startTime: number;
+	endTime: number;
+	text: string;
+}
+
+export interface YouTubeChapter {
+	title: string;
+	startTime: number;
+	endTime: number;
+}
+
+export interface ScrapedContent {
+	title: string;
+	content: string;
+	summary?: string;
+	ogImageUrl: string | null;
+	ogImageWidth?: number | null;
+	ogImageHeight?: number | null;
+	siteName: string | null;
+	author: string | null;
+	publishedDate: string | null;
+	metadata?: Record<string, unknown>;
+	youtubeTranscript?: {
+		videoId: string;
+		segments: TranscriptSegment[];
+		language: string | null;
+		chapters: YouTubeChapter[];
+		chaptersFromDescription: boolean;
+	};
+}
+
 // Twitter related (Kaito API response shape)
 export interface Tweet {
 	id?: string;

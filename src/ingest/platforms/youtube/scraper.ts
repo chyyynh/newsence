@@ -3,7 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { YouTubeMetadata } from '@core-shared/platform-metadata';
-import { fetchWithTimeout, readTextWithLimit, type ScrapedContent, type TranscriptSegment, type YouTubeChapter } from '@core-shared/web';
+import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
 interface YouTubeVideoItem {
 	id: string;

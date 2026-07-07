@@ -10,7 +10,8 @@ import {
 	type TwitterAuthorFields,
 	type TwitterMedia,
 } from '@core-shared/platform-metadata';
-import { fetchJsonWithTimeout, type ScrapedContent } from '@core-shared/web';
+import type { ScrapedContent } from '@core-shared/types';
+import { fetchJsonWithTimeout } from '@core-shared/web';
 
 interface TwitterUrlEntity {
 	expanded_url?: string;

@@ -10,8 +10,8 @@ import {
 } from '@core-shared/article-store';
 import { PDF_MIME } from '@core-shared/mime';
 import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article, Env } from '@core-shared/types';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout, type TranscriptSegment } from '@core-shared/web';
+import type { Article, Env, TranscriptSegment } from '@core-shared/types';
+import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout } from '@core-shared/web';
 import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
 import {
 	cleanupSourceArticleDraftRef,
