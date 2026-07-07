@@ -94,10 +94,7 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function startRowWorkflow(
-	env: Env,
-	target: { articleId: string; targetTable?: ProcessableTable },
-): Promise<string | undefined> {
+export async function startRowWorkflow(env: Env, target: { articleId: string; targetTable?: ProcessableTable }): Promise<string> {
 	const { workflowId, workflowTarget } = rowWorkflowTarget(target);
 	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 	if (created[0]) return created[0].id;
@@ -106,7 +103,8 @@ export async function startRowWorkflow(
 	if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
 
 	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId(workflowId), params: { target: workflowTarget } }]);
-	return retried[0]?.id;
+	if (!retried[0]) throw new Error(`Failed to create row workflow: ${workflowId}`);
+	return retried[0].id;
 }
 
 export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<void> {
@@ -194,7 +192,6 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 	}
 
 	const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: USER_FILES_TABLE });
-	if (!instanceId) throw new Error(`Failed to create user_file workflow: ${userFileId}`);
 	await patchUserFileWorkflowMetadata(client, userFileId, {
 		monitor_instance_id: instanceId,
 		monitor_status: 'running',
