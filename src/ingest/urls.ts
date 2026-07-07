@@ -187,8 +187,8 @@ function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instance
 }
 
 async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
+	const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id, db);
 	if (row.resource_kind === 'blob') {
-		const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id, db);
 		return {
 			url,
 			userFileId: row.id,
@@ -204,7 +204,6 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 		};
 	}
 
-	const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id, db);
 	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
 }
 
@@ -238,8 +237,6 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	if ('error' in result) return { url, error: result.error };
 
 	if (result.kind === 'blob') {
-		// PDFs run through the AI workflow for text extraction + analysis;
-		// images are stored without further processing (no vision pipeline yet).
 		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId, db) : undefined;
 		return {
 			url,
@@ -253,9 +250,6 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	}
 
 	const { row } = result;
-	// `created=true`: fresh insert, always trigger workflow for AI enrichment.
-	// `created=false`: ON CONFLICT race — a concurrent submit already triggered
-	//   the workflow on the existing row, skip.
 	const instanceId = row.created ? await createUserFileWorkflow(env, row.id, db) : undefined;
 	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }

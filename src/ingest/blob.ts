@@ -1,8 +1,3 @@
-/**
- * Blob ingest: write uploaded/generated/saved-url bytes into the user's R2
- * namespace plus a `resource_kind='blob'` row in `user_files`.
- */
-
 import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { extensionFromMime, isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/web';
@@ -10,7 +5,6 @@ import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 
 const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
-type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
 
 const UPLOAD_CACHE_CONTROL = 'private, max-age=31536000';
 const UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE = 'Upload file quota exceeded';
@@ -34,7 +28,7 @@ type IngestBlobErrorCode =
 	| 'BAD_REQUEST'
 	| 'RATE_LIMITED'
 	| 'PAYLOAD_TOO_LARGE'
-	| QuotaExceededCode
+	| 'QUOTA_EXCEEDED'
 	| 'UNSUPPORTED_MEDIA_TYPE'
 	| 'INTERNAL_ERROR';
 
@@ -61,7 +55,7 @@ interface InsertBlobUserFileData {
 	metadata?: unknown | null;
 }
 
-type PersistBlobResult = { ok: true; userFileId: string } | { ok: false; code: QuotaExceededCode | 'INTERNAL_ERROR'; message: string };
+type PersistBlobResult = { ok: true; userFileId: string } | { ok: false; code: 'QUOTA_EXCEEDED' | 'INTERNAL_ERROR'; message: string };
 
 export type PersistGeneratedImageResult =
 	| {
@@ -76,13 +70,13 @@ export type PersistGeneratedImageResult =
 	  }
 	| {
 			ok: false;
-			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
+			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
 			message: string;
 	  };
 
 export type PersistSavedUrlBlobResult =
 	| { ok: true; userFileId: string; fileType: string; fileSize: number; title: string }
-	| { ok: false; code: 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'INTERNAL_ERROR'; message: string };
+	| { ok: false; code: 'PAYLOAD_TOO_LARGE' | 'QUOTA_EXCEEDED' | 'INTERNAL_ERROR'; message: string };
 
 class UploadQuotaExceededError extends Error {
 	constructor(
@@ -254,7 +248,6 @@ export async function ingestUploadedFile(env: Env, args: IngestUploadedFileArgs)
 	});
 	if (!persisted.ok) return persisted;
 
-	// Only PDFs trigger the AI workflow today — images have no text to analyze.
 	const instanceId = fileType === PDF_MIME ? await createUserFileWorkflow(env, persisted.userFileId) : undefined;
 
 	console.info({
