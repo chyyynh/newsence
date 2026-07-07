@@ -1,25 +1,18 @@
 import { parseJsonBody, requireAuth } from '@core-shared/auth';
-import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl, QUOTA_EXCEEDED_CODE } from '../blob';
+import { ingestBlob, ingestImageUrl, QUOTA_EXCEEDED_CODE } from '../blob';
 import { ingestUrls } from '../urls';
 
 // Matches `simple.period` in `wrangler.jsonc` `ratelimits[USER_INGEST_LIMITER]`.
 // Sent as `Retry-After` on 429; the binding doesn't expose remaining time so
 // we send the window length as a conservative upper bound.
 const RATE_LIMIT_HEADERS = { 'Retry-After': '60' };
-const IMAGE_URL_ERROR_STATUS: Partial<Record<IngestImageUrlErrorCode, number>> = {
+const INGEST_ERROR_STATUS: Record<string, number> = {
 	UNAUTHORIZED: 401,
 	RATE_LIMITED: 429,
 	PAYLOAD_TOO_LARGE: 413,
 	[QUOTA_EXCEEDED_CODE]: 403,
 	UNSUPPORTED_MEDIA_TYPE: 415,
 	UPSTREAM_ERROR: 502,
-	INTERNAL_ERROR: 500,
-};
-const BLOB_ERROR_STATUS: Record<string, number> = {
-	RATE_LIMITED: 429,
-	PAYLOAD_TOO_LARGE: 413,
-	[QUOTA_EXCEEDED_CODE]: 403,
-	UNSUPPORTED_MEDIA_TYPE: 415,
 	INTERNAL_ERROR: 500,
 };
 
@@ -29,6 +22,13 @@ type IngestJsonBody = {
 	userId?: string;
 	title?: string;
 };
+
+function ingestErrorResponse(code: string, message: string): Response {
+	return Response.json(
+		{ code, message },
+		{ status: INGEST_ERROR_STATUS[code] ?? 400, headers: code === 'RATE_LIMITED' ? RATE_LIMIT_HEADERS : undefined },
+	);
+}
 
 export async function handleIngest(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env);
@@ -54,28 +54,19 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
 			});
 			if (outcome.ok) return Response.json(outcome.result);
 
-			return outcome.code === 'RATE_LIMITED'
-				? Response.json({ code: outcome.code, message: outcome.message }, { status: 429, headers: RATE_LIMIT_HEADERS })
-				: Response.json({ code: outcome.code, message: outcome.message }, { status: IMAGE_URL_ERROR_STATUS[outcome.code] ?? 400 });
+			return ingestErrorResponse(outcome.code, outcome.message);
 		}
 
 		const outcome = await ingestUrls(env, { urls: body.urls ?? [], userId: body.userId });
 		if (outcome.ok) return Response.json(outcome.results);
 
-		if (outcome.code === 'RATE_LIMITED') {
-			return Response.json({ code: outcome.code, message: outcome.message }, { status: 429, headers: RATE_LIMIT_HEADERS });
-		}
-		const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
-		return Response.json({ code: outcome.code, message: outcome.message }, { status });
+		return ingestErrorResponse(outcome.code, outcome.message);
 	}
 	if (contentType.startsWith('multipart/form-data')) {
 		const outcome = await ingestBlob(request, env);
 		if (outcome.ok) return Response.json(outcome.result);
 
-		if (outcome.code === 'RATE_LIMITED') {
-			return Response.json({ code: outcome.code, message: outcome.message }, { status: 429, headers: RATE_LIMIT_HEADERS });
-		}
-		return Response.json({ code: outcome.code, message: outcome.message }, { status: BLOB_ERROR_STATUS[outcome.code] ?? 400 });
+		return ingestErrorResponse(outcome.code, outcome.message);
 	}
 	return Response.json(
 		{ code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported Content-Type: ${contentType || '(none)'}` },

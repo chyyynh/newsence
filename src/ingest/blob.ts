@@ -69,7 +69,7 @@ type IngestBlobErrorCode =
 
 export type IngestBlobOutcome = { ok: true; result: BlobIngestResult } | { ok: false; code: IngestBlobErrorCode; message: string };
 
-export type IngestImageUrlErrorCode = IngestBlobErrorCode | 'UNAUTHORIZED' | 'UPSTREAM_ERROR';
+type IngestImageUrlErrorCode = IngestBlobErrorCode | 'UNAUTHORIZED' | 'UPSTREAM_ERROR';
 
 export type IngestImageUrlOutcome = { ok: true; result: BlobIngestResult } | { ok: false; code: IngestImageUrlErrorCode; message: string };
 
