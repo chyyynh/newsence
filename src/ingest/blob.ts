@@ -140,10 +140,6 @@ function buildBlobResult(args: {
 	};
 }
 
-function deriveFileTitle(fileName: string): string {
-	return fileName.replace(/\.[a-z0-9]{1,8}$/i, '') || fileName;
-}
-
 function storageKeyToAssetUrl(key: string): string {
 	const encodedPath = key
 		.split('/')
@@ -154,10 +150,6 @@ function storageKeyToAssetUrl(key: string): string {
 
 function userUploadKey(userId: string, extension: string): string {
 	return `users/${userId}/uploads/${crypto.randomUUID()}.${extension}`;
-}
-
-function userGeneratedImageKey(userId: string, extension: string): string {
-	return `users/${userId}/illustrations/${crypto.randomUUID()}.${extension}`;
 }
 
 async function assertBlobUploadQuotaTx(db: Client, userId: string, incomingBytes: number): Promise<void> {
@@ -313,7 +305,7 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 	}
 
-	const title = titleOverride ?? deriveFileTitle(file.name);
+	const title = (titleOverride ?? file.name.replace(/\.[a-z0-9]{1,8}$/i, '')) || file.name;
 	const persisted = await persistBlobRow(env, {
 		userId,
 		storageKey,
@@ -470,7 +462,7 @@ export async function persistSavedUrlBlob(
 	if (!stored) return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 
 	const fileSize = stored.size;
-	const title = deriveFileTitle(args.suggestedFilename);
+	const title = args.suggestedFilename.replace(/\.[a-z0-9]{1,8}$/i, '') || args.suggestedFilename;
 	const persisted = await persistBlobRow(env, {
 		userId: args.userId,
 		storageKey,
@@ -502,7 +494,7 @@ export async function persistGeneratedImage(
 		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported image type: ${args.contentType}` };
 	}
 
-	const storageKey = userGeneratedImageKey(args.userId, extensionFromMime(args.contentType));
+	const storageKey = `users/${args.userId}/illustrations/${crypto.randomUUID()}.${extensionFromMime(args.contentType)}`;
 	const fileName = storageKey.split('/').pop() ?? storageKey;
 
 	try {
