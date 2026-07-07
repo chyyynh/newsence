@@ -1,6 +1,5 @@
 import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
-import { upsertTwitterSourceEventAttachment } from '@ingest/platforms/twitter/persistence';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
 import type { Client } from 'pg';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
@@ -36,7 +35,7 @@ class DefaultProcessor implements ArticleProcessor {
 // ─────────────────────────────────────────────────────────────
 
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
-import { TwitterProcessor } from '../platforms/twitter/processor';
+import { TwitterProcessor, upsertTwitterSourceEventAttachment } from '../platforms/twitter/processor';
 
 export type PlatformWorkflowData = { type: 'youtube'; highlights: YouTubeHighlightsUpdate };
 
