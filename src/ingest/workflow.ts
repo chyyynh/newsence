@@ -2,9 +2,9 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
 	type ArticleForProcessing,
-	type ArticleStoreTable,
 	getIncompleteWorkflowTargetIds,
 	type InsertArticleData,
+	insertArticleDataToArticle,
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
 	updateArticleAfterProcessing,
@@ -229,7 +229,7 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 
 type WorkflowRunContext = {
 	target: WorkflowTarget;
-	table: ArticleStoreTable;
+	table: 'articles' | 'user_files';
 	rowId: string | null;
 	userFileId: string | null;
 	readSourceDraft(): Promise<SourceArticleDraft>;
@@ -260,30 +260,10 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 	};
 }
 
-function sourceDraftToArticle(data: InsertArticleData): Article {
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		og_image_url: null,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
-}
-
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
 	let article: Article;
 	if (context.target.kind === 'source') {
-		article = sourceDraftToArticle((await context.readSourceDraft()).article);
+		article = insertArticleDataToArticle((await context.readSourceDraft()).article);
 	} else {
 		if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 		article = await loadArticleForProcessing(env, context.table, context.rowId);
@@ -365,7 +345,7 @@ async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: 
 
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
-	const fullArticle = sourceDraftToArticle(draft.article);
+	const fullArticle = insertArticleDataToArticle(draft.article);
 	let articleForInsert = draft.article;
 	let updatePayload = buildProcessorUpdatePayload(
 		fullArticle,
@@ -467,7 +447,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () => {
 					if (context.target.kind === 'source')
-						return { ...sourceDraftToArticle((await context.readSourceDraft()).article), content: null };
+						return { ...insertArticleDataToArticle((await context.readSourceDraft()).article), content: null };
 					if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 					return loadArticleForProcessing(this.env, context.table, context.rowId, true);
 				},

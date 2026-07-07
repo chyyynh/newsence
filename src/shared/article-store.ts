@@ -49,6 +49,26 @@ export interface InsertArticleData {
 	tags?: string[];
 }
 
+export function insertArticleDataToArticle(data: InsertArticleData): Article {
+	return {
+		id: data.url,
+		title: data.title,
+		title_cn: null,
+		summary: data.summary || null,
+		summary_cn: null,
+		content: data.content,
+		content_cn: null,
+		url: data.url,
+		source: data.source,
+		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+		tags: data.tags ?? [],
+		keywords: data.keywords ?? [],
+		source_type: data.sourceType,
+		og_image_url: null,
+		platform_metadata: data.platformMetadata as Article['platform_metadata'],
+	};
+}
+
 export type ArticleProcessingUpdate = Record<string, unknown>;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
