@@ -1,5 +1,12 @@
 import { generateArticleEmbedding } from '@core-ai/embedding';
-import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@core-rpc/contracts';
+import type {
+	ArticleRankSearchInput,
+	ArticleSearchInput,
+	ArticleSummary,
+	ReadContextItem,
+	ReadContextResult,
+	RelatedArticleSearchInput,
+} from '@core-rpc/contracts';
 import type { TranscriptSegment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import type { Client } from 'pg';
@@ -8,16 +15,6 @@ import { Client as PgClient } from 'pg';
 type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
 type RankArticleOptions = { fromDate?: Date | null };
-export type ArticleRank = { id: string; score: number };
-export type ArticleRankSearchInput = { query: string; limit?: number };
-export type RelatedArticleSearchInput = {
-	seed: { id: string; type: 'article' | 'user_file' };
-	limit?: number;
-	offset?: number;
-};
-
-export type CorpusReadItem = ReadContextItem;
-export type CorpusReadResult = ReadContextResult;
 
 interface ArticleSummaryRow {
 	id: string;
@@ -60,7 +57,7 @@ const OVERFETCH_CAP = 200;
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearchInput): Promise<ArticleRank[]> {
+export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
@@ -121,7 +118,7 @@ export async function searchCorpusArticles(env: Env, input: ArticleSearchInput):
 	return result.rows.map(formatSummary);
 }
 
-export async function readCorpusItems(env: Env, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
+export async function readCorpusItems(env: Env, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
 	return readItems(client, items, userId);
@@ -300,7 +297,7 @@ function truncate(content: string | null | undefined, max: number): string {
 function formatArticleReadResult(
 	article: ArticleContentRow,
 	transcript?: { segments: TranscriptSegment[]; highlights?: TranscriptHighlight[] } | null,
-): CorpusReadResult {
+): ReadContextResult {
 	const meta: Record<string, unknown> = {
 		url: article.url,
 		source: article.source,
@@ -321,7 +318,7 @@ function formatArticleReadResult(
 	};
 }
 
-async function attachTranscripts(client: Client, articles: ArticleContentRow[]): Promise<CorpusReadResult[]> {
+async function attachTranscripts(client: Client, articles: ArticleContentRow[]): Promise<ReadContextResult[]> {
 	const videoIds = articles
 		.filter((a) => a.source_type === 'youtube')
 		.map((a) => extractVideoId(a.url))
@@ -349,7 +346,7 @@ async function attachTranscripts(client: Client, articles: ArticleContentRow[]):
 	});
 }
 
-async function readArticles(client: Client, ids: string[]): Promise<Map<string, CorpusReadResult>> {
+async function readArticles(client: Client, ids: string[]): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 	const result = await client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE id = ANY($1::uuid[])`, [
@@ -359,7 +356,7 @@ async function readArticles(client: Client, ids: string[]): Promise<Map<string, 
 	return new Map(formatted.map((r) => [r.id, r]));
 }
 
-async function readCollections(client: Client, ids: string[], userId: string): Promise<Map<string, CorpusReadResult>> {
+async function readCollections(client: Client, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
@@ -435,7 +432,7 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 	);
 }
 
-async function readUrls(client: Client, urls: string[]): Promise<Map<string, CorpusReadResult>> {
+async function readUrls(client: Client, urls: string[]): Promise<Map<string, ReadContextResult>> {
 	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
 	const candidateUrls = [...new Set(urlPairs.flat())];
 
@@ -455,7 +452,7 @@ async function readUrls(client: Client, urls: string[]): Promise<Map<string, Cor
 	return new Map(matches.map((m) => [m.url, formattedById.get(m.article.id)!] as const));
 }
 
-async function readItems(client: Client, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
+async function readItems(client: Client, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	const groups = new Map<ResourceType, string[]>();
 	for (const item of items) {
 		const list = groups.get(item.type) ?? [];
@@ -463,7 +460,7 @@ async function readItems(client: Client, items: CorpusReadItem[], userId: string
 		groups.set(item.type, list);
 	}
 
-	const resultMaps = new Map<ResourceType, Map<string, CorpusReadResult>>();
+	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>();
 	await Promise.all(
 		[...groups.entries()].map(async ([type, ids]) => {
 			const results =
