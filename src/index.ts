@@ -3,7 +3,7 @@ import type { ArticleSearchInput, CoreRpc, ReadContextItem, ScrapedUrlContent, S
 import type { Env } from '@core-shared/types';
 import { routeRequest } from '@entry/http';
 import { persistGeneratedImage } from '@ingest/blob';
-import { type ExtractInput, extractSource, isScrapeInputTempKey, type NormalizedContent } from '@ingest/extract';
+import { type ExtractInput, extractSource, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -30,7 +30,7 @@ export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ScrapeWorkflowParams
 			() => extractSource(this.env, input),
 		);
 
-		if (input.kind === 'r2' && isScrapeInputTempKey(input.key)) {
+		if (input.kind === 'r2' && input.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) {
 			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () => this.env.R2.delete(input.key));
 		}
 

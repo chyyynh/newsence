@@ -2,7 +2,7 @@ import { parseJsonBody, requireAuth } from '@core-shared/auth';
 import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
 import type { Env } from '@core-shared/types';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/web';
-import { extractSource, isScrapeInputTempKey, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
+import { extractSource, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
 // same wildcard CORS and 10 MB body cap. The actual extraction lives in
@@ -113,7 +113,7 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 async function cleanupStagedScrapeInput(env: Env, params: { kind: 'url'; url: string } | { kind: 'r2'; key: string }): Promise<void> {
 	if (params.kind !== 'r2') return;
 	try {
-		if (isScrapeInputTempKey(params.key)) await env.R2.delete(params.key);
+		if (params.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) await env.R2.delete(params.key);
 	} catch (error) {
 		console.warn({ tag: 'SCRAPE_JOB', msg: 'Failed to cleanup staged scrape input', key: params.key, error: String(error) });
 	}
