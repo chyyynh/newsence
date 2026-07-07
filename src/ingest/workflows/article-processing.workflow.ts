@@ -13,6 +13,7 @@ import type { Article, TranscriptSegment } from '@core-shared/types';
 import type { SourceArticleDraft, WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
 import { articleProcessors } from '../domain/processors';
+import { parsePdf } from '../extract';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import { enrichS2ByTitle, enrichS2FromId } from '../platforms/paper/semanticscholar';
@@ -21,11 +22,14 @@ import {
 	prepareYouTubeHighlightsFromTranscript,
 	type YouTubeHighlightsUpdate,
 } from '../platforms/youtube/highlights';
-import { createPdfTextTemp, type PdfTextTempResult, persistWorkflowTarget, recordWorkflowFailure } from './article-persistence';
+import { type PdfTextTempResult, persistWorkflowTarget, recordWorkflowFailure } from './article-persistence';
 
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
 };
+
+const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
+const PDF_TEXT_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
 type WorkflowRunContext = {
 	target: WorkflowQueueTarget;
@@ -120,7 +124,15 @@ async function stagePdfExtraction(
 		const pdfTextTemp = await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => createPdfTextTemp(env, target.articleId, storageKey),
+			async () => {
+				const obj = await env.R2.get(storageKey);
+				if (!obj) throw new Error(`PDF source object missing: ${storageKey}`);
+				const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
+				const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${target.articleId}/${crypto.randomUUID()}.md`;
+				await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: PDF_TEXT_CONTENT_TYPE } });
+				console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: target.articleId, status, chars, pages });
+				return { status, chars, pages, textStorageKey };
+			},
 		);
 		console.info({
 			tag: 'WORKFLOW',

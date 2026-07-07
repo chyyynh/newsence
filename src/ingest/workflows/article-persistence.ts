@@ -12,13 +12,11 @@ import {
 } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
-import { type PdfTextStatus, parsePdf } from '../extract';
+import type { PdfTextStatus } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
 
 const OG_IMAGE_UPDATE_KEY = 'og_image_url';
-const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
-const PDF_TEXT_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
 type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 
@@ -48,17 +46,6 @@ export interface PdfTextTempResult {
 	chars: number;
 	pages: number;
 	textStorageKey?: string;
-}
-
-export async function createPdfTextTemp(env: Env, articleId: string, storageKey: string): Promise<PdfTextTempResult> {
-	const obj = await env.R2.get(storageKey);
-	if (!obj) throw new Error(`PDF source object missing: ${storageKey}`);
-	const bytes = await obj.bytes();
-	const { text, status, chars, pages } = await parsePdf(bytes);
-	const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${articleId}/${crypto.randomUUID()}.md`;
-	await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: PDF_TEXT_CONTENT_TYPE } });
-	console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: articleId, status, chars, pages });
-	return { status, chars, pages, textStorageKey };
 }
 
 export async function persistWorkflowTarget(
