@@ -4,7 +4,7 @@
 
 import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
-import { fetchJsonWithTimeout } from '@core-shared/web';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { scrapeWebPage } from '../web-scraper';
 
 interface TwitterUrlEntity {
@@ -219,11 +219,19 @@ export async function scrapeTwitterArticle(
 ): Promise<(ScrapedContent & { metadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
-	const data = await fetchJsonWithTimeout<{ article?: TwitterArticle; status: string; message?: string }>(
-		`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`,
-		{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
-	).catch(() => null);
-	if (!data) return null;
+	let data: { article?: TwitterArticle; status: string; message?: string };
+	try {
+		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
+			headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+		});
+		if (!response.ok) {
+			await response.body?.cancel();
+			return null;
+		}
+		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterArticle; status: string; message?: string };
+	} catch {
+		return null;
+	}
 	if (data.status !== 'success' || !data.article) return null;
 
 	const article = data.article;
@@ -258,10 +266,14 @@ export async function scrapeTwitterArticle(
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
 
-	const data = await fetchJsonWithTimeout<{ tweets?: KaitoTweet[]; status: string; msg?: string }>(
-		`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`,
-		{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
-	);
+	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
+		headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	const data = JSON.parse(await readTextWithLimit(response)) as { tweets?: KaitoTweet[]; status: string; msg?: string };
 	if (!data.tweets?.length) {
 		throw new Error(`Kaito API: Tweet not found (status=${data.status})`);
 	}

@@ -8,7 +8,8 @@ import {
 	extractHackerNewsId,
 	extractTweetId,
 	extractYouTubeId,
-	fetchJsonWithTimeout,
+	fetchWithTimeout,
+	readTextWithLimit,
 } from '@core-shared/web';
 import { buildHnMetadata, HN_ALGOLIA_API, type HnItem, scrapeHackerNews } from './hackernews/scraper';
 import { scrapeTweet } from './twitter/scraper';
@@ -101,10 +102,16 @@ export async function resolveDiscussionPlatformMetadata(url: string): Promise<Pl
 	if (detectUrlKind(url) !== 'hackernews') return null;
 	const itemId = extractHackerNewsId(url);
 	if (!itemId) return null;
+	const response = await fetchWithTimeout(`${HN_ALGOLIA_API}/${itemId}`);
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	const item = JSON.parse(await readTextWithLimit(response)) as HnItem;
 	return {
 		type: 'hackernews',
 		fetchedAt: new Date().toISOString(),
-		data: buildHnMetadata(await fetchJsonWithTimeout<HnItem>(`${HN_ALGOLIA_API}/${itemId}`), url),
+		data: buildHnMetadata(item, url),
 	};
 }
 

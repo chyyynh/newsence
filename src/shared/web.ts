@@ -130,20 +130,6 @@ export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_T
 	}
 }
 
-export async function fetchJsonWithTimeout<T>(
-	url: string,
-	options: RequestInit = {},
-	timeoutMs = 15_000,
-	maxBytes = DEFAULT_TEXT_MAX_BYTES,
-): Promise<T> {
-	const response = await fetchWithTimeout(url, options, timeoutMs);
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-	}
-	return JSON.parse(await readTextWithLimit(response, maxBytes)) as T;
-}
-
 export function streamWithByteLimit(body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> {
 	let bytesSeen = 0;
 	return body.pipeThrough(

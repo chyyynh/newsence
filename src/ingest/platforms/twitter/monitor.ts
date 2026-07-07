@@ -1,5 +1,5 @@
 import type { RSSFeed, Tweet } from '@core-shared/types';
-import { fetchJsonWithTimeout } from '@core-shared/web';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Client } from 'pg';
 import { saveTweetGroups } from './persistence';
 import { normalizeRetweet } from './source-events';
@@ -70,12 +70,20 @@ async function fetchTweetsForBatch(
 
 		let apiRes: { tweets?: Tweet[]; has_next_page?: boolean; next_cursor?: string };
 		try {
-			apiRes = await fetchJsonWithTimeout(
+			const response = await fetchWithTimeout(
 				`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
 				{ headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' } },
 				20_000,
-				2 * 1024 * 1024,
 			);
+			if (!response.ok) {
+				await response.body?.cancel();
+				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+			}
+			apiRes = JSON.parse(await readTextWithLimit(response, 2 * 1024 * 1024)) as {
+				tweets?: Tweet[];
+				has_next_page?: boolean;
+				next_cursor?: string;
+			};
 		} catch (err) {
 			console.error({ tag: 'TWITTER', msg: 'Advanced Search fetch failed', error: String(err) });
 			return { tweets, completed: false };
