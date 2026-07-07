@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// HackerNews Processor
-// ─────────────────────────────────────────────────────────────
-
 import { generateText } from '@core-ai/embedding';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
@@ -13,22 +9,12 @@ import {
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
-import { scrapeWebPage } from '../web-scraper';
 import { fetchHnItem, type HnComment, type HnItem } from './scraper';
 
-// ─────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────
-
 interface HnCollectedComment {
-	id?: number;
 	author?: string;
 	text: string;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
 
 function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 	const comments: HnCollectedComment[] = [];
@@ -37,7 +23,6 @@ function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 			const cleanText = htmlToText(child.text);
 			if (cleanText) {
 				comments.push({
-					id: child.id,
 					author: child.author,
 					text: cleanText,
 				});
@@ -69,10 +54,6 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 	}
 	return urls;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Editorial Prompts
-// ─────────────────────────────────────────────────────────────
 
 interface EditorialPrompts {
 	system: string;
@@ -131,13 +112,9 @@ function buildEditorialPrompt(
 	hnText: string,
 	commentInput: string,
 	commentCount: number,
-	pageExcerpt: string,
 ): { system: string; user: string } {
 	const rulesBlock = prompts.rules.map((r) => `- ${r}`).join('\n');
 	const user = `Title: ${title}
-Article excerpt (${pageExcerpt.length} chars):
-${pageExcerpt || 'N/A'}
-
 HN post text:
 ${htmlToText(hnText).slice(0, 1200) || 'N/A'}
 
@@ -156,20 +133,16 @@ async function generateHnEditorial(
 	title: string,
 	hnText: string,
 	comments: HnCollectedComment[],
-	externalPageContent?: string | null,
 ): Promise<{ en: string | null; cn: string | null }> {
-	if (comments.length < 4 && !(externalPageContent && externalPageContent.length >= 600)) {
-		return { en: null, cn: null };
-	}
+	if (comments.length < 4) return { en: null, cn: null };
 
 	const commentInput = comments
 		.map((c) => `${c.author ? `${c.author}: ` : ''}${c.text}`)
 		.join('\n')
 		.slice(0, 30000);
-	const pageExcerpt = externalPageContent?.slice(0, 6000) ?? '';
 
-	const cnPrompt = buildEditorialPrompt(EDITORIAL_CN, title, hnText, commentInput, comments.length, pageExcerpt);
-	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length, pageExcerpt);
+	const cnPrompt = buildEditorialPrompt(EDITORIAL_CN, title, hnText, commentInput, comments.length);
+	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length);
 
 	const [cn, en] = await Promise.all([
 		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: 'hn-editorial-cn', gatewayId: env.AI_GATEWAY_NAME }),
@@ -179,10 +152,6 @@ async function generateHnEditorial(
 	return { en, cn };
 }
 
-// ─────────────────────────────────────────────────────────────
-// HackerNewsProcessor class
-// ─────────────────────────────────────────────────────────────
-
 export class HackerNewsProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const metadata = article.platform_metadata;
@@ -190,7 +159,6 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		const enrichments: PlatformEnrichments = {};
 		const updateData: ProcessorResult['updateData'] = {};
 
-		// 1. 從 HN API 取得完整資料（包含評論）
 		const hnData: HnItem | null = itemId
 			? await fetchHnItem(itemId).catch((error) => {
 					console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
@@ -198,19 +166,9 @@ export class HackerNewsProcessor implements ArticleProcessor {
 				})
 			: null;
 
-		// 2. 收集評論與外部文章
 		const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
-		const externalPageContent = hnData?.url
-			? await scrapeWebPage(hnData.url)
-					.then((page) => page.content || null)
-					.catch((error) => {
-						console.warn({ tag: 'HN-PROCESSOR', msg: 'Failed to scrape linked webpage', error: String(error) });
-						return null;
-					})
-			: null;
-
-		const editorial = hnData ? await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments, externalPageContent) : null;
+		const editorial = hnData ? await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments) : null;
 		Object.assign(updateData, {
 			...(editorial?.cn ? { content_cn: editorial.cn } : {}),
 			...(editorial?.en ? { content: editorial.en } : {}),
@@ -225,9 +183,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 				links: extractPostLinks(hnData.url, hnData.text),
 			});
 
-		// 4. 用外部文章（若有）做分析，品質更好
-		const articleForAnalysis = externalPageContent ? { ...article, content: externalPageContent, summary: null } : article;
-		const analysis = await generateArticleAnalysis(articleForAnalysis, ctx.env);
+		const analysis = await generateArticleAnalysis(article, ctx.env);
 		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), 'HackerNews'])];
 
 		Object.assign(updateData, {

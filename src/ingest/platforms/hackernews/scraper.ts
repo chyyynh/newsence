@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// HackerNews Scraper
-// ─────────────────────────────────────────────────────────────
-
 import type { HackerNewsMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
@@ -9,7 +5,6 @@ import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
 export interface HnComment {
-	id?: number;
 	author?: string;
 	text?: string;
 	children?: HnComment[];
