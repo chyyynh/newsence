@@ -6,7 +6,7 @@ import type { HackerNewsMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
 
-const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
 export interface HnComment {
 	id?: number;
@@ -44,10 +44,6 @@ export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url
 	};
 }
 
-export async function fetchHnItem(itemId: string | number): Promise<HnItem> {
-	return fetchJsonWithTimeout<HnItem>(`${HN_ALGOLIA_API}/${itemId}`);
-}
-
 function buildHnMarkdown(item: HnItem): string {
 	const title = item.title || `HN Item ${item.id}`;
 	const parts: string[] = [`# ${title}\n`];
@@ -69,7 +65,7 @@ function buildHnMarkdown(item: HnItem): string {
 export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
-	const item = await fetchHnItem(itemId);
+	const item = await fetchJsonWithTimeout<HnItem>(`${HN_ALGOLIA_API}/${itemId}`);
 
 	const title = item.title || `HN Item ${itemId}`;
 	let summary = item.text?.slice(0, 200) || title;

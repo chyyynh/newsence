@@ -5,7 +5,7 @@
 import { generateText } from '@core-ai/embedding';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
-import { decodeHtmlEntities, htmlToText } from '@core-shared/web';
+import { decodeHtmlEntities, fetchJsonWithTimeout, htmlToText } from '@core-shared/web';
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
@@ -14,7 +14,7 @@ import {
 	type ProcessorResult,
 } from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web-scraper';
-import { fetchHnItem, type HnComment, type HnItem } from './scraper';
+import { HN_ALGOLIA_API, type HnComment, type HnItem } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -192,7 +192,7 @@ export class HackerNewsProcessor implements ArticleProcessor {
 
 		// 1. 從 HN API 取得完整資料（包含評論）
 		const hnData: HnItem | null = itemId
-			? await fetchHnItem(itemId).catch((error) => {
+			? await fetchJsonWithTimeout<HnItem>(`${HN_ALGOLIA_API}/${itemId}`).catch((error) => {
 					console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
 					return null;
 				})
