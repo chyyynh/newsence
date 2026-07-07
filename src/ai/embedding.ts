@@ -63,15 +63,6 @@ function errorDetails(error: unknown): Record<string, unknown> {
 	return details;
 }
 
-function geminiText(response: GeminiTextResponse): string | null {
-	const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
-	return text?.trim() || null;
-}
-
-function openAIText(response: OpenAIChatResponse): string | null {
-	return response.choices?.[0]?.message?.content?.trim() || null;
-}
-
 // Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
 // translations dilutes the budget without adding recall.
 type EmbeddingInput = Pick<Article, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
@@ -109,7 +100,8 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 			},
 			gatewayOptions(gatewayIdValue, task),
 		);
-		return geminiText(response);
+		const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
+		return text?.trim() || null;
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, ...errorDetails(error) });
 		return null;
@@ -142,7 +134,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 			},
 			gatewayOptions(gatewayIdValue, task),
 		);
-		const text = openAIText(response);
+		const text = response.choices?.[0]?.message?.content?.trim() || null;
 		if (!text) throw new Error('No text content found in model response');
 
 		const parsed = schema.safeParse(JSON.parse(text));
