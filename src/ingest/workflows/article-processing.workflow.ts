@@ -18,7 +18,6 @@ import {
 	readSourceArticleDraft,
 	type SourceArticleDraft,
 	sourceDraftToArticle,
-	sourceDraftYoutubeTranscript,
 } from '@ingest/workflows/source-draft';
 import { syncPaperGraph } from '@papers/sync';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
@@ -452,7 +451,7 @@ async function prepareYoutubeHighlightsInput(
 
 	if (context.target.kind === 'source') {
 		const draft = await context.readSourceDraft();
-		const transcript = sourceDraftYoutubeTranscript(draft);
+		const transcript = draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
 		if (!transcript) return null;
 		return {
 			kind: 'transcript',

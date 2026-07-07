@@ -31,14 +31,6 @@ function assertSourceArticleDraftKey(key: string): void {
 	if (!key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${key}`);
 }
 
-export function sourceDraftYoutubeTranscript(draft: SourceArticleDraft): YoutubeTranscriptRow | undefined {
-	return draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
-}
-
-export function sourceDraftTwitterSourceEvent(draft: SourceArticleDraft): TwitterSourceEventDraft | undefined {
-	return draft.attachments?.find((attachment) => attachment.kind === 'twitter-source-event')?.event;
-}
-
 export async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
 	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
 	await env.R2.put(r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });

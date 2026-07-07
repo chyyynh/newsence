@@ -7,7 +7,7 @@ import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntities
 import { syncArticleEntities } from '@entities/sync';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed, type WorkflowQueueTarget } from '@ingest/workflows/queue';
-import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@ingest/workflows/source-draft';
+import type { SourceArticleDraft } from '@ingest/workflows/source-draft';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { type PdfTextStatus, parsePdf } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
@@ -109,8 +109,8 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	);
 	const platformMetadata = finalInsert.updatePayload.platform_metadata ?? finalInsert.article.platformMetadata;
 	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
-	const twitterSourceEvent = sourceDraftTwitterSourceEvent(draft);
-	const youtubeTranscript = sourceDraftYoutubeTranscript(draft);
+	const twitterSourceEvent = draft.attachments?.find((attachment) => attachment.kind === 'twitter-source-event')?.event;
+	const youtubeTranscript = draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
 	return withDbTransaction(env, 'source article', async (db) => {
 		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
