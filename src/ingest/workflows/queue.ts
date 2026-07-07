@@ -206,7 +206,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 		}
 
-		const baseId = userFileWorkflowId(userFileId);
+		const baseId = `user-file-${workflowIdPart(userFileId)}`;
 		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
 		const instanceId = await createUserFileWorkflowInstance(env, workflowId, userFileId);
 		await recordUserFileWorkflowInstanceId(env, userFileId, instanceId);
@@ -268,10 +268,6 @@ async function patchUserFileWorkflowMetadata(db: DbClient, userFileId: string, p
 		 WHERE id = $2`,
 		[JSON.stringify(patch), userFileId],
 	);
-}
-
-function userFileWorkflowId(userFileId: string): string {
-	return `user-file-${userFileId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}`;
 }
 
 async function createUserFileWorkflowInstance(env: Env, workflowId: string, userFileId: string): Promise<string> {

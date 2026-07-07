@@ -109,7 +109,7 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 		fullArticle,
 		input.result,
 		input.embedding,
-		paperMetadataPatch(input.paperEnrichment),
+		input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : undefined,
 	);
 	const platformMetadata = finalInsert.updatePayload.platform_metadata ?? finalInsert.article.platformMetadata;
 	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
@@ -157,8 +157,24 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 			...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
 		},
 	};
-	const metadataPatch = mergeMetadataPatches(extractionMetadata(input.pdfTextTemp), paperMetadataPatch(input.paperEnrichment));
-	const updatePayload = buildProcessorUpdatePayload(input.article, finalResult, input.embedding, metadataPatch);
+	const metadataPatch: Record<string, unknown> = {
+		...(input.pdfTextTemp
+			? {
+					extraction: {
+						status: input.pdfTextTemp.status,
+						parser: 'liteparse',
+						...(input.pdfTextTemp.status === 'failed' ? {} : { chars: input.pdfTextTemp.chars, pages: input.pdfTextTemp.pages }),
+					},
+				}
+			: {}),
+		...(input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : {}),
+	};
+	const updatePayload = buildProcessorUpdatePayload(
+		input.article,
+		finalResult,
+		input.embedding,
+		Object.keys(metadataPatch).length ? metadataPatch : undefined,
+	);
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
 	const entities = entityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
@@ -181,27 +197,4 @@ function entityUpdatePayload(
 	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
 	updatePayload.entities = entities;
 	return entities;
-}
-
-/** Envelope patch that promotes an article to the `paper` platform type. */
-function paperMetadataPatch(paper: PaperMetadata | null): Record<string, unknown> | undefined {
-	return paper ? { type: 'paper', data: paper } : undefined;
-}
-
-/** Shallow-merge metadata patches, dropping the key entirely when all are empty. */
-function mergeMetadataPatches(...patches: Array<Record<string, unknown> | undefined>): Record<string, unknown> | undefined {
-	const merged: Record<string, unknown> = {};
-	for (const patch of patches) if (patch) Object.assign(merged, patch);
-	return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
-function extractionMetadata(pdfTextTemp: PdfTextTempResult | null): Record<string, unknown> | undefined {
-	if (!pdfTextTemp) return undefined;
-	return {
-		extraction: {
-			status: pdfTextTemp.status,
-			parser: 'liteparse',
-			...(pdfTextTemp.status === 'failed' ? {} : { chars: pdfTextTemp.chars, pages: pdfTextTemp.pages }),
-		},
-	};
 }

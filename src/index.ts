@@ -45,12 +45,25 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	}
 
 	override scheduled(event: ScheduledController): void {
-		handleScheduled(event, this.env, this.ctx);
+		console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
+
+		if (event.cron === '*/5 * * * *') this.ctx.waitUntil(handleRSSCron(this.env, this.ctx));
+		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env, this.ctx));
+		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env, this.ctx));
+		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env, this.ctx));
 	}
 
 	override async queue(batch: MessageBatch<QueueMessage>): Promise<void> {
 		console.info({ tag: 'CORE', msg: 'Queue received', queue: batch.queue, count: batch.messages.length });
-		await handleArticleQueue(batch, this.env);
+
+		try {
+			const result = await createWorkflowsForQueueMessages(this.env, batch.messages);
+			console.info({ tag: 'ARTICLE-QUEUE', msg: 'Created workflows', ...result });
+			batch.ackAll();
+		} catch (err) {
+			console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling batch, retrying', error: String(err) });
+			batch.retryAll();
+		}
 	}
 
 	// ── Service-binding RPC for engine capabilities ─────────────────────────
@@ -74,27 +87,5 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Read article/collection/url resources from the core corpus. */
 	readCorpusItems(items: ReadContextItem[], userId: string) {
 		return readCorpusItems(this.env, items, userId);
-	}
-}
-
-function handleScheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): void {
-	console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
-
-	if (event.cron === '*/5 * * * *') ctx.waitUntil(handleRSSCron(env, ctx));
-	else if (event.cron === '0 */6 * * *') ctx.waitUntil(handleTwitterCron(env, ctx));
-	else if (event.cron === '*/30 * * * *') ctx.waitUntil(handleYouTubeCron(env, ctx));
-	else if (event.cron === '0 3 * * *') ctx.waitUntil(handleRetryCron(env, ctx));
-}
-
-async function handleArticleQueue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
-	console.info({ tag: 'ARTICLE-QUEUE', msg: 'Received batch', count: batch.messages.length });
-
-	try {
-		const result = await createWorkflowsForQueueMessages(env, batch.messages);
-		console.info({ tag: 'ARTICLE-QUEUE', msg: 'Created workflows', ...result });
-		batch.ackAll();
-	} catch (err) {
-		console.error({ tag: 'ARTICLE-QUEUE', msg: 'Error handling batch, retrying', error: String(err) });
-		batch.retryAll();
 	}
 }
