@@ -16,6 +16,13 @@ const IMAGE_URL_ERROR_STATUS: Partial<Record<IngestImageUrlErrorCode, number>> =
 	UPSTREAM_ERROR: 502,
 	INTERNAL_ERROR: 500,
 };
+const BLOB_ERROR_STATUS: Record<string, number> = {
+	RATE_LIMITED: 429,
+	PAYLOAD_TOO_LARGE: 413,
+	[QUOTA_EXCEEDED_CODE]: 403,
+	UNSUPPORTED_MEDIA_TYPE: 415,
+	INTERNAL_ERROR: 500,
+};
 
 type IngestJsonBody = {
 	urls?: string[];
@@ -63,27 +70,13 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
 		return jsonError(outcome.code, outcome.message, status);
 	}
 	if (contentType.startsWith('multipart/form-data')) {
-		return ingestMultipart(request, env);
+		const outcome = await ingestBlob(request, env);
+		if (outcome.ok) return jsonData(outcome.result);
+
+		if (outcome.code === 'RATE_LIMITED') {
+			return jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS);
+		}
+		return jsonError(outcome.code, outcome.message, BLOB_ERROR_STATUS[outcome.code] ?? 400);
 	}
 	return jsonError('UNSUPPORTED_MEDIA_TYPE', `Unsupported Content-Type: ${contentType || '(none)'}`, 415);
-}
-
-async function ingestMultipart(request: Request, env: Env): Promise<Response> {
-	const outcome = await ingestBlob(request, env);
-	if (outcome.ok) return jsonData(outcome.result);
-
-	if (outcome.code === 'RATE_LIMITED') {
-		return jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS);
-	}
-	const status =
-		outcome.code === 'PAYLOAD_TOO_LARGE'
-			? 413
-			: outcome.code === QUOTA_EXCEEDED_CODE
-				? 403
-				: outcome.code === 'UNSUPPORTED_MEDIA_TYPE'
-					? 415
-					: outcome.code === 'INTERNAL_ERROR'
-						? 500
-						: 400;
-	return jsonError(outcome.code, outcome.message, status);
 }
