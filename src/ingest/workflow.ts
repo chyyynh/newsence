@@ -21,7 +21,7 @@ import {
 	type PlatformWorkflowData,
 	type ProcessorResult,
 } from './domain/processors';
-import { extractPdfTextToTemp, type PdfTextTempResult, pdfTextExtractionMetadata, preparePdfTextExtraction } from './pdf';
+import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './pdf';
 import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
 
 type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
@@ -271,40 +271,8 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 		if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 		article = await loadArticleForProcessing(env, context.table, context.rowId);
 	}
-	if (!pdfTextTemp?.textStorageKey) return article;
-	const pdfTextObj = await env.R2.get(pdfTextTemp.textStorageKey);
-	if (!pdfTextObj) throw new Error(`PDF text temp object missing: ${pdfTextTemp.textStorageKey}`);
-	return { ...article, content: await pdfTextObj.text() };
-}
-
-async function stagePdfExtraction(
-	env: Env,
-	context: WorkflowRunContext,
-	article: ArticleForProcessing,
-	step: WorkflowStep,
-	workflowInstanceId: string,
-): Promise<PdfTextTempResult | null> {
-	if (!context.userFileId) return null;
-	const request = preparePdfTextExtraction({
-		articleId: context.userFileId,
-		hasContent: 'has_content' in article && !!article.has_content,
-		storageKey: article.storage_key,
-		originType: article.origin_type,
-		fileType: article.file_type,
-		tempId: workflowIdPart(workflowInstanceId),
-	});
-	if (!request) return null;
-
-	try {
-		return await step.do(
-			'extract-pdf-text',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => extractPdfTextToTemp(env, request),
-		);
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: request.articleId, error: String(error) });
-		return { status: 'failed', chars: 0, pages: 0 };
-	}
+	const pdfText = await readPdfTextTemp(env, pdfTextTemp);
+	return pdfText === null ? article : { ...article, content: pdfText };
 }
 
 async function enrichPaperMetadataStep(
@@ -384,10 +352,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 
 async function persistStoredTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	if (!context.rowId) throw new Error('Stored workflow target is missing row id');
-	const pdfTextObj = input.pdfTextTemp?.textStorageKey ? await env.R2.get(input.pdfTextTemp.textStorageKey) : null;
-	if (input.pdfTextTemp?.textStorageKey && !pdfTextObj)
-		throw new Error(`PDF text temp object missing: ${input.pdfTextTemp.textStorageKey}`);
-	const extractedPdfText = pdfTextObj ? await pdfTextObj.text() : null;
+	const extractedPdfText = await readPdfTextTemp(env, input.pdfTextTemp);
 	const finalResult: ProcessorResult = {
 		...input.result,
 		updateData: {
@@ -455,7 +420,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
-			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step, event.instanceId);
+			const pdfTextTemp = await stagePdfTextExtraction(this.env, step, {
+				articleId: context.userFileId,
+				hasContent: 'has_content' in article && !!article.has_content,
+				storageKey: article.storage_key,
+				originType: article.origin_type,
+				fileType: article.file_type,
+				tempId: workflowIdPart(event.instanceId),
+			});
 
 			const paperEnrichment = await enrichPaperMetadataStep(this.env, context, article, pdfTextTemp, step);
 

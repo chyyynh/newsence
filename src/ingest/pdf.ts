@@ -1,3 +1,4 @@
+import type { WorkflowStep } from 'cloudflare:workers';
 import { PDF_MIME } from '@core-shared/mime';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
@@ -18,7 +19,14 @@ export interface PdfTextTempResult {
 	textStorageKey?: string;
 }
 
-type PdfTextExtractionRequest = { articleId: string; storageKey: string; tempId: string };
+type PdfWorkflowExtractionInput = {
+	articleId: string | null;
+	hasContent?: boolean;
+	storageKey?: string | null;
+	originType?: string | null;
+	fileType?: string | null;
+	tempId: string;
+};
 
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
@@ -41,32 +49,51 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	return { text, pages, chars, status };
 }
 
-export function preparePdfTextExtraction(input: {
-	articleId: string;
-	hasContent?: boolean;
-	storageKey?: string | null;
-	originType?: string | null;
-	fileType?: string | null;
-	tempId: string;
-}): PdfTextExtractionRequest | null {
-	if (
-		input.hasContent ||
-		!input.storageKey ||
-		!(input.originType === 'upload' || input.originType === 'saved_url') ||
-		input.fileType !== PDF_MIME
-	) {
-		return null;
-	}
-	return { articleId: input.articleId, storageKey: input.storageKey, tempId: input.tempId };
-}
-
-export async function extractPdfTextToTemp(env: Env, input: PdfTextExtractionRequest): Promise<PdfTextTempResult> {
+async function extractPdfTextToTemp(
+	env: Env,
+	input: { articleId: string; storageKey: string; tempId: string },
+): Promise<PdfTextTempResult> {
 	const obj = await env.R2.get(input.storageKey);
 	if (!obj) throw new Error(`PDF source object missing: ${input.storageKey}`);
 	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
 	const textStorageKey = `${WORKFLOW_PDF_TEXT_TEMP_PREFIX}${input.articleId}/${input.tempId}.md`;
 	await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: WORKFLOW_PDF_TEXT_CONTENT_TYPE } });
 	return { status, chars, pages, textStorageKey };
+}
+
+export async function stagePdfTextExtraction(
+	env: Env,
+	step: WorkflowStep,
+	input: PdfWorkflowExtractionInput,
+): Promise<PdfTextTempResult | null> {
+	if (
+		input.hasContent ||
+		!input.articleId ||
+		!input.storageKey ||
+		!(input.originType === 'upload' || input.originType === 'saved_url') ||
+		input.fileType !== PDF_MIME
+	) {
+		return null;
+	}
+	const request = { articleId: input.articleId, storageKey: input.storageKey, tempId: input.tempId };
+
+	try {
+		return await step.do(
+			'extract-pdf-text',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => extractPdfTextToTemp(env, request),
+		);
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: request.articleId, error: String(error) });
+		return { status: 'failed', chars: 0, pages: 0 };
+	}
+}
+
+export async function readPdfTextTemp(env: Env, result: PdfTextTempResult | null): Promise<string | null> {
+	if (!result?.textStorageKey) return null;
+	const obj = await env.R2.get(result.textStorageKey);
+	if (!obj) throw new Error(`PDF text temp object missing: ${result.textStorageKey}`);
+	return obj.text();
 }
 
 export function pdfTextExtractionMetadata(result: PdfTextTempResult | null): Record<string, unknown> | undefined {
