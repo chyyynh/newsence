@@ -1,4 +1,4 @@
-import { jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { parseJsonBody, requireAuth } from '@core-shared/auth';
 import type { Env } from '@core-shared/types';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl, QUOTA_EXCEEDED_CODE } from '../blob';
 import { ingestUrls } from '../urls';
@@ -44,7 +44,7 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
 		const hasImageUrl = typeof body.imageUrl === 'string' && body.imageUrl.trim().length > 0;
 		const hasUrlField = Array.isArray(body.urls) && body.urls.length > 0;
 		if (hasImageUrl && hasUrlField) {
-			return jsonError('BAD_REQUEST', 'Provide imageUrl OR urls, not both', 400);
+			return Response.json({ code: 'BAD_REQUEST', message: 'Provide imageUrl OR urls, not both' }, { status: 400 });
 		}
 
 		if (hasImageUrl) {
@@ -53,30 +53,33 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
 				userId: body.userId,
 				title: body.title ?? null,
 			});
-			if (outcome.ok) return jsonData(outcome.result);
+			if (outcome.ok) return Response.json(outcome.result);
 
 			return outcome.code === 'RATE_LIMITED'
-				? jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS)
-				: jsonError(outcome.code, outcome.message, IMAGE_URL_ERROR_STATUS[outcome.code] ?? 400);
+				? Response.json({ code: outcome.code, message: outcome.message }, { status: 429, headers: RATE_LIMIT_HEADERS })
+				: Response.json({ code: outcome.code, message: outcome.message }, { status: IMAGE_URL_ERROR_STATUS[outcome.code] ?? 400 });
 		}
 
 		const outcome = await ingestUrls(env, { urls: body.urls ?? [], userId: body.userId });
-		if (outcome.ok) return jsonData(outcome.results);
+		if (outcome.ok) return Response.json(outcome.results);
 
 		if (outcome.code === 'RATE_LIMITED') {
-			return jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS);
+			return Response.json({ code: outcome.code, message: outcome.message }, { status: 429, headers: RATE_LIMIT_HEADERS });
 		}
 		const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
-		return jsonError(outcome.code, outcome.message, status);
+		return Response.json({ code: outcome.code, message: outcome.message }, { status });
 	}
 	if (contentType.startsWith('multipart/form-data')) {
 		const outcome = await ingestBlob(request, env);
-		if (outcome.ok) return jsonData(outcome.result);
+		if (outcome.ok) return Response.json(outcome.result);
 
 		if (outcome.code === 'RATE_LIMITED') {
-			return jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS);
+			return Response.json({ code: outcome.code, message: outcome.message }, { status: 429, headers: RATE_LIMIT_HEADERS });
 		}
-		return jsonError(outcome.code, outcome.message, BLOB_ERROR_STATUS[outcome.code] ?? 400);
+		return Response.json({ code: outcome.code, message: outcome.message }, { status: BLOB_ERROR_STATUS[outcome.code] ?? 400 });
 	}
-	return jsonError('UNSUPPORTED_MEDIA_TYPE', `Unsupported Content-Type: ${contentType || '(none)'}`, 415);
+	return Response.json(
+		{ code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported Content-Type: ${contentType || '(none)'}` },
+		{ status: 415 },
+	);
 }

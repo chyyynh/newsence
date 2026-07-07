@@ -1,5 +1,5 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
-import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import type { Env } from '@core-shared/types';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
@@ -49,8 +49,8 @@ const HELP_TEXT =
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
-	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
-	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
+	'POST /search                              - Hybrid corpus ranking (internal token) -> {results}\n' +
+	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {ids}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {
@@ -61,15 +61,15 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
 	if (body instanceof Response) return body;
 
 	if (!body.query?.trim()) {
-		return jsonData({ results: [] }, INTERNAL_CORS_HEADERS);
+		return Response.json({ results: [] }, { headers: INTERNAL_CORS_HEADERS });
 	}
 
 	try {
 		const results = await searchCorpusArticleRanks(env, { query: body.query, limit: body.limit });
-		return jsonData({ results }, INTERNAL_CORS_HEADERS);
+		return Response.json({ results }, { headers: INTERNAL_CORS_HEADERS });
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'hybrid search failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('SEARCH_FAILED', 'Search failed', 500, INTERNAL_CORS_HEADERS);
+		return Response.json({ code: 'SEARCH_FAILED', message: 'Search failed' }, { status: 500, headers: INTERNAL_CORS_HEADERS });
 	}
 }
 
@@ -81,16 +81,16 @@ async function handleRelated(request: Request, env: Env): Promise<Response> {
 	if (body instanceof Response) return body;
 
 	if (!body.id?.trim()) {
-		return jsonError('BAD_REQUEST', 'Missing seed id', 400, INTERNAL_CORS_HEADERS);
+		return Response.json({ code: 'BAD_REQUEST', message: 'Missing seed id' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
 	const type = body.type === 'user_file' ? 'user_file' : 'article';
 
 	try {
 		const ids = await relatedCorpusArticleIds(env, { seed: { id: body.id, type }, limit: body.limit, offset: body.offset });
-		return jsonData({ ids }, INTERNAL_CORS_HEADERS);
+		return Response.json({ ids }, { headers: INTERNAL_CORS_HEADERS });
 	} catch (error) {
 		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('SEARCH_FAILED', 'Related search failed', 500, INTERNAL_CORS_HEADERS);
+		return Response.json({ code: 'SEARCH_FAILED', message: 'Related search failed' }, { status: 500, headers: INTERNAL_CORS_HEADERS });
 	}
 }
 
@@ -107,11 +107,11 @@ async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): P
 	if (articleIds.length || userFileIds.length) {
 		if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
 		if (userFileIds.length) await enqueueArticleBatchProcess(env, userFileIds, USER_FILES_TABLE);
-		return jsonData({ articles: articleIds.length, userFiles: userFileIds.length }, INTERNAL_CORS_HEADERS);
+		return Response.json({ articles: articleIds.length, userFiles: userFileIds.length }, { headers: INTERNAL_CORS_HEADERS });
 	}
 
 	ctx.waitUntil(handleRetryCron(env));
-	return jsonData({ queued: true }, INTERNAL_CORS_HEADERS);
+	return Response.json({ queued: true }, { headers: INTERNAL_CORS_HEADERS });
 }
 
 async function handleWorkflowStream(request: Request, instanceId: string, env: Env): Promise<Response> {

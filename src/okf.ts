@@ -6,7 +6,7 @@
 // the ingest pipeline stores with, so bundles never diverge from the DB gate.
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { type DbClient, withDbClient } from '@core-shared/db';
 import type { Env } from '@core-shared/types';
 import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@entities/normalize';
@@ -74,7 +74,7 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 	if (body instanceof Response) return body;
 	const viewerId = body.userId?.trim() || null;
 	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
-		return jsonError('BAD_REQUEST', 'Missing collectionId', 400, OKF_EXPORT_CORS);
+		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400, headers: OKF_EXPORT_CORS });
 	}
 
 	try {
@@ -89,10 +89,10 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 		});
 	} catch (error) {
 		if (error instanceof Error && error.message === 'Collection not found') {
-			return jsonError('NOT_FOUND', error.message, 404, OKF_EXPORT_CORS);
+			return Response.json({ code: 'NOT_FOUND', message: error.message }, { status: 404, headers: OKF_EXPORT_CORS });
 		}
 		console.error({ tag: 'OKF_EXPORT', msg: 'export failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'OKF export failed', 500, OKF_EXPORT_CORS);
+		return Response.json({ code: 'INTERNAL_ERROR', message: 'OKF export failed' }, { status: 500, headers: OKF_EXPORT_CORS });
 	}
 }
 

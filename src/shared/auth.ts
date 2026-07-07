@@ -8,20 +8,6 @@ export const INTERNAL_CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
 
-export function jsonData<T>(data: T, headers?: HeadersInit): Response {
-	return Response.json({ success: true, data }, { headers });
-}
-
-export function jsonError(
-	code: string,
-	message: string,
-	status: number,
-	headers?: HeadersInit,
-	details?: Record<string, unknown>,
-): Response {
-	return Response.json({ success: false, error: { code, message, ...(details ? { details } : {}) } }, { status, headers });
-}
-
 async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
 	const [hashA, hashB] = await Promise.all([
 		crypto.subtle.digest('SHA-256', ENCODER.encode(a)),
@@ -42,7 +28,7 @@ export async function requireAuth(request: Request, env: Env, extraHeaders?: Hea
 		// set in all deployed envs; an empty value is a misconfiguration, so we
 		// reject and log loudly rather than silently opening the door.
 		console.error({ tag: 'AUTH', msg: 'CORE_WORKER_INTERNAL_TOKEN is not set — rejecting internal-token request' });
-		return jsonError('UNAUTHORIZED', 'Missing or invalid internal token', 401, extraHeaders);
+		return Response.json({ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' }, { status: 401, headers: extraHeaders });
 	}
 	const provided = (
 		request.headers.get('x-internal-token') ??
@@ -50,17 +36,16 @@ export async function requireAuth(request: Request, env: Env, extraHeaders?: Hea
 		''
 	).trim();
 	if (provided && (await timingSafeStringEqual(provided, expected))) return null;
-	return jsonError('UNAUTHORIZED', 'Missing or invalid internal token', 401, extraHeaders);
+	return Response.json({ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' }, { status: 401, headers: extraHeaders });
 }
 
 /**
  * Parse a JSON body, returning either the parsed value or a 400 Response.
- * The error envelope matches the rest of the worker's error shape.
  */
 export async function parseJsonBody<T>(request: Request, extraHeaders?: HeadersInit): Promise<T | Response> {
 	try {
 		return (await request.json()) as T;
 	} catch {
-		return jsonError('BAD_REQUEST', 'Invalid JSON body', 400, extraHeaders);
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid JSON body' }, { status: 400, headers: extraHeaders });
 	}
 }

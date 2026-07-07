@@ -2,7 +2,7 @@
 // Internal /entities/* maintenance endpoints (registered in http.ts).
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@core-shared/auth';
+import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { withDbTransaction } from '@core-shared/db';
 import type { Env } from '@core-shared/types';
 import { type MaintenanceCursor, pruneOrphanEntities, repairMissingArticleEntityLinks } from '@entities/maintenance';
@@ -41,21 +41,21 @@ export async function handleRepairEntityLinks(request: Request, env: Env): Promi
 	const limit = boundedMaintenanceLimit(body.limit);
 	const before = body.before?.trim() || undefined;
 	if (before && Number.isNaN(Date.parse(before))) {
-		return jsonError('BAD_REQUEST', 'Invalid before timestamp', 400, INTERNAL_CORS_HEADERS);
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid before timestamp' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
 	const cursor = parseMaintenanceCursor(body.cursor);
 	if (body.cursor !== undefined && !cursor) {
-		return jsonError('BAD_REQUEST', 'Invalid cursor', 400, INTERNAL_CORS_HEADERS);
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid cursor' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
 	const sourceType = parseMaintenanceSourceType(body.sourceType);
 	if (body.sourceType !== undefined && !sourceType) {
-		return jsonError('BAD_REQUEST', 'Invalid sourceType', 400, INTERNAL_CORS_HEADERS);
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid sourceType' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
 	const includeLinked = body.includeLinked === true;
 	const result = await withDbTransaction(env, 'repair entity links', (db) =>
 		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked, sourceType: sourceType ?? undefined }),
 	);
-	return jsonData({ ...result, includeLinked, sourceType: sourceType ?? null }, INTERNAL_CORS_HEADERS);
+	return Response.json({ ...result, includeLinked, sourceType: sourceType ?? null }, { headers: INTERNAL_CORS_HEADERS });
 }
 
 export async function handleEntityQuality(request: Request, env: Env): Promise<Response> {
@@ -67,7 +67,7 @@ export async function handleEntityQuality(request: Request, env: Env): Promise<R
 
 	const months = boundedMaintenanceLimit(body.months, 6, 24);
 	const result = await withDbTransaction(env, 'entity quality snapshot', (db) => getEntityQualitySnapshot(db, { months }));
-	return jsonData(result, INTERNAL_CORS_HEADERS);
+	return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
 }
 
 export async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
@@ -79,5 +79,5 @@ export async function handlePruneOrphanEntities(request: Request, env: Env): Pro
 
 	const limit = boundedMaintenanceLimit(body.limit);
 	const result = await withDbTransaction(env, 'prune orphan entities', (db) => pruneOrphanEntities(db, limit));
-	return jsonData(result, INTERNAL_CORS_HEADERS);
+	return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
 }
