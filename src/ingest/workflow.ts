@@ -114,23 +114,41 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 	const workflowTarget: WorkflowTarget = { kind: 'source', sourceArticle };
 	await env.R2.put(sourceArticle.r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
 
+	let keepDraft = false;
+	let cleanupReason = 'workflow create failed';
+	let cleanupWorkflowId: string | undefined;
 	try {
 		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
 		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
-		if (created.length) return;
+		if (created.length) {
+			keepDraft = true;
+			return;
+		}
 
 		const existing = await getMonitorWorkflowStatus(env, workflowId);
 		if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
-			await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId: existing.id });
+			cleanupReason = 'workflow already exists';
+			cleanupWorkflowId = existing.id;
 			return;
 		}
 
 		const retryId = retryWorkflowId(workflowId);
 		const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryId, params: { target: workflowTarget } }]);
 		if (!retried.length) throw new Error(`Failed to create source workflow ${retryId}`);
-	} catch (err) {
-		await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'workflow create failed' });
-		throw err;
+		keepDraft = true;
+	} finally {
+		if (!keepDraft) {
+			await env.R2.delete(sourceArticle.r2Key).catch((error) =>
+				console.warn({
+					tag: 'SOURCE-WORKFLOW',
+					msg: 'Failed to cleanup source article draft',
+					reason: cleanupReason,
+					workflowId: cleanupWorkflowId,
+					sourceUrl: sourceArticle.url,
+					error: String(error),
+				}),
+			);
+		}
 	}
 }
 
@@ -159,26 +177,6 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 		.map((byte) => byte.toString(16).padStart(2, '0'))
 		.join('');
 	return `source-article-${hash}`;
-}
-
-async function cleanupSourceArticleDraft(
-	env: Env,
-	ref: { url: string; r2Key: string },
-	context: { reason: string; workflowId?: string },
-): Promise<void> {
-	try {
-		if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
-		await env.R2.delete(ref.r2Key);
-	} catch (err) {
-		console.warn({
-			tag: 'SOURCE-WORKFLOW',
-			msg: 'Failed to cleanup source article draft',
-			reason: context.reason,
-			workflowId: context.workflowId,
-			sourceUrl: ref.url,
-			error: String(err),
-		});
-	}
 }
 
 export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string | undefined> {
