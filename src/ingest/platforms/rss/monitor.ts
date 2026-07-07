@@ -1,9 +1,4 @@
-import {
-	type ArticleSourceUpdate,
-	type ExistingArticleRecord,
-	getExistingArticlesByUrl,
-	updateArticleSourceByUrl,
-} from '@core-shared/article-store';
+import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
@@ -26,19 +21,65 @@ import {
 // RSS Monitor
 // ─────────────────────────────────────────────────────────────
 
-// Source priorities for the upgrade-on-duplicate flow: RSS feeds default to 10
-// and overwrite anything below them. Lower number = lower priority.
-const SOURCE_PRIORITY: Record<string, number> = { Unknown: 0 };
-const TYPE_PRIORITY: Record<string, number> = { twitter: 0 };
-const DEFAULT_FEED_PRIORITY = 10;
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 type FeedItemWithUrl = { item: RSSItem; url: string };
 
-async function processFeed(env: Env, db: Client, feed: RSSFeed, parser: XMLParser): Promise<void> {
-	if (feed.type !== 'rss') return;
+async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<boolean> {
+	let sourceType = 'rss';
+	let platformMetadata: PlatformMetadata | null = null;
+	const commentsUrl = toPlainText(item.comments) || undefined;
+	if (commentsUrl) {
+		try {
+			platformMetadata = await resolveDiscussionPlatformMetadata(commentsUrl);
+			sourceType = platformMetadata?.type ?? sourceType;
+		} catch (err) {
+			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
+		}
+	}
 
+	let crawledContent = '';
+	let fetchedOgImageUrl: string | null = null;
+	let ogImageWidth: number | null = null;
+	let ogImageHeight: number | null = null;
+	if (sourceType === 'rss') {
+		const rssContent = extractRssFullContent(item);
+		if (rssContent) {
+			crawledContent = rssContent;
+		} else {
+			try {
+				const scraped = await scrapeWebPage(url);
+				crawledContent = scraped.content;
+				fetchedOgImageUrl = scraped.ogImageUrl;
+				ogImageWidth = scraped.ogImageWidth ?? null;
+				ogImageHeight = scraped.ogImageHeight ?? null;
+			} catch (e) {
+				console.warn({ tag: 'RSS', msg: 'Scrape fallback failed', url, error: String(e) });
+			}
+		}
+	}
+
+	const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
+	const metadataToStore = platformMetadata ? { ...platformMetadata, ogImageWidth, ogImageHeight } : null;
+
+	await startSourceArticleWorkflow(env, {
+		article: {
+			url,
+			title: toPlainText(item.title) || toPlainText(item.text) || 'No Title',
+			source: feed.name,
+			publishedDate: pubDate ? new Date(pubDate) : new Date(),
+			summary: platformMetadata ? '' : stripHtml(item.description ?? item.summary ?? ''),
+			sourceType,
+			content: crawledContent || null,
+			ogImageUrl: fetchedOgImageUrl ?? extractImageFromItem(item),
+			platformMetadata: metadataToStore,
+		},
+	});
+	return true;
+}
+
+async function processFeed(env: Env, db: Client, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	let res: Response;
 	try {
 		res = await fetchWithTimeout(feed.RSSLink, {
@@ -71,98 +112,11 @@ async function processFeed(env: Env, db: Client, feed: RSSFeed, parser: XMLParse
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 
-	const urlToItem = new Map<string, RSSItem>();
-	for (const { item, url } of itemUrls) {
-		urlToItem.set(url, item);
-	}
-
-	const feedPriority = SOURCE_PRIORITY[feed.name] ?? DEFAULT_FEED_PRIORITY;
-	const sourceUpgrades: Array<{ existing: ExistingArticleRecord; update: ArticleSourceUpdate }> = [];
-	for (const existing of existingRecords) {
-		const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
-		if (feedPriority <= existingPriority) continue;
-
-		const normalized = normalizeUrl(existing.url);
-		let sourceType: string | undefined;
-		let platformMetadata: PlatformMetadata | undefined;
-		const rssItem = urlToItem.get(normalized);
-		const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
-		if (commentsUrl) {
-			try {
-				platformMetadata = (await resolveDiscussionPlatformMetadata(commentsUrl)) ?? undefined;
-				sourceType = platformMetadata?.type;
-			} catch (err) {
-				console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata for upgrade', url: normalized, error: String(err) });
-			}
-		}
-
-		sourceUpgrades.push({ existing, update: { url: normalized, source: feed.name, sourceType, platformMetadata } });
-	}
-	if (sourceUpgrades.length) {
-		for (const { existing, update } of sourceUpgrades) {
-			await updateArticleSourceByUrl(db, update);
-			console.info({ tag: 'RSS', msg: 'Upgraded article source', url: update.url, from: existing.source, to: feed.name });
-		}
-	}
-
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
 	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			let sourceType = 'rss';
-			let platformMetadata: PlatformMetadata | null = null;
-			const commentsUrl = toPlainText(item.comments) || undefined;
-			if (commentsUrl) {
-				try {
-					platformMetadata = await resolveDiscussionPlatformMetadata(commentsUrl);
-					sourceType = platformMetadata?.type ?? sourceType;
-				} catch (err) {
-					console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
-				}
-			}
-
-			let crawledContent = '';
-			let fetchedOgImageUrl: string | null = null;
-			let ogImageWidth: number | null = null;
-			let ogImageHeight: number | null = null;
-			if (sourceType === 'rss') {
-				const rssContent = extractRssFullContent(item);
-				if (rssContent) {
-					crawledContent = rssContent;
-				} else {
-					try {
-						const scraped = await scrapeWebPage(url);
-						crawledContent = scraped.content;
-						fetchedOgImageUrl = scraped.ogImageUrl;
-						ogImageWidth = scraped.ogImageWidth ?? null;
-						ogImageHeight = scraped.ogImageHeight ?? null;
-					} catch (e) {
-						console.warn({ tag: 'RSS', msg: 'Scrape fallback failed', url, error: String(e) });
-					}
-				}
-			}
-
-			const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
-			const metadataToStore = platformMetadata
-				? { ...platformMetadata, ogImageWidth, ogImageHeight }
-				: ogImageWidth && ogImageHeight
-					? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
-					: null;
-
-			await startSourceArticleWorkflow(env, {
-				article: {
-					url,
-					title: toPlainText(item.title) || toPlainText(item.text) || 'No Title',
-					source: feed.name ?? 'Unknown',
-					publishedDate: pubDate ? new Date(pubDate) : new Date(),
-					summary: platformMetadata ? '' : stripHtml(item.description ?? item.summary ?? ''),
-					sourceType,
-					content: crawledContent || null,
-					ogImageUrl: fetchedOgImageUrl ?? extractImageFromItem(item),
-					platformMetadata: metadataToStore,
-				},
-			});
-			queued++;
+			if (await queueRssItem(env, feed, item, url)) queued++;
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });
 		}

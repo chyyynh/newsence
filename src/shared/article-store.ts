@@ -161,31 +161,6 @@ export async function getExistingArticlesByUrl(db: Client, urls: string[], batch
 	return records;
 }
 
-export type ArticleSourceUpdate = {
-	url: string;
-	source: string;
-	sourceType?: string;
-	platformMetadata?: unknown;
-};
-
-export async function updateArticleSourceByUrl(db: Client, update: ArticleSourceUpdate): Promise<void> {
-	const updateFields: string[] = ['source = $1'];
-	const updateValues: unknown[] = [update.source];
-	let paramIndex = 2;
-
-	if (update.sourceType !== undefined) {
-		updateFields.push(`source_type = $${paramIndex++}`);
-		updateValues.push(update.sourceType);
-	}
-	if (update.platformMetadata !== undefined) {
-		updateFields.push(`platform_metadata = $${paramIndex++}`);
-		updateValues.push(update.platformMetadata === null ? null : JSON.stringify(update.platformMetadata));
-	}
-
-	updateValues.push(update.url);
-	await db.query(`UPDATE ${ARTICLES_TABLE} SET ${updateFields.join(', ')} WHERE url = $${paramIndex}`, updateValues);
-}
-
 export type ArticleReprocessingTextUpdate = {
 	summary: string;
 	content: string;
