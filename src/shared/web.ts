@@ -146,19 +146,6 @@ export function streamWithByteLimit(body: ReadableStream<Uint8Array>, maxBytes: 
 	);
 }
 
-export async function resolveUrl(url: string): Promise<string> {
-	try {
-		const response = await fetchWithTimeout(url, {
-			method: 'HEAD',
-			redirect: 'follow',
-			headers: { 'User-Agent': BROWSER_UA },
-		});
-		return response.url;
-	} catch {
-		return url;
-	}
-}
-
 export function assertExternalFetchable(rawUrl: string): URL {
 	const parsed = parseUrl(rawUrl);
 	if (!parsed) throw new Error('Invalid URL');

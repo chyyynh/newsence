@@ -1,7 +1,7 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
-import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
+import { BROWSER_UA, isSocialMediaUrl, normalizeUrl } from '@core-shared/web';
 import { startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
@@ -98,10 +98,17 @@ async function saveTwitterArticleTweet(
 }
 
 async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalUrl: string, text: string): Promise<boolean> {
-	const resolvedUrl = await resolveUrl(externalUrl).catch((err) => {
-		console.warn({ tag: 'TWITTER', msg: 'Failed to resolve shared link', url: externalUrl, error: String(err) });
-		return null;
-	});
+	const resolvedUrl = await fetch(externalUrl, {
+		method: 'HEAD',
+		redirect: 'follow',
+		headers: { 'User-Agent': BROWSER_UA },
+		signal: AbortSignal.timeout(15_000),
+	})
+		.then((response) => response.url)
+		.catch((err) => {
+			console.warn({ tag: 'TWITTER', msg: 'Failed to resolve shared link', url: externalUrl, error: String(err) });
+			return null;
+		});
 	if (!resolvedUrl || isSocialMediaUrl(resolvedUrl)) return false;
 
 	const existingArticle = await findArticleByUrl(db, resolvedUrl);
