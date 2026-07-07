@@ -14,7 +14,7 @@ const CORS_HEADERS: Record<string, string> = {
 // POST /scrape — synchronous, stateless content extraction. Accepts either
 // `{ "url": "..." }` (JSON) or raw file bytes (`--data-binary`). Returns
 // NormalizedContent without touching R2/DB and without AI — the fast path.
-// Large/slow inputs (OCR, big PDFs) should use the async POST /scrape/jobs.
+// Large PDFs should use the async POST /scrape/jobs.
 export async function handleScrape(request: Request, env: Env): Promise<Response> {
 	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 

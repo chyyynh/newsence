@@ -225,7 +225,7 @@ async function extractFromBytes(bytes: Uint8Array, declaredType?: string): Promi
 	const sniffed = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES));
 	const type = sniffed ?? declaredType ?? 'application/octet-stream';
 	if (type === PDF_MIME) return normalizePdf(await parsePdf(bytes), null);
-	return emptyResult(type, null, isRasterImage(type) ? 'needs_ocr' : 'failed');
+	return emptyResult(type, null, 'failed');
 }
 
 async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent> {
@@ -238,7 +238,7 @@ async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent>
 		return normalizePdf(await parsePdf(bytes), result.sourceUrl);
 	}
 	await result.body.cancel();
-	return emptyResult(result.contentType, result.sourceUrl, 'needs_ocr');
+	return emptyResult(result.contentType, result.sourceUrl, 'failed');
 }
 
 export async function extractSource(env: Env, input: ExtractInput): Promise<NormalizedContent> {
