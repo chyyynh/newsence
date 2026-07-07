@@ -42,10 +42,6 @@ type WorkflowStreamEvent = {
 	status: string;
 };
 
-function internalPreflight(): Response {
-	return new Response(null, { headers: INTERNAL_CORS_HEADERS });
-}
-
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints (frontend):\n' +
@@ -63,26 +59,6 @@ const HELP_TEXT =
 	'POST /search                              - Hybrid corpus ranking (internal token) -> {success,data:{results}}\n' +
 	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {success,data:{ids}}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
-
-function scrapeJobId(pathname: string): string | null {
-	return SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId || null;
-}
-
-function workflowStreamInstanceId(pathname: string): string | null {
-	return WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId || null;
-}
-
-function health(): Response {
-	return Response.json({
-		status: 'ok',
-		worker: 'newsence-core',
-		timestamp: new Date().toISOString(),
-	});
-}
-
-function isTerminalWorkflowStatus(status: string): boolean {
-	return TERMINAL_WORKFLOW_STATUSES.has(status);
-}
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
@@ -162,7 +138,7 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 				while (!request.signal.aborted) {
 					const { status, error, output } = await instance.status();
 					const streamStatus = String(status);
-					const isTerminal = isTerminalWorkflowStatus(streamStatus);
+					const isTerminal = TERMINAL_WORKFLOW_STATUSES.has(streamStatus);
 
 					if (streamStatus === 'complete') {
 						writeEvent({ status: 'complete', output });
@@ -191,25 +167,22 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 	});
 }
 
-function routePrefixGet(request: Request, pathname: string, env: Env): Response | Promise<Response> | null {
-	const instanceId = workflowStreamInstanceId(pathname);
-	if (instanceId) return handleWorkflowStream(request, instanceId, env);
-
-	const id = scrapeJobId(pathname);
-	if (id) return handleScrapeJobStatus(request, id, env);
-	return null;
-}
-
 export function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
 	const { pathname } = new URL(request.url);
 	const { method } = request;
 
-	if (pathname === '/health') return health();
+	if (pathname === '/health') {
+		return Response.json({
+			status: 'ok',
+			worker: 'newsence-core',
+			timestamp: new Date().toISOString(),
+		});
+	}
 	if (method === 'OPTIONS') {
 		if (SCRAPE_PREFLIGHT_ROUTES.has(pathname)) return POST_ROUTES[pathname](request, env, ctx);
-		if (INTERNAL_PREFLIGHT_ROUTES.has(pathname)) return internalPreflight();
+		if (INTERNAL_PREFLIGHT_ROUTES.has(pathname)) return new Response(null, { headers: INTERNAL_CORS_HEADERS });
 
-		const id = scrapeJobId(pathname);
+		const id = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
 		if (id) return handleScrapeJobStatus(request, id, env);
 	}
 
@@ -219,8 +192,11 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'GET') {
-		const response = routePrefixGet(request, pathname, env);
-		if (response) return response;
+		const instanceId = WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId;
+		if (instanceId) return handleWorkflowStream(request, instanceId, env);
+
+		const id = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
+		if (id) return handleScrapeJobStatus(request, id, env);
 	}
 
 	return new Response(HELP_TEXT, { headers: { 'Content-Type': 'text/plain' } });
