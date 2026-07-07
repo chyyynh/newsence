@@ -17,7 +17,7 @@ import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
-import { handleRetryCron, type QueueMessage } from '@ingest/workflows/queue';
+import { type ArticleQueueMessage, handleRetryCron } from '@ingest/workflows/queue';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
 
@@ -67,7 +67,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env));
 	}
 
-	override async queue(batch: MessageBatch<QueueMessage>): Promise<void> {
+	override async queue(batch: MessageBatch<ArticleQueueMessage>): Promise<void> {
 		console.info({ tag: 'CORE', msg: 'Queue received', queue: batch.queue, count: batch.messages.length });
 
 		try {

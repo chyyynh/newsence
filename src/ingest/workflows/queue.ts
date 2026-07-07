@@ -9,29 +9,22 @@ import type { Tweet } from '@core-shared/types';
 import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
 import { Client } from 'pg';
 
-export type WorkflowQueueTarget =
-	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
-	| { kind: 'source'; sourceArticle: SourceArticleDraftRef };
+export type ArticleQueueMessage = { kind: 'row'; articleId: string; targetTable?: ProcessableTable };
+export type WorkflowTarget = ArticleQueueMessage | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
-type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 export type TwitterSourceEventDraft = {
 	tweet: Tweet;
-	eventType: TwitterSourceEventType;
+	eventType: 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 	text?: string | null;
 	media?: TwitterMedia[];
 	raw?: unknown;
 };
-type SourceArticleAttachment =
-	| { kind: 'youtube-transcript'; transcript: YoutubeTranscriptRow }
-	| { kind: 'twitter-source-event'; event: TwitterSourceEventDraft };
 export interface SourceArticleDraft {
 	article: InsertArticleData;
-	attachments?: SourceArticleAttachment[];
+	attachments?: Array<
+		{ kind: 'youtube-transcript'; transcript: YoutubeTranscriptRow } | { kind: 'twitter-source-event'; event: TwitterSourceEventDraft }
+	>;
 }
-type SourceArticleDraftRef = { url: string; r2Key: string };
-type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
-export type QueueMessage = RowWorkflowTarget;
-type UserFileWorkflowMetadataPatch = Record<string, string>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const RETRY_BATCH_SIZE = 20;
@@ -77,13 +70,24 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 
 	try {
 		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
-		const result = await ensureSourceArticleWorkflow(env, workflowId, sourceArticle);
-		if (!result.sourceRefUsed)
+		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: { kind: 'source', sourceArticle } } }]);
+		if (created.length) return;
+
+		const existing = await getMonitorWorkflowStatus(env, workflowId);
+		if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
 			await cleanupSourceArticleDraftRef(env, sourceArticle, {
 				reason: 'workflow already exists',
-				workflowId: result.id,
+				workflowId: existing.id,
 				logTag: 'SOURCE-WORKFLOW',
 			});
+			return;
+		}
+
+		const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
+		const retried = await env.MONITOR_WORKFLOW.createBatch([
+			{ id: retryWorkflowId, params: { target: { kind: 'source', sourceArticle } } },
+		]);
+		if (!retried.length) throw new Error(`Failed to create source workflow ${retryWorkflowId}`);
 	} catch (err) {
 		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow create failed', logTag: 'SOURCE-WORKFLOW' });
 		throw err;
@@ -104,43 +108,9 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function ensureSourceArticleWorkflow(
-	env: Env,
-	workflowId: string,
-	sourceArticle: SourceArticleDraftRef,
-): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
-	const existing = await getMonitorWorkflowStatus(env, workflowId);
-	if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status))
-		return { id: existing.id, created: false, sourceRefUsed: false };
-
-	if (existing.status === 'unknown') {
-		try {
-			const instance = await env.MONITOR_WORKFLOW.create({ id: workflowId, params: { target: { kind: 'source', sourceArticle } } });
-			const id = instance.id;
-			return { id, created: true, sourceRefUsed: true };
-		} catch {
-			const raced = await getMonitorWorkflowStatus(env, workflowId);
-			if (raced.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(raced.status))
-				return { id: raced.id, created: false, sourceRefUsed: false };
-			if (raced.status === 'unknown') throw new Error(`Failed to create source workflow ${workflowId}`);
-		}
-	}
-
-	const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({ id: retryWorkflowId, params: { target: { kind: 'source', sourceArticle } } });
-		const id = instance.id;
-		return { id, created: true, sourceRefUsed: true };
-	} catch (err) {
-		const raced = await getMonitorWorkflowStatus(env, retryWorkflowId);
-		if (raced.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: true };
-		throw err;
-	}
-}
-
 async function cleanupSourceArticleDraftRef(
 	env: Env,
-	ref: SourceArticleDraftRef,
+	ref: { url: string; r2Key: string },
 	context: { reason: string; workflowId?: string; logTag?: string },
 ): Promise<void> {
 	try {
@@ -225,7 +195,7 @@ export async function recordUserFileWorkflowFailed(env: Env, userFileId: string,
 	});
 }
 
-async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: UserFileWorkflowMetadataPatch): Promise<void> {
+async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: Record<string, string>): Promise<void> {
 	await db.query(
 		`UPDATE ${USER_FILES_TABLE}
 		 SET metadata = jsonb_set(

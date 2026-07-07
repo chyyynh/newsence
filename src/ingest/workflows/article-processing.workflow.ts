@@ -10,7 +10,7 @@ import {
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article, TranscriptSegment } from '@core-shared/types';
-import { recordUserFileWorkflowFailed, type SourceArticleDraft, type WorkflowQueueTarget } from '@ingest/workflows/queue';
+import { recordUserFileWorkflowFailed, type SourceArticleDraft, type WorkflowTarget } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
 import { articleProcessors } from '../domain/processors';
 import { parsePdf } from '../extract';
@@ -25,14 +25,14 @@ import {
 import { type PdfTextTempResult, persistWorkflowTarget } from './article-persistence';
 
 type WorkflowParams = {
-	target: WorkflowQueueTarget;
+	target: WorkflowTarget;
 };
 
 const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
 const PDF_TEXT_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
 type WorkflowRunContext = {
-	target: WorkflowQueueTarget;
+	target: WorkflowTarget;
 	table: ProcessableTable;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 	readSourceArticle(): Promise<Article>;
@@ -41,7 +41,7 @@ type YoutubeHighlightsInput =
 	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
 	| { kind: 'article'; article: Article };
 
-function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): WorkflowRunContext {
+function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
 	let draft: Promise<SourceArticleDraft> | undefined;
 	let article: Promise<Article> | undefined;
 
