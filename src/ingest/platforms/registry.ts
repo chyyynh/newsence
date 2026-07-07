@@ -4,7 +4,7 @@ import type { ScrapedContent } from '@core-shared/types';
 import {
 	assertExternalFetchable,
 	BROWSER_UA,
-	detectPlatformType,
+	detectUrlKind,
 	extractHackerNewsId,
 	extractTweetId,
 	extractYouTubeId,
@@ -109,16 +109,16 @@ async function fetchAndDispatch(url: string): Promise<ScrapeResult> {
 }
 
 export async function resolveDiscussionPlatformMetadata(url: string): Promise<PlatformMetadata | null> {
-	if (detectPlatformType(url) !== 'hackernews') return null;
+	if (detectUrlKind(url) !== 'hackernews') return null;
 	const itemId = extractHackerNewsId(url);
 	if (!itemId) return null;
 	return buildMetadata('hackernews', buildHnMetadata(await fetchHnItem(itemId), url));
 }
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
-	const platformType = detectPlatformType(url);
+	const urlKind = detectUrlKind(url);
 
-	switch (platformType) {
+	switch (urlKind) {
 		case 'youtube': {
 			const videoId = extractYouTubeId(url);
 			if (!videoId) throw new Error('Invalid YouTube URL');

@@ -61,7 +61,7 @@ const TWITTER_HOSTS = new Set(['twitter.com', 'x.com']);
 const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
 
-export type PlatformType = 'hackernews' | 'youtube' | 'twitter' | 'web';
+export type UrlKind = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
 export class PayloadTooLargeError extends Error {
 	constructor(maxBytes: number) {
@@ -234,7 +234,7 @@ export function normalizeUrl(url: string): string {
 	return parsed.toString();
 }
 
-export function detectPlatformType(url: string): PlatformType {
+export function detectUrlKind(url: string): UrlKind {
 	const parsed = parseUrl(url);
 	if (!parsed) return 'web';
 

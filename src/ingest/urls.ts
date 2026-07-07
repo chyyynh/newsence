@@ -1,7 +1,7 @@
 import { withDbClient } from '@core-shared/db';
 import { PDF_MIME } from '@core-shared/mime';
 import type { Env, ScrapedContent } from '@core-shared/types';
-import { detectPlatformType, normalizeUrl, validateImageUrl } from '@core-shared/web';
+import { detectUrlKind, normalizeUrl, validateImageUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { persistSavedUrlBlob } from './blob';
@@ -47,9 +47,9 @@ type UserFileUrlResultRow = Pick<
 >;
 
 async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env, userId: string): Promise<InsertOutcome> {
-	const platformType = detectPlatformType(url);
+	const urlKind = detectUrlKind(url);
 
-	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
+	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
 	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
 		return { error: 'Content too short' };
 	}
@@ -72,7 +72,7 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 				source: scraped.siteName || 'External',
 				publishedDate: scraped.publishedDate || new Date().toISOString(),
 				summary: scraped.summary || '',
-				platformType,
+				platformType: urlKind,
 				content: scraped.content || null,
 				ogImageUrl,
 				platformMetadata: platformMetadataToStore,

@@ -1,6 +1,6 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
 import type { DbClient } from '@core-shared/db';
-import { normalizeUrl } from '@core-shared/web';
+import { normalizeUrl, type UrlKind } from '@core-shared/web';
 
 export interface InsertUrlUserFileData {
 	url: string;
@@ -8,7 +8,7 @@ export interface InsertUrlUserFileData {
 	source: string;
 	publishedDate: Date | string;
 	summary: string;
-	platformType: 'web' | 'youtube' | 'twitter' | 'hackernews';
+	platformType: UrlKind;
 	content: string | null;
 	ogImageUrl: string | null;
 	platformMetadata: unknown | null;
