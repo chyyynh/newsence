@@ -320,12 +320,9 @@ async function stagePdfExtraction(
 	if (!request) return null;
 
 	try {
-		const result = await step.do(
-			'extract-pdf-text',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => extractPdfTextToTemp(env, request),
+		return step.do('extract-pdf-text', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+			extractPdfTextToTemp(env, request),
 		);
-		return result;
 	} catch (error) {
 		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: request.articleId, error: String(error) });
 		return { status: 'failed', chars: 0, pages: 0 };
@@ -357,10 +354,6 @@ async function enrichPaperMetadataStep(
 	}
 }
 
-// Promote the resolved paper + its references into the relational citation graph
-// (papers / paper_references). Runs in its own transaction inside syncPaperGraph,
-// so a DOI collision here can't roll back the already-persisted article. Fully
-// non-fatal — a graph failure is logged and the workflow still succeeds.
 async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: PaperMetadata | null, step: WorkflowStep): Promise<void> {
 	if (!paperEnrichment?.openAlexId) return;
 	try {
