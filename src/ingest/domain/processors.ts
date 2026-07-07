@@ -32,7 +32,7 @@ class DefaultProcessor implements ArticleProcessor {
 // Factory
 // ─────────────────────────────────────────────────────────────
 
-import { HackerNewsProcessor } from '../platforms/hackernews/processor';
+import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
 export const articleProcessors: Record<string, ArticleProcessor> = {
