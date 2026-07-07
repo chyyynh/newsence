@@ -75,8 +75,8 @@ const MIN_PDF_CHARS_PER_PAGE = 20;
 
 let pdfParserReady = false;
 
-const REMOTE_DISPATCH_TIMEOUT_MS = 8_000;
-const REMOTE_DISPATCH_HEADERS: HeadersInit = {
+const GENERIC_URL_FETCH_TIMEOUT_MS = 8_000;
+const GENERIC_URL_FETCH_HEADERS: HeadersInit = {
 	'User-Agent': BROWSER_UA,
 	Accept: '*/*',
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
@@ -108,11 +108,11 @@ function parseContentDisposition(header: string | null): string | null {
 	}
 }
 
-async function fetchAndDispatchUrl(url: string): Promise<ScrapeResult> {
+async function fetchGenericUrl(url: string): Promise<ScrapeResult> {
 	const res = await fetch(url, {
 		redirect: 'follow',
-		signal: AbortSignal.timeout(REMOTE_DISPATCH_TIMEOUT_MS),
-		headers: REMOTE_DISPATCH_HEADERS,
+		signal: AbortSignal.timeout(GENERIC_URL_FETCH_TIMEOUT_MS),
+		headers: GENERIC_URL_FETCH_HEADERS,
 	});
 	if (!res.ok) {
 		await res.body?.cancel();
@@ -172,7 +172,7 @@ export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<Sc
 	}
 	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
 	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
-	return fetchAndDispatchUrl(url);
+	return fetchGenericUrl(url);
 }
 
 function stripMarkdown(md: string): string {
