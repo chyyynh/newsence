@@ -5,25 +5,6 @@ import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 
-export function normalizeRetweet(tweet: Tweet): Tweet | null {
-	if (tweet.retweeted_tweet) {
-		return {
-			...tweet.retweeted_tweet,
-			retweetedBy: {
-				tweetId: tweet.id,
-				tweetUrl: tweet.url,
-				retweetedAt: tweet.createdAt,
-				authorName: tweet.author?.name || '',
-				authorUserName: tweet.author?.userName || '',
-				authorProfilePicture: tweet.author?.profilePicture,
-				authorVerified: tweet.author?.isBlueVerified,
-			},
-		};
-	}
-	if (tweet.text.startsWith('RT @')) return null;
-	return tweet;
-}
-
 export async function upsertTwitterSourceEvent(
 	db: Client,
 	tweet: Tweet,

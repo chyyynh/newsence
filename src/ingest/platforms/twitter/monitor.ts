@@ -2,7 +2,6 @@ import type { RSSFeed, Tweet } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Client } from 'pg';
 import { saveTweetGroups } from './persistence';
-import { normalizeRetweet } from './source-events';
 
 // ─────────────────────────────────────────────────────────────
 // Twitter Monitor
@@ -17,6 +16,25 @@ const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'sha
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 type MonitoredTwitterUser = RSSFeed & { twitterUserName: string };
+
+function normalizeRetweet(tweet: Tweet): Tweet | null {
+	if (tweet.retweeted_tweet) {
+		return {
+			...tweet.retweeted_tweet,
+			retweetedBy: {
+				tweetId: tweet.id,
+				tweetUrl: tweet.url,
+				retweetedAt: tweet.createdAt,
+				authorName: tweet.author?.name || '',
+				authorUserName: tweet.author?.userName || '',
+				authorProfilePicture: tweet.author?.profilePicture,
+				authorVerified: tweet.author?.isBlueVerified,
+			},
+		};
+	}
+	if (tweet.text.startsWith('RT @')) return null;
+	return tweet;
+}
 
 function normalizeTwitterUserName(input: string | null | undefined): string | null {
 	const trimmed = input?.trim();
