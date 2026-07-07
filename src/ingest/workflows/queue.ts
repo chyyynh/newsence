@@ -135,7 +135,8 @@ async function ensureSourceArticleWorkflow(
 	sourceArticle: SourceArticleDraftRef,
 ): Promise<{ id: string; created: boolean; sourceRefUsed: boolean }> {
 	const existing = await getMonitorWorkflowStatus(env, workflowId);
-	if (isReusableSourceWorkflowStatus(existing.status)) return { id: existing.id, created: false, sourceRefUsed: false };
+	if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status))
+		return { id: existing.id, created: false, sourceRefUsed: false };
 
 	if (existing.status === 'unknown') {
 		try {
@@ -144,7 +145,8 @@ async function ensureSourceArticleWorkflow(
 			return { id, created: true, sourceRefUsed: true };
 		} catch {
 			const raced = await getMonitorWorkflowStatus(env, workflowId);
-			if (isReusableSourceWorkflowStatus(raced.status)) return { id: raced.id, created: false, sourceRefUsed: false };
+			if (raced.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(raced.status))
+				return { id: raced.id, created: false, sourceRefUsed: false };
 			if (raced.status === 'unknown') throw new Error(`Failed to create source workflow ${workflowId}`);
 		}
 	}
@@ -159,10 +161,6 @@ async function ensureSourceArticleWorkflow(
 		if (raced.status !== 'unknown') return { id: raced.id, created: false, sourceRefUsed: true };
 		throw err;
 	}
-}
-
-function isReusableSourceWorkflowStatus(status: string): boolean {
-	return status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(status);
 }
 
 export async function cleanupSourceArticleDraftRef(

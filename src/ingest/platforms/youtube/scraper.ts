@@ -91,10 +91,6 @@ export function parseDurationSeconds(iso: string | undefined): number {
 	return parseInt(match[1] || '0', 10) * 3600 + parseInt(match[2] || '0', 10) * 60 + parseInt(match[3] || '0', 10);
 }
 
-function redactSecret(message: string, secret: string): string {
-	return secret ? message.replaceAll(secret, '[redacted]') : message;
-}
-
 async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Promise<YouTubeVideosResponse> {
 	const url = new URL('https://www.googleapis.com/youtube/v3/videos');
 	url.searchParams.set('id', videoId);
@@ -110,7 +106,10 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 
 		return JSON.parse(await readTextWithLimit(response, YOUTUBE_API_MAX_BYTES)) as YouTubeVideosResponse;
 	} catch (error) {
-		throw new Error(`YouTube API request failed for ${videoId}: ${redactSecret(String(error), youtubeApiKey)}`);
+		const message = String(error);
+		throw new Error(
+			`YouTube API request failed for ${videoId}: ${youtubeApiKey ? message.replaceAll(youtubeApiKey, '[redacted]') : message}`,
+		);
 	}
 }
 
