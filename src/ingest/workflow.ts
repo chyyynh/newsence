@@ -346,18 +346,16 @@ async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: 
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = insertArticleDataToArticle(draft.article);
-	let articleForInsert = draft.article;
-	let updatePayload = buildProcessorUpdatePayload(
-		fullArticle,
-		input.result,
-		input.embedding,
-		input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : undefined,
-	);
-	if (Object.hasOwn(updatePayload, 'og_image_url')) {
-		updatePayload = { ...updatePayload, og_image_url: null };
-	} else {
-		articleForInsert = { ...draft.article, ogImageUrl: null };
-	}
+	const articleForInsert = { ...draft.article, ogImageUrl: null };
+	const updatePayload: Record<string, unknown> = {
+		...buildProcessorUpdatePayload(
+			fullArticle,
+			input.result,
+			input.embedding,
+			input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : undefined,
+		),
+		og_image_url: null,
+	};
 	const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
 	const entities = entityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
