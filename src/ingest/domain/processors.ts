@@ -1,5 +1,8 @@
 import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
+import { upsertTwitterSourceEventAttachment } from '@ingest/platforms/twitter/persistence';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
+import type { Client } from 'pg';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
 
 export type { ProcessorResult } from './ai-utils';
@@ -35,11 +38,50 @@ class DefaultProcessor implements ArticleProcessor {
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
-export const articleProcessors: Record<string, ArticleProcessor> = {
-	hackernews: new HackerNewsProcessor(),
-	twitter: new TwitterProcessor(),
-	default: new DefaultProcessor(),
+export type PlatformWorkflowData = { type: 'youtube'; highlights: YouTubeHighlightsUpdate };
+
+type PlatformWorkflowPersistenceInput = {
+	articleId: string;
+	data?: PlatformWorkflowData | null;
+	attachments?: unknown[];
 };
+
+export type ArticlePlatformAdapter = ArticleProcessor & {
+	prepareWorkflowData?: (article: Article, ctx: ProcessorContext, attachments?: unknown[]) => Promise<PlatformWorkflowData | null>;
+	persistWorkflowData?: (db: Client, input: PlatformWorkflowPersistenceInput) => Promise<void>;
+};
+
+const defaultProcessor = new DefaultProcessor();
+const twitterProcessor = new TwitterProcessor();
+
+export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
+	hackernews: new HackerNewsProcessor(),
+	twitter: {
+		process: (article, ctx) => twitterProcessor.process(article, ctx),
+		persistWorkflowData: (db, input) => upsertTwitterSourceEventAttachment(db, input.articleId, input.attachments),
+	},
+	youtube: {
+		process: (article, ctx) => defaultProcessor.process(article, ctx),
+		async prepareWorkflowData(article, ctx, attachments) {
+			const highlights = await prepareYouTubeHighlights(ctx.env, article, attachments);
+			return highlights ? { type: 'youtube', highlights } : null;
+		},
+		persistWorkflowData: (db, input) =>
+			persistYouTubeWorkflowData(db, {
+				attachments: input.attachments,
+				highlights: input.data?.type === 'youtube' ? input.data.highlights : null,
+			}),
+	},
+	default: defaultProcessor,
+};
+
+export function getArticlePlatform(sourceType?: string | null): ArticlePlatformAdapter {
+	return articlePlatforms[sourceType ?? ''] ?? articlePlatforms.default;
+}
+
+export function getArticlePlatformForArticle(article: Article): ArticlePlatformAdapter {
+	return getArticlePlatform(article.platform_metadata?.type ?? article.source_type);
+}
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 
