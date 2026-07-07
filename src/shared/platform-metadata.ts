@@ -175,16 +175,10 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-/** True when an envelope already carries usable (positive) OG image dimensions. */
-export function hasOgDimensions(metadata: PlatformMetadata | null | undefined): boolean {
-	return !!metadata && !!metadata.ogImageWidth && !!metadata.ogImageHeight;
-}
-
 /**
  * Attach OG image dimensions to an envelope, synthesizing a `default` envelope
- * when the article has none yet (mirrors rss/monitor's dims-only envelope, so an
- * article that was stored with `platform_metadata = null` still gets boxable
- * dims). Used by both the processing workflow and the backfill endpoint.
+ * when the article has none yet. Used only when a source scraper already
+ * provided dimensions with its processor result.
  */
 export function withOgDimensions(metadata: PlatformMetadata | null | undefined, width: number, height: number): PlatformMetadata {
 	const base: PlatformMetadata = metadata ?? { type: 'default', fetchedAt: new Date().toISOString(), data: null };

@@ -224,7 +224,6 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | `ARTICLE_QUEUE`    | `article-processing-queue-core` 的 producer |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
 | `AI`               | Workers AI（Qwen3 分析 + BGE-M3 向量生成） |
-| `IMAGES`           | Cloudflare Images metadata / 尺寸檢查       |
 | `BROWSER`          | Cloudflare Browser Rendering（預留）        |
 
 Secrets（透過 `wrangler secret put` 設定）：

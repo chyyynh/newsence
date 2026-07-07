@@ -9,9 +9,8 @@ import {
 	USER_FILES_TABLE,
 } from '@core-shared/article-store';
 import { PDF_MIME } from '@core-shared/mime';
-import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
+import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article, Env, TranscriptSegment } from '@core-shared/types';
-import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout } from '@core-shared/web';
 import {
 	cleanupSourceArticleDraftRef,
 	readSourceArticleDraft,
@@ -19,7 +18,7 @@ import {
 	type WorkflowQueueTarget,
 } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
-import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
+import { buildEmbeddingTextForArticle, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import { enrichS2ByTitle, enrichS2FromId } from '../platforms/paper/semanticscholar';
@@ -37,11 +36,6 @@ import {
 	recordWorkflowFailure,
 } from './article-persistence';
 
-const OG_FETCH_TIMEOUT_MS = 6_000;
-const OG_MAX_BYTES = 131_072;
-const IMAGE_DIMENSIONS_FETCH_TIMEOUT_MS = 10_000;
-const IMAGE_DIMENSIONS_MAX_BYTES = 12 * 1024 * 1024;
-
 type WorkflowParams = {
 	target: WorkflowQueueTarget;
 };
@@ -52,109 +46,9 @@ type WorkflowRunContext = {
 	readSourceDraft(): Promise<SourceArticleDraft>;
 	readSourceArticle(): Promise<Article>;
 };
-type OgImageResult = {
-	ogImageUrl: string | null;
-	ogImageWidth: number | null;
-	ogImageHeight: number | null;
-};
-type OgImageDimensions = { width: number; height: number };
-type OgImagePatch = {
-	ogImageUrl: string | null;
-	ogImageDimensions: OgImageDimensions | null;
-};
 type YoutubeHighlightsInput =
 	| { kind: 'transcript'; videoId: string; segments: TranscriptSegment[] }
 	| { kind: 'article'; article: Article };
-
-const EMPTY_OG_IMAGE_PATCH: OgImagePatch = { ogImageUrl: null, ogImageDimensions: null };
-
-async function fetchOgImage(url: string): Promise<OgImageResult | null> {
-	try {
-		const response = await fetchWithTimeout(
-			url,
-			{
-				headers: {
-					'User-Agent': BROWSER_UA,
-					Accept: 'text/html,application/xhtml+xml',
-				},
-			},
-			OG_FETCH_TIMEOUT_MS,
-		);
-
-		if (!response.ok || !response.body) {
-			await response.body?.cancel();
-			return null;
-		}
-
-		const reader = response.body.getReader();
-		const chunks: Uint8Array[] = [];
-		let totalBytes = 0;
-
-		while (totalBytes < OG_MAX_BYTES) {
-			const { done, value } = await reader.read();
-			if (done || !value) break;
-			chunks.push(value);
-			totalBytes += value.length;
-		}
-		await reader.cancel();
-
-		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
-		let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
-		if (!ogImageUrl) return null;
-
-		if (!ogImageUrl.startsWith('http')) {
-			try {
-				ogImageUrl = new URL(ogImageUrl, url).toString();
-			} catch {
-				return null;
-			}
-		}
-		if (/^http:\/\//i.test(ogImageUrl)) {
-			ogImageUrl = ogImageUrl.replace(/^http:/i, 'https:');
-		}
-
-		const rawW = extractMeta(html, 'og:image:width');
-		const rawH = extractMeta(html, 'og:image:height');
-
-		return {
-			ogImageUrl,
-			ogImageWidth: parsePositiveInt(rawW),
-			ogImageHeight: parsePositiveInt(rawH),
-		};
-	} catch {
-		return null;
-	}
-}
-
-function parsePositiveInt(raw: string | null): number | null {
-	if (!raw) return null;
-	const parsed = parseInt(raw, 10);
-	return parsed > 0 ? parsed : null;
-}
-
-function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
-	const merged = new Uint8Array(total);
-	let offset = 0;
-	for (const chunk of chunks) {
-		merged.set(chunk, offset);
-		offset += chunk.length;
-	}
-	return merged;
-}
-
-function extractMeta(html: string, property: string): string | null {
-	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
-	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
-	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw).trim() || null : null;
-}
-
-function extractMetaName(html: string, name: string): string | null {
-	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
-	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
-	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw).trim() || null : null;
-}
 
 function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): WorkflowRunContext {
 	let draft: Promise<SourceArticleDraft> | undefined;
@@ -344,76 +238,6 @@ async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: 
 	}
 }
 
-function mergeProcessorResult(result: ProcessorResult, { ogImageUrl, ogImageDimensions }: OgImagePatch): ProcessorResult {
-	return {
-		...result,
-		updateData: {
-			...result.updateData,
-			...(ogImageUrl ? { og_image_url: ogImageUrl } : {}),
-		},
-		...(ogImageDimensions ? { ogImageDimensions } : {}),
-	};
-}
-
-async function resolveWorkflowOgImagePatch(env: Env, article: Article, result: ProcessorResult, step: WorkflowStep): Promise<OgImagePatch> {
-	if (!shouldResolveOgImagePatch(article, result)) return EMPTY_OG_IMAGE_PATCH;
-	return step.do('resolve-og-image', { retries: { limit: 1, delay: '3 seconds' }, timeout: '25 seconds' }, () =>
-		resolveOgImagePatch(env, article, result),
-	);
-}
-
-function shouldResolveOgImagePatch(article: Article, result: ProcessorResult): boolean {
-	const knownOgImageUrl = result.updateData.og_image_url ?? article.og_image_url ?? null;
-	return !knownOgImageUrl || !hasOgDimensions(article.platform_metadata);
-}
-
-async function resolveOgImagePatch(env: Env, article: Article, result: ProcessorResult): Promise<OgImagePatch> {
-	const fetchedOgImage = !article.og_image_url && !result.updateData.og_image_url ? await fetchOgImage(article.url) : null;
-
-	const effectiveOgImageUrl = result.updateData.og_image_url ?? article.og_image_url ?? fetchedOgImage?.ogImageUrl ?? null;
-	const ogImageDimensions = await resolveOgImageDimensions(env, article, effectiveOgImageUrl, fetchedOgImage);
-
-	return { ogImageUrl: fetchedOgImage?.ogImageUrl ?? null, ogImageDimensions };
-}
-
-async function resolveOgImageDimensions(
-	env: Env,
-	article: Article,
-	ogImageUrl: string | null,
-	fetchedOgImage: OgImageResult | null,
-): Promise<OgImageDimensions | null> {
-	if (!ogImageUrl || hasOgDimensions(article.platform_metadata)) return null;
-
-	if (fetchedOgImage?.ogImageUrl === ogImageUrl && fetchedOgImage.ogImageWidth && fetchedOgImage.ogImageHeight) {
-		return { width: fetchedOgImage.ogImageWidth, height: fetchedOgImage.ogImageHeight };
-	}
-
-	return measureImageDimensions(env, ogImageUrl);
-}
-
-async function measureImageDimensions(env: Env, imageUrl: string): Promise<OgImageDimensions | null> {
-	try {
-		const response = await fetch(imageUrl, {
-			headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' },
-			signal: AbortSignal.timeout(IMAGE_DIMENSIONS_FETCH_TIMEOUT_MS),
-		});
-		if (!response.ok || !response.body) return null;
-
-		const contentLength = Number(response.headers.get('content-length') ?? 0);
-		if (contentLength > IMAGE_DIMENSIONS_MAX_BYTES) {
-			response.body.cancel();
-			return null;
-		}
-
-		const info = await env.IMAGES.info(response.body);
-		if (!('width' in info) || !('height' in info) || !info.width || !info.height) return null;
-		return { width: info.width, height: info.height };
-	} catch (error) {
-		console.warn({ tag: 'IMAGE_DIMS', msg: 'Failed to measure image dimensions', imageUrl, error: String(error) });
-		return null;
-	}
-}
-
 async function prepareYoutubeHighlights(
 	env: Env,
 	context: WorkflowRunContext,
@@ -527,11 +351,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				},
 			);
 
-			const finalProcessorResult = mergeProcessorResult(
-				processorResult,
-				await resolveWorkflowOgImagePatch(this.env, article, processorResult, step),
-			);
-
 			const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, sourceType, step);
 			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
@@ -539,7 +358,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				() =>
 					persistWorkflowTarget(this.env, context, {
 						article,
-						result: finalProcessorResult,
+						result: processorResult,
 						embedding,
 						pdfTextTemp,
 						youtubeHighlights,

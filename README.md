@@ -246,7 +246,6 @@ src/
 │   ├── handlers/         # ingest / scrape HTTP handlers
 │   ├── monitors/         # cross-platform scheduled maintenance
 │   └── urls.ts · blob.ts · image-url.ts   # ingestion entrypoints (URL / blob / image)
-├── media/                # OG image dimension helpers used by ingestion
 └── corpus.ts · okf.ts     # engine read/search/export helpers
 ```
 
@@ -260,7 +259,6 @@ Bindings (in `wrangler.jsonc`):
 | `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
 | `AI`               | Workers AI (Qwen3 analysis + BGE-M3 embeddings) |
-| `IMAGES`           | Cloudflare Images metadata/dimension inspection |
 | `BROWSER`          | Cloudflare Browser Rendering (reserved)      |
 
 Secrets (via `wrangler secret put`):

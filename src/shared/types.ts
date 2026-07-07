@@ -15,7 +15,6 @@ export interface Env {
 	USER_INGEST_LIMITER: RateLimit;
 	BROWSER: Fetcher;
 	AI: Ai;
-	IMAGES: ImagesBinding;
 	MONITOR_WORKFLOW: Workflow<unknown>;
 	SCRAPE_WORKFLOW: Workflow<unknown>;
 	AI_GATEWAY_NAME: string;
