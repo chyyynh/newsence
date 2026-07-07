@@ -214,15 +214,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 	}
 }
 
-export async function recordUserFileWorkflowComplete(db: Client, userFileId: string, articleId: string): Promise<void> {
-	await patchUserFileWorkflowMetadata(db, userFileId, {
-		monitor_status: 'complete',
-		monitor_completed_at: new Date().toISOString(),
-		article_id: articleId,
-	});
-}
-
-export async function recordUserFileWorkflowFailed(env: Env, userFileId: string, error: string): Promise<void> {
+async function recordUserFileWorkflowFailed(env: Env, userFileId: string, error: string): Promise<void> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await patchUserFileWorkflowMetadata(db, userFileId, {
@@ -599,7 +591,12 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 	await db.query('BEGIN');
 	try {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
-		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
+		if (table === USER_FILES_TABLE)
+			await patchUserFileWorkflowMetadata(db, target.articleId, {
+				monitor_status: 'complete',
+				monitor_completed_at: new Date().toISOString(),
+				article_id: target.articleId,
+			});
 		if (table !== USER_FILES_TABLE && entities)
 			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
@@ -701,13 +698,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			return { success: true, article_id: articleId };
 		} catch (error) {
 			if (context.target.kind === 'row' && context.table === USER_FILES_TABLE) {
+				const failedUserFileId = context.target.articleId;
 				try {
-					await recordUserFileWorkflowFailed(this.env, context.target.articleId, String(error));
+					await step.do(
+						'record-user-file-workflow-failed',
+						{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
+						() => recordUserFileWorkflowFailed(this.env, failedUserFileId, String(error)),
+					);
 				} catch (metadataError) {
 					console.warn({
 						tag: 'WORKFLOW',
 						msg: 'Failed to record user_file workflow failure',
-						article_id: context.target.articleId,
+						article_id: failedUserFileId,
 						error: String(metadataError),
 					});
 				}
