@@ -102,30 +102,25 @@ export async function startRowWorkflow(
 
 export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<void> {
 	const sourceArticle = { url: draft.article.url, r2Key: `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json` };
+	const workflowTarget: WorkflowTarget = { kind: 'source', sourceArticle };
 	await env.R2.put(sourceArticle.r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
 
 	try {
 		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
-		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: { kind: 'source', sourceArticle } } }]);
+		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 		if (created.length) return;
 
 		const existing = await getMonitorWorkflowStatus(env, workflowId);
 		if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
-			await cleanupSourceArticleDraftRef(env, sourceArticle, {
-				reason: 'workflow already exists',
-				workflowId: existing.id,
-				logTag: 'SOURCE-WORKFLOW',
-			});
+			await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'workflow already exists', workflowId: existing.id });
 			return;
 		}
 
-		const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
-		const retried = await env.MONITOR_WORKFLOW.createBatch([
-			{ id: retryWorkflowId, params: { target: { kind: 'source', sourceArticle } } },
-		]);
-		if (!retried.length) throw new Error(`Failed to create source workflow ${retryWorkflowId}`);
+		const retryId = retryWorkflowId(workflowId);
+		const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryId, params: { target: workflowTarget } }]);
+		if (!retried.length) throw new Error(`Failed to create source workflow ${retryId}`);
 	} catch (err) {
-		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow create failed', logTag: 'SOURCE-WORKFLOW' });
+		await cleanupSourceArticleDraft(env, sourceArticle, { reason: 'workflow create failed' });
 		throw err;
 	}
 }
@@ -157,17 +152,17 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function cleanupSourceArticleDraftRef(
+async function cleanupSourceArticleDraft(
 	env: Env,
 	ref: { url: string; r2Key: string },
-	context: { reason: string; workflowId?: string; logTag?: string },
+	context: { reason: string; workflowId?: string },
 ): Promise<void> {
 	try {
 		if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
 		await env.R2.delete(ref.r2Key);
 	} catch (err) {
 		console.warn({
-			tag: context.logTag ?? 'SOURCE-DRAFT',
+			tag: 'SOURCE-WORKFLOW',
 			msg: 'Failed to cleanup source article draft',
 			reason: context.reason,
 			workflowId: context.workflowId,
@@ -244,12 +239,7 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 		const status = await instance.status();
 		return { id: instance.id, status: status.status };
 	} catch {
-		// `MONITOR_WORKFLOW.get()` throws when the instance ID was never created (or
-		// has aged out of retention). Every caller treats `'unknown'` as "not a live
-		// workflow", so normalize the not-found throw to that — otherwise the very
-		// first status check for a brand-new article aborts the ensure/create path
-		// and the queue message retries forever. A real existing instance is still
-		// surfaced via the create-conflict retry, so a transient get error is not lost.
+		// Missing or expired instances are not live; callers may create a retry instance.
 		return { id: workflowId, status: 'unknown' };
 	}
 }
