@@ -6,7 +6,7 @@ import type { HackerNewsMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
-export const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
 export interface HnComment {
 	id?: number;
@@ -44,6 +44,15 @@ export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url
 	};
 }
 
+export async function fetchHnItem(itemId: string): Promise<HnItem> {
+	const response = await fetchWithTimeout(`${HN_ALGOLIA_API}/${itemId}`);
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	return JSON.parse(await readTextWithLimit(response)) as HnItem;
+}
+
 function buildHnMarkdown(item: HnItem): string {
 	const title = item.title || `HN Item ${item.id}`;
 	const parts: string[] = [`# ${title}\n`];
@@ -65,12 +74,7 @@ function buildHnMarkdown(item: HnItem): string {
 export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
-	const response = await fetchWithTimeout(`${HN_ALGOLIA_API}/${itemId}`);
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-	}
-	const item = JSON.parse(await readTextWithLimit(response)) as HnItem;
+	const item = await fetchHnItem(itemId);
 
 	const title = item.title || `HN Item ${itemId}`;
 	let summary = item.text?.slice(0, 200) || title;

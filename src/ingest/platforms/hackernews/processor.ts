@@ -5,7 +5,7 @@
 import { generateText } from '@core-ai/embedding';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
-import { decodeHtmlEntities, fetchWithTimeout, htmlToText, readTextWithLimit } from '@core-shared/web';
+import { decodeHtmlEntities, htmlToText } from '@core-shared/web';
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
@@ -14,7 +14,7 @@ import {
 	type ProcessorResult,
 } from '../../domain/ai-utils';
 import { scrapeWebPage } from '../web-scraper';
-import { HN_ALGOLIA_API, type HnComment, type HnItem } from './scraper';
+import { fetchHnItem, type HnComment, type HnItem } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -192,18 +192,10 @@ export class HackerNewsProcessor implements ArticleProcessor {
 
 		// 1. 從 HN API 取得完整資料（包含評論）
 		const hnData: HnItem | null = itemId
-			? await fetchWithTimeout(`${HN_ALGOLIA_API}/${itemId}`)
-					.then(async (response) => {
-						if (!response.ok) {
-							await response.body?.cancel();
-							throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-						}
-						return JSON.parse(await readTextWithLimit(response)) as HnItem;
-					})
-					.catch((error) => {
-						console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
-						return null;
-					})
+			? await fetchHnItem(itemId).catch((error) => {
+					console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
+					return null;
+				})
 			: null;
 
 		// 2. 收集評論與外部文章
