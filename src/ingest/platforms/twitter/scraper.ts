@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// Twitter Scraper
-// ─────────────────────────────────────────────────────────────
-
 import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
@@ -164,10 +160,9 @@ export function buildTwitterArticlePlatformMetadata(
 	};
 }
 
-interface KaitoTweet {
+type KaitoTweet = TwitterLikeTweet & {
 	id: string;
 	url: string;
-	text: string;
 	createdAt: string;
 	viewCount?: number;
 	likeCount?: number;
@@ -175,25 +170,11 @@ interface KaitoTweet {
 	replyCount?: number;
 	quoteCount?: number;
 	lang?: string;
-	author?: {
+	author?: TwitterLikeTweet['author'] & {
 		userName: string;
 		name: string;
-		isBlueVerified?: boolean;
-		profilePicture?: string;
 	};
-	extendedEntities?: {
-		media?: Array<{
-			media_url_https: string;
-			type: string;
-			sizes?: { large?: { w: number; h: number } };
-			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
-		}>;
-	};
-	entities?: {
-		hashtags?: Array<{ text: string }>;
-		urls?: Array<{ expanded_url: string }>;
-	};
-}
+};
 
 interface TwitterArticle {
 	title?: string;
@@ -209,7 +190,6 @@ interface TwitterArticle {
 	viewCount?: number;
 	likeCount?: number;
 	replyCount?: number;
-	quoteCount?: number;
 	createdAt?: string;
 }
 
@@ -219,7 +199,7 @@ export async function scrapeTwitterArticle(
 ): Promise<(ScrapedContent & { metadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
-	let data: { article?: TwitterArticle; status?: string; msg?: string; message?: string };
+	let data: { article?: TwitterArticle; status?: string };
 	try {
 		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
 			headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
@@ -228,7 +208,7 @@ export async function scrapeTwitterArticle(
 			await response.body?.cancel();
 			return null;
 		}
-		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterArticle; status?: string; msg?: string; message?: string };
+		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterArticle; status?: string };
 	} catch {
 		return null;
 	}

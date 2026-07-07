@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// Twitter Processor
-// ─────────────────────────────────────────────────────────────
-
 import { generateObject } from '@core-ai/embedding';
 import type { ArticleCategory } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
@@ -14,7 +10,6 @@ import {
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
-import { scrapeWebPage } from '../web-scraper';
 
 type UpdateData = ProcessorResult['updateData'];
 
@@ -31,10 +26,6 @@ function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, upda
 	return analysis.category;
 }
 
-// ─────────────────────────────────────────────────────────────
-// TwitterProcessor class
-// ─────────────────────────────────────────────────────────────
-
 export class TwitterProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const updateData: UpdateData = {};
@@ -48,24 +39,6 @@ export class TwitterProcessor implements ArticleProcessor {
 
 		const tweetText = article.summary?.trim() || article.content || '';
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
-
-		const metadata = article.platform_metadata;
-		const linkedUrl = metadata?.type === 'twitter' && metadata.data.variant === 'shared' ? metadata.data.externalUrl?.trim() : null;
-		const linked = linkedUrl
-			? await scrapeWebPage(linkedUrl).catch((error) => {
-					console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(error) });
-					return null;
-				})
-			: null;
-		if (linked?.content && linked.content.length > 100) {
-			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
-			updateData.content = linked.content;
-			const analysis = await generateArticleAnalysis(
-				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-				ctx.env,
-			);
-			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
-		}
 
 		const analysis = await translateTweet(tweetText, article, ctx.env);
 		if (!analysis) return { updateData: { ...updateData, ...(!article.tags?.length ? { tags: ['Twitter'] } : {}) } };
@@ -81,10 +54,6 @@ export class TwitterProcessor implements ArticleProcessor {
 		return { updateData };
 	}
 }
-
-// ─────────────────────────────────────────────────────────────
-// Tweet Translation
-// ─────────────────────────────────────────────────────────────
 
 interface TweetAnalysis {
 	summary_cn: string;

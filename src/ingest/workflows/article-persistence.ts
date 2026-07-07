@@ -8,7 +8,7 @@ import { recordUserFileWorkflowComplete, type SourceArticleDraft, type WorkflowT
 import { Client } from 'pg';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import type { PdfTextStatus } from '../extract';
-import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
+import { upsertTwitterSourceEvent } from '../platforms/twitter/persistence';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
 
 type RowTarget = Extract<WorkflowTarget, { kind: 'row' }>;

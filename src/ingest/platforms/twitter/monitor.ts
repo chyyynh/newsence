@@ -1,4 +1,4 @@
-import type { RSSFeed, Tweet } from '@core-shared/types';
+import type { Tweet } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Client } from 'pg';
 import { saveTweetGroups } from './persistence';
@@ -13,9 +13,15 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 const TWITTER_BATCH_SIZE = 20;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
-const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
+const SOURCE_FEED_FIELDS = 'id, "RSSLink", scraped_at';
 
-type MonitoredTwitterUser = RSSFeed & { twitterUserName: string };
+type TwitterSourceFeed = {
+	id: string;
+	RSSLink: string | null;
+	scraped_at?: string | null;
+};
+
+type MonitoredTwitterUser = TwitterSourceFeed & { twitterUserName: string };
 
 function normalizeRetweet(tweet: Tweet): Tweet | null {
 	if (tweet.retweeted_tweet) {
@@ -58,7 +64,7 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
  * Global sinceTime = oldest scraped_at across all users minus a 1h overlap.
  * If no user has been scraped before, fall back to 24h ago.
  */
-function calculateMonitoringSinceTime(users: RSSFeed[]): number {
+function calculateMonitoringSinceTime(users: TwitterSourceFeed[]): number {
 	if (!users.some((u) => u.scraped_at)) {
 		return Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
 	}
@@ -145,52 +151,54 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 export async function handleTwitterCron(env: Env): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const users = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows;
-	if (!users.length) {
-		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
-		return;
-	}
+	try {
+		await db.connect();
+		const users = (await db.query<TwitterSourceFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows;
+		if (!users.length) {
+			console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
+			return;
+		}
 
-	const monitoredUsers: MonitoredTwitterUser[] = [];
-	for (const user of users) {
-		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
-		if (twitterUserName) monitoredUsers.push({ ...user, twitterUserName });
-	}
-	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
-	if (userNames.length === 0) {
-		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
-		return;
-	}
-	const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
-	const batches: string[][] = [];
-	for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
-		batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
-	}
+		const monitoredUsers: MonitoredTwitterUser[] = [];
+		for (const user of users) {
+			const twitterUserName = normalizeTwitterUserName(user.RSSLink);
+			if (twitterUserName) monitoredUsers.push({ ...user, twitterUserName });
+		}
+		const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
+		if (userNames.length === 0) {
+			console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
+			return;
+		}
+		const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
+		const batches: string[][] = [];
+		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
+			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
+		}
 
-	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
+		console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
 
-	let processed = 0;
-	let allCompleted = true;
-	for (const batch of batches) {
-		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
-		if (!completed) allCompleted = false;
-		const groups = groupTweetsIntoThreads(tweets);
-		processed += await saveTweetGroups(db, env, groups);
+		let processed = 0;
+		let allCompleted = true;
+		for (const batch of batches) {
+			const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
+			if (!completed) allCompleted = false;
+			const groups = groupTweetsIntoThreads(tweets);
+			processed += await saveTweetGroups(db, env, groups);
+		}
+
+		if (allCompleted) {
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
+		}
+
+		console.info({
+			tag: 'TWITTER',
+			msg: 'end',
+			processed,
+			users: users.length,
+			validUsers: monitoredUsers.length,
+			batches: batches.length,
+		});
+	} finally {
+		await db.end().catch((error) => console.warn({ tag: 'TWITTER', msg: 'Failed to close db client', error: String(error) }));
 	}
-
-	// Advance scraped_at only if every batch completed — partial fetches would
-	// let the next cron skip tweets we failed to pull.
-	if (allCompleted) {
-		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
-	}
-
-	console.info({
-		tag: 'TWITTER',
-		msg: 'end',
-		processed,
-		users: users.length,
-		validUsers: monitoredUsers.length,
-		batches: batches.length,
-	});
 }
