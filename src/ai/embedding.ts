@@ -25,15 +25,6 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function firstEmbedding(response: unknown): number[] | null {
-	if (!isRecord(response) || !Array.isArray(response.data) || !Array.isArray(response.data[0])) return null;
-	return response.data[0].every((value) => typeof value === 'number') ? response.data[0] : null;
-}
-
 function gatewayOptions(gatewayName?: string, task?: string): AiOptions {
 	return {
 		gateway: {
@@ -48,10 +39,6 @@ function runGatewayModel<Response>(ai: AiBinding, model: string, inputs: object,
 	// Generated Worker types strongly type Workers AI catalog models, while AI
 	// Gateway also accepts third-party `{provider}/{model}` names from docs.
 	return (ai.run as unknown as GatewayRun)<Response>(model, inputs, options);
-}
-
-function schemaId(name: string): string {
-	return name.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'structured_output';
 }
 
 function errorDetails(error: unknown): Record<string, unknown> {
@@ -110,6 +97,7 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
 	const { gatewayId: gatewayIdValue, schema, systemPrompt, task } = options;
+	const schemaName = (task ?? 'structured-output').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'structured_output';
 	const messages: AiMessage[] = [
 		...(systemPrompt ? [{ role: 'system', content: systemPrompt } as const] : []),
 		{ role: 'user', content: prompt },
@@ -126,7 +114,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 				response_format: {
 					type: 'json_schema',
 					json_schema: {
-						name: schemaId(task ?? 'structured-output'),
+						name: schemaName,
 						schema: z.toJSONSchema(schema),
 						strict: true,
 					},
@@ -163,7 +151,9 @@ export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName
 			{ text: [sanitizedText.slice(0, MAX_TEXT_LENGTH)] },
 			gatewayOptions(gatewayName, 'article-embedding'),
 		);
-		const embedding = firstEmbedding(result);
+		const record = typeof result === 'object' && result !== null && !Array.isArray(result) ? (result as Record<string, unknown>) : null;
+		const first = Array.isArray(record?.data) ? record.data[0] : null;
+		const embedding = Array.isArray(first) && first.every((value) => typeof value === 'number') ? first : null;
 
 		if (!embedding?.length) {
 			console.error({ tag: 'EMBEDDING', msg: 'Invalid response format' });
