@@ -8,11 +8,6 @@ export interface YoutubeTranscriptRow {
 	chaptersFromDescription?: unknown;
 }
 
-export interface YoutubeTranscriptForHighlights {
-	transcript: Array<{ startTime: number; endTime: number; text: string }> | null;
-	ai_highlights: unknown;
-}
-
 export interface YoutubeHighlightsUpdateData {
 	videoId: string;
 	value: unknown;
@@ -38,14 +33,6 @@ export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTra
 			new Date(),
 		],
 	);
-}
-
-export async function getYoutubeTranscriptForHighlights(db: Client, videoId: string): Promise<YoutubeTranscriptForHighlights | null> {
-	const result = await db.query<YoutubeTranscriptForHighlights>(
-		'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
-		[videoId],
-	);
-	return result.rows[0] ?? null;
 }
 
 export async function saveYouTubeHighlights(db: Client, update: YoutubeHighlightsUpdateData): Promise<void> {
