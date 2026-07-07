@@ -10,10 +10,6 @@ interface YouTubeHighlight {
 	endTime: number;
 }
 
-interface YouTubeHighlightsResult {
-	highlights: YouTubeHighlight[];
-}
-
 export interface YouTubeHighlightsUpdate {
 	videoId: string;
 	value: {
@@ -50,35 +46,6 @@ const YouTubeHighlightsSchema = z.object({
 		.min(1),
 });
 
-async function generateYouTubeHighlights(
-	videoId: string,
-	transcript: TranscriptSegment[],
-	env: Env,
-): Promise<YouTubeHighlightsResult | null> {
-	console.info({ tag: 'AI', msg: 'Generating YouTube highlights', videoId });
-
-	const transcriptText = transcript.map((s) => `[${Math.floor(s.startTime)}s] ${s.text}`).join('\n');
-	const last = transcript[transcript.length - 1];
-	const duration = Math.ceil(last.endTime);
-
-	const result = await generateObject<YouTubeHighlightsResult>(env.AI, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
-		schema: YouTubeHighlightsSchema,
-		task: 'youtube-highlights',
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 2000,
-		temperature: 0.3,
-		systemPrompt: HIGHLIGHTS_SYSTEM_PROMPT,
-	});
-
-	if (!result?.highlights || !Array.isArray(result.highlights) || result.highlights.length === 0) {
-		console.error({ tag: 'AI', msg: 'YouTube highlights: invalid JSON', videoId });
-		return null;
-	}
-
-	console.info({ tag: 'AI', msg: 'YouTube highlights generated', videoId, count: result.highlights.length });
-	return result;
-}
-
 export async function prepareYouTubeHighlights(env: Env, article: Article): Promise<YouTubeHighlightsUpdate | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;
 
@@ -103,9 +70,27 @@ export async function prepareYouTubeHighlightsFromTranscript(
 	videoId: string,
 	transcript: TranscriptSegment[],
 ): Promise<YouTubeHighlightsUpdate | null> {
-	const highlights = await generateYouTubeHighlights(videoId, transcript, env);
-	if (!highlights) return null;
+	console.info({ tag: 'AI', msg: 'Generating YouTube highlights', videoId });
 
+	const transcriptText = transcript.map((s) => `[${Math.floor(s.startTime)}s] ${s.text}`).join('\n');
+	const last = transcript[transcript.length - 1];
+	const duration = Math.ceil(last.endTime);
+
+	const highlights = await generateObject(env.AI, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+		schema: YouTubeHighlightsSchema,
+		task: 'youtube-highlights',
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 2000,
+		temperature: 0.3,
+		systemPrompt: HIGHLIGHTS_SYSTEM_PROMPT,
+	});
+
+	if (!highlights?.highlights.length) {
+		console.error({ tag: 'AI', msg: 'YouTube highlights: invalid JSON', videoId });
+		return null;
+	}
+
+	console.info({ tag: 'AI', msg: 'YouTube highlights generated', videoId, count: highlights.highlights.length });
 	const generatedAt = new Date().toISOString();
 	return {
 		videoId,
