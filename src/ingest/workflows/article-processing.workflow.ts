@@ -15,7 +15,6 @@ import { syncPaperGraph } from '@papers/sync';
 import { articleProcessors } from '../domain/processors';
 import { parsePdf } from '../extract';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
-import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import { enrichS2ByTitle, enrichS2FromId } from '../platforms/paper/semanticscholar';
 import {
 	prepareYouTubeHighlights,
@@ -155,8 +154,8 @@ async function stagePdfExtraction(
 
 // Best-effort academic-paper enrichment. Detects a DOI/arXiv id from the URL
 // (always) or the extracted PDF text (only when we have staged PDF text), then
-// pulls structured metadata + references from OpenAlex. Never fails the workflow:
-// a non-paper resolves to null cheaply, and any OpenAlex error is swallowed.
+// pulls structured metadata + references from Semantic Scholar. Never fails the
+// workflow: a non-paper resolves to null cheaply, and API errors are swallowed.
 async function enrichPaperMetadata(
 	env: Env,
 	context: WorkflowRunContext,
@@ -188,16 +187,9 @@ async function enrichPaperMetadata(
 				const canTitleSearch = detection.hasAcademicMarker || isPdfRow;
 				const apiKey = env.S2_API_KEY;
 
-				// Semantic Scholar is primary — OpenAlex rate-limits shared Worker IPs.
-				let paper =
+				const paper =
 					(detection.id ? await enrichS2FromId(detection.id, apiKey) : null) ??
 					(canTitleSearch && searchTitle ? await enrichS2ByTitle(searchTitle, apiKey) : null);
-				// OpenAlex fallback (usually 429s from Workers, but works via other egress).
-				if (!paper) {
-					paper =
-						(detection.id ? await enrichPaperFromId(detection.id) : null) ??
-						(canTitleSearch && searchTitle ? await enrichPaperByTitle(searchTitle) : null);
-				}
 				if (paper) {
 					console.info({
 						tag: 'WORKFLOW',

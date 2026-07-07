@@ -4,8 +4,8 @@
 //
 // Runs in its OWN transaction (via the workflow step), decoupled from article
 // persistence — a DOI unique collision here must never poison the article
-// insert. Keyed on the OpenAlex work id (every OpenAlex work has one); papers
-// without one are skipped (no stable node identity).
+// insert. Keyed on the source-native paper id stored in the legacy openalex_id
+// column; papers without one are skipped (no stable node identity).
 // ─────────────────────────────────────────────────────────────
 
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';

@@ -69,7 +69,7 @@ const TITLE_STOP_RE = /^(abstract|introduction|keywords|ccs concepts|acm referen
 /**
  * Extract a paper's real title from the head of its (markdown-ish) extracted
  * text — the leading heading lines, concatenated. This beats the filename-derived
- * title for the OpenAlex title fallback: uploads carry noisy filenames (typos,
+ * title for metadata title matching: uploads carry noisy filenames (typos,
  * abbreviations) that no title search will match, whereas the PDF's own heading
  * is the real thing.
  */

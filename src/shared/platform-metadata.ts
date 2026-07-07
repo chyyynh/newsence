@@ -103,9 +103,8 @@ interface PdfMetadata {
 // ── Academic paper ───────────────────────────────────────────
 
 /**
- * A single resolved reference of a paper. OpenAlex gives us the referenced
- * work's OpenAlex id always; title/doi/year/author are best-effort (present
- * when the batch resolve succeeds).
+ * A single resolved reference of a paper. `openAlexId` is the legacy DB-facing
+ * field name; new enrichments store the source-native Semantic Scholar paperId.
  */
 export interface PaperReference {
 	openAlexId?: string;
@@ -117,13 +116,13 @@ export interface PaperReference {
 
 /**
  * Academic-paper metadata (stored in the `paper` envelope). Sourced from
- * OpenAlex via a DOI or arXiv id. `references` is capped and best-effort;
+ * Semantic Scholar via a DOI or arXiv id. `references` is capped and best-effort;
  * `referenceCount` is the true count even when the list is truncated or the
- * reference batch resolve failed.
+ * reference resolve failed.
  */
 export interface PaperMetadata {
 	source: 'openalex' | 'semanticscholar';
-	/** Source-native id: OpenAlex work id (Wxxx) or Semantic Scholar paperId. */
+	/** Legacy field name; new values are source-native Semantic Scholar paperIds. */
 	openAlexId?: string;
 	doi?: string;
 	arxivId?: string;
