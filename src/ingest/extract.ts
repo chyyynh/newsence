@@ -1,9 +1,21 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
-import { MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
+import {
+	BROWSER_UA,
+	detectUrlKind,
+	extractHackerNewsId,
+	extractTweetId,
+	extractYouTubeId,
+	MAX_UPLOAD_BYTES,
+	streamWithByteLimit,
+	type UrlKind,
+} from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
-import { scrapeUrl } from './platforms/registry';
+import { scrapeHackerNews } from './platforms/hackernews/scraper';
+import { scrapeTweet } from './platforms/twitter/scraper';
+import { scrapeHtmlFromResponse } from './platforms/web-scraper';
+import { scrapeYouTube } from './platforms/youtube/scraper';
 
 // Shared extraction core: one input → one normalized shape. Wraps the existing
 // engines — `scrapeUrl` (HTML / PDF / image dispatch) and `parsePdf` (LiteParse)
@@ -47,6 +59,23 @@ export interface ParsedPdf {
 	chars: number;
 }
 
+export interface ScrapeOptions {
+	youtubeApiKey?: string;
+	kaitoApiKey?: string;
+}
+
+export type ScrapeResult =
+	| { kind: 'page'; scraped: ScrapedContent }
+	| {
+			kind: 'blob';
+			body: ReadableStream<Uint8Array>;
+			contentType: string;
+			sourceUrl: string;
+			suggestedFilename: string;
+			/** From upstream `Content-Length` — null if absent or unparseable. */
+			contentLength: number | null;
+	  };
+
 const EMPTY_METADATA: NormalizedContent['metadata'] = {
 	author: null,
 	publishedDate: null,
@@ -64,6 +93,35 @@ const MIN_PDF_CHARS_PER_PAGE = 20;
 // rule turns the import into a WebAssembly.Module.
 let pdfParserReady = false;
 
+const REMOTE_DISPATCH_TIMEOUT_MS = 8_000;
+const REMOTE_DISPATCH_HEADERS: HeadersInit = {
+	'User-Agent': BROWSER_UA,
+	Accept: '*/*',
+	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+};
+
+type PageScraper = (url: string, options: ScrapeOptions) => Promise<ScrapedContent>;
+
+const PLATFORM_SCRAPERS: Partial<Record<UrlKind, PageScraper>> = {
+	youtube: async (url, options) => {
+		const videoId = extractYouTubeId(url);
+		if (!videoId) throw new Error('Invalid YouTube URL');
+		if (!options.youtubeApiKey) throw new Error('YouTube API key required');
+		return scrapeYouTube(videoId, options.youtubeApiKey);
+	},
+	twitter: async (url, options) => {
+		const tweetId = extractTweetId(url);
+		if (!tweetId) throw new Error('Invalid Twitter URL');
+		if (!options.kaitoApiKey) throw new Error('Kaito API key required');
+		return scrapeTweet(tweetId, options.kaitoApiKey);
+	},
+	hackernews: async (url) => {
+		const itemId = extractHackerNewsId(url);
+		if (!itemId) throw new Error('Invalid HackerNews URL');
+		return scrapeHackerNews(itemId);
+	},
+};
+
 export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	if (!pdfParserReady) {
 		initSync({ module: wasmModule });
@@ -76,6 +134,66 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	const chars = text.length;
 	const status = chars < MIN_PDF_CHARS || chars / Math.max(pages, 1) < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
 	return { text, pages, chars, status };
+}
+
+function parseContentDisposition(header: string | null): string | null {
+	if (!header) return null;
+	const match = header.match(/filename\*=UTF-8''([^;]+)|filename=("([^"]+)"|([^;]+))/i);
+	const raw = match?.[1] ?? match?.[3] ?? match?.[4];
+	if (!raw) return null;
+	try {
+		return decodeURIComponent(raw.trim());
+	} catch {
+		return raw.trim();
+	}
+}
+
+async function fetchAndDispatchUrl(url: string): Promise<ScrapeResult> {
+	const res = await fetch(url, {
+		redirect: 'follow',
+		signal: AbortSignal.timeout(REMOTE_DISPATCH_TIMEOUT_MS),
+		headers: REMOTE_DISPATCH_HEADERS,
+	});
+	if (!res.ok) {
+		await res.body?.cancel();
+		throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+	}
+
+	const ct = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
+
+	if (ct.includes('text/html') || ct.includes('text/xml') || ct.includes('application/xhtml')) {
+		const scraped = await scrapeHtmlFromResponse(res, url);
+		return { kind: 'page', scraped };
+	}
+
+	if (ct === PDF_MIME || isRasterImage(ct)) {
+		if (!res.body) throw new Error('Response body is empty');
+		const lenRaw = res.headers.get('content-length');
+		const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
+		const finalUrl = res.url || url;
+		const cdName = parseContentDisposition(res.headers.get('content-disposition'));
+		const suggestedFilename =
+			cdName ?? new URL(finalUrl).pathname.split('/').filter(Boolean).pop() ?? (ct === PDF_MIME ? 'document.pdf' : 'image');
+		return { kind: 'blob', body: res.body, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength };
+	}
+
+	await res.body?.cancel();
+	throw new Error(`Unsupported content-type: ${ct}`);
+}
+
+export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
+	const scraper = PLATFORM_SCRAPERS[detectUrlKind(url)];
+	if (scraper) return { kind: 'page', scraped: await scraper(url, options) };
+
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error('Invalid URL');
+	}
+	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
+	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+	return fetchAndDispatchUrl(url);
 }
 
 // Lossy markdown → plain text. Cheap and good enough for the `text` field; we

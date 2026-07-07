@@ -6,7 +6,7 @@ import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import { persistSavedUrlBlob } from './blob';
-import { type ScrapeResult, scrapeUrl } from './platforms/registry';
+import { type ScrapeResult, scrapeUrl } from './extract';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
