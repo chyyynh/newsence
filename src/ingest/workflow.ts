@@ -21,8 +21,8 @@ import {
 	type PlatformWorkflowData,
 	type ProcessorResult,
 } from './domain/processors';
-import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './pdf';
 import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
+import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
 
 type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
 

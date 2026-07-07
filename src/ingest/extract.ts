@@ -1,8 +1,8 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
-import { parsePdf } from './pdf';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
+import { parsePdf } from './platforms/pdf';
 import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
 import { scrapeHtmlFromResponse } from './platforms/web-scraper';
 import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
