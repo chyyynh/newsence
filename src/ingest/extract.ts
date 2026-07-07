@@ -1,7 +1,7 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
-import { type ParsedPdf, parsePdf } from './pdf';
+import { parsePdf } from './pdf';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
 import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
 import { scrapeHtmlFromResponse } from './platforms/web-scraper';
@@ -56,6 +56,8 @@ const EMPTY_METADATA: NormalizedContent['metadata'] = {
 	description: null,
 	ogImageUrl: null,
 };
+
+type ParsedPdf = Awaited<ReturnType<typeof parsePdf>>;
 
 const GENERIC_URL_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_URL_FETCH_HEADERS: HeadersInit = {

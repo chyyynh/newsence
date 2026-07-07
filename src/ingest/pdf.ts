@@ -2,9 +2,9 @@ import { PDF_MIME } from '@core-shared/mime';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 
-export type PdfTextStatus = 'ok' | 'needs_ocr';
+type PdfTextStatus = 'ok' | 'needs_ocr';
 
-export interface ParsedPdf {
+interface ParsedPdf {
 	text: string;
 	status: PdfTextStatus;
 	pages: number;
@@ -18,7 +18,7 @@ export interface PdfTextTempResult {
 	textStorageKey?: string;
 }
 
-export type PdfTextExtractionRequest = { articleId: string; storageKey: string; tempId: string };
+type PdfTextExtractionRequest = { articleId: string; storageKey: string; tempId: string };
 
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
