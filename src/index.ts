@@ -22,15 +22,11 @@ import { ingestUrls } from './ingest/urls';
 
 export { NewsenceMonitorWorkflow };
 
-// Bytes can't fit Workflow params, so the job path only ever passes a URL or a
-// staged R2 key — never inline bytes.
-type ScrapeWorkflowParams = Extract<ExtractInput, { kind: 'url' } | { kind: 'r2' }>;
-
 // Non-persisting scrape job. Unlike NewsenceMonitorWorkflow this creates no DB
 // row — the result is returned as the Workflow `output`, polled via
 // GET /scrape/jobs/:id.
-export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ScrapeWorkflowParams> {
-	async run(event: WorkflowEvent<ScrapeWorkflowParams>, step: WorkflowStep): Promise<NormalizedContent> {
+export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ExtractInput> {
+	async run(event: WorkflowEvent<ExtractInput>, step: WorkflowStep): Promise<NormalizedContent> {
 		const input = event.payload;
 
 		const result = await step.do(

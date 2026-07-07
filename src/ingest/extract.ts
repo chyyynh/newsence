@@ -10,7 +10,7 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 
 export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 
-export type ExtractInput = { kind: 'url'; url: string } | { kind: 'bytes'; bytes: Uint8Array } | { kind: 'r2'; key: string };
+export type ExtractInput = { kind: 'url'; url: string } | { kind: 'r2'; key: string };
 
 export interface NormalizedContent {
 	/** null for raw-bytes / R2 input (no originating URL). */
@@ -245,8 +245,6 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 	switch (input.kind) {
 		case 'url':
 			return extractUrl(env, input.url);
-		case 'bytes':
-			return extractFile(input.bytes);
 		case 'r2': {
 			if (!input.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) throw new Error(`Invalid scrape input temp object key: ${input.key}`);
 			const obj = await env.R2.get(input.key);
