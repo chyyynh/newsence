@@ -12,6 +12,7 @@ import {
 } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
+import { scrapeWebPage } from '../web-scraper';
 
 interface TwitterUrlEntity {
 	expanded_url?: string;
@@ -284,8 +285,6 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	if (externalUrl) {
 		console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
 		try {
-			// Import scrapeWebPage at call site to avoid circular dependency
-			const { scrapeWebPage } = await import('../web-scraper');
 			const linked = await scrapeWebPage(externalUrl);
 			if (linked.content && linked.content.length > 100) {
 				console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
