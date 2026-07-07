@@ -20,7 +20,7 @@
 
 ## What is newsence?
 
-Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter / YouTube / HN / Bilibili / Xiaohongshu, runs bilingual AI analysis on each, stores them as searchable embeddings, entities graph. Follows the [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern — each source is read once and integrated into a persistent artifact (summaries, entities, embeddings, cross-refs), not RAG'd at query time.
+Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / user files, runs bilingual AI analysis on each, stores them as searchable embeddings and an entity graph. Follows the [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern — each source is read once and integrated into a persistent artifact (summaries, entities, embeddings, cross-refs), not RAG'd at query time.
 
 ## Supported Platforms
 
@@ -28,19 +28,15 @@ Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls content
 ![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)
 ![X](https://img.shields.io/badge/X%2FTwitter-000000?logo=x&logoColor=white)
 ![Hacker News](https://img.shields.io/badge/Hacker%20News-F0652F?logo=ycombinator&logoColor=white)
-![Bilibili](https://img.shields.io/badge/Bilibili-00A1D6?logo=bilibili&logoColor=white)
-![Xiaohongshu](https://img.shields.io/badge/Xiaohongshu-FF2442?logo=xiaohongshu&logoColor=white)
 
 | Platform             | Type      | Schedule      | What it does                                                                |
 | -------------------- | --------- | ------------- | --------------------------------------------------------------------------- |
 | **RSS Feeds**        | Monitor   | Every 5 min   | Fetches feeds, deduplicates by URL, detects HN links                        |
 | **Twitter/X**        | Monitor   | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media               |
 | **YouTube**          | Monitor   | Every 30 min  | Atom feed → video metadata, transcripts, chapters, AI highlights            |
-| **Bilibili**         | Monitor   | Every 30 min  | gRPC mobile API → user dynamics, video cards                                |
-| **Xiaohongshu**      | Monitor   | Every 30 min  | Profile scraping → user notes, covers                                       |
 | **Hacker News**      | Processor | Via RSS       | Detects HN links → fetches comments via Algolia → generates editorial notes |
 | **Web**              | Scraper   | On demand     | Full content extraction (Readability + Cheerio), OG metadata                |
-| **User Uploads**     | Ingestion | Real-time     | `POST /ingest` — URL/image/blob ingest, returns saved resource + workflow id |
+| **User Uploads**     | Ingestion | Real-time     | App service-binding RPC — URL/image/blob ingest, returns saved resource + workflow id |
 
 All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 
@@ -52,12 +48,11 @@ Each article goes through an automated workflow with independent retries:
 Content arrives (source monitor / user upload / retry)
   │
   ├─ 1. Load Content ───────── Source draft from R2, or user_file/article row for upload/retry
-  ├─ 2. AI Analysis ────────── Workers AI Qwen3 → bilingual title, summary, tags, keywords, entities
-  ├─ 3. Fetch OG Image ─────── Grab OG image if missing (first 32 KB of HTML)
-  ├─ 4. Save to DB ─────────── Source: single final INSERT; row-based: one final UPDATE
+  ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
+  ├─ 3. Save to DB ─────────── Source: single final INSERT; row-based: one final UPDATE
   ├─    Sync Entities ──────── (conditional) Upsert entities, link to article
-  ├─ 5. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
-  └─ 7. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
+  ├─ 4. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
+  └─ 5. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
 ```
 
 Roughly 30 seconds per article. Each step retries independently with exponential backoff.
@@ -66,9 +61,9 @@ Roughly 30 seconds per article. Each step retries independently with exponential
 
 | Stage                   | Model             | What it does                                                                                      |
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| **Analysis**          | Workers AI Qwen3 | Article → bilingual title, summary, tags, keywords, category                                      |
-| **Entity Extraction** | Workers AI Qwen3 | Article → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
-| **Embedding**         | BGE-M3 (1024d)   | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
+| **Analysis**          | AI Gateway text model | Article → bilingual title, summary, tags, keywords, category                                      |
+| **Entity Extraction** | AI Gateway JSON model | Article → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
+| **Embedding**         | BGE-M3 (1024d)        | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
 Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole article into fallback.
 
@@ -87,7 +82,7 @@ Change the DB schema only when the product needs a query shape that the current 
 | Runtime       | Cloudflare Workers (V8 isolates)                  |
 | Orchestration | Cloudflare Queues + Workflows                     |
 | Database      | PostgreSQL + pgvector (via Cloudflare Hyperdrive) |
-| LLM           | Cloudflare Workers AI → Qwen3                     |
+| LLM           | Cloudflare AI Gateway                             |
 | Embeddings    | Cloudflare Workers AI → BGE-M3                    |
 | Twitter Data  | Kaito API (third-party)                           |
 
@@ -231,7 +226,7 @@ Bindings (in `wrangler.jsonc`):
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
 | `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
-| `AI`               | Workers AI (Qwen3 analysis + BGE-M3 embeddings) |
+| `AI`               | Workers AI binding (AI Gateway text calls + BGE-M3 embeddings) |
 
 Secrets (via `wrangler secret put`):
 
@@ -250,7 +245,7 @@ Minimum to add a new source:
 
 1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
 2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
-3. **Detection + dispatch** — add the URL pattern to `shared/scraped-content.ts:detectPlatformType` and route it in `ingest/platforms/registry.ts`.
+3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it in `ingest/platforms/registry.ts`.
 4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `entrypoints/scheduled.ts`.
 5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `ingest/domain/processors.ts`.
 

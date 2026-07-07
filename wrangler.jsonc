@@ -127,7 +127,7 @@
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *
 	 * Required secrets:
-	 * - CORE_WORKER_INTERNAL_TOKEN protects direct HTTP maintenance endpoints.
+	 * - CORE_WORKER_INTERNAL_TOKEN protects direct HTTP scrape/export/status endpoints.
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
 	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
 	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
