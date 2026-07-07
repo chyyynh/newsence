@@ -1,18 +1,19 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
-import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 
-// ─────────────────────────────────────────────────────────────
-// RSS Monitor
-// ─────────────────────────────────────────────────────────────
-
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
-const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
+const RSS_SOURCE_FIELDS = 'id, name, "RSSLink"';
 
-async function queueRssItem(env: Env, feed: RSSFeed, item: FeedEntry, url: string): Promise<void> {
+type RssSource = {
+	id: string;
+	name: string;
+	RSSLink: string;
+};
+
+async function queueRssItem(env: Env, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
 	const pubDate = item.published ?? '';
 	const description = item.description ?? '';
 
@@ -37,7 +38,7 @@ function parseFeedItems(xml: string): FeedEntry[] {
 	}).entries ?? []) as FeedEntry[];
 }
 
-async function processFeed(env: Env, db: Client, feed: RSSFeed): Promise<void> {
+async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void> {
 	let res: Response;
 	try {
 		res = await fetchWithTimeout(feed.RSSLink, {
@@ -82,7 +83,7 @@ export async function handleRSSCron(env: Env): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const feeds = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
+	const feeds = (await db.query<RssSource>(`SELECT ${RSS_SOURCE_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
 	for (const feed of feeds) {
 		try {
 			await processFeed(env, db, feed);

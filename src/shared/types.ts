@@ -46,17 +46,6 @@ export interface AIAnalysisResult {
 	entities?: ExtractedEntity[];
 }
 
-// RSS Feed related
-export interface RSSFeed {
-	id: string;
-	name: string;
-	RSSLink: string;
-	url: string;
-	type: string;
-	scraped_at?: string;
-	avatar_url?: string;
-}
-
 export interface TranscriptSegment {
 	startTime: number;
 	endTime: number;
