@@ -44,11 +44,6 @@ export type ExistingUrlUserFile = {
 const EXISTING_URL_USER_FILE_FIELDS =
 	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
 
-function serializeMetadata(metadata: unknown | null): string | null {
-	if (metadata === null || metadata === undefined) return null;
-	return JSON.stringify(metadata);
-}
-
 /**
  * Insert scraped URL content into the per-user `user_files` table.
  *
@@ -95,7 +90,7 @@ export async function insertUrlUserFile(db: DbClient, data: InsertUrlUserFileDat
 			data.ogImageUrl,
 			data.keywords ?? [],
 			data.tags ?? [],
-			serializeMetadata(data.platformMetadata),
+			data.platformMetadata === null || data.platformMetadata === undefined ? null : JSON.stringify(data.platformMetadata),
 			data.userId,
 		],
 	);

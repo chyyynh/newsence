@@ -150,11 +150,6 @@ function deriveFileTitle(fileName: string): string {
 	return fileName.replace(/\.[a-z0-9]{1,8}$/i, '') || fileName;
 }
 
-function buildPdfMetadata(args: { fileType: string; fileName: string; fileSize: number }) {
-	if (args.fileType !== PDF_MIME) return null;
-	return { type: 'pdf' as const, fetchedAt: new Date().toISOString(), data: { fileName: args.fileName, fileSize: args.fileSize } };
-}
-
 function storageKeyToAssetUrl(key: string): string {
 	const encodedPath = key
 		.split('/')
@@ -179,11 +174,6 @@ function getBlobUploadQuota(planId: string): BlobUploadQuota {
 		maxUserFileStorageBytes: FREE_MAX_USER_FILE_STORAGE_BYTES,
 		maxUserFiles: FREE_MAX_USER_FILES,
 	};
-}
-
-function serializeMetadata(metadata: unknown | null): string | null {
-	if (metadata === null || metadata === undefined) return null;
-	return JSON.stringify(metadata);
 }
 
 async function assertBlobUploadQuotaTx(db: DbClient, userId: string, incomingBytes: number): Promise<void> {
@@ -239,7 +229,7 @@ async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileData): P
 			data.sourceUrl ?? null,
 			data.normalizedSourceUrl ?? null,
 			title,
-			serializeMetadata(data.metadata ?? null),
+			data.metadata === null || data.metadata === undefined ? null : JSON.stringify(data.metadata),
 			data.userId,
 		],
 	);
@@ -339,7 +329,10 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 		fileName: file.name,
 		originType: 'upload',
 		title,
-		metadata: buildPdfMetadata({ fileType, fileName: file.name, fileSize: file.size }),
+		metadata:
+			fileType === PDF_MIME
+				? { type: 'pdf' as const, fetchedAt: new Date().toISOString(), data: { fileName: file.name, fileSize: file.size } }
+				: null,
 	});
 	if (!persisted.ok) return persisted;
 
@@ -489,7 +482,10 @@ export async function persistSavedUrlBlob(
 		title,
 		sourceUrl: args.sourceUrl,
 		normalizedSourceUrl: args.normalizedSourceUrl,
-		metadata: buildPdfMetadata({ fileType: args.contentType, fileName: args.suggestedFilename, fileSize }),
+		metadata:
+			args.contentType === PDF_MIME
+				? { type: 'pdf' as const, fetchedAt: new Date().toISOString(), data: { fileName: args.suggestedFilename, fileSize } }
+				: null,
 	});
 	if (!persisted.ok) return persisted;
 

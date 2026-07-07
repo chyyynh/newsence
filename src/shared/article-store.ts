@@ -28,26 +28,19 @@ const ARTICLE_SHELL_FIELDS: Record<ProcessableTable, string> = {
 		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
 };
 
-async function fetchProcessableArticle<T extends Article>(
-	env: Env,
-	table: ProcessableTable,
-	articleId: string,
-	fields: string,
-): Promise<T> {
-	return withDbClient(env, async (db) => {
-		const result = await db.query(`SELECT ${fields} FROM ${table} WHERE id = $1`, [articleId]);
-		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-		return result.rows[0] as T;
-	});
-}
-
 export function loadProcessableArticle(
 	env: Env,
 	table: ProcessableTable,
 	articleId: string,
 	shell = false,
 ): Promise<ProcessableArticleShell> {
-	return fetchProcessableArticle(env, table, articleId, shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]);
+	return withDbClient(env, async (db) => {
+		const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
+			articleId,
+		]);
+		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		return result.rows[0] as ProcessableArticleShell;
+	});
 }
 
 export interface InsertArticleData {
