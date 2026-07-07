@@ -380,7 +380,7 @@ async function prepareYoutubeHighlights(
 	const videoId = platformMetadata.data.videoId;
 	if (!videoId) return null;
 
-	return step.do(
+	return await step.do(
 		'generate-youtube-highlights',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 		async () => {
