@@ -150,7 +150,7 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY || '', batch, sinceTime);
 		if (!completed) allCompleted = false;
 		const groups = groupTweetsIntoThreads(tweets);
-		processed += await saveTweetGroups(env, groups);
+		processed += await saveTweetGroups(db, env, groups);
 	}
 
 	// Advance scraped_at only if every batch completed — partial fetches would

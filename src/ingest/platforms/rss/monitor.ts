@@ -36,7 +36,7 @@ const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_u
 
 type FeedItemWithUrl = { item: RSSItem; url: string };
 
-async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
+async function processFeed(env: Env, db: Client, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
 
 	let res: Response;
@@ -55,8 +55,6 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	let items = extractItemsFromFeed(parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES)));
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
-		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-		await db.connect();
 		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 		return;
 	}
@@ -69,8 +67,6 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		if (rawUrl) itemUrls.push({ item, url: normalizeUrl(rawUrl) });
 	}
 	const urls = itemUrls.map(({ url }) => url);
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
 	const existingRecords = await getExistingArticlesByUrl(db, urls);
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
@@ -183,7 +179,7 @@ export async function handleRSSCron(env: Env): Promise<void> {
 	const feeds = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
 	for (const feed of feeds) {
 		try {
-			await processFeed(env, feed, parser);
+			await processFeed(env, db, feed, parser);
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
 		}

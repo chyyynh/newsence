@@ -3,7 +3,7 @@ import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
 import { startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
-import { Client } from 'pg';
+import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -19,15 +19,14 @@ import {
 } from './scraper';
 import { upsertTwitterSourceEvent } from './source-events';
 
-async function findArticleByUrl(env: Env, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
+async function findArticleByUrl(db: Client, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
 	const [article] = await getExistingArticlesByUrl(db, [url]);
 	return article ? { id: article.id, summary_cn: article.summary_cn } : null;
 }
 
 async function enqueueTwitterArticle(
 	env: Env,
+	db: Client,
 	data: {
 		url: string;
 		title: string;
@@ -41,7 +40,7 @@ async function enqueueTwitterArticle(
 		sourceEvent?: TwitterSourceEventDraft;
 	},
 ): Promise<boolean> {
-	if (await findArticleByUrl(env, data.url)) return false;
+	if (await findArticleByUrl(db, data.url)) return false;
 	await startSourceArticleWorkflow(env, {
 		article: {
 			url: data.url,
@@ -62,16 +61,14 @@ async function enqueueTwitterArticle(
 
 const MIN_TWEET_LENGTH = 150;
 
-async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
+async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
 	const expandedUrls = extractExpandedUrls(tweet);
 	const externalUrl = findExternalUrl(expandedUrls);
 	const textWithoutUrls = stripTweetUrls(tweet.text);
 
-	const existingTweetArticle = await findArticleByUrl(env, tweetUrl);
+	const existingTweetArticle = await findArticleByUrl(db, tweetUrl);
 	if (existingTweetArticle) {
-		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-		await db.connect();
 		await upsertTwitterSourceEvent(db, tweet, {
 			articleId: existingTweetArticle.id,
 			eventType: externalUrl ? 'share' : 'tweet',
@@ -89,7 +86,7 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 		if (scraped) {
 			const meta = scraped.metadata?.data;
 			const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
-			const queued = await enqueueTwitterArticle(env, {
+			const queued = await enqueueTwitterArticle(env, db, {
 				url: tweetUrl,
 				title: scraped.title,
 				source: tweet.author?.name || 'Twitter',
@@ -127,10 +124,8 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 			if (isSocialMediaUrl(resolvedUrl)) {
 				console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
 			} else {
-				const existingArticle = await findArticleByUrl(env, resolvedUrl);
+				const existingArticle = await findArticleByUrl(db, resolvedUrl);
 				if (existingArticle) {
-					const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-					await db.connect();
 					await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls });
 					if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingArticle.id });
 					console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
@@ -147,7 +142,7 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 					if (!scraped.content || scraped.content.length < 100) {
 						console.info({ tag: 'TWITTER', msg: 'Scraped content too short', url: resolvedUrl, chars: scraped.content?.length ?? 0 });
 					} else {
-						const queued = await enqueueTwitterArticle(env, {
+						const queued = await enqueueTwitterArticle(env, db, {
 							url: resolvedUrl,
 							title: scraped.title || 'Shared Article',
 							source: tweet.author?.name || 'Twitter',
@@ -187,7 +182,7 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 	);
 	const media = metadata.data.media ?? [];
 
-	const queued = await enqueueTwitterArticle(env, {
+	const queued = await enqueueTwitterArticle(env, db, {
 		url: tweetUrl,
 		title: buildTweetTitle(tweet),
 		source: tweet.author?.name || 'Twitter',
@@ -206,12 +201,12 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 	return queued;
 }
 
-async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
+async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolean> {
 	const sorted = tweets.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 	const first = sorted[0];
 	const firstUrl = normalizeUrl(first.url);
 
-	const existing = await findArticleByUrl(env, firstUrl);
+	const existing = await findArticleByUrl(db, firstUrl);
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
 	for (const t of sorted.slice(0, 10)) {
@@ -228,8 +223,6 @@ async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
 
 	if (existing) {
 		const existingId = existing.id;
-		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-		await db.connect();
 		await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
 		await upsertTwitterSourceEvent(db, first, {
 			articleId: existingId,
@@ -243,7 +236,7 @@ async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
 		return true;
 	}
 
-	const queued = await enqueueTwitterArticle(env, {
+	const queued = await enqueueTwitterArticle(env, db, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
@@ -262,14 +255,14 @@ async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
 	return queued;
 }
 
-export async function saveTweetGroups(env: Env, groups: Tweet[][]): Promise<number> {
+export async function saveTweetGroups(db: Client, env: Env, groups: Tweet[][]): Promise<number> {
 	let count = 0;
 	for (const group of groups) {
 		try {
 			if (group.length >= 2) {
-				if (await saveThread(group, env)) count++;
+				if (await saveThread(db, group, env)) count++;
 			} else {
-				if (await saveTweet(group[0], env)) count++;
+				if (await saveTweet(db, group[0], env)) count++;
 			}
 		} catch (err) {
 			console.error({ tag: 'TWITTER', msg: 'Save failed', url: group[0]?.url, error: String(err) });

@@ -185,11 +185,11 @@ export async function cleanupSourceArticleDraftRef(
 	}
 }
 
-export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
+export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string | undefined> {
 	try {
-		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-		await db.connect();
-		const result = await db.query(
+		const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		if (!db) await client.connect();
+		const result = await client.query(
 			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
 			[userFileId],
 		);
@@ -222,7 +222,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 				instanceId = instance.id;
 			}
 		}
-		await patchUserFileWorkflowMetadata(db, userFileId, {
+		await patchUserFileWorkflowMetadata(client, userFileId, {
 			monitor_instance_id: instanceId,
 			monitor_status: 'running',
 			monitor_started_at: new Date().toISOString(),

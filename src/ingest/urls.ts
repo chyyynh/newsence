@@ -46,7 +46,7 @@ type UserFileUrlResultRow = Pick<
 	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
 >;
 
-async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env, userId: string): Promise<InsertOutcome> {
+async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: string, userId: string): Promise<InsertOutcome> {
 	const urlKind = detectUrlKind(url);
 
 	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
@@ -56,8 +56,6 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 
 	try {
 		const ogImageUrl = await validateImageUrl(scraped.ogImageUrl);
-		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-		await db.connect();
 		const platformMetadataToStore = scraped.metadata
 			? {
 					...scraped.metadata,
@@ -154,9 +152,9 @@ function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instance
 	};
 }
 
-async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
+async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
 	if (row.resource_kind === 'blob') {
-		const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id);
+		const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id, db);
 		return {
 			url,
 			userFileId: row.id,
@@ -172,7 +170,7 @@ async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): 
 		};
 	}
 
-	const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id);
+	const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id, db);
 	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
 }
 
@@ -183,7 +181,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	await db.connect();
 	const existingRow = await getUrlUserFileByNormalizedSourceUrl(db, userId, url);
 	if (existingRow) {
-		return returnExisting(url, existingRow, env);
+		return returnExisting(db, url, existingRow, env);
 	}
 
 	let result: InsertOutcome;
@@ -194,7 +192,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 		});
 		result =
 			scrapeResult.kind === 'page'
-				? await insertScrapedPage(scrapeResult.scraped, url, env, userId)
+				? await insertScrapedPage(db, scrapeResult.scraped, url, userId)
 				: await insertScrapedBlob(scrapeResult, url, env, userId);
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
@@ -205,7 +203,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	if (result.kind === 'blob') {
 		// PDFs run through the AI workflow for text extraction + analysis;
 		// images are stored without further processing (no vision pipeline yet).
-		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId) : undefined;
+		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId, db) : undefined;
 		return {
 			url,
 			userFileId: result.userFileId,
@@ -221,7 +219,7 @@ async function processUrl(rawUrl: string, env: Env, userId: string): Promise<Ing
 	// `created=true`: fresh insert, always trigger workflow for AI enrichment.
 	// `created=false`: ON CONFLICT race — a concurrent submit already triggered
 	//   the workflow on the existing row, skip.
-	const instanceId = row.created ? await createUserFileWorkflow(env, row.id) : undefined;
+	const instanceId = row.created ? await createUserFileWorkflow(env, row.id, db) : undefined;
 	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 
