@@ -1,12 +1,12 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
-import { BROWSER_UA, detectUrlKind, extractYouTubeId, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
+import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
 import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
 import { scrapeHtmlFromResponse } from './platforms/web-scraper';
-import { scrapeYouTube } from './platforms/youtube/scraper';
+import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 
 export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 

@@ -38,6 +38,29 @@ type YouTubeVideosResponse = {
 	error?: { message: string };
 };
 
+const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
+
+export function extractYouTubeId(url: string): string | null {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return null;
+	}
+
+	const watchId = parsed.searchParams.get('v');
+	if (watchId?.match(YOUTUBE_VIDEO_ID_RE)) return watchId;
+
+	const [kind, maybeId] = parsed.pathname.split('/').filter(Boolean);
+	const pathId =
+		parsed.hostname.toLowerCase().replace(/^www\./, '') === 'youtu.be'
+			? kind
+			: ['embed', 'shorts', 'live', 'v'].includes(kind ?? '')
+				? maybeId
+				: null;
+	return pathId?.match(YOUTUBE_VIDEO_ID_RE)?.[0] ?? null;
+}
+
 function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 	const chapterRegex = /(?:^|\n)(\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.+?)(?=\n|$)/g;
 	const chapters: YouTubeChapter[] = [];

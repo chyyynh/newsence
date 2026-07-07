@@ -59,6 +59,7 @@ const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com']);
 const TWITTER_HOSTS = new Set(['twitter.com', 'x.com']);
 const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
+const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
 type UrlKind = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
@@ -171,17 +172,20 @@ export function detectUrlKind(url: string): UrlKind {
 	return 'web';
 }
 
-export function extractYouTubeId(url: string): string | null {
+function extractYouTubeId(url: string): string | null {
 	const parsed = parseUrl(url);
 	if (!parsed) return null;
 
 	const watchId = parsed.searchParams.get('v');
-	if (watchId?.match(/^[a-zA-Z0-9_-]{11}$/)) return watchId;
+	if (watchId?.match(YOUTUBE_VIDEO_ID_RE)) return watchId;
 
-	const parts = parsed.pathname.split('/').filter(Boolean);
-	if (hostMatches(canonicalHost(parsed.hostname), YOUTUBE_SHORT_HOSTS)) return parts[0]?.match(/^[a-zA-Z0-9_-]{11}$/)?.[0] ?? null;
-	if (['embed', 'shorts', 'live', 'v'].includes(parts[0] ?? '')) return parts[1]?.match(/^[a-zA-Z0-9_-]{11}$/)?.[0] ?? null;
-	return null;
+	const [kind, maybeId] = parsed.pathname.split('/').filter(Boolean);
+	const pathId = hostMatches(canonicalHost(parsed.hostname), YOUTUBE_SHORT_HOSTS)
+		? kind
+		: ['embed', 'shorts', 'live', 'v'].includes(kind ?? '')
+			? maybeId
+			: null;
+	return pathId?.match(YOUTUBE_VIDEO_ID_RE)?.[0] ?? null;
 }
 
 export function decodeHtmlEntities(str: string): string {
