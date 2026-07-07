@@ -26,13 +26,6 @@ export type SniffedMediaType =
 	| 'image/tiff'
 	| typeof PDF_MIME;
 
-export class UnsupportedMediaError extends Error {
-	constructor() {
-		super('Content does not match a supported image or PDF format');
-		this.name = 'UnsupportedMediaError';
-	}
-}
-
 export function isRasterImage(contentType: string): boolean {
 	const lower = contentType.toLowerCase();
 	return lower.startsWith('image/') && !lower.startsWith('image/svg');
@@ -77,58 +70,4 @@ export function sniffMediaType(header: Uint8Array): SniffedMediaType | null {
 		if (HEIC_BRANDS.has(brand)) return 'image/heic';
 	}
 	return null;
-}
-
-/**
- * Stream wrapper that sniffs the leading bytes before letting any data through.
- * If the signature doesn't pass `accept`, the stream errors with
- * `UnsupportedMediaError`; R2 will not commit a partial object from an errored
- * source stream.
- */
-export function sniffMediaTypeStream(
-	body: ReadableStream<Uint8Array>,
-	accept: (type: SniffedMediaType) => boolean,
-): { stream: ReadableStream<Uint8Array>; getDetected: () => SniffedMediaType | null } {
-	let detected: SniffedMediaType | null = null;
-	let decided = false;
-	let header = new Uint8Array(0);
-
-	const decideAndFlush = (controller: TransformStreamDefaultController<Uint8Array>): boolean => {
-		const type = sniffMediaType(header);
-		if (!type || !accept(type)) {
-			controller.error(new UnsupportedMediaError());
-			return false;
-		}
-		detected = type;
-		decided = true;
-		controller.enqueue(header);
-		return true;
-	};
-
-	const stream = body.pipeThrough(
-		new TransformStream<Uint8Array, Uint8Array>({
-			transform(chunk, controller) {
-				if (decided) {
-					controller.enqueue(chunk);
-					return;
-				}
-				const merged = new Uint8Array(header.length + chunk.byteLength);
-				merged.set(header, 0);
-				merged.set(chunk, header.length);
-				header = merged;
-				if (header.length < MAGIC_SNIFF_BYTES) return;
-				decideAndFlush(controller);
-			},
-			flush(controller) {
-				if (decided) return;
-				if (header.length === 0) {
-					controller.error(new UnsupportedMediaError());
-					return;
-				}
-				decideAndFlush(controller);
-			},
-		}),
-	);
-
-	return { stream, getDetected: () => detected };
 }

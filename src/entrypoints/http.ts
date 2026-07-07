@@ -1,18 +1,13 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
-import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { enqueueArticleBatchProcess, handleRetryCron } from '@ingest/workflows/queue';
-import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import { handleExportCollectionOkf } from '../okf';
 import { handleEntityQuality, handlePruneOrphanEntities, handleRepairEntityLinks } from './entity-maintenance';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/search': handleSearch,
-	'/search/related': handleRelated,
-	'/ingest': handleIngest,
 	'/retry': handleRetry,
 	'/entities/prune-orphans': handlePruneOrphanEntities,
 	'/entities/quality': handleEntityQuality,
@@ -39,7 +34,6 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints:\n' +
 	'GET  /health\n' +
-	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
@@ -48,50 +42,7 @@ const HELP_TEXT =
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
-	'POST /search                              - Hybrid corpus ranking (internal token) -> {results}\n' +
-	'POST /search/related                      - pgvector neighbours of a seed (internal token) -> {ids}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
-
-async function handleSearch(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ query?: string; limit?: number }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.query?.trim()) {
-		return Response.json({ results: [] }, { headers: INTERNAL_CORS_HEADERS });
-	}
-
-	try {
-		const results = await searchCorpusArticleRanks(env, { query: body.query, limit: body.limit });
-		return Response.json({ results }, { headers: INTERNAL_CORS_HEADERS });
-	} catch (error) {
-		console.error({ tag: 'SEARCH', msg: 'hybrid search failed', error: error instanceof Error ? error.message : String(error) });
-		return Response.json({ code: 'SEARCH_FAILED', message: 'Search failed' }, { status: 500, headers: INTERNAL_CORS_HEADERS });
-	}
-}
-
-async function handleRelated(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ id?: string; type?: string; limit?: number; offset?: number }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
-
-	if (!body.id?.trim()) {
-		return Response.json({ code: 'BAD_REQUEST', message: 'Missing seed id' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
-	}
-	const type = body.type === 'user_file' ? 'user_file' : 'article';
-
-	try {
-		const ids = await relatedCorpusArticleIds(env, { seed: { id: body.id, type }, limit: body.limit, offset: body.offset });
-		return Response.json({ ids }, { headers: INTERNAL_CORS_HEADERS });
-	} catch (error) {
-		console.error({ tag: 'SEARCH', msg: 'related search failed', error: error instanceof Error ? error.message : String(error) });
-		return Response.json({ code: 'SEARCH_FAILED', message: 'Related search failed' }, { status: 500, headers: INTERNAL_CORS_HEADERS });
-	}
-}
 
 async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);

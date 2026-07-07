@@ -14,9 +14,8 @@ export async function requireAuth(request: Request, env: Env, extraHeaders?: Hea
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	if (!expected) {
 		// Fail closed: a missing server secret must never make the protected
-		// surface (/ingest, /search, /media/*) world-writable. The token is
-		// set in all deployed envs; an empty value is a misconfiguration, so we
-		// reject and log loudly rather than silently opening the door.
+		// HTTP surface world-writable. The token is set in all deployed envs; an
+		// empty value is a misconfiguration, so we reject and log loudly.
 		console.error({ tag: 'AUTH', msg: 'CORE_WORKER_INTERNAL_TOKEN is not set — rejecting internal-token request' });
 		return Response.json({ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' }, { status: 401, headers: extraHeaders });
 	}
