@@ -104,7 +104,7 @@ export interface ScrapedContent {
 	siteName: string | null;
 	author: string | null;
 	publishedDate: string | null;
-	metadata?: Record<string, unknown>;
+	metadata?: PlatformMetadata;
 	youtubeTranscript?: {
 		videoId: string;
 		segments: TranscriptSegment[];

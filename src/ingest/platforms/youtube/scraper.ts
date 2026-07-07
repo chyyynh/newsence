@@ -2,7 +2,7 @@
 // YouTube Scraper
 // ─────────────────────────────────────────────────────────────
 
-import type { YouTubeMetadata } from '@core-shared/platform-metadata';
+import { buildMetadata, type PlatformMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
@@ -84,7 +84,7 @@ function toSeconds(value: string | number | undefined): number {
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function parseDurationSeconds(iso: string | undefined): number {
+export function parseDurationSeconds(iso: string | undefined): number {
 	if (!iso) return 0;
 	const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
 	if (!match) return 0;
@@ -93,19 +93,6 @@ function parseDurationSeconds(iso: string | undefined): number {
 
 function redactSecret(message: string, secret: string): string {
 	return secret ? message.replaceAll(secret, '[redacted]') : message;
-}
-
-function transcriptToMarkdown(segments: TranscriptSegment[]): string {
-	return segments
-		.map((segment) => segment.text.trim())
-		.filter(Boolean)
-		.join('\n');
-}
-
-function buildYouTubeContent(description: string, transcript: TranscriptSegment[]): string {
-	const transcriptMarkdown = transcriptToMarkdown(transcript);
-	if (transcriptMarkdown) return transcriptMarkdown;
-	return description.trim();
 }
 
 async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Promise<YouTubeVideosResponse> {
@@ -190,7 +177,7 @@ export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
 	options: YouTubeScrapeOptions = {},
-): Promise<ScrapedContent & { metadata: YouTubeMetadata }> {
+): Promise<ScrapedContent & { metadata: Extract<PlatformMetadata, { type: 'youtube' }> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
 	const videoData = await fetchYouTubeVideoData(videoId, youtubeApiKey);
@@ -231,7 +218,11 @@ export async function scrapeYouTube(
 		});
 	}
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
-	const content = buildYouTubeContent(snippet.description, transcript);
+	const transcriptMarkdown = transcript
+		.map((segment) => segment.text.trim())
+		.filter(Boolean)
+		.join('\n');
+	const content = transcriptMarkdown || snippet.description.trim();
 
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
@@ -243,7 +234,7 @@ export async function scrapeYouTube(
 		siteName: 'YouTube',
 		author: snippet.channelTitle,
 		publishedDate: snippet.publishedAt,
-		metadata: {
+		metadata: buildMetadata('youtube', {
 			videoId: video.id,
 			channelName: snippet.channelTitle,
 			channelId: snippet.channelId,
@@ -255,7 +246,7 @@ export async function scrapeYouTube(
 			tags: snippet.tags || [],
 			publishedAt: snippet.publishedAt,
 			description: snippet.description || '',
-		},
+		}),
 		youtubeTranscript:
 			transcript.length > 0
 				? { videoId: video.id, segments: transcript, language: transcriptLanguage, chapters, chaptersFromDescription: chapters.length > 0 }

@@ -2,7 +2,7 @@
 // HackerNews Scraper
 // ─────────────────────────────────────────────────────────────
 
-import type { HackerNewsMetadata } from '@core-shared/platform-metadata';
+import { buildMetadata, type HackerNewsMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
 
@@ -85,6 +85,6 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 		siteName: 'Hacker News',
 		author: item.author || null,
 		publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
-		metadata: { ...buildHnMetadata(item) },
+		metadata: buildMetadata('hackernews', buildHnMetadata(item)),
 	};
 }

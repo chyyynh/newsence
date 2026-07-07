@@ -1,6 +1,5 @@
 import { withDbClient } from '@core-shared/db';
 import { PDF_MIME } from '@core-shared/mime';
-import { parsePlatformMetadata } from '@core-shared/platform-metadata';
 import type { Env, ScrapedContent } from '@core-shared/types';
 import { detectPlatformType, normalizeUrl, validateImageUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
@@ -58,10 +57,9 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 	try {
 		const ogImageUrl = await validateImageUrl(scraped.ogImageUrl);
 		return await withDbClient(env, async (db) => {
-			const normalizedPlatformMetadata = parsePlatformMetadata(scraped.metadata, platformType);
-			const platformMetadataToStore = normalizedPlatformMetadata
+			const platformMetadataToStore = scraped.metadata
 				? {
-						...normalizedPlatformMetadata,
+						...scraped.metadata,
 						ogImageWidth: scraped.ogImageWidth ?? null,
 						ogImageHeight: scraped.ogImageHeight ?? null,
 					}

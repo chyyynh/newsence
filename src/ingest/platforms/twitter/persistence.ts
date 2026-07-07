@@ -1,7 +1,7 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Env, ScrapedContent, Tweet } from '@core-shared/types';
+import type { Env, Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
 import { startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
 import { scrapeWebPage } from '../web-scraper';
@@ -58,111 +58,7 @@ async function enqueueTwitterArticle(
 	return true;
 }
 
-async function handleTwitterArticle(tweet: Tweet, env: Env, expandedUrls: string[]): Promise<boolean> {
-	const articleUrl = findTwitterArticleUrl(expandedUrls);
-	if (!articleUrl) return false;
-
-	const tweetId = tweet.id || tweet.url.split('/').pop();
-	if (!tweetId) return false;
-
-	console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', tweetId, articleUrl });
-	const scraped = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
-	if (!scraped) {
-		console.warn({ tag: 'TWITTER', msg: 'Article API failed, falling through' });
-		return false;
-	}
-
-	const meta = scraped.metadata;
-	const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
-	const queued = await enqueueTwitterArticle(env, {
-		url: normalizeUrl(tweet.url),
-		title: scraped.title,
-		source: tweet.author?.name || 'Twitter',
-		publishedDate: scraped.publishedDate ? new Date(scraped.publishedDate) : new Date(),
-		summary: scraped.summary || '',
-		content: scraped.content,
-		ogImage: scraped.ogImageUrl || null,
-		metadata: buildTwitterArticlePlatformMetadata(tweetId, {
-			name: typeof meta?.authorName === 'string' ? meta.authorName : tweet.author?.name,
-			userName: typeof meta?.authorUserName === 'string' ? meta.authorUserName : tweet.author?.userName,
-			profilePicture: typeof meta?.authorProfilePicture === 'string' ? meta.authorProfilePicture : tweet.author?.profilePicture,
-			isBlueVerified: authorVerified,
-		}),
-		sourceEvent: { tweet, eventType: 'article', text: scraped.summary || stripTweetUrls(tweet.text) },
-	});
-
-	if (queued) {
-		console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
-	}
-	return queued;
-}
-
 const MIN_TWEET_LENGTH = 150;
-
-function shouldSaveStandaloneTweet(textWithoutUrls: string): boolean {
-	return textWithoutUrls.length >= MIN_TWEET_LENGTH;
-}
-
-type FollowLinkResult =
-	| { status: 'inserted' }
-	| { status: 'handled' }
-	| { status: 'skipped'; resolvedUrl?: string; scraped?: ScrapedContent | null };
-
-async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalUrl: string, env: Env): Promise<FollowLinkResult> {
-	const resolvedUrl = await resolveUrl(externalUrl).catch((err) => {
-		console.warn({ tag: 'TWITTER', msg: 'Failed to resolve shared link', url: externalUrl, error: String(err) });
-		return null;
-	});
-	if (!resolvedUrl) return { status: 'skipped' };
-
-	if (isSocialMediaUrl(resolvedUrl)) {
-		console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
-		return { status: 'skipped', resolvedUrl };
-	}
-	const existingArticle = await findArticleByUrl(env, resolvedUrl);
-	if (existingArticle) {
-		await withDbClient(env, (db) =>
-			upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls }),
-		);
-		if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingArticle.id });
-		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
-		return { status: 'handled' };
-	}
-
-	const scraped = await scrapeWebPage(resolvedUrl).catch((err) => {
-		console.warn({ tag: 'TWITTER', msg: 'Failed to scrape followed link', url: resolvedUrl, error: String(err) });
-		return null;
-	});
-	if (!scraped) return { status: 'skipped', resolvedUrl };
-
-	if (!scraped.content || scraped.content.length < 100) {
-		console.info({ tag: 'TWITTER', msg: 'Scraped content too short', url: resolvedUrl, chars: scraped.content?.length ?? 0 });
-		return { status: 'skipped', resolvedUrl, scraped };
-	}
-
-	const queued = await enqueueTwitterArticle(env, {
-		url: resolvedUrl,
-		title: scraped.title || 'Shared Article',
-		source: tweet.author?.name || 'Twitter',
-		publishedDate: tweet.createdAt ? new Date(tweet.createdAt) : new Date(),
-		summary: '',
-		content: scraped.content,
-		ogImage: scraped.ogImageUrl,
-		metadata: buildTweetPlatformMetadata(tweet, {
-			tweetText: textWithoutUrls,
-			externalUrl: resolvedUrl,
-			externalOgImage: scraped.ogImageUrl,
-			externalTitle: scraped.title || null,
-			originalTweetUrl: tweet.url,
-		}),
-		sourceEvent: { tweet, eventType: 'share', text: textWithoutUrls },
-	});
-
-	if (queued) {
-		console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
-	}
-	return queued ? { status: 'inserted' } : { status: 'skipped', resolvedUrl, scraped };
-}
 
 async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
@@ -183,24 +79,103 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 		return false;
 	}
 
-	if (await handleTwitterArticle(tweet, env, expandedUrls)) return true;
-
-	let linkFallback: Extract<FollowLinkResult, { status: 'skipped' }> | null = null;
-	if (externalUrl) {
-		const linkResult = await handleFollowLink(tweet, textWithoutUrls, externalUrl, env);
-		if (linkResult.status === 'inserted') return true;
-		if (linkResult.status === 'handled') return false;
-		linkFallback = linkResult;
+	const articleUrl = findTwitterArticleUrl(expandedUrls);
+	const tweetId = tweet.id || tweet.url.split('/').pop();
+	if (articleUrl && tweetId) {
+		console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', tweetId, articleUrl });
+		const scraped = await scrapeTwitterArticle(tweetId, env.KAITO_API_KEY || '');
+		if (scraped) {
+			const meta = scraped.metadata?.data;
+			const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
+			const queued = await enqueueTwitterArticle(env, {
+				url: tweetUrl,
+				title: scraped.title,
+				source: tweet.author?.name || 'Twitter',
+				publishedDate: scraped.publishedDate ? new Date(scraped.publishedDate) : new Date(),
+				summary: scraped.summary || '',
+				content: scraped.content,
+				ogImage: scraped.ogImageUrl || null,
+				metadata: buildTwitterArticlePlatformMetadata(tweetId, {
+					name: typeof meta?.authorName === 'string' ? meta.authorName : tweet.author?.name,
+					userName: typeof meta?.authorUserName === 'string' ? meta.authorUserName : tweet.author?.userName,
+					profilePicture: typeof meta?.authorProfilePicture === 'string' ? meta.authorProfilePicture : tweet.author?.profilePicture,
+					isBlueVerified: authorVerified,
+				}),
+				sourceEvent: { tweet, eventType: 'article', text: scraped.summary || textWithoutUrls },
+			});
+			if (queued) {
+				console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
+				return true;
+			}
+		} else {
+			console.warn({ tag: 'TWITTER', msg: 'Article API failed, falling through' });
+		}
 	}
 
-	if (!tweet.retweetedBy && !shouldSaveStandaloneTweet(textWithoutUrls)) {
+	let metadataExternalUrl = externalUrl;
+	let externalOgImage: string | null = null;
+	let externalTitle: string | null = null;
+	if (externalUrl) {
+		const resolvedUrl = await resolveUrl(externalUrl).catch((err) => {
+			console.warn({ tag: 'TWITTER', msg: 'Failed to resolve shared link', url: externalUrl, error: String(err) });
+			return null;
+		});
+		if (resolvedUrl) {
+			metadataExternalUrl = resolvedUrl;
+			if (isSocialMediaUrl(resolvedUrl)) {
+				console.info({ tag: 'TWITTER', msg: 'Skipped social media link', url: resolvedUrl });
+			} else {
+				const existingArticle = await findArticleByUrl(env, resolvedUrl);
+				if (existingArticle) {
+					await withDbClient(env, (db) =>
+						upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls }),
+					);
+					if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingArticle.id });
+					console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
+					return false;
+				}
+
+				const scraped = await scrapeWebPage(resolvedUrl).catch((err) => {
+					console.warn({ tag: 'TWITTER', msg: 'Failed to scrape followed link', url: resolvedUrl, error: String(err) });
+					return null;
+				});
+				if (scraped) {
+					externalOgImage = scraped.ogImageUrl;
+					externalTitle = scraped.title || null;
+					if (!scraped.content || scraped.content.length < 100) {
+						console.info({ tag: 'TWITTER', msg: 'Scraped content too short', url: resolvedUrl, chars: scraped.content?.length ?? 0 });
+					} else {
+						const queued = await enqueueTwitterArticle(env, {
+							url: resolvedUrl,
+							title: scraped.title || 'Shared Article',
+							source: tweet.author?.name || 'Twitter',
+							publishedDate: tweet.createdAt ? new Date(tweet.createdAt) : new Date(),
+							summary: '',
+							content: scraped.content,
+							ogImage: scraped.ogImageUrl,
+							metadata: buildTweetPlatformMetadata(tweet, {
+								tweetText: textWithoutUrls,
+								externalUrl: resolvedUrl,
+								externalOgImage: scraped.ogImageUrl,
+								externalTitle: scraped.title || null,
+								originalTweetUrl: tweet.url,
+							}),
+							sourceEvent: { tweet, eventType: 'share', text: textWithoutUrls },
+						});
+						if (queued) {
+							console.info({ tag: 'TWITTER', msg: 'Saved shared article', title: scraped.title?.slice(0, 50) });
+							return true;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (!tweet.retweetedBy && textWithoutUrls.length < MIN_TWEET_LENGTH) {
 		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short standalone tweet' });
 		return false;
 	}
-
-	const metadataExternalUrl = linkFallback?.resolvedUrl ?? externalUrl;
-	const externalOgImage = linkFallback?.scraped?.ogImageUrl ?? null;
-	const externalTitle = linkFallback?.scraped?.title || null;
 
 	const metadata = buildTweetPlatformMetadata(
 		tweet,

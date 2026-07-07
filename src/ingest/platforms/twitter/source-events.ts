@@ -1,44 +1,27 @@
 import type { DbClient } from '@core-shared/db';
-import type { RetweetedByData, TwitterMedia } from '@core-shared/platform-metadata';
+import type { TwitterMedia } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
 
-function buildRetweetedBy(tweet: Tweet): RetweetedByData {
-	return {
-		tweetId: tweet.id,
-		tweetUrl: tweet.url,
-		retweetedAt: tweet.createdAt,
-		authorName: tweet.author?.name || '',
-		authorUserName: tweet.author?.userName || '',
-		authorProfilePicture: tweet.author?.profilePicture,
-		authorVerified: tweet.author?.isBlueVerified,
-	};
-}
-
 export function normalizeRetweet(tweet: Tweet): Tweet | null {
 	if (tweet.retweeted_tweet) {
-		return { ...tweet.retweeted_tweet, retweetedBy: buildRetweetedBy(tweet) };
+		return {
+			...tweet.retweeted_tweet,
+			retweetedBy: {
+				tweetId: tweet.id,
+				tweetUrl: tweet.url,
+				retweetedAt: tweet.createdAt,
+				authorName: tweet.author?.name || '',
+				authorUserName: tweet.author?.userName || '',
+				authorProfilePicture: tweet.author?.profilePicture,
+				authorVerified: tweet.author?.isBlueVerified,
+			},
+		};
 	}
 	if (tweet.text.startsWith('RT @')) return null;
 	return tweet;
-}
-
-function sourceEventTypeFor(tweet: Tweet, eventType: TwitterSourceEventType): TwitterSourceEventType {
-	if (tweet.retweetedBy) return 'retweet';
-	if (eventType === 'tweet' && tweet.quoted_tweet) return 'quote';
-	return eventType;
-}
-
-function publicMetricsFor(tweet: Tweet): Record<string, number | undefined> {
-	return {
-		viewCount: tweet.viewCount,
-		likeCount: tweet.likeCount,
-		retweetCount: tweet.retweetCount,
-		replyCount: tweet.replyCount,
-		quoteCount: tweet.quoteCount,
-	};
 }
 
 export async function upsertTwitterSourceEvent(
@@ -65,7 +48,9 @@ export async function upsertTwitterSourceEvent(
 			}
 		: tweet.author;
 	const createdAt = tweet.retweetedBy?.retweetedAt ?? tweet.createdAt;
-	const eventType = sourceEventTypeFor(tweet, options.eventType);
+	let eventType = options.eventType;
+	if (tweet.retweetedBy) eventType = 'retweet';
+	else if (eventType === 'tweet' && tweet.quoted_tweet) eventType = 'quote';
 	const text = options.text ?? stripTweetUrls(tweet.text);
 	const mediaAssets = options.media ?? extractTweetMedia(tweet);
 	const raw = options.raw ?? tweet;
@@ -103,7 +88,13 @@ export async function upsertTwitterSourceEvent(
 				text,
 				createdAt,
 				tweet.lang,
-				JSON.stringify(publicMetricsFor(tweet)),
+				JSON.stringify({
+					viewCount: tweet.viewCount,
+					likeCount: tweet.likeCount,
+					retweetCount: tweet.retweetCount,
+					replyCount: tweet.replyCount,
+					quoteCount: tweet.quoteCount,
+				}),
 				JSON.stringify(raw),
 			],
 		);

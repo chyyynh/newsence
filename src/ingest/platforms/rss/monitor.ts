@@ -17,7 +17,6 @@ import {
 	extractItemsFromFeed,
 	extractRssFullContent,
 	extractUrlFromItem,
-	htmlToMarkdown,
 	type RSSItem,
 	stripHtml,
 	toPlainText,
@@ -26,113 +25,6 @@ import {
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
 // ─────────────────────────────────────────────────────────────
-
-interface FeedConfig {
-	summarySource: 'description' | 'ai';
-	contentSource: 'content_encoded' | 'description' | 'scrape' | 'skip';
-}
-
-const DEFAULT_CONFIG: FeedConfig = {
-	summarySource: 'description',
-	contentSource: 'scrape',
-};
-
-const FEED_OVERRIDES: Record<string, Partial<FeedConfig>> = {
-	'Nvidia Blog': { contentSource: 'content_encoded' },
-	'Microsoft Research': { contentSource: 'content_encoded' },
-	stratechery: { contentSource: 'content_encoded' },
-	Lesswrong: { summarySource: 'ai', contentSource: 'description' },
-	'ethresear.ch': { summarySource: 'ai', contentSource: 'description' },
-	'Ethereum Magicians': { summarySource: 'ai', contentSource: 'description' },
-	'Google Research': { summarySource: 'ai' },
-	'Google Deepmind': { summarySource: 'ai' },
-	'Anthropic Research': { summarySource: 'ai' },
-};
-
-interface FetchedRssContent {
-	content: string;
-	ogImageUrl: string | null;
-	ogImageWidth: number | null;
-	ogImageHeight: number | null;
-}
-
-const EMPTY_CONTENT: FetchedRssContent = { content: '', ogImageUrl: null, ogImageWidth: null, ogImageHeight: null };
-
-async function fetchContentForRssItem(item: RSSItem, config: FeedConfig, url: string): Promise<FetchedRssContent> {
-	switch (config.contentSource) {
-		case 'content_encoded':
-			return { ...EMPTY_CONTENT, content: extractRssFullContent(item) ?? '' };
-		case 'description': {
-			const raw = toPlainText(item.description);
-			return { ...EMPTY_CONTENT, content: raw && raw.length > 100 ? htmlToMarkdown(raw) : '' };
-		}
-		case 'scrape': {
-			const rssContent = extractRssFullContent(item);
-			if (rssContent) return { ...EMPTY_CONTENT, content: rssContent };
-			try {
-				const scraped = await scrapeWebPage(url);
-				return {
-					content: scraped.content,
-					ogImageUrl: scraped.ogImageUrl,
-					ogImageWidth: scraped.ogImageWidth ?? null,
-					ogImageHeight: scraped.ogImageHeight ?? null,
-				};
-			} catch (e) {
-				console.warn({ tag: 'RSS', msg: 'Scrape fallback failed', url, error: String(e) });
-				return EMPTY_CONTENT;
-			}
-		}
-		case 'skip':
-			return EMPTY_CONTENT;
-	}
-}
-
-async function enqueueRssSourceArticle(env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
-	let sourceType = 'rss';
-	let platformMetadata: PlatformMetadata | null = null;
-	const commentsUrl = toPlainText(item.comments) || undefined;
-	if (commentsUrl) {
-		try {
-			platformMetadata = await resolveDiscussionPlatformMetadata(commentsUrl);
-			sourceType = platformMetadata?.type ?? sourceType;
-		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
-		}
-	}
-
-	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
-	const crawledContent = fetched.content;
-	const ogImageUrl = fetched.ogImageUrl ?? extractImageFromItem(item);
-	const { ogImageWidth, ogImageHeight } = fetched;
-
-	const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
-	const content = crawledContent || null;
-
-	const publishedDate = pubDate ? new Date(pubDate) : new Date();
-	const title = toPlainText(item.title) || toPlainText(item.text) || 'No Title';
-	const source = feed.name ?? 'Unknown';
-	const summary = platformMetadata || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
-
-	const metadataToStore = platformMetadata
-		? { ...platformMetadata, ogImageWidth, ogImageHeight }
-		: ogImageWidth && ogImageHeight
-			? { type: 'default', fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
-			: null;
-
-	await startSourceArticleWorkflow(env, {
-		article: {
-			url,
-			title,
-			source,
-			publishedDate,
-			summary,
-			sourceType,
-			content,
-			ogImageUrl,
-			platformMetadata: metadataToStore,
-		},
-	});
-}
 
 // Source priorities for the upgrade-on-duplicate flow: RSS feeds default to 10
 // and overwrite anything below them. Lower number = lower priority.
@@ -143,42 +35,6 @@ const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 type FeedItemWithUrl = { item: RSSItem; url: string };
-
-function extractFeedItemUrls(items: RSSItem[]): FeedItemWithUrl[] {
-	const entries: FeedItemWithUrl[] = [];
-	for (const item of items) {
-		const rawUrl = extractUrlFromItem(item);
-		if (rawUrl) entries.push({ item, url: normalizeUrl(rawUrl) });
-	}
-	return entries;
-}
-
-/** Build a source/metadata upgrade for an existing article when this feed outranks it. */
-async function prepareExistingArticleSourceUpgrade(
-	feed: RSSFeed,
-	feedPriority: number,
-	existing: ExistingArticleRecord,
-	rssItem: RSSItem | undefined,
-): Promise<ArticleSourceUpdate | null> {
-	const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
-	if (feedPriority <= existingPriority) return null;
-
-	const normalized = normalizeUrl(existing.url);
-	let sourceType: string | undefined;
-	let platformMetadata: PlatformMetadata | undefined;
-
-	const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
-	if (commentsUrl) {
-		try {
-			platformMetadata = (await resolveDiscussionPlatformMetadata(commentsUrl)) ?? undefined;
-			sourceType = platformMetadata?.type;
-		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata for upgrade', url: normalized, error: String(err) });
-		}
-	}
-
-	return { url: normalized, source: feed.name, sourceType, platformMetadata };
-}
 
 async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<void> {
 	if (feed.type !== 'rss') return;
@@ -203,10 +59,13 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		return;
 	}
 
-	const config = { ...DEFAULT_CONFIG, ...FEED_OVERRIDES[feed.name] };
 	if (items.length > 30) items = items.slice(0, 30);
 
-	const itemUrls = extractFeedItemUrls(items);
+	const itemUrls: FeedItemWithUrl[] = [];
+	for (const item of items) {
+		const rawUrl = extractUrlFromItem(item);
+		if (rawUrl) itemUrls.push({ item, url: normalizeUrl(rawUrl) });
+	}
 	const urls = itemUrls.map(({ url }) => url);
 	const existingRecords = await withDbClient(env, (db) => getExistingArticlesByUrl(db, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
@@ -220,8 +79,24 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	const feedPriority = SOURCE_PRIORITY[feed.name] ?? DEFAULT_FEED_PRIORITY;
 	const sourceUpgrades: Array<{ existing: ExistingArticleRecord; update: ArticleSourceUpdate }> = [];
 	for (const existing of existingRecords) {
-		const update = await prepareExistingArticleSourceUpgrade(feed, feedPriority, existing, urlToItem.get(normalizeUrl(existing.url)));
-		if (update) sourceUpgrades.push({ existing, update });
+		const existingPriority = SOURCE_PRIORITY[existing.source] ?? TYPE_PRIORITY[existing.source_type] ?? DEFAULT_FEED_PRIORITY;
+		if (feedPriority <= existingPriority) continue;
+
+		const normalized = normalizeUrl(existing.url);
+		let sourceType: string | undefined;
+		let platformMetadata: PlatformMetadata | undefined;
+		const rssItem = urlToItem.get(normalized);
+		const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
+		if (commentsUrl) {
+			try {
+				platformMetadata = (await resolveDiscussionPlatformMetadata(commentsUrl)) ?? undefined;
+				sourceType = platformMetadata?.type;
+			} catch (err) {
+				console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata for upgrade', url: normalized, error: String(err) });
+			}
+		}
+
+		sourceUpgrades.push({ existing, update: { url: normalized, source: feed.name, sourceType, platformMetadata } });
 	}
 	if (sourceUpgrades.length) {
 		await withDbClient(env, async (db) => {
@@ -236,7 +111,59 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			await enqueueRssSourceArticle(env, item, url, feed, config);
+			let sourceType = 'rss';
+			let platformMetadata: PlatformMetadata | null = null;
+			const commentsUrl = toPlainText(item.comments) || undefined;
+			if (commentsUrl) {
+				try {
+					platformMetadata = await resolveDiscussionPlatformMetadata(commentsUrl);
+					sourceType = platformMetadata?.type ?? sourceType;
+				} catch (err) {
+					console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
+				}
+			}
+
+			let crawledContent = '';
+			let fetchedOgImageUrl: string | null = null;
+			let ogImageWidth: number | null = null;
+			let ogImageHeight: number | null = null;
+			if (sourceType === 'rss') {
+				const rssContent = extractRssFullContent(item);
+				if (rssContent) {
+					crawledContent = rssContent;
+				} else {
+					try {
+						const scraped = await scrapeWebPage(url);
+						crawledContent = scraped.content;
+						fetchedOgImageUrl = scraped.ogImageUrl;
+						ogImageWidth = scraped.ogImageWidth ?? null;
+						ogImageHeight = scraped.ogImageHeight ?? null;
+					} catch (e) {
+						console.warn({ tag: 'RSS', msg: 'Scrape fallback failed', url, error: String(e) });
+					}
+				}
+			}
+
+			const pubDate = toPlainText(item.pubDate) || toPlainText(item.isoDate) || toPlainText(item.published) || toPlainText(item.updated);
+			const metadataToStore = platformMetadata
+				? { ...platformMetadata, ogImageWidth, ogImageHeight }
+				: ogImageWidth && ogImageHeight
+					? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null, ogImageWidth, ogImageHeight }
+					: null;
+
+			await startSourceArticleWorkflow(env, {
+				article: {
+					url,
+					title: toPlainText(item.title) || toPlainText(item.text) || 'No Title',
+					source: feed.name ?? 'Unknown',
+					publishedDate: pubDate ? new Date(pubDate) : new Date(),
+					summary: platformMetadata ? '' : stripHtml(item.description ?? item.summary ?? ''),
+					sourceType,
+					content: crawledContent || null,
+					ogImageUrl: fetchedOgImageUrl ?? extractImageFromItem(item),
+					platformMetadata: metadataToStore,
+				},
+			});
 			queued++;
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });

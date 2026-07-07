@@ -17,7 +17,6 @@ import {
 import { scrapeWebPage } from '../web-scraper';
 
 type UpdateData = ProcessorResult['updateData'];
-type LinkedArticleAnalysisResult = { applied: false } | { applied: true; category?: ArticleCategory };
 
 function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): ArticleCategory | undefined {
 	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
@@ -30,25 +29,6 @@ function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, upda
 	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
 	if (analysis.entities) updateData.entities = analysis.entities;
 	return analysis.category;
-}
-
-function extractTweetText(article: Article): string {
-	const fromSummary = article.summary?.trim();
-	if (fromSummary) return fromSummary;
-	const raw = article.content ?? '';
-	try {
-		const parsed = JSON.parse(raw);
-		if (parsed?.text) return parsed.text;
-	} catch {
-		// Not JSON, use raw as-is
-	}
-	return raw;
-}
-
-function getLinkedUrl(article: Article): string | null {
-	const metadata = article.platform_metadata;
-	if (metadata?.type !== 'twitter' || metadata.data.variant !== 'shared') return null;
-	return metadata.data.externalUrl?.trim() || null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -66,49 +46,41 @@ export class TwitterProcessor implements ArticleProcessor {
 			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
 		}
 
-		const tweetText = extractTweetText(article);
+		let tweetText = article.summary?.trim() || '';
+		if (!tweetText) {
+			tweetText = article.content ?? '';
+			try {
+				const parsed = JSON.parse(tweetText);
+				if (parsed?.text) tweetText = parsed.text;
+			} catch {
+				// Not JSON, use raw as-is
+			}
+		}
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
-		const linkedUrl = getLinkedUrl(article);
-		const linkedAnalysis: LinkedArticleAnalysisResult = linkedUrl
-			? await this.applyLinkedArticleAnalysis(article, ctx, linkedUrl, updateData)
-			: { applied: false };
-		if (linkedAnalysis.applied) {
-			return { updateData, classificationCategory: linkedAnalysis.category };
+		const metadata = article.platform_metadata;
+		const linkedUrl = metadata?.type === 'twitter' && metadata.data.variant === 'shared' ? metadata.data.externalUrl?.trim() : null;
+		if (linkedUrl) {
+			try {
+				const linked = await scrapeWebPage(linkedUrl);
+				if (linked.content && linked.content.length > 100) {
+					console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
+					updateData.content = linked.content;
+					const analysis = await generateArticleAnalysis(
+						{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
+						ctx.env,
+					);
+					return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
+				}
+			} catch (e) {
+				console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(e) });
+			}
 		}
 
-		await this.applyPlainTweetAnalysis(tweetText, article, ctx, updateData);
-		return { updateData };
-	}
-
-	/** Returns true if the linked article was usable and analysis was applied. */
-	private async applyLinkedArticleAnalysis(
-		article: Article,
-		ctx: ProcessorContext,
-		linkedUrl: string,
-		updateData: UpdateData,
-	): Promise<LinkedArticleAnalysisResult> {
-		try {
-			const linked = await scrapeWebPage(linkedUrl);
-			if (!linked.content || linked.content.length <= 100) return { applied: false };
-			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
-			updateData.content = linked.content;
-			const analysis = await generateArticleAnalysis(
-				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-				ctx.env,
-			);
-			return { applied: true, category: applyArticleAnalysis(article, analysis, updateData) };
-		} catch (e) {
-			console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(e) });
-			return { applied: false };
-		}
-	}
-
-	private async applyPlainTweetAnalysis(tweetText: string, article: Article, ctx: ProcessorContext, updateData: UpdateData): Promise<void> {
 		const analysis = await translateTweet(tweetText, article, ctx.env);
 		if (!analysis) {
 			if (!article.tags?.length) updateData.tags = ['Twitter'];
-			return;
+			return { updateData };
 		}
 		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80);
 		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
@@ -117,6 +89,7 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (!article.tags?.length && analysis.tags.length) updateData.tags = analysis.tags;
 		if (!article.keywords?.length && analysis.keywords.length) updateData.keywords = analysis.keywords;
 		updateData.entities = analysis.entities;
+		return { updateData };
 	}
 }
 
@@ -167,25 +140,25 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-function buildTweetContextPrompt(tweetText: string, article: Article): string {
-	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
-	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
-	return `推文來源: ${article.source}${excludedLine}
-推文內容：
-${tweetText}`;
-}
-
 async function translateTweet(tweetText: string, article: Article, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
+	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
+	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 
 	try {
-		const result = await generateObject<TweetAnalysis>(env.AI, buildTweetContextPrompt(tweetText, article), {
-			schema: TweetAnalysisSchema,
-			task: 'tweet-analysis',
-			gatewayId: env.AI_GATEWAY_NAME,
-			maxTokens: 600,
-			systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
-		});
+		const result = await generateObject<TweetAnalysis>(
+			env.AI,
+			`推文來源: ${article.source}${excludedLine}
+推文內容：
+${tweetText}`,
+			{
+				schema: TweetAnalysisSchema,
+				task: 'tweet-analysis',
+				gatewayId: env.AI_GATEWAY_NAME,
+				maxTokens: 600,
+				systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
+			},
+		);
 		if (!result) throw new Error('No JSON found');
 
 		return {

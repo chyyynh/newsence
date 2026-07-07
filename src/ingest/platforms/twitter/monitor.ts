@@ -36,15 +36,6 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 	return TWITTER_USERNAME_RE.test(userName) ? userName : null;
 }
 
-// -- Twitter Cron: staged pipeline --------------------------------------------
-
-function normalizeTwitterUsers(users: RSSFeed[]): MonitoredTwitterUser[] {
-	return users.flatMap((user) => {
-		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
-		return twitterUserName ? [{ ...user, twitterUserName }] : [];
-	});
-}
-
 /**
  * Global sinceTime = oldest scraped_at across all users minus a 1h overlap.
  * If no user has been scraped before, fall back to 24h ago.
@@ -136,7 +127,11 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 		return;
 	}
 
-	const monitoredUsers = normalizeTwitterUsers(users);
+	const monitoredUsers: MonitoredTwitterUser[] = [];
+	for (const user of users) {
+		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
+		if (twitterUserName) monitoredUsers.push({ ...user, twitterUserName });
+	}
 	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
 	if (userNames.length === 0) {
 		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });

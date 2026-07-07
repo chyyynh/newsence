@@ -208,7 +208,10 @@ interface TwitterArticle {
 	createdAt?: string;
 }
 
-export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Promise<ScrapedContent | null> {
+export async function scrapeTwitterArticle(
+	tweetId: string,
+	apiKey: string,
+): Promise<(ScrapedContent & { metadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
 	const data = await fetchJsonWithTimeout<{ article?: TwitterArticle; status: string; message?: string }>(
@@ -243,15 +246,8 @@ export async function scrapeTwitterArticle(tweetId: string, apiKey: string): Pro
 		siteName: 'Twitter',
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
-		metadata: { ...buildTwitterArticlePlatformMetadata(tweetId, article.author).data },
+		metadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
 	};
-}
-
-function buildTweetMetadata(tweet: KaitoTweet, expandedUrls: string[]): Record<string, unknown> {
-	const externalUrl = findExternalUrl(expandedUrls);
-	const tweetText = stripTweetUrls(tweet.text);
-
-	return { ...buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}).data };
 }
 
 export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
@@ -269,6 +265,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	const media = extractTweetMedia(tweet);
 	const ogImageUrl = media[0]?.url ?? null;
 	const expandedUrls = extractExpandedUrls(tweet);
+	const tweetText = stripTweetUrls(tweet.text);
 
 	const articleUrl = findTwitterArticleUrl(expandedUrls);
 	const externalUrl = findExternalUrl(expandedUrls);
@@ -296,16 +293,14 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 					siteName: linked.siteName || 'Twitter',
 					author: tweet.author?.userName || linked.author || null,
 					publishedDate: tweet.createdAt,
-					metadata: {
-						...buildTweetPlatformMetadata(tweet, {
-							media,
-							tweetText: stripTweetUrls(tweet.text),
-							externalUrl,
-							externalOgImage: linked.ogImageUrl || null,
-							externalTitle: linked.title || null,
-							originalTweetUrl: tweet.url,
-						}).data,
-					},
+					metadata: buildTweetPlatformMetadata(tweet, {
+						media,
+						tweetText,
+						externalUrl,
+						externalOgImage: linked.ogImageUrl || null,
+						externalTitle: linked.title || null,
+						originalTweetUrl: tweet.url,
+					}),
 				};
 			}
 		} catch (e) {
@@ -326,6 +321,6 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		siteName: 'Twitter',
 		author: tweet.author?.userName || null,
 		publishedDate: tweet.createdAt,
-		metadata: buildTweetMetadata(tweet, expandedUrls),
+		metadata: buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}),
 	};
 }

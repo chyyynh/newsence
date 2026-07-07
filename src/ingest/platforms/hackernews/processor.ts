@@ -179,19 +179,14 @@ async function generateHnEditorial(
 	return { en, cn };
 }
 
-function extractItemId(article: Article): string | null {
-	const metadata = article.platform_metadata;
-	if (metadata?.type === 'hackernews') return metadata.data.itemId || null;
-	return null;
-}
-
 // ─────────────────────────────────────────────────────────────
 // HackerNewsProcessor class
 // ─────────────────────────────────────────────────────────────
 
 export class HackerNewsProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const itemId = extractItemId(article);
+		const metadata = article.platform_metadata;
+		const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
 		const enrichments: PlatformEnrichments = {};
 		const updateData: ProcessorResult['updateData'] = {};
 

@@ -56,7 +56,7 @@ export function stripHtml(raw: unknown): string {
 	return htmlToText(toPlainText(raw));
 }
 
-export function htmlToMarkdown(html: string): string {
+function htmlToMarkdown(html: string): string {
 	const markdown = html
 		// Block elements
 		.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
