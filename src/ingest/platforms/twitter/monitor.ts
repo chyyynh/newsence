@@ -125,7 +125,7 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 	return [...groups.values()];
 }
 
-export async function handleTwitterCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+export async function handleTwitterCron(env: Env): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const users = await withDbClient(
 		env,

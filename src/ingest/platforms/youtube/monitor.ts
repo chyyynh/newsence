@@ -113,7 +113,7 @@ async function processYouTubeChannel(env: Env, channel: RSSFeed, parser: XMLPars
 	return queued;
 }
 
-export async function handleYouTubeCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+export async function handleYouTubeCron(env: Env): Promise<void> {
 	if (!env.YOUTUBE_API_KEY) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipped — YOUTUBE_API_KEY not configured' });
 		return;

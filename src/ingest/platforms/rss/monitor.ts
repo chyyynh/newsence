@@ -265,7 +265,7 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]));
 }
 
-export async function handleRSSCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+export async function handleRSSCron(env: Env): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const parser = new XMLParser({ ignoreAttributes: false });
 	const feeds = await withDbClient(

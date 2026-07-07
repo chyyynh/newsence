@@ -47,9 +47,9 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	override scheduled(event: ScheduledController): void {
 		console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
 
-		if (event.cron === '*/5 * * * *') this.ctx.waitUntil(handleRSSCron(this.env, this.ctx));
-		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env, this.ctx));
-		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env, this.ctx));
+		if (event.cron === '*/5 * * * *') this.ctx.waitUntil(handleRSSCron(this.env));
+		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
+		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
 		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env));
 	}
 
