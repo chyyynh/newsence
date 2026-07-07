@@ -38,7 +38,6 @@ interface ArticleContentRow extends ArticleSummaryRow {
 }
 
 type TranscriptHighlight = { title: string; startTime: number; endTime: number; summary: string };
-type Reader = (client: Client, ids: string[], userId: string) => Promise<Map<string, CorpusReadResult>>;
 
 const ARTICLE_SUMMARY_COLS = 'id, title, title_cn, url, published_date, source, summary, summary_cn, tags';
 const ARTICLE_CONTENT_COLS = `${ARTICLE_SUMMARY_COLS}, content, content_cn, source_type`;
@@ -289,10 +288,6 @@ function isValidUuid(id: string): boolean {
 	return UUID_RE.test(id);
 }
 
-function toMap<T, K>(rows: T[], key: (row: T) => K): Map<K, T> {
-	return new Map(rows.map((r) => [key(r), r]));
-}
-
 function extractVideoId(url: string | null): string | null {
 	return url?.match(YT_RE)?.[1] ?? null;
 }
@@ -411,7 +406,7 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 		summary: string | null;
 		summary_cn: string | null;
 	}>(`SELECT id, title, title_cn, summary, summary_cn FROM articles WHERE id = ANY($1::uuid[])`, [allArticleIds]);
-	const articleMap = toMap(articlesResult.rows, (a) => a.id);
+	const articleMap = new Map(articlesResult.rows.map((a) => [a.id, a] as const));
 
 	return new Map(
 		collectionsResult.rows.map((col) => {
@@ -447,7 +442,7 @@ async function readUrls(client: Client, urls: string[]): Promise<Map<string, Cor
 	const result = await client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE url = ANY($1::text[])`, [
 		candidateUrls,
 	]);
-	const dbMap = toMap(result.rows, (a) => a.url);
+	const dbMap = new Map(result.rows.map((a) => [a.url, a] as const));
 	const matches = urlPairs
 		.map(([url, norm]) => ({ url, article: dbMap.get(url) ?? dbMap.get(norm) }))
 		.filter((m): m is { url: string; article: ArticleContentRow } => !!m.article);
@@ -456,15 +451,9 @@ async function readUrls(client: Client, urls: string[]): Promise<Map<string, Cor
 		client,
 		matches.map((m) => m.article),
 	);
-	const formattedById = toMap(formatted, (r) => r.id);
+	const formattedById = new Map(formatted.map((r) => [r.id, r] as const));
 	return new Map(matches.map((m) => [m.url, formattedById.get(m.article.id)!] as const));
 }
-
-const READERS: Record<ResourceType, Reader> = {
-	article: (client, ids) => readArticles(client, ids),
-	collection: readCollections,
-	url: (client, ids) => readUrls(client, ids),
-};
 
 async function readItems(client: Client, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
 	const groups = new Map<ResourceType, string[]>();
@@ -477,7 +466,13 @@ async function readItems(client: Client, items: CorpusReadItem[], userId: string
 	const resultMaps = new Map<ResourceType, Map<string, CorpusReadResult>>();
 	await Promise.all(
 		[...groups.entries()].map(async ([type, ids]) => {
-			resultMaps.set(type, await READERS[type](client, ids, userId));
+			const results =
+				type === 'article'
+					? await readArticles(client, ids)
+					: type === 'collection'
+						? await readCollections(client, ids, userId)
+						: await readUrls(client, ids);
+			resultMaps.set(type, results);
 		}),
 	);
 
