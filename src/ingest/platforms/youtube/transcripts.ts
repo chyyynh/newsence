@@ -1,4 +1,4 @@
-import type { DbClient } from '@core-shared/db';
+import type { Client } from 'pg';
 
 export interface YoutubeTranscriptRow {
 	videoId: string;
@@ -19,7 +19,7 @@ export interface YoutubeHighlightsUpdateData {
 	generatedAt: string;
 }
 
-export async function upsertYoutubeTranscript(db: DbClient, transcript: YoutubeTranscriptRow): Promise<void> {
+export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTranscriptRow): Promise<void> {
 	await db.query(
 		`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -40,7 +40,7 @@ export async function upsertYoutubeTranscript(db: DbClient, transcript: YoutubeT
 	);
 }
 
-export async function getYoutubeTranscriptForHighlights(db: DbClient, videoId: string): Promise<YoutubeTranscriptForHighlights | null> {
+export async function getYoutubeTranscriptForHighlights(db: Client, videoId: string): Promise<YoutubeTranscriptForHighlights | null> {
 	const result = await db.query<YoutubeTranscriptForHighlights>(
 		'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
 		[videoId],
@@ -48,7 +48,7 @@ export async function getYoutubeTranscriptForHighlights(db: DbClient, videoId: s
 	return result.rows[0] ?? null;
 }
 
-export async function saveYouTubeHighlights(db: DbClient, update: YoutubeHighlightsUpdateData): Promise<void> {
+export async function saveYouTubeHighlights(db: Client, update: YoutubeHighlightsUpdateData): Promise<void> {
 	await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
 		JSON.stringify(update.value),
 		update.generatedAt,

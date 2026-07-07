@@ -1,10 +1,10 @@
 import { getExistingUrls } from '@core-shared/article-store';
-import { withDbClient } from '@core-shared/db';
 import type { YouTubeMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
+import { Client } from 'pg';
 import { parseDurationSeconds, scrapeYouTube } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
@@ -25,10 +25,9 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const channels = await withDbClient(
-		env,
-		async (db) => (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])).rows,
-	);
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const channels = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])).rows;
 	if (!channels.length) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'No youtube_channel source feeds configured' });
 		return;
@@ -55,12 +54,12 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 				: [];
 			if (videos.length === 0) {
 				console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-				await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]));
+				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
 				continue;
 			}
 
 			const videoUrls = videos.map(({ url }) => url);
-			const existingSet = await withDbClient(env, (db) => getExistingUrls(db, videoUrls));
+			const existingSet = await getExistingUrls(db, videoUrls);
 			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 
 			if (!newVideos.length) {
@@ -109,7 +108,7 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 				}
 			}
 
-			await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]));
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
 		} catch (err) {
 			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
 		}

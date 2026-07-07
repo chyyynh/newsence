@@ -1,16 +1,10 @@
-import { type DbClient, withDbClient } from './db';
+import { Client } from 'pg';
 import type { Article } from './types';
 import { normalizeUrl } from './web';
 
 export const ARTICLES_TABLE = 'articles';
 export const USER_FILES_TABLE = 'user_files';
 export type ProcessableTable = typeof ARTICLES_TABLE | typeof USER_FILES_TABLE;
-
-export function resolveProcessableTable(table?: string | null): ProcessableTable {
-	if (!table) return ARTICLES_TABLE;
-	if (table === ARTICLES_TABLE || table === USER_FILES_TABLE) return table;
-	throw new Error(`Unsupported workflow target table: ${table}`);
-}
 
 export type ProcessableArticleShell = Article & { has_content?: boolean };
 
@@ -28,19 +22,19 @@ const ARTICLE_SHELL_FIELDS: Record<ProcessableTable, string> = {
 		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
 };
 
-export function loadProcessableArticle(
+export async function loadProcessableArticle(
 	env: Env,
 	table: ProcessableTable,
 	articleId: string,
 	shell = false,
 ): Promise<ProcessableArticleShell> {
-	return withDbClient(env, async (db) => {
-		const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
-			articleId,
-		]);
-		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-		return result.rows[0] as ProcessableArticleShell;
-	});
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
+		articleId,
+	]);
+	if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
+	return result.rows[0] as ProcessableArticleShell;
 }
 
 export interface InsertArticleData {
@@ -80,7 +74,7 @@ function serializeProcessedArticleValue(column: string, value: unknown): unknown
 }
 
 export async function updateProcessedArticle(
-	db: DbClient,
+	db: Client,
 	table: ProcessableTable,
 	articleId: string,
 	updatePayload: ProcessedArticleUpdate,
@@ -100,7 +94,7 @@ export async function updateProcessedArticle(
 }
 
 export async function insertFinalSourceArticle(
-	db: DbClient,
+	db: Client,
 	base: InsertArticleData,
 	updatePayload: ProcessedArticleUpdate,
 ): Promise<string> {
@@ -151,7 +145,7 @@ export type ExistingArticleRecord = {
 	summary_cn: string | null;
 };
 
-export async function getExistingArticlesByUrl(db: DbClient, urls: string[], batchSize = 50): Promise<ExistingArticleRecord[]> {
+export async function getExistingArticlesByUrl(db: Client, urls: string[], batchSize = 50): Promise<ExistingArticleRecord[]> {
 	const records: ExistingArticleRecord[] = [];
 	if (urls.length === 0) return records;
 
@@ -174,7 +168,7 @@ export type ArticleSourceUpdate = {
 	platformMetadata?: unknown;
 };
 
-export async function updateArticleSourceByUrl(db: DbClient, update: ArticleSourceUpdate): Promise<void> {
+export async function updateArticleSourceByUrl(db: Client, update: ArticleSourceUpdate): Promise<void> {
 	const updateFields: string[] = ['source = $1'];
 	const updateValues: unknown[] = [update.source];
 	let paramIndex = 2;
@@ -199,7 +193,7 @@ export type ArticleReprocessingTextUpdate = {
 };
 
 export async function updateArticleTextForReprocessing(
-	db: DbClient,
+	db: Client,
 	articleId: string,
 	update: ArticleReprocessingTextUpdate,
 ): Promise<void> {
@@ -217,7 +211,7 @@ export async function updateArticleTextForReprocessing(
 	);
 }
 
-export async function getExistingUrls(db: DbClient, urls: string[], table: string = ARTICLES_TABLE, batchSize = 50): Promise<Set<string>> {
+export async function getExistingUrls(db: Client, urls: string[], table: string = ARTICLES_TABLE, batchSize = 50): Promise<Set<string>> {
 	const existing = new Set<string>();
 	if (urls.length === 0) return existing;
 	for (let i = 0; i < urls.length; i += batchSize) {
@@ -235,7 +229,7 @@ export type IncompleteWorkflowTargetIds = {
 	userFileIds: string[];
 };
 
-export async function getIncompleteWorkflowTargetIds(db: DbClient, since: Date | string): Promise<IncompleteWorkflowTargetIds> {
+export async function getIncompleteWorkflowTargetIds(db: Client, since: Date | string): Promise<IncompleteWorkflowTargetIds> {
 	const articleResult = await db.query<{ id: string }>(
 		`SELECT id FROM ${ARTICLES_TABLE}
 		 WHERE scraped_date >= $1

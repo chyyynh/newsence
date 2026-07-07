@@ -1,8 +1,9 @@
 import { generateArticleEmbedding } from '@core-ai/embedding';
 import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@core-rpc/contracts';
-import { type DbClient, withDbClient } from '@core-shared/db';
 import type { TranscriptSegment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
+import type { Client } from 'pg';
+import { Client as PgClient } from 'pg';
 
 type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
@@ -37,7 +38,7 @@ interface ArticleContentRow extends ArticleSummaryRow {
 }
 
 type TranscriptHighlight = { title: string; startTime: number; endTime: number; summary: string };
-type Reader = (client: DbClient, ids: string[], userId: string) => Promise<Map<string, CorpusReadResult>>;
+type Reader = (client: Client, ids: string[], userId: string) => Promise<Map<string, CorpusReadResult>>;
 
 const ARTICLE_SUMMARY_COLS = 'id, title, title_cn, url, published_date, source, summary, summary_cn, tags';
 const ARTICLE_CONTENT_COLS = `${ARTICLE_SUMMARY_COLS}, content, content_cn, source_type`;
@@ -64,10 +65,10 @@ export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearc
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
-	return withDbClient(env, async (client) => {
-		const ranks = await rankArticles(client, env, query, limit);
-		return rankEntries(ranks);
-	});
+	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
+	await client.connect();
+	const ranks = await rankArticles(client, env, query, limit);
+	return rankEntries(ranks);
 }
 
 export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSearchInput): Promise<string[]> {
@@ -75,51 +76,53 @@ export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSea
 	if (!seed.id) return [];
 	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
-	return withDbClient(env, async (client) => {
-		const ids = await relatedArticles(client, seed, limit, offset);
-		return [...new Set(ids)].filter((id) => id !== seed.id);
-	});
+	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
+	await client.connect();
+	const ids = await relatedArticles(client, seed, limit, offset);
+	return [...new Set(ids)].filter((id) => id !== seed.id);
 }
 
 export async function searchCorpusArticles(env: Env, input: ArticleSearchInput): Promise<ArticleSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	return withDbClient(env, async (client) => {
-		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
-		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
+	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
+	await client.connect();
+	const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
+	const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
+	const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
 
-		if (ranks) {
-			if (ranks.size === 0) return [];
-			const candidateIds = [...ranks.keys()].filter(isValidUuid);
-			if (candidateIds.length === 0) return [];
-			const params: unknown[] = [candidateIds];
-			let where = `id = ANY($1::uuid[])`;
-			if (fromDate) {
-				params.push(fromDate);
-				where += ` AND published_date >= $${params.length}`;
-			}
-			const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
-			return sortByRank(result.rows, ranks).slice(0, limit).map(formatSummary);
-		}
-
-		const params: unknown[] = [];
-		let where = 'TRUE';
+	if (ranks) {
+		if (ranks.size === 0) return [];
+		const candidateIds = [...ranks.keys()].filter(isValidUuid);
+		if (candidateIds.length === 0) return [];
+		const params: unknown[] = [candidateIds];
+		let where = `id = ANY($1::uuid[])`;
 		if (fromDate) {
 			params.push(fromDate);
-			where = `published_date >= $${params.length}`;
+			where += ` AND published_date >= $${params.length}`;
 		}
-		params.push(limit);
-		const result = await client.query<ArticleSummaryRow>(
-			`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where} ORDER BY published_date DESC LIMIT $${params.length}`,
-			params,
-		);
-		return result.rows.map(formatSummary);
-	});
+		const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
+		return sortByRank(result.rows, ranks).slice(0, limit).map(formatSummary);
+	}
+
+	const params: unknown[] = [];
+	let where = 'TRUE';
+	if (fromDate) {
+		params.push(fromDate);
+		where = `published_date >= $${params.length}`;
+	}
+	params.push(limit);
+	const result = await client.query<ArticleSummaryRow>(
+		`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where} ORDER BY published_date DESC LIMIT $${params.length}`,
+		params,
+	);
+	return result.rows.map(formatSummary);
 }
 
 export async function readCorpusItems(env: Env, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
-	return withDbClient(env, (client) => readItems(client, items, userId));
+	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
+	await client.connect();
+	return readItems(client, items, userId);
 }
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
@@ -155,7 +158,7 @@ function sortByRank<T extends { id: string }>(articles: T[], ranks: SearchRanks)
 }
 
 async function relatedArticles(
-	client: DbClient,
+	client: Client,
 	seed: { id: string; type: 'article' | 'user_file' },
 	limit: number,
 	offset: number,
@@ -176,13 +179,7 @@ async function relatedArticles(
 	return rows.rows.map((r) => r.id);
 }
 
-async function rankArticles(
-	client: DbClient,
-	env: Env,
-	query: string,
-	limit = 100,
-	options: RankArticleOptions = {},
-): Promise<SearchRanks> {
+async function rankArticles(client: Client, env: Env, query: string, limit = 100, options: RankArticleOptions = {}): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 
@@ -247,7 +244,7 @@ async function rankArticles(
 	}
 }
 
-async function keywordOnly(client: DbClient, patterns: string[], limit: number, options: RankArticleOptions = {}): Promise<SearchRanks> {
+async function keywordOnly(client: Client, patterns: string[], limit: number, options: RankArticleOptions = {}): Promise<SearchRanks> {
 	const params: unknown[] = [patterns, limit];
 	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
 	try {
@@ -334,7 +331,7 @@ function formatArticleReadResult(
 	};
 }
 
-async function attachTranscripts(client: DbClient, articles: ArticleContentRow[]): Promise<CorpusReadResult[]> {
+async function attachTranscripts(client: Client, articles: ArticleContentRow[]): Promise<CorpusReadResult[]> {
 	const videoIds = articles
 		.filter((a) => a.source_type === 'youtube')
 		.map((a) => extractVideoId(a.url))
@@ -362,7 +359,7 @@ async function attachTranscripts(client: DbClient, articles: ArticleContentRow[]
 	});
 }
 
-async function readArticles(client: DbClient, ids: string[]): Promise<Map<string, CorpusReadResult>> {
+async function readArticles(client: Client, ids: string[]): Promise<Map<string, CorpusReadResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 	const result = await client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE id = ANY($1::uuid[])`, [
@@ -372,7 +369,7 @@ async function readArticles(client: DbClient, ids: string[]): Promise<Map<string
 	return new Map(formatted.map((r) => [r.id, r]));
 }
 
-async function readCollections(client: DbClient, ids: string[], userId: string): Promise<Map<string, CorpusReadResult>> {
+async function readCollections(client: Client, ids: string[], userId: string): Promise<Map<string, CorpusReadResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
@@ -448,7 +445,7 @@ async function readCollections(client: DbClient, ids: string[], userId: string):
 	);
 }
 
-async function readUrls(client: DbClient, urls: string[]): Promise<Map<string, CorpusReadResult>> {
+async function readUrls(client: Client, urls: string[]): Promise<Map<string, CorpusReadResult>> {
 	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
 	const candidateUrls = [...new Set(urlPairs.flat())];
 
@@ -474,7 +471,7 @@ const READERS: Record<ResourceType, Reader> = {
 	url: (client, ids) => readUrls(client, ids),
 };
 
-async function readItems(client: DbClient, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
+async function readItems(client: Client, items: CorpusReadItem[], userId: string): Promise<CorpusReadResult[]> {
 	const groups = new Map<ResourceType, string[]>();
 	for (const item of items) {
 		const list = groups.get(item.type) ?? [];

@@ -1,9 +1,9 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
-import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
 import { startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
+import { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -20,7 +20,9 @@ import {
 import { upsertTwitterSourceEvent } from './source-events';
 
 async function findArticleByUrl(env: Env, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
-	const [article] = await withDbClient(env, (db) => getExistingArticlesByUrl(db, [url]));
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const [article] = await getExistingArticlesByUrl(db, [url]);
 	return article ? { id: article.id, summary_cn: article.summary_cn } : null;
 }
 
@@ -68,13 +70,13 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 
 	const existingTweetArticle = await findArticleByUrl(env, tweetUrl);
 	if (existingTweetArticle) {
-		await withDbClient(env, (db) =>
-			upsertTwitterSourceEvent(db, tweet, {
-				articleId: existingTweetArticle.id,
-				eventType: externalUrl ? 'share' : 'tweet',
-				text: textWithoutUrls,
-			}),
-		);
+		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		await db.connect();
+		await upsertTwitterSourceEvent(db, tweet, {
+			articleId: existingTweetArticle.id,
+			eventType: externalUrl ? 'share' : 'tweet',
+			text: textWithoutUrls,
+		});
 		if (!existingTweetArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingTweetArticle.id });
 		return false;
 	}
@@ -127,9 +129,9 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 			} else {
 				const existingArticle = await findArticleByUrl(env, resolvedUrl);
 				if (existingArticle) {
-					await withDbClient(env, (db) =>
-						upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls }),
-					);
+					const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+					await db.connect();
+					await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls });
 					if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingArticle.id });
 					console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 					return false;
@@ -226,15 +228,15 @@ async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
 
 	if (existing) {
 		const existingId = existing.id;
-		await withDbClient(env, async (db) => {
-			await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
-			await upsertTwitterSourceEvent(db, first, {
-				articleId: existingId,
-				eventType: 'thread',
-				text: combinedText,
-				media: allMedia,
-				raw: { tweets: sorted },
-			});
+		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		await db.connect();
+		await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
+		await upsertTwitterSourceEvent(db, first, {
+			articleId: existingId,
+			eventType: 'thread',
+			text: combinedText,
+			media: allMedia,
+			raw: { tweets: sorted },
 		});
 		await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });

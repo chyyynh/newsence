@@ -1,7 +1,7 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import { withDbClient } from '@core-shared/db';
 import type { Article, TranscriptSegment } from '@core-shared/types';
 import { getYoutubeTranscriptForHighlights } from '@ingest/platforms/youtube/transcripts';
+import { Client } from 'pg';
 import { z } from 'zod';
 
 interface YouTubeHighlight {
@@ -86,12 +86,12 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 	const videoId = article.platform_metadata.data.videoId;
 	if (!videoId) return null;
 
-	return withDbClient(env, async (db) => {
-		const row = await getYoutubeTranscriptForHighlights(db, videoId);
-		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const row = await getYoutubeTranscriptForHighlights(db, videoId);
+	if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
-		return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
-	});
+	return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
 }
 
 export async function prepareYouTubeHighlightsFromTranscript(

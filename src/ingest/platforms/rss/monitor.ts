@@ -4,12 +4,12 @@ import {
 	getExistingArticlesByUrl,
 	updateArticleSourceByUrl,
 } from '@core-shared/article-store';
-import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
+import { Client } from 'pg';
 import { resolveDiscussionPlatformMetadata } from '../registry';
 import { scrapeWebPage } from '../web-scraper';
 import {
@@ -55,7 +55,9 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 	let items = extractItemsFromFeed(parser.parse(await readTextWithLimit(res, MAX_FEED_BYTES)));
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
-		await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]));
+		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		await db.connect();
+		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 		return;
 	}
 
@@ -67,7 +69,9 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		if (rawUrl) itemUrls.push({ item, url: normalizeUrl(rawUrl) });
 	}
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await withDbClient(env, (db) => getExistingArticlesByUrl(db, urls));
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const existingRecords = await getExistingArticlesByUrl(db, urls);
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 
@@ -99,12 +103,10 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		sourceUpgrades.push({ existing, update: { url: normalized, source: feed.name, sourceType, platformMetadata } });
 	}
 	if (sourceUpgrades.length) {
-		await withDbClient(env, async (db) => {
-			for (const { existing, update } of sourceUpgrades) {
-				await updateArticleSourceByUrl(db, update);
-				console.info({ tag: 'RSS', msg: 'Upgraded article source', url: update.url, from: existing.source, to: feed.name });
-			}
-		});
+		for (const { existing, update } of sourceUpgrades) {
+			await updateArticleSourceByUrl(db, update);
+			console.info({ tag: 'RSS', msg: 'Upgraded article source', url: update.url, from: existing.source, to: feed.name });
+		}
 	}
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
@@ -170,16 +172,15 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
-	await withDbClient(env, (db) => db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]));
+	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 }
 
 export async function handleRSSCron(env: Env): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const parser = new XMLParser({ ignoreAttributes: false });
-	const feeds = await withDbClient(
-		env,
-		async (db) => (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows,
-	);
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const feeds = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
 	for (const feed of feeds) {
 		try {
 			await processFeed(env, feed, parser);

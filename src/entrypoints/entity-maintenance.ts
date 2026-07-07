@@ -3,9 +3,9 @@
 // ─────────────────────────────────────────────────────────────
 
 import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
-import { withDbTransaction } from '@core-shared/db';
 import { type MaintenanceCursor, pruneOrphanEntities, repairMissingArticleEntityLinks } from '@entities/maintenance';
 import { getEntityQualitySnapshot } from '@entities/quality-report';
+import { Client } from 'pg';
 
 function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): number {
 	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);
@@ -51,10 +51,24 @@ export async function handleRepairEntityLinks(request: Request, env: Env): Promi
 		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid sourceType' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
 	const includeLinked = body.includeLinked === true;
-	const result = await withDbTransaction(env, 'repair entity links', (db) =>
-		repairMissingArticleEntityLinks(db, limit, { before, cursor: cursor ?? undefined, includeLinked, sourceType: sourceType ?? undefined }),
-	);
-	return Response.json({ ...result, includeLinked, sourceType: sourceType ?? null }, { headers: INTERNAL_CORS_HEADERS });
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
+		const result = await repairMissingArticleEntityLinks(db, limit, {
+			before,
+			cursor: cursor ?? undefined,
+			includeLinked,
+			sourceType: sourceType ?? undefined,
+		});
+		await db.query('COMMIT');
+		return Response.json({ ...result, includeLinked, sourceType: sourceType ?? null }, { headers: INTERNAL_CORS_HEADERS });
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'repair entity links rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }
 
 export async function handleEntityQuality(request: Request, env: Env): Promise<Response> {
@@ -65,8 +79,19 @@ export async function handleEntityQuality(request: Request, env: Env): Promise<R
 	if (body instanceof Response) return body;
 
 	const months = boundedMaintenanceLimit(body.months, 6, 24);
-	const result = await withDbTransaction(env, 'entity quality snapshot', (db) => getEntityQualitySnapshot(db, { months }));
-	return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
+		const result = await getEntityQualitySnapshot(db, { months });
+		await db.query('COMMIT');
+		return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'entity quality snapshot rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }
 
 export async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
@@ -77,6 +102,17 @@ export async function handlePruneOrphanEntities(request: Request, env: Env): Pro
 	if (body instanceof Response) return body;
 
 	const limit = boundedMaintenanceLimit(body.limit);
-	const result = await withDbTransaction(env, 'prune orphan entities', (db) => pruneOrphanEntities(db, limit));
-	return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
+		const result = await pruneOrphanEntities(db, limit);
+		await db.query('COMMIT');
+		return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'prune orphan entities rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }

@@ -1,9 +1,9 @@
-import { withDbClient } from '@core-shared/db';
 import { PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { detectUrlKind, normalizeUrl, validateImageUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
+import { Client } from 'pg';
 import { persistSavedUrlBlob } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
 import {
@@ -56,55 +56,55 @@ async function insertScrapedPage(scraped: ScrapedContent, url: string, env: Env,
 
 	try {
 		const ogImageUrl = await validateImageUrl(scraped.ogImageUrl);
-		return await withDbClient(env, async (db) => {
-			const platformMetadataToStore = scraped.metadata
-				? {
-						...scraped.metadata,
-						ogImageWidth: scraped.ogImageWidth ?? null,
-						ogImageHeight: scraped.ogImageHeight ?? null,
-					}
-				: null;
-
-			const userFile = await insertUrlUserFile(db, {
-				url,
-				normalizedUrl: url,
-				title: scraped.title,
-				source: scraped.siteName || 'External',
-				publishedDate: scraped.publishedDate || new Date().toISOString(),
-				summary: scraped.summary || '',
-				platformType: urlKind,
-				content: scraped.content || null,
-				ogImageUrl,
-				platformMetadata: platformMetadataToStore,
-				userId,
-			});
-
-			if (!userFile) {
-				console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
-				return { error: 'DB insert failed' };
-			}
-
-			// ON CONFLICT path: row pre-existed, skip post-insert side effects.
-			if (!userFile.created) {
-				return { kind: 'page', row: userFile };
-			}
-
-			if (scraped.youtubeTranscript) {
-				try {
-					await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-				} catch (transcriptErr) {
-					console.error({
-						tag: 'YOUTUBE',
-						msg: 'Failed to save transcript',
-						videoId: scraped.youtubeTranscript.videoId,
-						error: String(transcriptErr),
-					});
+		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		await db.connect();
+		const platformMetadataToStore = scraped.metadata
+			? {
+					...scraped.metadata,
+					ogImageWidth: scraped.ogImageWidth ?? null,
+					ogImageHeight: scraped.ogImageHeight ?? null,
 				}
-			}
+			: null;
 
-			console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
-			return { kind: 'page', row: userFile };
+		const userFile = await insertUrlUserFile(db, {
+			url,
+			normalizedUrl: url,
+			title: scraped.title,
+			source: scraped.siteName || 'External',
+			publishedDate: scraped.publishedDate || new Date().toISOString(),
+			summary: scraped.summary || '',
+			platformType: urlKind,
+			content: scraped.content || null,
+			ogImageUrl,
+			platformMetadata: platformMetadataToStore,
+			userId,
 		});
+
+		if (!userFile) {
+			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
+			return { error: 'DB insert failed' };
+		}
+
+		// ON CONFLICT path: row pre-existed, skip post-insert side effects.
+		if (!userFile.created) {
+			return { kind: 'page', row: userFile };
+		}
+
+		if (scraped.youtubeTranscript) {
+			try {
+				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
+			} catch (transcriptErr) {
+				console.error({
+					tag: 'YOUTUBE',
+					msg: 'Failed to save transcript',
+					videoId: scraped.youtubeTranscript.videoId,
+					error: String(transcriptErr),
+				});
+			}
+		}
+
+		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
+		return { kind: 'page', row: userFile };
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
 		return { error: 'DB insert failed' };
@@ -179,7 +179,9 @@ async function returnExisting(url: string, row: ExistingUrlUserFile, env: Env): 
 async function processUrl(rawUrl: string, env: Env, userId: string): Promise<IngestResult> {
 	const url = normalizeUrl(rawUrl);
 
-	const existingRow = await withDbClient(env, (db) => getUrlUserFileByNormalizedSourceUrl(db, userId, url));
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const existingRow = await getUrlUserFileByNormalizedSourceUrl(db, userId, url);
 	if (existingRow) {
 		return returnExisting(url, existingRow, env);
 	}

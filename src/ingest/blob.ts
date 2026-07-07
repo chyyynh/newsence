@@ -12,7 +12,6 @@
  */
 
 import { USER_FILES_TABLE } from '@core-shared/article-store';
-import { type DbClient, withDbTransaction } from '@core-shared/db';
 import {
 	extensionFromMime,
 	isRasterImage,
@@ -31,6 +30,7 @@ import {
 	streamWithByteLimit,
 } from '@core-shared/web';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';
+import { Client } from 'pg';
 
 export const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
 type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
@@ -175,7 +175,7 @@ function getBlobUploadQuota(planId: string): BlobUploadQuota {
 	};
 }
 
-async function assertBlobUploadQuotaTx(db: DbClient, userId: string, incomingBytes: number): Promise<void> {
+async function assertBlobUploadQuotaTx(db: Client, userId: string, incomingBytes: number): Promise<void> {
 	await db.query('SELECT pg_advisory_xact_lock(752617, hashtext($1))', [userId]);
 
 	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
@@ -211,7 +211,7 @@ async function assertBlobUploadQuotaTx(db: DbClient, userId: string, incomingByt
 	}
 }
 
-async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileData): Promise<{ id: string }> {
+async function insertBlobUserFile(db: Client, data: InsertBlobUserFileData): Promise<{ id: string }> {
 	const title = data.title ? data.title.slice(0, 200) : null;
 	const result = await db.query(
 		`INSERT INTO ${USER_FILES_TABLE}
@@ -239,10 +239,20 @@ async function insertBlobUserFile(db: DbClient, data: InsertBlobUserFileData): P
 
 async function persistBlobRow(env: Env, data: InsertBlobUserFileData): Promise<PersistBlobResult> {
 	try {
-		const row = await withDbTransaction(env, 'blob row insert', async (db) => {
+		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		await db.connect();
+		await db.query('BEGIN');
+		let row: { id: string };
+		try {
 			await assertBlobUploadQuotaTx(db, data.userId, data.fileSize);
-			return insertBlobUserFile(db, data);
-		});
+			row = await insertBlobUserFile(db, data);
+			await db.query('COMMIT');
+		} catch (error) {
+			await db
+				.query('ROLLBACK')
+				.catch((rollbackError) => console.error({ tag: 'DB', msg: 'blob row insert rollback failed', error: String(rollbackError) }));
+			throw error;
+		}
 		return { ok: true, userFileId: row.id };
 	} catch (err) {
 		console.error({ tag: 'PERSIST_BLOB', msg: 'blob row insert failed', storageKey: data.storageKey, error: String(err) });

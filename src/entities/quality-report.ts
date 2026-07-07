@@ -5,8 +5,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { ARTICLES_TABLE } from '@core-shared/article-store';
-import type { DbClient } from '@core-shared/db';
 import { ENTITY_TYPES } from '@core-shared/types';
+import type { Client } from 'pg';
 import { GENERIC_ENTITY_CANONICALS, MAX_ENTITIES_PER_ARTICLE } from './normalize';
 
 const ENTITY_QUALITY_TOP_LIMIT = 10;
@@ -104,7 +104,7 @@ function articleExampleValue(entry: EntityQualityArticleExampleRow): EntityQuali
 }
 
 export async function getEntityQualitySnapshot(
-	db: DbClient,
+	db: Client,
 	options: { months: number },
 ): Promise<{
 	overview: {

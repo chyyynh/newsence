@@ -1,6 +1,6 @@
-import { withDbClient } from '@core-shared/db';
 import type { RSSFeed, Tweet } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
+import { Client } from 'pg';
 import { saveTweetGroups } from './persistence';
 import { normalizeRetweet } from './source-events';
 
@@ -118,10 +118,9 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 
 export async function handleTwitterCron(env: Env): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
-	const users = await withDbClient(
-		env,
-		async (db) => (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows,
-	);
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const users = (await db.query<RSSFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows;
 	if (!users.length) {
 		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
 		return;
@@ -157,9 +156,7 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 	// Advance scraped_at only if every batch completed — partial fetches would
 	// let the next cron skip tweets we failed to pull.
 	if (allCompleted) {
-		await withDbClient(env, (db) =>
-			db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]),
-		);
+		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
 	}
 
 	console.info({

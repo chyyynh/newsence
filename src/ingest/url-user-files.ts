@@ -1,6 +1,6 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
-import type { DbClient } from '@core-shared/db';
 import { normalizeUrl, type UrlKind } from '@core-shared/web';
+import type { Client } from 'pg';
 
 export interface InsertUrlUserFileData {
 	url: string;
@@ -51,7 +51,7 @@ const EXISTING_URL_USER_FILE_FIELDS =
  * (user_id, normalized_source_url) for resource_kind='url'. Callers may dedup
  * for efficiency, but correctness comes from this conflict-safe insert.
  */
-export async function insertUrlUserFile(db: DbClient, data: InsertUrlUserFileData): Promise<InsertUrlUserFileResult | null> {
+export async function insertUrlUserFile(db: Client, data: InsertUrlUserFileData): Promise<InsertUrlUserFileResult | null> {
 	const normalizedUrl = data.normalizedUrl ?? normalizeUrl(data.url);
 	const result = await db.query(
 		`WITH inserted AS (
@@ -99,7 +99,7 @@ export async function insertUrlUserFile(db: DbClient, data: InsertUrlUserFileDat
 }
 
 export async function getUrlUserFileByNormalizedSourceUrl(
-	db: DbClient,
+	db: Client,
 	userId: string,
 	normalizedUrl: string,
 ): Promise<ExistingUrlUserFile | null> {

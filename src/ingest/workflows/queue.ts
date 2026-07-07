@@ -1,14 +1,14 @@
 import {
+	ARTICLES_TABLE,
 	getIncompleteWorkflowTargetIds,
 	type InsertArticleData,
 	type ProcessableTable,
-	resolveProcessableTable,
 	USER_FILES_TABLE,
 } from '@core-shared/article-store';
-import { type DbClient, withDbClient } from '@core-shared/db';
 import type { TwitterMedia } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
+import { Client } from 'pg';
 
 export type WorkflowQueueTarget =
 	| { kind: 'row'; articleId: string; targetTable?: ProcessableTable }
@@ -51,25 +51,25 @@ export async function enqueueArticleBatchProcess(env: Env, articleIds: string[],
 
 export async function handleRetryCron(env: Env): Promise<void> {
 	console.info({ tag: 'RETRY', msg: 'start' });
-	await withDbClient(env, async (db) => {
-		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-		const { articleIds, userFileIds } = await getIncompleteWorkflowTargetIds(db, since);
-		const total = articleIds.length + userFileIds.length;
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+	const { articleIds, userFileIds } = await getIncompleteWorkflowTargetIds(db, since);
+	const total = articleIds.length + userFileIds.length;
 
-		if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
-		for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
-			await enqueueArticleBatchProcess(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
-		}
-		for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-			await enqueueArticleBatchProcess(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE);
-		}
-		console.info({
-			tag: 'RETRY',
-			msg: 'Queued articles for retry',
-			articles: articleIds.length,
-			userFiles: userFileIds.length,
-			batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
-		});
+	if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
+	for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
+		await enqueueArticleBatchProcess(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
+	}
+	for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
+		await enqueueArticleBatchProcess(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), USER_FILES_TABLE);
+	}
+	console.info({
+		tag: 'RETRY',
+		msg: 'Queued articles for retry',
+		articles: articleIds.length,
+		userFiles: userFileIds.length,
+		batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
 	});
 }
 
@@ -104,7 +104,7 @@ export async function createWorkflowsForQueueMessages(env: Env, messages: readon
 
 	const instances = await env.MONITOR_WORKFLOW.createBatch(
 		messages.map(({ id, body: target }) => {
-			const targetTable = resolveProcessableTable(target.targetTable);
+			const targetTable = target.targetTable ?? ARTICLES_TABLE;
 			return {
 				id: ['article', workflowIdPart(id), workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'),
 				params: { target: { kind: 'row', articleId: target.articleId, targetTable } },
@@ -187,14 +187,14 @@ export async function cleanupSourceArticleDraftRef(
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
 	try {
-		const storedInstanceId = await withDbClient(env, async (db) => {
-			const result = await db.query(
-				`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
-				[userFileId],
-			);
-			const row = result.rows[0] as { instance_id?: string | null } | undefined;
-			return row?.instance_id ?? null;
-		});
+		const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+		await db.connect();
+		const result = await db.query(
+			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
+			[userFileId],
+		);
+		const row = result.rows[0] as { instance_id?: string | null } | undefined;
+		const storedInstanceId = row?.instance_id ?? null;
 		if (storedInstanceId) {
 			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
@@ -222,13 +222,11 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 				instanceId = instance.id;
 			}
 		}
-		await withDbClient(env, (db) =>
-			patchUserFileWorkflowMetadata(db, userFileId, {
-				monitor_instance_id: instanceId,
-				monitor_status: 'running',
-				monitor_started_at: new Date().toISOString(),
-			}),
-		);
+		await patchUserFileWorkflowMetadata(db, userFileId, {
+			monitor_instance_id: instanceId,
+			monitor_status: 'running',
+			monitor_started_at: new Date().toISOString(),
+		});
 		return instanceId;
 	} catch (err) {
 		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
@@ -236,7 +234,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 	}
 }
 
-export async function recordUserFileWorkflowComplete(db: DbClient, userFileId: string, articleId: string): Promise<void> {
+export async function recordUserFileWorkflowComplete(db: Client, userFileId: string, articleId: string): Promise<void> {
 	await patchUserFileWorkflowMetadata(db, userFileId, {
 		monitor_status: 'complete',
 		monitor_completed_at: new Date().toISOString(),
@@ -245,16 +243,16 @@ export async function recordUserFileWorkflowComplete(db: DbClient, userFileId: s
 }
 
 export async function recordUserFileWorkflowFailed(env: Env, userFileId: string, error: string): Promise<void> {
-	await withDbClient(env, (db) =>
-		patchUserFileWorkflowMetadata(db, userFileId, {
-			monitor_status: 'failed',
-			monitor_failed_at: new Date().toISOString(),
-			error: error.slice(0, 500),
-		}),
-	);
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await patchUserFileWorkflowMetadata(db, userFileId, {
+		monitor_status: 'failed',
+		monitor_failed_at: new Date().toISOString(),
+		error: error.slice(0, 500),
+	});
 }
 
-async function patchUserFileWorkflowMetadata(db: DbClient, userFileId: string, patch: UserFileWorkflowMetadataPatch): Promise<void> {
+async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: UserFileWorkflowMetadataPatch): Promise<void> {
 	await db.query(
 		`UPDATE ${USER_FILES_TABLE}
 		 SET metadata = jsonb_set(

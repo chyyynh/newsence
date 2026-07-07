@@ -3,11 +3,11 @@
 // with an article's normalized entity list.
 // ─────────────────────────────────────────────────────────────
 
-import type { DbClient } from '@core-shared/db';
+import type { Client } from 'pg';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from './normalize';
 
 export async function syncArticleEntities(
-	db: DbClient,
+	db: Client,
 	articleId: string,
 	entities: ArticleEntityInput[],
 	source?: string | null,
@@ -60,7 +60,7 @@ export async function syncArticleEntities(
 }
 
 /** Recompute article_count from actual links; reconciles drift the insert/delete triggers can miss. */
-async function refreshEntityArticleCounts(db: DbClient, entityIds: string[]): Promise<void> {
+async function refreshEntityArticleCounts(db: Client, entityIds: string[]): Promise<void> {
 	const uniqueIds = [...new Set(entityIds)];
 	if (!uniqueIds.length) return;
 	await db.query(

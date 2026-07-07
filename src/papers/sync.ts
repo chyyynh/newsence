@@ -8,9 +8,9 @@
 // without one are skipped (no stable node identity).
 // ─────────────────────────────────────────────────────────────
 
-import type { DbClient } from '@core-shared/db';
-import { withDbTransaction } from '@core-shared/db';
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
+import type { Client } from 'pg';
+import { Client as PgClient } from 'pg';
 
 const MAX_EDGES = 50;
 
@@ -32,7 +32,7 @@ type PaperRow = {
  * on every field so a node that pre-existed as a reference-only stub gets
  * enriched and linked to its article without clobbering data with nulls.
  */
-async function upsertIngestedPaper(db: DbClient, row: PaperRow): Promise<string> {
+async function upsertIngestedPaper(db: Client, row: PaperRow): Promise<string> {
 	const result = await db.query<{ id: string }>(
 		`INSERT INTO papers (openalex_id, doi, article_id, title, authors, venue, year, abstract, cited_by_count, oa_pdf_url)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -60,7 +60,7 @@ async function upsertIngestedPaper(db: DbClient, row: PaperRow): Promise<string>
  * already be ingested — don't null it out), only backfills title/year when the
  * existing row is missing them.
  */
-async function upsertReferenceNode(db: DbClient, ref: PaperReference): Promise<string | null> {
+async function upsertReferenceNode(db: Client, ref: PaperReference): Promise<string | null> {
 	if (!ref.openAlexId) return null;
 	const result = await db.query<{ id: string }>(
 		`INSERT INTO papers (openalex_id, doi, title, authors, year)
@@ -84,7 +84,10 @@ async function upsertReferenceNode(db: DbClient, ref: PaperReference): Promise<s
 export async function syncPaperGraph(env: Env, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
 	if (!paper.openAlexId) return null;
 
-	return withDbTransaction(env, 'paper graph', async (db) => {
+	const db = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
 		const fromId = await upsertIngestedPaper(db, {
 			openAlexId: paper.openAlexId!,
 			doi: paper.doi ?? null,
@@ -110,6 +113,12 @@ export async function syncPaperGraph(env: Env, articleId: string, paper: PaperMe
 			);
 			edges++;
 		}
+		await db.query('COMMIT');
 		return { edges };
-	});
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'paper graph rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }

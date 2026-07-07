@@ -1,5 +1,4 @@
 import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, updateProcessedArticle } from '@core-shared/article-store';
-import { withDbTransaction } from '@core-shared/db';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
 import { validateImageUrl } from '@core-shared/web';
@@ -12,6 +11,7 @@ import {
 	type SourceArticleDraft,
 	type WorkflowQueueTarget,
 } from '@ingest/workflows/queue';
+import { Client } from 'pg';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { type PdfTextStatus, parsePdf } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
@@ -111,7 +111,10 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
 	const twitterSourceEvent = draft.attachments?.find((attachment) => attachment.kind === 'twitter-source-event')?.event;
 	const youtubeTranscript = draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
-	return withDbTransaction(env, 'source article', async (db) => {
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
 		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
 		if (entities) await syncArticleEntities(db, articleId, entities, finalInsert.article.source, platformMetadata);
@@ -125,8 +128,14 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 				raw: twitterSourceEvent.raw,
 			});
 		}
+		await db.query('COMMIT');
 		return articleId;
-	});
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'source article rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }
 
 async function prepareSourceFinalInsert(
@@ -174,14 +183,23 @@ async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableT
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
 	const entities = entityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
-	return withDbTransaction(env, 'row workflow', async (db) => {
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
 		await updateProcessedArticle(db, table, target.articleId, updatePayload);
 		if (table === USER_FILES_TABLE) await recordUserFileWorkflowComplete(db, target.articleId, target.articleId);
 		if (table !== USER_FILES_TABLE && entities)
 			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
+		await db.query('COMMIT');
 		return target.articleId;
-	});
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'row workflow rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }
 
 function entityUpdatePayload(

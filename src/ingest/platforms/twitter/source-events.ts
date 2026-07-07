@@ -1,6 +1,6 @@
-import type { DbClient } from '@core-shared/db';
 import type { TwitterMedia } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
+import type { Client } from 'pg';
 import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
@@ -25,7 +25,7 @@ export function normalizeRetweet(tweet: Tweet): Tweet | null {
 }
 
 export async function upsertTwitterSourceEvent(
-	db: DbClient,
+	db: Client,
 	tweet: Tweet,
 	options: {
 		articleId: string | null;

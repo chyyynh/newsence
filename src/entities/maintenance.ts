@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { ARTICLES_TABLE } from '@core-shared/article-store';
-import type { DbClient } from '@core-shared/db';
+import type { Client } from 'pg';
 import { isArticleEntityInput, normalizeArticleEntitiesForStorage } from './normalize';
 import { syncArticleEntities } from './sync';
 
@@ -19,7 +19,7 @@ type ArticleEntityRepairRow = {
 };
 
 export async function repairMissingArticleEntityLinks(
-	db: DbClient,
+	db: Client,
 	limit: number,
 	options: { before?: Date | string; cursor?: MaintenanceCursor; includeLinked?: boolean; sourceType?: string } = {},
 ): Promise<{
@@ -94,7 +94,7 @@ export async function repairMissingArticleEntityLinks(
 	};
 }
 
-export async function pruneOrphanEntities(db: DbClient, limit: number): Promise<{ deleted: number }> {
+export async function pruneOrphanEntities(db: Client, limit: number): Promise<{ deleted: number }> {
 	const result = await db.query<{ deleted: number }>(
 		`WITH orphan_entities AS (
 		   SELECT e.id
