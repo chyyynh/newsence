@@ -1,5 +1,4 @@
 import {
-	ARTICLES_TABLE,
 	getIncompleteWorkflowTargetIds,
 	type InsertArticleData,
 	type ProcessableTable,
@@ -32,7 +31,6 @@ export interface SourceArticleDraft {
 type SourceArticleDraftRef = { url: string; r2Key: string };
 type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 export type QueueMessage = RowWorkflowTarget;
-export type QueueResult = { count: number; created: number; existing: number };
 type UserFileWorkflowMetadataPatch = Record<string, string>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
@@ -90,22 +88,6 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow create failed', logTag: 'SOURCE-WORKFLOW' });
 		throw err;
 	}
-}
-
-export async function createWorkflowsForQueueMessages(env: Env, messages: readonly Message<QueueMessage>[]): Promise<QueueResult> {
-	if (!messages.length) return { count: 0, created: 0, existing: 0 };
-
-	const instances = await env.MONITOR_WORKFLOW.createBatch(
-		messages.map(({ id, body: target }) => {
-			const targetTable = target.targetTable ?? ARTICLES_TABLE;
-			return {
-				id: ['article', workflowIdPart(id), workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'),
-				params: { target: { kind: 'row', articleId: target.articleId, targetTable } },
-			};
-		}),
-	);
-
-	return { count: messages.length, created: instances.length, existing: messages.length - instances.length };
 }
 
 function workflowIdPart(value: string): string {
