@@ -10,12 +10,7 @@ import {
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article, TranscriptSegment } from '@core-shared/types';
-import {
-	cleanupSourceArticleDraftRef,
-	readSourceArticleDraft,
-	type SourceArticleDraft,
-	type WorkflowQueueTarget,
-} from '@ingest/workflows/queue';
+import type { SourceArticleDraft, WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
 import { articleProcessors } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
@@ -48,11 +43,16 @@ function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): Workfl
 
 	const readSourceDraft = () => {
 		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
-		draft ??= readSourceArticleDraft(env, target.sourceArticle).catch((error) => {
-			draft = undefined;
-			article = undefined;
-			throw error;
-		});
+		draft ??= env.R2.get(target.sourceArticle.r2Key)
+			.then((obj) => {
+				if (!obj) throw new Error(`source article draft missing: ${target.sourceArticle.r2Key}`);
+				return obj.json<SourceArticleDraft>();
+			})
+			.catch((error) => {
+				draft = undefined;
+				article = undefined;
+				throw error;
+			});
 		return draft;
 	};
 
@@ -269,7 +269,11 @@ async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext,
 	}
 
 	if (target.kind === 'source') {
-		await cleanupSourceArticleDraftRef(env, target.sourceArticle, { reason: 'workflow completed', logTag: 'WORKFLOW' });
+		try {
+			await env.R2.delete(target.sourceArticle.r2Key);
+		} catch (error) {
+			failures.push({ object: 'source_article_draft', key: target.sourceArticle.r2Key, error: String(error) });
+		}
 	}
 
 	if (failures.length) console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup incomplete', failures });

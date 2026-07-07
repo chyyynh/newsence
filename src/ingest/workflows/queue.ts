@@ -29,7 +29,7 @@ export interface SourceArticleDraft {
 	article: InsertArticleData;
 	attachments?: SourceArticleAttachment[];
 }
-export type SourceArticleDraftRef = { url: string; r2Key: string };
+type SourceArticleDraftRef = { url: string; r2Key: string };
 type RowWorkflowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 export type QueueMessage = RowWorkflowTarget;
 export type QueueResult = { count: number; created: number; existing: number };
@@ -90,13 +90,6 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 		await cleanupSourceArticleDraftRef(env, sourceArticle, { reason: 'workflow create failed', logTag: 'SOURCE-WORKFLOW' });
 		throw err;
 	}
-}
-
-export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
-	if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
-	const obj = await env.R2.get(ref.r2Key);
-	if (!obj) throw new Error(`source article draft missing: ${ref.r2Key}`);
-	return obj.json<SourceArticleDraft>();
 }
 
 export async function createWorkflowsForQueueMessages(env: Env, messages: readonly Message<QueueMessage>[]): Promise<QueueResult> {
@@ -163,7 +156,7 @@ async function ensureSourceArticleWorkflow(
 	}
 }
 
-export async function cleanupSourceArticleDraftRef(
+async function cleanupSourceArticleDraftRef(
 	env: Env,
 	ref: SourceArticleDraftRef,
 	context: { reason: string; workflowId?: string; logTag?: string },
