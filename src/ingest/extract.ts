@@ -10,10 +10,7 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 
 export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 
-export type ExtractInput =
-	| { kind: 'url'; url: string }
-	| { kind: 'bytes'; bytes: Uint8Array; contentType?: string }
-	| { kind: 'r2'; key: string };
+export type ExtractInput = { kind: 'url'; url: string } | { kind: 'bytes'; bytes: Uint8Array } | { kind: 'r2'; key: string };
 
 export interface NormalizedContent {
 	/** null for raw-bytes / R2 input (no originating URL). */
@@ -221,9 +218,8 @@ function emptyResult(contentType: string, sourceUrl: string | null, status: 'nee
 	return { sourceUrl, contentType, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status };
 }
 
-async function extractFromBytes(bytes: Uint8Array, declaredType?: string): Promise<NormalizedContent> {
-	const sniffed = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES));
-	const type = sniffed ?? declaredType ?? 'application/octet-stream';
+async function extractFromBytes(bytes: Uint8Array): Promise<NormalizedContent> {
+	const type = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES)) ?? 'application/octet-stream';
 	if (type === PDF_MIME) return normalizePdf(await parsePdf(bytes), null);
 	return emptyResult(type, null, 'failed');
 }
@@ -246,12 +242,12 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 		case 'url':
 			return extractFromUrl(env, input.url);
 		case 'bytes':
-			return extractFromBytes(input.bytes, input.contentType);
+			return extractFromBytes(input.bytes);
 		case 'r2': {
 			if (!input.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) throw new Error(`Invalid scrape input temp object key: ${input.key}`);
 			const obj = await env.R2.get(input.key);
 			if (!obj) throw new Error(`scrape input temp object missing: ${input.key}`);
-			return extractFromBytes(await obj.bytes(), obj.httpMetadata?.contentType);
+			return extractFromBytes(await obj.bytes());
 		}
 	}
 }
