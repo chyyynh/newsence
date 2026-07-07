@@ -260,7 +260,6 @@ type WorkflowRunContext = {
 	target: WorkflowTarget;
 	table: ProcessableTable;
 	readSourceDraft(): Promise<SourceArticleDraft>;
-	readSourceArticle(): Promise<Article>;
 };
 type RowTarget = Extract<WorkflowTarget, { kind: 'row' }>;
 type WorkflowPersistenceInput = {
@@ -291,33 +290,33 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 		target,
 		table: target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE,
 		readSourceDraft,
-		readSourceArticle: async () => {
-			const data = (await readSourceDraft()).article;
-			return {
-				id: data.url,
-				title: data.title,
-				title_cn: null,
-				summary: data.summary || null,
-				summary_cn: null,
-				content: data.content,
-				content_cn: null,
-				url: data.url,
-				source: data.source,
-				published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-				tags: data.tags ?? [],
-				keywords: data.keywords ?? [],
-				source_type: data.sourceType,
-				og_image_url: null,
-				platform_metadata: data.platformMetadata as Article['platform_metadata'],
-			};
-		},
+	};
+}
+
+function sourceDraftToArticle(data: InsertArticleData): Article {
+	return {
+		id: data.url,
+		title: data.title,
+		title_cn: null,
+		summary: data.summary || null,
+		summary_cn: null,
+		content: data.content,
+		content_cn: null,
+		url: data.url,
+		source: data.source,
+		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+		tags: data.tags ?? [],
+		keywords: data.keywords ?? [],
+		source_type: data.sourceType,
+		og_image_url: null,
+		platform_metadata: data.platformMetadata as Article['platform_metadata'],
 	};
 }
 
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
 	const article =
 		context.target.kind === 'source'
-			? await context.readSourceArticle()
+			? sourceDraftToArticle((await context.readSourceDraft()).article)
 			: await loadProcessableArticle(env, context.table, context.target.articleId);
 	if (!pdfTextTemp?.textStorageKey) return article;
 	const pdfTextObj = await env.R2.get(pdfTextTemp.textStorageKey);
@@ -509,7 +508,7 @@ async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, inpu
 
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
-	const fullArticle = await context.readSourceArticle();
+	const fullArticle = sourceDraftToArticle(draft.article);
 	let articleForInsert = draft.article;
 	let updatePayload = buildProcessorUpdatePayload(
 		fullArticle,
@@ -630,7 +629,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () =>
 					context.target.kind === 'source'
-						? { ...(await context.readSourceArticle()), content: null }
+						? { ...sourceDraftToArticle((await context.readSourceDraft()).article), content: null }
 						: loadProcessableArticle(this.env, context.table, context.target.articleId, true),
 			);
 			const sourceType = article.source_type ?? 'default';
