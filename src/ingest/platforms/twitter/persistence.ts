@@ -2,7 +2,7 @@ import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@cor
 import type { PlatformMetadata, TwitterMedia } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
-import { startRowWorkflow, startSourceArticleWorkflow } from '@ingest/workflow';
+import { startArticleWorkflow, startSourceArticleWorkflow } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import {
@@ -263,7 +263,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 	const existingArticle = await findArticleByUrl(db, articleUrl);
 	if (existingArticle) {
 		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text });
-		if (!existingArticle.summary_cn) await startRowWorkflow(env, { articleId: existingArticle.id });
+		if (!existingArticle.summary_cn) await startArticleWorkflow(env, existingArticle.id);
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: articleUrl });
 		return true;
 	}
@@ -336,7 +336,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 			eventType: articleUrl ? 'article' : externalUrl ? 'share' : 'tweet',
 			text: textWithoutUrls,
 		});
-		if (!existingTweetArticle.summary_cn) await startRowWorkflow(env, { articleId: existingTweetArticle.id });
+		if (!existingTweetArticle.summary_cn) await startArticleWorkflow(env, existingTweetArticle.id);
 		return false;
 	}
 
@@ -378,7 +378,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 			media: allMedia,
 			raw: { tweets: sorted },
 		});
-		await startRowWorkflow(env, { articleId: existingId });
+		await startArticleWorkflow(env, existingId);
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}

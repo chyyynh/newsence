@@ -26,9 +26,9 @@ import {
 	type YouTubeHighlightsUpdate,
 } from './platforms/youtube/transcripts';
 
-export type WorkflowTarget =
-	| { kind: 'row'; articleId: string; targetTable?: ArticleStoreTable }
-	| { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
+type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
+
+export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 export interface SourceArticleDraft {
 	article: InsertArticleData;
@@ -41,16 +41,16 @@ const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 const WORKFLOW_ID_MAX_LENGTH = 100;
 
-async function startRowWorkflowBatch(env: Env, articleIds: string[], targetTable?: ArticleStoreTable): Promise<number> {
-	if (!articleIds.length) return 0;
-	const targets = articleIds.map((articleId) => rowWorkflowTarget({ articleId, ...(targetTable ? { targetTable } : {}) }));
+async function startStoredWorkflowBatch(env: Env, targets: StoredWorkflowTarget[]): Promise<number> {
+	if (!targets.length) return 0;
+	const descriptors = targets.map(storedWorkflowTarget);
 	const created = await env.MONITOR_WORKFLOW.createBatch(
-		targets.map(({ workflowId, workflowTarget }) => ({ id: workflowId, params: { target: workflowTarget } })),
+		descriptors.map(({ workflowId, workflowTarget }) => ({ id: workflowId, params: { target: workflowTarget } })),
 	);
 	const createdIds = new Set(created.map((instance) => instance.id));
-	const retryTargets: typeof targets = [];
+	const retryTargets: typeof descriptors = [];
 	let active = 0;
-	for (const target of targets) {
+	for (const target of descriptors) {
 		if (createdIds.has(target.workflowId)) continue;
 		const existing = await getMonitorWorkflowStatus(env, target.workflowId);
 		if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) active++;
@@ -77,10 +77,16 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
 	let started = 0;
 	for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startRowWorkflowBatch(env, articleIds.slice(i, i + RETRY_BATCH_SIZE));
+		started += await startStoredWorkflowBatch(
+			env,
+			articleIds.slice(i, i + RETRY_BATCH_SIZE).map((articleId) => ({ kind: 'article', articleId })),
+		);
 	}
 	for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startRowWorkflowBatch(env, userFileIds.slice(i, i + RETRY_BATCH_SIZE), 'user_files');
+		started += await startStoredWorkflowBatch(
+			env,
+			userFileIds.slice(i, i + RETRY_BATCH_SIZE).map((userFileId) => ({ kind: 'userFile', userFileId })),
+		);
 	}
 	console.info({
 		tag: 'RETRY',
@@ -92,8 +98,12 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function startRowWorkflow(env: Env, target: { articleId: string; targetTable?: ArticleStoreTable }): Promise<string> {
-	const { workflowId, workflowTarget } = rowWorkflowTarget(target);
+export async function startArticleWorkflow(env: Env, articleId: string): Promise<string> {
+	return startStoredWorkflow(env, { kind: 'article', articleId });
+}
+
+async function startStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
+	const { workflowId, workflowTarget } = storedWorkflowTarget(target);
 	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 	if (created[0]) return created[0].id;
 
@@ -101,7 +111,7 @@ export async function startRowWorkflow(env: Env, target: { articleId: string; ta
 	if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
 
 	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId(workflowId), params: { target: workflowTarget } }]);
-	if (!retried[0]) throw new Error(`Failed to create row workflow: ${workflowId}`);
+	if (!retried[0]) throw new Error(`Failed to create stored workflow: ${workflowId}`);
 	return retried[0].id;
 }
 
@@ -152,13 +162,13 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function rowWorkflowTarget(target: { articleId: string; targetTable?: ArticleStoreTable }): {
+function storedWorkflowTarget(target: StoredWorkflowTarget): {
 	workflowId: string;
 	workflowTarget: WorkflowTarget;
 } {
-	const targetTable = target.targetTable ?? 'articles';
-	const workflowTarget: WorkflowTarget = { kind: 'row', articleId: target.articleId, targetTable };
-	return { workflowId: ['article', workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'), workflowTarget };
+	const id = target.kind === 'article' ? target.articleId : target.userFileId;
+	const table = target.kind === 'article' ? 'articles' : 'user_files';
+	return { workflowId: ['article', workflowIdPart(table), workflowIdPart(id)].join('-'), workflowTarget: target };
 }
 
 function retryWorkflowId(workflowId: string): string {
@@ -188,7 +198,7 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 	}
 
-	const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: 'user_files' });
+	const instanceId = await startStoredWorkflow(env, { kind: 'userFile', userFileId });
 	await patchUserFileWorkflowMetadata(client, userFileId, {
 		monitor_instance_id: instanceId,
 		monitor_status: 'running',
@@ -225,6 +235,8 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 type WorkflowRunContext = {
 	target: WorkflowTarget;
 	table: ArticleStoreTable;
+	rowId: string | null;
+	userFileId: string | null;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 };
 type WorkflowPersistenceInput = {
@@ -246,7 +258,9 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 
 	return {
 		target,
-		table: target.kind === 'row' ? (target.targetTable ?? 'articles') : 'articles',
+		table: target.kind === 'userFile' ? 'user_files' : 'articles',
+		rowId: target.kind === 'article' ? target.articleId : target.kind === 'userFile' ? target.userFileId : null,
+		userFileId: target.kind === 'userFile' ? target.userFileId : null,
 		readSourceDraft,
 	};
 }
@@ -272,10 +286,13 @@ function sourceDraftToArticle(data: InsertArticleData): Article {
 }
 
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
-	const article =
-		context.target.kind === 'source'
-			? sourceDraftToArticle((await context.readSourceDraft()).article)
-			: await loadArticleForProcessing(env, context.table, context.target.articleId);
+	let article: Article;
+	if (context.target.kind === 'source') {
+		article = sourceDraftToArticle((await context.readSourceDraft()).article);
+	} else {
+		if (!context.rowId) throw new Error('Stored workflow target is missing row id');
+		article = await loadArticleForProcessing(env, context.table, context.rowId);
+	}
 	if (!pdfTextTemp?.textStorageKey) return article;
 	const pdfTextObj = await env.R2.get(pdfTextTemp.textStorageKey);
 	if (!pdfTextObj) throw new Error(`PDF text temp object missing: ${pdfTextTemp.textStorageKey}`);
@@ -289,9 +306,9 @@ async function stagePdfExtraction(
 	step: WorkflowStep,
 	workflowInstanceId: string,
 ): Promise<PdfTextTempResult | null> {
-	if (context.target.kind !== 'row' || context.table !== 'user_files') return null;
+	if (!context.userFileId) return null;
 	const request = preparePdfTextExtraction({
-		articleId: context.target.articleId,
+		articleId: context.userFileId,
 		hasContent: 'has_content' in article && !!article.has_content,
 		storageKey: article.storage_key,
 		originType: article.origin_type,
@@ -410,12 +427,8 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	}
 }
 
-async function persistRowTarget(
-	env: Env,
-	target: Extract<WorkflowTarget, { kind: 'row' }>,
-	table: ArticleStoreTable,
-	input: WorkflowPersistenceInput,
-): Promise<string> {
+async function persistStoredTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
+	if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 	const pdfTextObj = input.pdfTextTemp?.textStorageKey ? await env.R2.get(input.pdfTextTemp.textStorageKey) : null;
 	if (input.pdfTextTemp?.textStorageKey && !pdfTextObj)
 		throw new Error(`PDF text temp object missing: ${input.pdfTextTemp.textStorageKey}`);
@@ -452,18 +465,17 @@ async function persistRowTarget(
 	await db.connect();
 	await db.query('BEGIN');
 	try {
-		await updateArticleAfterProcessing(db, table, target.articleId, updatePayload);
-		if (table === 'user_files')
-			await patchUserFileWorkflowMetadata(db, target.articleId, {
+		await updateArticleAfterProcessing(db, context.table, context.rowId, updatePayload);
+		if (context.userFileId)
+			await patchUserFileWorkflowMetadata(db, context.userFileId, {
 				monitor_status: 'complete',
 				monitor_completed_at: new Date().toISOString(),
-				article_id: target.articleId,
+				article_id: context.rowId,
 			});
-		if (table !== 'user_files' && entities)
-			await syncArticleEntities(db, target.articleId, entities, input.article.source, platformMetadata);
+		if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
 		await persistYouTubeWorkflowData(db, { highlights: input.youtubeHighlights });
 		await db.query('COMMIT');
-		return target.articleId;
+		return context.rowId;
 	} catch (error) {
 		await db
 			.query('ROLLBACK')
@@ -490,16 +502,16 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			const article = await step.do(
 				context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				async () =>
-					context.target.kind === 'source'
-						? { ...sourceDraftToArticle((await context.readSourceDraft()).article), content: null }
-						: loadArticleForProcessing(this.env, context.table, context.target.articleId, true),
+				async () => {
+					if (context.target.kind === 'source')
+						return { ...sourceDraftToArticle((await context.readSourceDraft()).article), content: null };
+					if (!context.rowId) throw new Error('Stored workflow target is missing row id');
+					return loadArticleForProcessing(this.env, context.table, context.rowId, true);
+				},
 			);
 			const sourceType = article.source_type ?? 'default';
 			const logContext =
-				context.target.kind === 'row'
-					? { article_id: context.target.articleId, table: context.table }
-					: { url: article.url, table: context.table };
+				context.target.kind === 'source' ? { url: article.url, table: context.table } : { article_id: context.rowId, table: context.table };
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
@@ -548,7 +560,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 					};
 					return context.target.kind === 'source'
 						? persistSourceTarget(this.env, context, input)
-						: persistRowTarget(this.env, context.target, context.table, input);
+						: persistStoredTarget(this.env, context, input);
 				},
 			);
 
@@ -571,8 +583,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 			return { success: true, article_id: articleId };
 		} catch (error) {
-			if (context.target.kind === 'row' && context.table === 'user_files') {
-				const failedUserFileId = context.target.articleId;
+			if (context.userFileId) {
+				const failedUserFileId = context.userFileId;
 				try {
 					await step.do(
 						'record-user-file-workflow-failed',
