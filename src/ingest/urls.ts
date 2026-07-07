@@ -3,7 +3,7 @@ import { PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
-import { createUserFileWorkflow } from '@ingest/workflows/queue';
+import { createUserFileWorkflow } from '@ingest/workflow';
 import { Client } from 'pg';
 import { persistSavedUrlBlob } from './blob';
 import { type ScrapeResult, scrapeUrl } from './extract';

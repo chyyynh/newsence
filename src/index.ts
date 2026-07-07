@@ -16,8 +16,7 @@ import { type ExtractInput, extractSource, extractUrl, type NormalizedContent, S
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
-import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
-import { handleRetryCron } from '@ingest/workflows/queue';
+import { handleRetryCron, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';

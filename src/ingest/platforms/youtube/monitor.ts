@@ -1,7 +1,7 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
+import { startSourceArticleWorkflow } from '@ingest/workflow';
 import { Client } from 'pg';
 import { parseDurationSeconds, scrapeYouTube } from './scraper';
 

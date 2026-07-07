@@ -28,6 +28,15 @@ export interface YoutubeTranscriptRow {
 	chaptersFromDescription?: unknown;
 }
 
+type YoutubeTranscriptAttachment = {
+	kind: 'youtube-transcript';
+	transcript: YoutubeTranscriptRow;
+};
+
+export function isYoutubeTranscriptAttachment(value: unknown): value is YoutubeTranscriptAttachment {
+	return !!value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'youtube-transcript';
+}
+
 const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 YouTube 影片逐字稿，找出 5-8 個最重要的主題段落。
 
 規則：

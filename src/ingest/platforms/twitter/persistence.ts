@@ -2,7 +2,7 @@ import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@cor
 import type { PlatformMetadata, TwitterMedia } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
-import { startRowWorkflow, startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
+import { startRowWorkflow, startSourceArticleWorkflow } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import {
@@ -42,6 +42,23 @@ async function findArticleByUrl(db: Client, url: string): Promise<{ id: string; 
 
 type TwitterSourceEventInputType = 'tweet' | 'thread' | 'share' | 'article';
 type TwitterSourceEventType = TwitterSourceEventInputType | 'quote' | 'retweet';
+
+export type TwitterSourceEventDraft = {
+	tweet: Tweet;
+	eventType: TwitterSourceEventInputType;
+	text?: string | null;
+	media?: TwitterMedia[];
+	raw?: unknown;
+};
+
+type TwitterSourceEventAttachment = {
+	kind: 'twitter-source-event';
+	event: TwitterSourceEventDraft;
+};
+
+export function isTwitterSourceEventAttachment(value: unknown): value is TwitterSourceEventAttachment {
+	return !!value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'twitter-source-event';
+}
 
 export async function upsertTwitterSourceEvent(
 	db: Client,
