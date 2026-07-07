@@ -6,7 +6,7 @@ import { ingestUrls } from '../urls';
 // Matches `simple.period` in `wrangler.jsonc` `ratelimits[USER_INGEST_LIMITER]`.
 // Sent as `Retry-After` on 429; the binding doesn't expose remaining time so
 // we send the window length as a conservative upper bound.
-const RATE_LIMIT_PERIOD_SEC = 60;
+const RATE_LIMIT_HEADERS = { 'Retry-After': '60' };
 
 type IngestJsonBody = {
 	urls?: string[];
@@ -14,10 +14,6 @@ type IngestJsonBody = {
 	userId?: string;
 	title?: string;
 };
-
-function rateLimited(code: string, message: string): Response {
-	return jsonError(code, message, 429, { 'Retry-After': String(RATE_LIMIT_PERIOD_SEC) });
-}
 
 export async function handleIngest(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env);
@@ -59,7 +55,9 @@ async function ingestImageUrlJson(body: IngestJsonBody, env: Env): Promise<Respo
 	if (outcome.ok) return jsonData(outcome.result);
 
 	const status = imageUrlStatusFor(outcome.code);
-	return outcome.code === 'RATE_LIMITED' ? rateLimited(outcome.code, outcome.message) : jsonError(outcome.code, outcome.message, status);
+	return outcome.code === 'RATE_LIMITED'
+		? jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS)
+		: jsonError(outcome.code, outcome.message, status);
 }
 
 function imageUrlStatusFor(code: IngestImageUrlErrorCode): number {
@@ -89,7 +87,7 @@ async function ingestUrlsJson(body: IngestJsonBody, env: Env): Promise<Response>
 	if (outcome.ok) return jsonData(outcome.results);
 
 	if (outcome.code === 'RATE_LIMITED') {
-		return rateLimited(outcome.code, outcome.message);
+		return jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS);
 	}
 	const status = outcome.code === 'UNAUTHORIZED' ? 401 : 400;
 	return jsonError(outcome.code, outcome.message, status);
@@ -100,7 +98,7 @@ async function ingestMultipart(request: Request, env: Env): Promise<Response> {
 	if (outcome.ok) return jsonData(outcome.result);
 
 	if (outcome.code === 'RATE_LIMITED') {
-		return rateLimited(outcome.code, outcome.message);
+		return jsonError(outcome.code, outcome.message, 429, RATE_LIMIT_HEADERS);
 	}
 	const status =
 		outcome.code === 'PAYLOAD_TOO_LARGE'

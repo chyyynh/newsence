@@ -219,10 +219,6 @@ export function isSocialMediaUrl(url: string): boolean {
 	return parsed ? hostMatches(canonicalHost(parsed.hostname), SOCIAL_MEDIA_HOSTS) : false;
 }
 
-export function buildYouTubeWatchUrl(videoId: string): string {
-	return `https://youtube.com/watch?v=${videoId}`;
-}
-
 export function normalizeUrl(url: string): string {
 	const parsed = parseUrl(url);
 	if (!parsed) return url;
@@ -230,7 +226,7 @@ export function normalizeUrl(url: string): string {
 	parsed.hostname = canonicalHost(parsed.hostname);
 	if (isYouTubeHost(parsed.hostname)) {
 		const videoId = extractYouTubeId(parsed.toString());
-		if (videoId) return buildYouTubeWatchUrl(videoId);
+		if (videoId) return `https://youtube.com/watch?v=${videoId}`;
 	}
 
 	for (const param of TRACKING_PARAMS) parsed.searchParams.delete(param);
