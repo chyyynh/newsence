@@ -46,49 +46,38 @@ export class TwitterProcessor implements ArticleProcessor {
 			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
 		}
 
-		let tweetText = article.summary?.trim() || '';
-		if (!tweetText) {
-			tweetText = article.content ?? '';
-			try {
-				const parsed = JSON.parse(tweetText);
-				if (parsed?.text) tweetText = parsed.text;
-			} catch {
-				// Not JSON, use raw as-is
-			}
-		}
+		const tweetText = article.summary?.trim() || article.content || '';
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
 		const metadata = article.platform_metadata;
 		const linkedUrl = metadata?.type === 'twitter' && metadata.data.variant === 'shared' ? metadata.data.externalUrl?.trim() : null;
-		if (linkedUrl) {
-			try {
-				const linked = await scrapeWebPage(linkedUrl);
-				if (linked.content && linked.content.length > 100) {
-					console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
-					updateData.content = linked.content;
-					const analysis = await generateArticleAnalysis(
-						{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
-						ctx.env,
-					);
-					return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
-				}
-			} catch (e) {
-				console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(e) });
-			}
+		const linked = linkedUrl
+			? await scrapeWebPage(linkedUrl).catch((error) => {
+					console.warn({ tag: 'TWITTER-PROCESSOR', msg: 'Failed to scrape linked URL', url: linkedUrl, error: String(error) });
+					return null;
+				})
+			: null;
+		if (linked?.content && linked.content.length > 100) {
+			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Scraped linked article', title: linked.title });
+			updateData.content = linked.content;
+			const analysis = await generateArticleAnalysis(
+				{ ...article, title: linked.title || article.title, content: linked.content, summary: linked.summary ?? null },
+				ctx.env,
+			);
+			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
 		}
 
 		const analysis = await translateTweet(tweetText, article, ctx.env);
-		if (!analysis) {
-			if (!article.tags?.length) updateData.tags = ['Twitter'];
-			return { updateData };
-		}
-		if (isEmpty(article.title_cn)) updateData.title_cn = analysis.summary_cn.slice(0, 80);
-		if (isEmpty(article.summary_cn)) updateData.summary_cn = analysis.summary_cn;
-		if (isEmpty(article.content)) updateData.content = tweetText;
-		if (isEmpty(article.content_cn)) updateData.content_cn = analysis.summary_cn;
-		if (!article.tags?.length && analysis.tags.length) updateData.tags = analysis.tags;
-		if (!article.keywords?.length && analysis.keywords.length) updateData.keywords = analysis.keywords;
-		updateData.entities = analysis.entities;
+		if (!analysis) return { updateData: { ...updateData, ...(!article.tags?.length ? { tags: ['Twitter'] } : {}) } };
+		Object.assign(updateData, {
+			...(isEmpty(article.title_cn) ? { title_cn: analysis.summary_cn.slice(0, 80) } : {}),
+			...(isEmpty(article.summary_cn) ? { summary_cn: analysis.summary_cn } : {}),
+			...(isEmpty(article.content) ? { content: tweetText } : {}),
+			...(isEmpty(article.content_cn) ? { content_cn: analysis.summary_cn } : {}),
+			...(!article.tags?.length && analysis.tags.length ? { tags: analysis.tags } : {}),
+			...(!article.keywords?.length && analysis.keywords.length ? { keywords: analysis.keywords } : {}),
+			entities: analysis.entities,
+		});
 		return { updateData };
 	}
 }
