@@ -68,7 +68,7 @@ export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearc
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
 	const ranks = await rankArticles(client, env, query, limit);
-	return rankEntries(ranks);
+	return [...ranks].map(([id, score]) => ({ id, score }));
 }
 
 export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSearchInput): Promise<string[]> {
@@ -102,7 +102,10 @@ export async function searchCorpusArticles(env: Env, input: ArticleSearchInput):
 			where += ` AND published_date >= $${params.length}`;
 		}
 		const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
-		return sortByRank(result.rows, ranks).slice(0, limit).map(formatSummary);
+		return result.rows
+			.sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0))
+			.slice(0, limit)
+			.map(formatSummary);
 	}
 
 	const params: unknown[] = [];
@@ -147,14 +150,6 @@ function formatSummary(a: ArticleSummaryRow): ArticleSummary {
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: a.tags ?? undefined,
 	};
-}
-
-function rankEntries(ranks: SearchRanks): ArticleRank[] {
-	return [...ranks].map(([id, score]) => ({ id, score }));
-}
-
-function sortByRank<T extends { id: string }>(articles: T[], ranks: SearchRanks): T[] {
-	return [...articles].sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0));
 }
 
 async function relatedArticles(
