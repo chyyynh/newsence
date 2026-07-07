@@ -16,7 +16,7 @@ import { syncArticleEntities } from '@entities/sync';
 import { syncPaperGraph } from '@papers/sync';
 import { Client } from 'pg';
 import { articleProcessors, buildProcessorUpdatePayload, type ProcessorResult } from './domain/processors';
-import { extractPdfTextToTemp, type PdfTextTempResult, preparePdfTextExtraction } from './pdf';
+import { extractPdfTextToTemp, type PdfTextTempResult, pdfTextExtractionMetadata, preparePdfTextExtraction } from './pdf';
 import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
 import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
@@ -411,16 +411,8 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 			...(extractedPdfText !== null ? { content: extractedPdfText } : {}),
 		},
 	};
-	const metadataPatch: Record<string, unknown> = {
-		...(input.pdfTextTemp
-			? {
-					extraction: {
-						status: input.pdfTextTemp.status,
-						parser: 'liteparse',
-						...(input.pdfTextTemp.status === 'failed' ? {} : { chars: input.pdfTextTemp.chars, pages: input.pdfTextTemp.pages }),
-					},
-				}
-			: {}),
+	const metadataPatch = {
+		...(pdfTextExtractionMetadata(input.pdfTextTemp) ?? {}),
 		...(input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : {}),
 	};
 	const updatePayload = buildProcessorUpdatePayload(

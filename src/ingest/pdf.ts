@@ -68,3 +68,9 @@ export async function extractPdfTextToTemp(env: Env, input: PdfTextExtractionReq
 	await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: WORKFLOW_PDF_TEXT_CONTENT_TYPE } });
 	return { status, chars, pages, textStorageKey };
 }
+
+export function pdfTextExtractionMetadata(result: PdfTextTempResult | null): Record<string, unknown> | undefined {
+	if (!result) return undefined;
+	const extraction = { status: result.status, parser: 'liteparse' };
+	return { extraction: result.status === 'failed' ? extraction : { ...extraction, chars: result.chars, pages: result.pages } };
+}
