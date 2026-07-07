@@ -388,20 +388,6 @@ async function prepareYoutubeHighlights(
 	);
 }
 
-async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<void> {
-	const keys: string[] = [];
-
-	if (pdfTextTemp?.textStorageKey) keys.push(pdfTextTemp.textStorageKey);
-	if (context.target.kind === 'source') keys.push(context.target.sourceArticle.r2Key);
-	if (!keys.length) return;
-
-	try {
-		await env.R2.delete(keys);
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup failed', keys, error: String(error) });
-	}
-}
-
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = sourceDraftToArticle(draft.article);
@@ -582,9 +568,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			await syncPaperGraphStep(this.env, articleId, paperEnrichment, step);
 
 			if (pdfTextTemp?.textStorageKey || context.target.kind === 'source') {
-				await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
-					cleanupWorkflowTempObjects(this.env, context, pdfTextTemp),
-				);
+				await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, async () => {
+					const keys = [
+						...(pdfTextTemp?.textStorageKey ? [pdfTextTemp.textStorageKey] : []),
+						...(context.target.kind === 'source' ? [context.target.sourceArticle.r2Key] : []),
+					];
+					try {
+						await this.env.R2.delete(keys);
+					} catch (error) {
+						console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup failed', keys, error: String(error) });
+					}
+				});
 			}
 
 			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
