@@ -13,7 +13,7 @@ export type TwitterSourceEventDraft = {
 	raw?: unknown;
 };
 
-export type SourceArticleAttachment =
+type SourceArticleAttachment =
 	| { kind: 'youtube-transcript'; transcript: YoutubeTranscriptRow }
 	| { kind: 'twitter-source-event'; event: TwitterSourceEventDraft };
 
@@ -36,14 +36,6 @@ function assertSourceArticleDraftKey(key: string): void {
 	if (!key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${key}`);
 }
 
-export function youtubeTranscriptAttachment(transcript: YoutubeTranscriptRow): SourceArticleAttachment {
-	return { kind: 'youtube-transcript', transcript };
-}
-
-export function twitterSourceEventAttachment(event: TwitterSourceEventDraft): SourceArticleAttachment {
-	return { kind: 'twitter-source-event', event };
-}
-
 export function sourceDraftYoutubeTranscript(draft: SourceArticleDraft): YoutubeTranscriptRow | undefined {
 	return draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
 }
@@ -55,10 +47,10 @@ export function sourceDraftTwitterSourceEvent(draft: SourceArticleDraft): Twitte
 function normalizeSourceArticleDraft(draft: LegacySourceArticleDraft): SourceArticleDraft {
 	const attachments = [...(draft.attachments ?? [])];
 	if (draft.youtubeTranscript && !attachments.some((attachment) => attachment.kind === 'youtube-transcript')) {
-		attachments.push(youtubeTranscriptAttachment(draft.youtubeTranscript));
+		attachments.push({ kind: 'youtube-transcript', transcript: draft.youtubeTranscript });
 	}
 	if (draft.twitterSourceEvent && !attachments.some((attachment) => attachment.kind === 'twitter-source-event')) {
-		attachments.push(twitterSourceEventAttachment(draft.twitterSourceEvent));
+		attachments.push({ kind: 'twitter-source-event', event: draft.twitterSourceEvent });
 	}
 	return {
 		article: draft.article,

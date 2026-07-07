@@ -4,7 +4,7 @@ import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Env, ScrapedContent, Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
 import { enqueueArticleProcess, startSourceArticleWorkflow } from '@ingest/workflows/queue';
-import { type TwitterSourceEventDraft, twitterSourceEventAttachment } from '@ingest/workflows/source-draft';
+import type { TwitterSourceEventDraft } from '@ingest/workflows/source-draft';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -65,7 +65,7 @@ async function enqueueTwitterArticle(
 			platformMetadata: data.metadata,
 			keywords: data.hashTags,
 		},
-		...(data.sourceEvent ? { attachments: [twitterSourceEventAttachment(data.sourceEvent)] } : {}),
+		...(data.sourceEvent ? { attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }] } : {}),
 	});
 	return true;
 }

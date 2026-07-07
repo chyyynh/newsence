@@ -4,7 +4,6 @@ import { buildMetadata, type YouTubeMetadata } from '@core-shared/platform-metad
 import type { Env, RSSFeed } from '@core-shared/types';
 import { buildYouTubeWatchUrl, FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
-import { youtubeTranscriptAttachment } from '@ingest/workflows/source-draft';
 import { XMLParser } from 'fast-xml-parser';
 import { listSourceFeedsByType, markSourceFeedScrapedById } from '../source-feeds';
 import { scrapeYouTube } from './scraper';
@@ -77,7 +76,7 @@ async function processYouTubeVideo(env: Env, channel: RSSFeed, video: FeedVideo)
 			ogImageUrl: scraped.ogImageUrl || null,
 			platformMetadata,
 		},
-		...(scraped.youtubeTranscript ? { attachments: [youtubeTranscriptAttachment(scraped.youtubeTranscript)] } : {}),
+		...(scraped.youtubeTranscript ? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] } : {}),
 	});
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
 	return true;
