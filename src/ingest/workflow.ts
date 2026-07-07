@@ -179,33 +179,28 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string | undefined> {
-	try {
-		const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
-		if (!db) await client.connect();
-		const result = await client.query(
-			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
-			[userFileId],
-		);
-		const row = result.rows[0] as { instance_id?: string | null } | undefined;
-		const storedInstanceId = row?.instance_id ?? null;
-		if (storedInstanceId) {
-			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
-			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
-		}
-
-		const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: USER_FILES_TABLE });
-		if (!instanceId) throw new Error(`Failed to create user_file workflow: ${userFileId}`);
-		await patchUserFileWorkflowMetadata(client, userFileId, {
-			monitor_instance_id: instanceId,
-			monitor_status: 'running',
-			monitor_started_at: new Date().toISOString(),
-		});
-		return instanceId;
-	} catch (err) {
-		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
-		return undefined;
+export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string> {
+	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	if (!db) await client.connect();
+	const result = await client.query(
+		`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
+		[userFileId],
+	);
+	const row = result.rows[0] as { instance_id?: string | null } | undefined;
+	const storedInstanceId = row?.instance_id ?? null;
+	if (storedInstanceId) {
+		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
+		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 	}
+
+	const instanceId = await startRowWorkflow(env, { articleId: userFileId, targetTable: USER_FILES_TABLE });
+	if (!instanceId) throw new Error(`Failed to create user_file workflow: ${userFileId}`);
+	await patchUserFileWorkflowMetadata(client, userFileId, {
+		monitor_instance_id: instanceId,
+		monitor_status: 'running',
+		monitor_started_at: new Date().toISOString(),
+	});
+	return instanceId;
 }
 
 async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: Record<string, string>): Promise<void> {
