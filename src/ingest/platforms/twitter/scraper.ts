@@ -2,14 +2,7 @@
 // Twitter Scraper
 // ─────────────────────────────────────────────────────────────
 
-import {
-	buildMetadata,
-	type PlatformMetadata,
-	type QuotedTweetData,
-	type RetweetedByData,
-	type TwitterAuthorFields,
-	type TwitterMedia,
-} from '@core-shared/platform-metadata';
+import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
 import { scrapeWebPage } from '../web-scraper';
@@ -131,32 +124,44 @@ export function buildTweetPlatformMetadata(
 	};
 
 	if (options.externalUrl) {
-		return buildMetadata('twitter', {
-			variant: 'shared',
-			...base,
-			tweetText,
-			externalUrl: options.externalUrl,
-			externalOgImage: options.externalOgImage ?? null,
-			externalTitle: options.externalTitle ?? null,
-			originalTweetUrl: options.originalTweetUrl,
-		});
+		return {
+			type: 'twitter',
+			fetchedAt: new Date().toISOString(),
+			data: {
+				variant: 'shared',
+				...base,
+				tweetText,
+				externalUrl: options.externalUrl,
+				externalOgImage: options.externalOgImage ?? null,
+				externalTitle: options.externalTitle ?? null,
+				originalTweetUrl: options.originalTweetUrl,
+			},
+		};
 	}
 
-	return buildMetadata('twitter', { ...base, quotedTweet: options.quotedTweet ?? extractQuotedTweet(tweet) });
+	return {
+		type: 'twitter',
+		fetchedAt: new Date().toISOString(),
+		data: { ...base, quotedTweet: options.quotedTweet ?? extractQuotedTweet(tweet) },
+	};
 }
 
 export function buildTwitterArticlePlatformMetadata(
 	tweetId: string,
 	author: TwitterLikeTweet['author'] | undefined,
 ): Extract<PlatformMetadata, { type: 'twitter' }> {
-	return buildMetadata('twitter', {
-		variant: 'article',
-		tweetId,
-		authorName: author?.name ?? '',
-		authorUserName: author?.userName ?? '',
-		authorProfilePicture: author?.profilePicture,
-		authorVerified: author?.isBlueVerified,
-	});
+	return {
+		type: 'twitter',
+		fetchedAt: new Date().toISOString(),
+		data: {
+			variant: 'article',
+			tweetId,
+			authorName: author?.name ?? '',
+			authorUserName: author?.userName ?? '',
+			authorProfilePicture: author?.profilePicture,
+			authorVerified: author?.isBlueVerified,
+		},
+	};
 }
 
 interface KaitoTweet {

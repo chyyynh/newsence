@@ -2,7 +2,7 @@
 // YouTube Scraper
 // ─────────────────────────────────────────────────────────────
 
-import { buildMetadata, type PlatformMetadata } from '@core-shared/platform-metadata';
+import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
@@ -234,19 +234,23 @@ export async function scrapeYouTube(
 		siteName: 'YouTube',
 		author: snippet.channelTitle,
 		publishedDate: snippet.publishedAt,
-		metadata: buildMetadata('youtube', {
-			videoId: video.id,
-			channelName: snippet.channelTitle,
-			channelId: snippet.channelId,
-			duration: video.contentDetails.duration,
-			thumbnailUrl: thumbnailUrl ?? undefined,
-			viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,
-			likeCount: stats.likeCount ? Number.parseInt(stats.likeCount, 10) : undefined,
-			commentCount: stats.commentCount ? Number.parseInt(stats.commentCount, 10) : undefined,
-			tags: snippet.tags || [],
-			publishedAt: snippet.publishedAt,
-			description: snippet.description || '',
-		}),
+		metadata: {
+			type: 'youtube',
+			fetchedAt: new Date().toISOString(),
+			data: {
+				videoId: video.id,
+				channelName: snippet.channelTitle,
+				channelId: snippet.channelId,
+				duration: video.contentDetails.duration,
+				thumbnailUrl: thumbnailUrl ?? undefined,
+				viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,
+				likeCount: stats.likeCount ? Number.parseInt(stats.likeCount, 10) : undefined,
+				commentCount: stats.commentCount ? Number.parseInt(stats.commentCount, 10) : undefined,
+				tags: snippet.tags || [],
+				publishedAt: snippet.publishedAt,
+				description: snippet.description || '',
+			},
+		},
 		youtubeTranscript:
 			transcript.length > 0
 				? { videoId: video.id, segments: transcript, language: transcriptLanguage, chapters, chaptersFromDescription: chapters.length > 0 }

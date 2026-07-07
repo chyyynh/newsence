@@ -22,7 +22,6 @@ import {
 	sniffMediaTypeStream,
 	UnsupportedMediaError,
 } from '@core-shared/mime';
-import { buildMetadata } from '@core-shared/platform-metadata';
 import type { Env } from '@core-shared/types';
 import {
 	assertExternalFetchable,
@@ -153,10 +152,7 @@ function deriveFileTitle(fileName: string): string {
 
 function buildPdfMetadata(args: { fileType: string; fileName: string; fileSize: number }) {
 	if (args.fileType !== PDF_MIME) return null;
-	return buildMetadata('pdf', {
-		fileName: args.fileName,
-		fileSize: args.fileSize,
-	});
+	return { type: 'pdf' as const, fetchedAt: new Date().toISOString(), data: { fileName: args.fileName, fileSize: args.fileSize } };
 }
 
 function storageKeyToAssetUrl(key: string): string {

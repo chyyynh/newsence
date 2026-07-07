@@ -1,6 +1,6 @@
 import { getExistingUrls } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
-import { buildMetadata, type YouTubeMetadata } from '@core-shared/platform-metadata';
+import type { YouTubeMetadata } from '@core-shared/platform-metadata';
 import type { Env, RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
@@ -96,7 +96,7 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 							sourceType: 'youtube',
 							content: scraped.content || null,
 							ogImageUrl: scraped.ogImageUrl || null,
-							platformMetadata: buildMetadata('youtube', youtubeMetadata),
+							platformMetadata: { type: 'youtube', fetchedAt: new Date().toISOString(), data: youtubeMetadata },
 						},
 						...(scraped.youtubeTranscript
 							? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }

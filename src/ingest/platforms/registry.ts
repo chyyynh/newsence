@@ -1,5 +1,5 @@
 import { isRasterImage, PDF_MIME } from '@core-shared/mime';
-import { buildMetadata, type PlatformMetadata } from '@core-shared/platform-metadata';
+import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import {
 	assertExternalFetchable,
@@ -112,7 +112,7 @@ export async function resolveDiscussionPlatformMetadata(url: string): Promise<Pl
 	if (detectUrlKind(url) !== 'hackernews') return null;
 	const itemId = extractHackerNewsId(url);
 	if (!itemId) return null;
-	return buildMetadata('hackernews', buildHnMetadata(await fetchHnItem(itemId), url));
+	return { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(await fetchHnItem(itemId), url) };
 }
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {

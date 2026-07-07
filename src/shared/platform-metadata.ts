@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// Canonical Platform Metadata Types + Builder
+// Canonical Platform Metadata Types
 //
 // The worker writes persisted platform_metadata (articles) / metadata
 // (user_files) JSONB. Keep this envelope stable for app-worker reads; UI-only
@@ -43,7 +43,7 @@ export interface RetweetedByData {
 /**
  * Flat persisted Twitter shape. `variant` discriminates standard (omitted),
  * `'shared'` (external link — adds tweetText/externalUrl/externalOgImage/externalTitle),
- * and `'article'` (long-form — author only). Constructed via `buildMetadata('twitter', …)`.
+ * and `'article'` (long-form — author only).
  */
 interface TwitterMetadata extends TwitterAuthorFields {
 	variant?: 'shared' | 'article';
@@ -186,26 +186,3 @@ export type PlatformMetadata =
 			ClassificationEnvelope)
 	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
 			ClassificationEnvelope);
-
-// ─────────────────────────────────────────────────────────────
-// Generic envelope builder
-// ─────────────────────────────────────────────────────────────
-
-/** Maps each platform `type` to the shape of its `data` payload. */
-interface MetadataDataMap {
-	twitter: TwitterMetadata;
-	youtube: YouTubeMetadata;
-	hackernews: HackerNewsMetadata;
-	pdf: PdfMetadata;
-	paper: PaperMetadata;
-	default: null;
-}
-
-/**
- * Wraps an already-assembled `data` payload in the platform envelope, binding the
- * `type` literal to the correct `data` shape via {@link MetadataDataMap}. Replaces the
- * per-platform `buildX` constructors (which were identical except for the `type` string).
- */
-export function buildMetadata<T extends keyof MetadataDataMap>(type: T, data: MetadataDataMap[T]): Extract<PlatformMetadata, { type: T }> {
-	return { type, fetchedAt: new Date().toISOString(), data } as Extract<PlatformMetadata, { type: T }>;
-}
