@@ -206,35 +206,17 @@ function targetLogContext(context: WorkflowRunContext, article: Article): Record
 		: { url: article.url, table: context.table };
 }
 
-async function loadTargetArticle(env: Env, context: WorkflowRunContext): Promise<Article> {
-	if (context.target.kind === 'source') return context.readSourceArticle();
-	return loadProcessableArticle(env, context.table, context.target.articleId);
-}
-
 async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ProcessableArticleShell> {
 	if (context.target.kind !== 'source') return loadProcessableArticleShell(env, context.table, context.target.articleId);
 	return { ...(await context.readSourceArticle()), content: null };
 }
 
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
-	const article = await loadTargetArticle(env, context);
+	const article =
+		context.target.kind === 'source'
+			? await context.readSourceArticle()
+			: await loadProcessableArticle(env, context.table, context.target.articleId);
 	return pdfTextTemp?.textStorageKey ? { ...article, content: await readPdfTextTemp(env, pdfTextTemp.textStorageKey) } : article;
-}
-
-async function analyzeArticle(env: Env, context: WorkflowRunContext, sourceType: string, pdfTextTemp: PdfTextTempResult | null) {
-	const article = await loadFullTargetArticle(env, context, pdfTextTemp);
-	return runArticleProcessor(article, sourceType, { env, table: context.table });
-}
-
-async function generateWorkflowEmbedding(
-	env: Env,
-	context: WorkflowRunContext,
-	processorResult: ProcessorResult,
-	pdfTextTemp: PdfTextTempResult | null,
-): Promise<number[] | null> {
-	const article = await loadFullTargetArticle(env, context, pdfTextTemp);
-	const text = buildEmbeddingTextForArticle(article, processorResult);
-	return text && env.AI ? generateArticleEmbedding(text, env.AI, env.AI_GATEWAY_NAME) : null;
 }
 
 async function stagePdfExtraction(
@@ -529,13 +511,20 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			const processorResult = await step.do(
 				'ai-analysis',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-				() => analyzeArticle(this.env, context, sourceType, pdfTextTemp),
+				async () =>
+					runArticleProcessor(await loadFullTargetArticle(this.env, context, pdfTextTemp), sourceType, {
+						env: this.env,
+						table: context.table,
+					}),
 			);
 
 			const embedding = await step.do(
 				'generate-embedding',
 				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-				() => generateWorkflowEmbedding(this.env, context, processorResult, pdfTextTemp),
+				async () => {
+					const text = buildEmbeddingTextForArticle(await loadFullTargetArticle(this.env, context, pdfTextTemp), processorResult);
+					return text && this.env.AI ? generateArticleEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
+				},
 			);
 
 			const finalProcessorResult = mergeProcessorResult(
