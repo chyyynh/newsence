@@ -13,12 +13,7 @@ import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metad
 import type { Article, Env, TranscriptSegment } from '@core-shared/types';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout } from '@core-shared/web';
 import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
-import {
-	cleanupSourceArticleDraftRef,
-	readSourceArticleDraft,
-	type SourceArticleDraft,
-	sourceDraftToArticle,
-} from '@ingest/workflows/source-draft';
+import { cleanupSourceArticleDraftRef, readSourceArticleDraft, type SourceArticleDraft } from '@ingest/workflows/source-draft';
 import { syncPaperGraph } from '@papers/sync';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
@@ -180,7 +175,26 @@ function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): Workfl
 		table: targetTable(target),
 		readSourceDraft,
 		readSourceArticle: () => {
-			article ??= readSourceDraft().then(sourceDraftToArticle);
+			article ??= readSourceDraft().then((draft) => {
+				const data = draft.article;
+				return {
+					id: data.url,
+					title: data.title,
+					title_cn: null,
+					summary: data.summary || null,
+					summary_cn: null,
+					content: data.content,
+					content_cn: null,
+					url: data.url,
+					source: data.source,
+					published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+					tags: data.tags ?? [],
+					keywords: data.keywords ?? [],
+					source_type: data.sourceType,
+					og_image_url: data.ogImageUrl,
+					platform_metadata: data.platformMetadata as Article['platform_metadata'],
+				};
+			});
 			return article;
 		},
 	};

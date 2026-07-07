@@ -1,6 +1,6 @@
 import type { InsertArticleData } from '@core-shared/article-store';
 import type { TwitterMedia } from '@core-shared/platform-metadata';
-import type { Article, Env, Tweet } from '@core-shared/types';
+import type { Env, Tweet } from '@core-shared/types';
 import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
 
 type TwitterSourceEventType = 'tweet' | 'thread' | 'share' | 'quote' | 'retweet' | 'article';
@@ -27,10 +27,6 @@ export type SourceArticleDraftRef = { url: string; r2Key: string };
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 
-function assertSourceArticleDraftKey(key: string): void {
-	if (!key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${key}`);
-}
-
 export async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
 	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
 	await env.R2.put(r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
@@ -38,31 +34,10 @@ export async function createSourceArticleDraftRef(env: Env, draft: SourceArticle
 }
 
 export async function readSourceArticleDraft(env: Env, ref: SourceArticleDraftRef): Promise<SourceArticleDraft> {
-	assertSourceArticleDraftKey(ref.r2Key);
+	if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
 	const obj = await env.R2.get(ref.r2Key);
 	if (!obj) throw new Error(`source article draft missing: ${ref.r2Key}`);
 	return obj.json<SourceArticleDraft>();
-}
-
-export function sourceDraftToArticle(draft: SourceArticleDraft): Article {
-	const data = draft.article;
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		og_image_url: data.ogImageUrl,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
 }
 
 export async function cleanupSourceArticleDraftRef(
@@ -71,7 +46,7 @@ export async function cleanupSourceArticleDraftRef(
 	context: { reason: string; workflowId?: string; logTag?: string },
 ): Promise<void> {
 	try {
-		assertSourceArticleDraftKey(ref.r2Key);
+		if (!ref.r2Key.startsWith(SOURCE_ARTICLE_DRAFT_PREFIX)) throw new Error(`Invalid source article draft key: ${ref.r2Key}`);
 		await env.R2.delete(ref.r2Key);
 	} catch (err) {
 		console.warn({
