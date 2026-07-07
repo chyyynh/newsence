@@ -178,6 +178,17 @@ export function normalizeArticleEntitiesForStorage(
 	return [...byCanonical.values()];
 }
 
+export function normalizeArticleEntityUpdatePayload(
+	updatePayload: Record<string, unknown>,
+	source?: string | null,
+	platformMetadata?: unknown,
+): NormalizedArticleEntity[] | null {
+	if (!Array.isArray(updatePayload.entities)) return null;
+	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
+	updatePayload.entities = entities;
+	return entities;
+}
+
 export function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
 	if (!value || typeof value !== 'object') return false;
 	const record = value as Record<string, unknown>;

@@ -11,7 +11,7 @@ import {
 } from '@core-shared/article-store';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
-import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
+import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { syncPaperGraph } from '@papers/sync';
 import { Client } from 'pg';
@@ -357,7 +357,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 		og_image_url: null,
 	};
 	const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
-	const entities = entityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
+	const entities = normalizeArticleEntityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
@@ -400,7 +400,7 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 		Object.keys(metadataPatch).length ? metadataPatch : undefined,
 	);
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
-	const entities = entityUpdatePayload(updatePayload, input.article.source, platformMetadata);
+	const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
@@ -423,17 +423,6 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'row workflow rollback failed', error: String(rollbackError) }));
 		throw error;
 	}
-}
-
-function entityUpdatePayload(
-	updatePayload: Record<string, unknown>,
-	source?: string | null,
-	platformMetadata?: unknown,
-): ArticleEntityInput[] | null {
-	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
-	updatePayload.entities = entities;
-	return entities;
 }
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: WorkflowTarget }> {
