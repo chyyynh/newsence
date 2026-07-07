@@ -10,14 +10,13 @@ const CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
+export { CORS_HEADERS as SCRAPE_CORS_HEADERS };
 
 // POST /scrape — synchronous, stateless content extraction. Accepts either
 // `{ "url": "..." }` (JSON) or raw file bytes (`--data-binary`). Returns
 // NormalizedContent without touching R2/DB and without AI — the fast path.
 // Large PDFs should use the async POST /scrape/jobs.
 export async function handleScrape(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-
 	try {
 		const input = await readScrapeInput(request);
 		if (input instanceof Response) return input;
@@ -38,8 +37,6 @@ export async function handleScrape(request: Request, env: Env): Promise<Response
 // poll GET /scrape/jobs/:id for the result. Use this for large/slow inputs that
 // would exceed the sync /scrape request budget.
 export async function handleScrapeJobCreate(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-
 	try {
 		const input = await readScrapeInput(request);
 		if (input instanceof Response) return input;
@@ -118,9 +115,7 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 
 // GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent
 // once the Workflow completes (from its `output`).
-export async function handleScrapeJobStatus(request: Request, jobId: string, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-
+export async function handleScrapeJobStatus(jobId: string, env: Env): Promise<Response> {
 	try {
 		const instance = await env.SCRAPE_WORKFLOW.get(jobId);
 		const { status, error, output } = await instance.status();

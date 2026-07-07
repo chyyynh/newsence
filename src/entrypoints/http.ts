@@ -1,8 +1,8 @@
-import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
+import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus, SCRAPE_CORS_HEADERS } from '@ingest/handlers/scrape';
 import { handleExportCollectionOkf } from '../okf';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
-type PostRoute = { handler: RouteHandler; cors: HeadersInit; optionsThroughHandler?: boolean };
+type PostRoute = { handler: RouteHandler; cors: HeadersInit };
 
 const ENCODER = new TextEncoder();
 const INTERNAL_CORS_HEADERS: Record<string, string> = {
@@ -10,17 +10,12 @@ const INTERNAL_CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Methods': 'POST, OPTIONS',
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
-const SCRAPE_CORS_HEADERS: Record<string, string> = {
-	'Access-Control-Allow-Origin': '*',
-	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
-};
 const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
 
 const POST_ROUTES: Record<string, PostRoute> = {
 	'/okf/collections/export': { handler: handleExportCollectionOkf, cors: OKF_EXPORT_CORS },
-	'/scrape': { handler: handleScrape, cors: SCRAPE_CORS_HEADERS, optionsThroughHandler: true },
-	'/scrape/jobs': { handler: handleScrapeJobCreate, cors: SCRAPE_CORS_HEADERS, optionsThroughHandler: true },
+	'/scrape': { handler: handleScrape, cors: SCRAPE_CORS_HEADERS },
+	'/scrape/jobs': { handler: handleScrapeJobCreate, cors: SCRAPE_CORS_HEADERS },
 };
 
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
@@ -127,10 +122,9 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
 		});
 	}
 	if (method === 'OPTIONS') {
-		if (postRoute?.optionsThroughHandler) return postRoute.handler(request, env, ctx);
 		if (postRoute) return new Response(null, { headers: postRoute.cors });
 
-		if (scrapeJobId) return handleScrapeJobStatus(request, scrapeJobId, env);
+		if (scrapeJobId) return new Response(null, { headers: SCRAPE_CORS_HEADERS });
 	}
 
 	const needsAuth = (method === 'POST' && !!postRoute) || (method === 'GET' && (!!streamInstanceId || !!scrapeJobId));
@@ -144,7 +138,7 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
 	if (method === 'GET') {
 		if (streamInstanceId) return handleWorkflowStream(request, streamInstanceId, env);
 
-		if (scrapeJobId) return handleScrapeJobStatus(request, scrapeJobId, env);
+		if (scrapeJobId) return handleScrapeJobStatus(scrapeJobId, env);
 	}
 
 	return new Response(HELP_TEXT, { headers: { 'Content-Type': 'text/plain' } });
