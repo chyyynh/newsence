@@ -389,17 +389,16 @@ async function prepareYoutubeHighlights(
 }
 
 async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<void> {
-	const tempObjects: Array<{ object: string; key: string }> = [];
+	const keys: string[] = [];
 
-	if (pdfTextTemp?.textStorageKey) tempObjects.push({ object: 'pdf_text', key: pdfTextTemp.textStorageKey });
-	if (context.target.kind === 'source') tempObjects.push({ object: 'source_article_draft', key: context.target.sourceArticle.r2Key });
+	if (pdfTextTemp?.textStorageKey) keys.push(pdfTextTemp.textStorageKey);
+	if (context.target.kind === 'source') keys.push(context.target.sourceArticle.r2Key);
+	if (!keys.length) return;
 
-	for (const tempObject of tempObjects) {
-		try {
-			await env.R2.delete(tempObject.key);
-		} catch (error) {
-			console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup failed', ...tempObject, error: String(error) });
-		}
+	try {
+		await env.R2.delete(keys);
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'Temp object cleanup failed', keys, error: String(error) });
 	}
 }
 
