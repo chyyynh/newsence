@@ -1,6 +1,6 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
-import { BROWSER_UA, detectUrlKind, extractYouTubeId, MAX_UPLOAD_BYTES, streamWithByteLimit, type UrlKind } from '@core-shared/web';
+import { BROWSER_UA, detectUrlKind, extractYouTubeId, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
@@ -82,28 +82,6 @@ const REMOTE_DISPATCH_HEADERS: HeadersInit = {
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
 
-type PageScraper = (url: string, options: ScrapeOptions) => Promise<ScrapedContent>;
-
-const PLATFORM_SCRAPERS: Partial<Record<UrlKind, PageScraper>> = {
-	youtube: async (url, options) => {
-		const videoId = extractYouTubeId(url);
-		if (!videoId) throw new Error('Invalid YouTube URL');
-		if (!options.youtubeApiKey) throw new Error('YouTube API key required');
-		return scrapeYouTube(videoId, options.youtubeApiKey);
-	},
-	twitter: async (url, options) => {
-		const tweetId = extractTweetId(url);
-		if (!tweetId) throw new Error('Invalid Twitter URL');
-		if (!options.kaitoApiKey) throw new Error('Kaito API key required');
-		return scrapeTweet(tweetId, options.kaitoApiKey);
-	},
-	hackernews: async (url) => {
-		const itemId = extractHackerNewsId(url);
-		if (!itemId) throw new Error('Invalid HackerNews URL');
-		return scrapeHackerNews(itemId);
-	},
-};
-
 export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	if (!pdfParserReady) {
 		initSync({ module: wasmModule });
@@ -164,8 +142,27 @@ async function fetchAndDispatchUrl(url: string): Promise<ScrapeResult> {
 }
 
 export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
-	const scraper = PLATFORM_SCRAPERS[detectUrlKind(url)];
-	if (scraper) return { kind: 'page', scraped: await scraper(url, options) };
+	switch (detectUrlKind(url)) {
+		case 'youtube': {
+			const videoId = extractYouTubeId(url);
+			if (!videoId) throw new Error('Invalid YouTube URL');
+			if (!options.youtubeApiKey) throw new Error('YouTube API key required');
+			return { kind: 'page', scraped: await scrapeYouTube(videoId, options.youtubeApiKey) };
+		}
+		case 'twitter': {
+			const tweetId = extractTweetId(url);
+			if (!tweetId) throw new Error('Invalid Twitter URL');
+			if (!options.kaitoApiKey) throw new Error('Kaito API key required');
+			return { kind: 'page', scraped: await scrapeTweet(tweetId, options.kaitoApiKey) };
+		}
+		case 'hackernews': {
+			const itemId = extractHackerNewsId(url);
+			if (!itemId) throw new Error('Invalid HackerNews URL');
+			return { kind: 'page', scraped: await scrapeHackerNews(itemId) };
+		}
+		case 'web':
+			break;
+	}
 
 	let parsed: URL;
 	try {

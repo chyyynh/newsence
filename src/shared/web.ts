@@ -60,7 +60,7 @@ const TWITTER_HOSTS = new Set(['twitter.com', 'x.com']);
 const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
 
-export type UrlKind = 'hackernews' | 'youtube' | 'twitter' | 'web';
+type UrlKind = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
 export class PayloadTooLargeError extends Error {
 	constructor(maxBytes: number) {
