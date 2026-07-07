@@ -35,21 +35,13 @@ class DefaultProcessor implements ArticleProcessor {
 import { HackerNewsProcessor } from '../platforms/hackernews/processor';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
-const processors: Record<string, ArticleProcessor> = {
+export const articleProcessors: Record<string, ArticleProcessor> = {
 	hackernews: new HackerNewsProcessor(),
 	twitter: new TwitterProcessor(),
 	default: new DefaultProcessor(),
 };
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
-
-export async function runArticleProcessor(
-	article: Article,
-	sourceType: string | undefined,
-	deps: ProcessorContext,
-): Promise<ProcessorResult> {
-	return (processors[sourceType ?? 'default'] ?? processors.default).process(article, deps);
-}
 
 export function buildProcessorUpdatePayload(
 	article: Article,

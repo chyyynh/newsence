@@ -17,7 +17,7 @@ import {
 	type WorkflowQueueTarget,
 } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
-import { runArticleProcessor } from '../domain/processors';
+import { articleProcessors } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import { enrichS2ByTitle, enrichS2FromId } from '../platforms/paper/semanticscholar';
@@ -307,10 +307,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				'ai-analysis',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 				async () =>
-					runArticleProcessor(await loadFullTargetArticle(this.env, context, pdfTextTemp), sourceType, {
-						env: this.env,
-						table: context.table,
-					}),
+					(articleProcessors[sourceType] ?? articleProcessors.default).process(
+						await loadFullTargetArticle(this.env, context, pdfTextTemp),
+						{ env: this.env, table: context.table },
+					),
 			);
 
 			const embedding = await step.do(
