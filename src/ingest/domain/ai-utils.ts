@@ -76,9 +76,6 @@ const ArticleClassificationSchema = z.object({
 	category: z.enum(ARTICLE_CATEGORIES),
 });
 
-type ArticleTranslationObject = z.infer<typeof ArticleTranslationSchema>;
-type ArticleClassificationObject = z.infer<typeof ArticleClassificationSchema>;
-
 const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
 
 任務：
@@ -188,28 +185,6 @@ function validateCleanedContent(original: string, cleaned: string | null): strin
 	return trimmed;
 }
 
-async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
-	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
-		schema: ArticleTranslationSchema,
-		task: 'article-translation',
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 700,
-		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
-	});
-	return result;
-}
-
-async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject | null> {
-	const result = await generateObject<ArticleClassificationObject>(env.AI, buildArticleContextPrompt(article), {
-		schema: ArticleClassificationSchema,
-		task: 'article-classification',
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 500,
-		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
-	});
-	return result;
-}
-
 async function generateArticleContentCleanup(article: Article, env: Env): Promise<string | null> {
 	const content = article.content?.trim();
 	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || article.source_type === 'youtube' || article.source_type === 'hackernews')
@@ -225,18 +200,6 @@ async function generateArticleContentCleanup(article: Article, env: Env): Promis
 	return validateCleanedContent(cleanupContent, cleaned);
 }
 
-async function generateArticleContentTranslation(article: Article, env: Env): Promise<string | null> {
-	if (!shouldTranslateArticleContent(article)) return null;
-	const content = article.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH);
-	return generateText(env.AI, `原文 Markdown:\n${content}`, {
-		task: 'article-content-translation',
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 6000,
-		temperature: 0.2,
-		systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
-	});
-}
-
 export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
@@ -246,19 +209,43 @@ export async function generateArticleAnalysis(article: Article, env: Env): Promi
 			return null;
 		});
 		const articleForAnalysis = cleanedContent ? { ...article, content: cleanedContent } : article;
+		const articlePrompt = buildArticleContextPrompt(articleForAnalysis);
+		const contentForTranslation = shouldTranslateArticleContent(articleForAnalysis)
+			? articleForAnalysis.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH)
+			: null;
 		const [translation, classification, contentTranslation] = await Promise.all([
-			generateArticleTranslation(articleForAnalysis, env).catch((error) => {
+			generateObject(env.AI, articlePrompt, {
+				schema: ArticleTranslationSchema,
+				task: 'article-translation',
+				gatewayId: env.AI_GATEWAY_NAME,
+				maxTokens: 700,
+				systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
+			}).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
 				return null;
 			}),
-			generateArticleClassification(articleForAnalysis, env).catch((error) => {
+			generateObject(env.AI, articlePrompt, {
+				schema: ArticleClassificationSchema,
+				task: 'article-classification',
+				gatewayId: env.AI_GATEWAY_NAME,
+				maxTokens: 500,
+				systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
+			}).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
 				return null;
 			}),
-			generateArticleContentTranslation(articleForAnalysis, env).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
-				return null;
-			}),
+			contentForTranslation
+				? generateText(env.AI, `原文 Markdown:\n${contentForTranslation}`, {
+						task: 'article-content-translation',
+						gatewayId: env.AI_GATEWAY_NAME,
+						maxTokens: 6000,
+						temperature: 0.2,
+						systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
+					}).catch((error) => {
+						console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
+						return null;
+					})
+				: Promise.resolve(null),
 		]);
 
 		const analysis: AIAnalysisResult = {};
