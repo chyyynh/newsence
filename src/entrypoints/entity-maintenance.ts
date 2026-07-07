@@ -20,10 +20,6 @@ function parseMaintenanceCursor(value: unknown): MaintenanceCursor | null {
 	return { id, publishedDate };
 }
 
-function parseMaintenanceSourceType(value: unknown): string | null {
-	return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
 export async function handleRepairEntityLinks(request: Request, env: Env): Promise<Response> {
 	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
 	if (unauth) return unauth;
@@ -46,7 +42,7 @@ export async function handleRepairEntityLinks(request: Request, env: Env): Promi
 	if (body.cursor !== undefined && !cursor) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid cursor' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
-	const sourceType = parseMaintenanceSourceType(body.sourceType);
+	const sourceType = typeof body.sourceType === 'string' && body.sourceType.trim() ? body.sourceType.trim() : null;
 	if (body.sourceType !== undefined && !sourceType) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid sourceType' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
 	}
@@ -81,17 +77,8 @@ export async function handleEntityQuality(request: Request, env: Env): Promise<R
 	const months = boundedMaintenanceLimit(body.months, 6, 24);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	await db.query('BEGIN');
-	try {
-		const result = await getEntityQualitySnapshot(db, { months });
-		await db.query('COMMIT');
-		return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'entity quality snapshot rollback failed', error: String(rollbackError) }));
-		throw error;
-	}
+	const result = await getEntityQualitySnapshot(db, { months });
+	return Response.json(result, { headers: INTERNAL_CORS_HEADERS });
 }
 
 export async function handlePruneOrphanEntities(request: Request, env: Env): Promise<Response> {
