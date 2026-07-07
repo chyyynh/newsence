@@ -176,12 +176,6 @@ function shouldTranslateArticleContent(article: Article): boolean {
 	return cjkRatio(content) < 0.6;
 }
 
-function shouldCleanArticleContent(article: Article): boolean {
-	const content = article.content?.trim();
-	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH) return false;
-	return article.source_type !== 'youtube' && article.source_type !== 'hackernews';
-}
-
 function normalizeComparableContent(content: string): string {
 	return content.replace(/\s+/g, ' ').trim();
 }
@@ -224,16 +218,18 @@ async function generateArticleClassification(article: Article, env: Env): Promis
 }
 
 async function generateArticleContentCleanup(article: Article, env: Env): Promise<string | null> {
-	if (!shouldCleanArticleContent(article)) return null;
-	const content = article.content!.trim().slice(0, MAX_CONTENT_CLEANUP_LENGTH);
-	const cleaned = await generateText(env.AI, `原文 Markdown:\n${content}`, {
+	const content = article.content?.trim();
+	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || article.source_type === 'youtube' || article.source_type === 'hackernews')
+		return null;
+	const cleanupContent = content.slice(0, MAX_CONTENT_CLEANUP_LENGTH);
+	const cleaned = await generateText(env.AI, `原文 Markdown:\n${cleanupContent}`, {
 		task: 'article-content-cleanup',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 6000,
 		temperature: 0.1,
 		systemPrompt: ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT,
 	});
-	return validateCleanedContent(content, cleaned);
+	return validateCleanedContent(cleanupContent, cleaned);
 }
 
 async function generateArticleContentTranslation(article: Article, env: Env): Promise<string | null> {

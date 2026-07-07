@@ -6,14 +6,6 @@ export const INTERNAL_CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
 };
 
-async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
-	const [hashA, hashB] = await Promise.all([
-		crypto.subtle.digest('SHA-256', ENCODER.encode(a)),
-		crypto.subtle.digest('SHA-256', ENCODER.encode(b)),
-	]);
-	return crypto.subtle.timingSafeEqual(hashA, hashB);
-}
-
 /**
  * Guard-style auth check: returns null when authorized, otherwise a pre-built
  * 401 Response. Callers do `const unauth = await requireAuth(req, env); if (unauth) return unauth;`.
@@ -33,7 +25,13 @@ export async function requireAuth(request: Request, env: Env, extraHeaders?: Hea
 		request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
 		''
 	).trim();
-	if (provided && (await timingSafeStringEqual(provided, expected))) return null;
+	if (provided) {
+		const [providedHash, expectedHash] = await Promise.all([
+			crypto.subtle.digest('SHA-256', ENCODER.encode(provided)),
+			crypto.subtle.digest('SHA-256', ENCODER.encode(expected)),
+		]);
+		if (crypto.subtle.timingSafeEqual(providedHash, expectedHash)) return null;
+	}
 	return Response.json({ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' }, { status: 401, headers: extraHeaders });
 }
 

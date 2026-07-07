@@ -1,14 +1,24 @@
 import { WorkerEntrypoint, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import type { ArticleSearchInput, CoreRpc, ReadContextItem, ScrapedUrlContent, StoreGeneratedImageInput } from '@core-rpc/contracts';
+import type {
+	ArticleRankSearchInput,
+	ArticleSearchInput,
+	CoreRpc,
+	CoreUploadedFileInput,
+	ReadContextItem,
+	RelatedArticleSearchInput,
+	ScrapedUrlContent,
+	StoreGeneratedImageInput,
+} from '@core-rpc/contracts';
 import { routeRequest } from '@entry/http';
-import { persistGeneratedImage } from '@ingest/blob';
+import { ingestUploadedFile, persistGeneratedImage } from '@ingest/blob';
 import { type ExtractInput, extractSource, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { NewsenceMonitorWorkflow } from '@ingest/workflows/article-processing.workflow';
 import { createWorkflowsForQueueMessages, handleRetryCron, type QueueMessage } from '@ingest/workflows/queue';
-import { readCorpusItems, searchCorpusArticles } from './corpus';
+import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
+import { ingestUrls } from './ingest/urls';
 
 export { NewsenceMonitorWorkflow };
 
@@ -73,9 +83,29 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		return persistGeneratedImage(this.env, input);
 	}
 
+	/** Ingest user-submitted URLs into user_files without going through public HTTP auth. */
+	ingestUrls(input: { urls: string[]; userId?: string }) {
+		return ingestUrls(this.env, input);
+	}
+
+	/** Ingest an uploaded PDF/image without encoding it as multipart HTTP between Workers. */
+	ingestUploadedFile(input: CoreUploadedFileInput) {
+		return ingestUploadedFile(this.env, input);
+	}
+
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
 	searchArticles(input: ArticleSearchInput) {
 		return searchCorpusArticles(this.env, input);
+	}
+
+	/** Hybrid rank search for app-side feed/context lookup. */
+	searchArticleRanks(input: ArticleRankSearchInput) {
+		return searchCorpusArticleRanks(this.env, input);
+	}
+
+	/** Related article ids for app-side recommendations. */
+	relatedArticleIds(input: RelatedArticleSearchInput) {
+		return relatedCorpusArticleIds(this.env, input);
 	}
 
 	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */

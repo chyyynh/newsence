@@ -74,6 +74,14 @@ export interface IngestImageUrlArgs {
 	title?: string | null;
 }
 
+export interface IngestUploadedFileArgs {
+	userId: string;
+	fileName: string;
+	contentType: string;
+	bytes: Uint8Array;
+	title?: string | null;
+}
+
 interface InsertBlobUserFileData {
 	userId: string;
 	storageKey: string;
@@ -267,22 +275,31 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	if (!userId) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Missing userId form field' };
 	}
+	return ingestUploadedFile(env, {
+		userId,
+		fileName: file.name,
+		contentType: file.type || 'application/octet-stream',
+		bytes: new Uint8Array(await file.arrayBuffer()),
+		title: titleOverride,
+	});
+}
 
+export async function ingestUploadedFile(env: Env, args: IngestUploadedFileArgs): Promise<IngestBlobOutcome> {
 	// Per-user throttle, mirroring the JSON ingest paths — without this the
 	// multipart upload surface was the one unmetered entry point on /ingest.
-	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${userId}` });
+	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${args.userId}` });
 	if (!success) {
 		return { ok: false, code: 'RATE_LIMITED', message: 'Too many ingest requests; retry shortly.' };
 	}
 
-	if (file.size === 0) {
+	if (args.bytes.byteLength === 0) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Empty file' };
 	}
-	if (file.size > MAX_UPLOAD_BYTES) {
+	if (args.bytes.byteLength > MAX_UPLOAD_BYTES) {
 		return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'File exceeds 10MB' };
 	}
 
-	const fileType = file.type || 'application/octet-stream';
+	const fileType = args.contentType || 'application/octet-stream';
 	if (fileType !== PDF_MIME && !isRasterImage(fileType)) {
 		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: `Unsupported file type: ${fileType}` };
 	}
@@ -291,32 +308,32 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	// before storing — and require the sniffed family (image vs PDF) to match the
 	// declared one, so a PDF can't masquerade as an image (or vice-versa) and slip
 	// past the declared-type gate above.
-	const header = new Uint8Array(await file.slice(0, MAGIC_SNIFF_BYTES).arrayBuffer());
+	const header = args.bytes.subarray(0, MAGIC_SNIFF_BYTES);
 	const sniffed = sniffMediaType(header);
 	if (!sniffed || (sniffed === PDF_MIME) !== (fileType === PDF_MIME)) {
 		return { ok: false, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'File content does not match a supported image or PDF format' };
 	}
 
-	const storageKey = userUploadKey(userId, extensionFromMime(fileType, file.name));
+	const storageKey = userUploadKey(args.userId, extensionFromMime(fileType, args.fileName));
 	try {
-		await env.R2.put(storageKey, file.stream(), { httpMetadata: { contentType: fileType, cacheControl: UPLOAD_CACHE_CONTROL } });
+		await env.R2.put(storageKey, args.bytes, { httpMetadata: { contentType: fileType, cacheControl: UPLOAD_CACHE_CONTROL } });
 	} catch (err) {
 		console.error({ tag: 'INGEST_BLOB', msg: 'R2 put failed', storageKey, error: String(err) });
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 	}
 
-	const title = (titleOverride ?? file.name.replace(/\.[a-z0-9]{1,8}$/i, '')) || file.name;
+	const title = args.title?.trim() || args.fileName.replace(/\.[a-z0-9]{1,8}$/i, '') || args.fileName;
 	const persisted = await persistBlobRow(env, {
-		userId,
+		userId: args.userId,
 		storageKey,
-		fileSize: file.size,
+		fileSize: args.bytes.byteLength,
 		fileType,
-		fileName: file.name,
+		fileName: args.fileName,
 		originType: 'upload',
 		title,
 		metadata:
 			fileType === PDF_MIME
-				? { type: 'pdf' as const, fetchedAt: new Date().toISOString(), data: { fileName: file.name, fileSize: file.size } }
+				? { type: 'pdf' as const, fetchedAt: new Date().toISOString(), data: { fileName: args.fileName, fileSize: args.bytes.byteLength } }
 				: null,
 	});
 	if (!persisted.ok) return persisted;
@@ -324,8 +341,15 @@ export async function ingestBlob(request: Request, env: Env): Promise<IngestBlob
 	// Only PDFs trigger the AI workflow today — images have no text to analyze.
 	const instanceId = fileType === PDF_MIME ? await createUserFileWorkflow(env, persisted.userFileId) : undefined;
 
-	console.info({ tag: 'INGEST_BLOB', msg: 'Stored blob', userFileId: persisted.userFileId, storageKey, fileType, fileSize: file.size });
-	return { ok: true, result: buildBlobResult({ ...persisted, storageKey, fileType, fileSize: file.size, title, instanceId }) };
+	console.info({
+		tag: 'INGEST_BLOB',
+		msg: 'Stored blob',
+		userFileId: persisted.userFileId,
+		storageKey,
+		fileType,
+		fileSize: args.bytes.byteLength,
+	});
+	return { ok: true, result: buildBlobResult({ ...persisted, storageKey, fileType, fileSize: args.bytes.byteLength, title, instanceId }) };
 }
 
 export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promise<IngestImageUrlOutcome> {

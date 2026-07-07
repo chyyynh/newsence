@@ -17,6 +17,17 @@ export type ArticleSearchInput = {
 	limit?: number;
 };
 
+export type ArticleRankSearchInput = {
+	query: string;
+	limit?: number;
+};
+
+export type RelatedArticleSearchInput = {
+	seed: { id: string; type: 'article' | 'user_file' };
+	limit?: number;
+	offset?: number;
+};
+
 export interface ReadContextItem {
 	type: 'article' | 'collection' | 'url';
 	id: string;
@@ -73,9 +84,61 @@ type StoreGeneratedImageResult =
 			message: string;
 	  };
 
+type CoreUrlIngestResult = {
+	url: string;
+	userFileId?: string;
+	instanceId?: string;
+	title?: string;
+	titleCn?: string;
+	summaryCn?: string;
+	tags?: string[];
+	ogImageUrl?: string | null;
+	resourceKind?: 'url' | 'blob';
+	originType?: 'saved_url';
+	platformType?: string;
+	fileType?: string;
+	alreadyExists?: boolean;
+	error?: string;
+};
+
+type CoreUrlIngestOutcome =
+	| { ok: true; results: CoreUrlIngestResult[] }
+	| { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED'; message: string };
+
+export type CoreUploadedFileInput = {
+	userId: string;
+	fileName: string;
+	contentType: string;
+	bytes: Uint8Array;
+	title?: string | null;
+};
+
+type CoreMediaIngestResult = {
+	userFileId: string;
+	storageKey: string;
+	assetUrl: string;
+	fileType: string;
+	fileSize: number;
+	title: string | null;
+	originType: 'upload';
+	instanceId?: string;
+};
+
+type CoreMediaIngestOutcome =
+	| { ok: true; result: CoreMediaIngestResult }
+	| {
+			ok: false;
+			code: 'BAD_REQUEST' | 'RATE_LIMITED' | 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
+			message: string;
+	  };
+
 export interface CoreRpc {
 	storeGeneratedImage(input: StoreGeneratedImageInput): Promise<StoreGeneratedImageResult>;
+	ingestUrls(input: { urls: string[]; userId?: string }): Promise<CoreUrlIngestOutcome>;
+	ingestUploadedFile(input: CoreUploadedFileInput): Promise<CoreMediaIngestOutcome>;
 	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]>;
+	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;
+	relatedArticleIds(input: RelatedArticleSearchInput): Promise<string[]>;
 	scrapeUrl(url: string): Promise<ScrapedUrlContent>;
 	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]>;
 }
