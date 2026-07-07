@@ -39,8 +39,20 @@ export async function handleScrapeJobCreate(request: Request, env: Env): Promise
 	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
 	try {
-		const params = await buildJobParams(request, env);
-		if (params instanceof Response) return params;
+		const input = await readScrapeInput(request);
+		if (input instanceof Response) return input;
+
+		let params: { kind: 'url'; url: string } | { kind: 'r2'; key: string };
+		if (input.kind === 'url') {
+			params = input;
+		} else {
+			const sniffed = sniffMediaType(input.bytes.subarray(0, MAGIC_SNIFF_BYTES));
+			if (!sniffed) return Response.json({ error: 'Unrecognized file type' }, { status: 415, headers: CORS_HEADERS });
+
+			const key = `${SCRAPE_INPUT_TEMP_PREFIX}${crypto.randomUUID()}.${extensionFromMime(sniffed)}`;
+			await env.R2.put(key, input.bytes, { httpMetadata: { contentType: sniffed } });
+			params = { kind: 'r2', key };
+		}
 
 		try {
 			const instance = await env.SCRAPE_WORKFLOW.create({ params });
@@ -100,21 +112,6 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 	if (bytes.byteLength === 0)
 		return Response.json({ error: 'Empty body — POST {url} JSON or raw bytes' }, { status: 400, headers: CORS_HEADERS });
 	return { kind: 'bytes', bytes };
-}
-
-// For the async job: a URL passes straight through as a workflow param; raw
-// bytes are staged to a temp R2 key (the workflow deletes it), since bytes can't
-// fit in Workflow params.
-async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'; url: string } | { kind: 'r2'; key: string } | Response> {
-	const input = await readScrapeInput(request);
-	if (input instanceof Response || input.kind === 'url') return input;
-
-	const sniffed = sniffMediaType(input.bytes.subarray(0, MAGIC_SNIFF_BYTES));
-	if (!sniffed) return Response.json({ error: 'Unrecognized file type' }, { status: 415, headers: CORS_HEADERS });
-
-	const key = `${SCRAPE_INPUT_TEMP_PREFIX}${crypto.randomUUID()}.${extensionFromMime(sniffed)}`;
-	await env.R2.put(key, input.bytes, { httpMetadata: { contentType: sniffed } });
-	return { kind: 'r2', key };
 }
 
 // GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent
