@@ -341,6 +341,7 @@ async function stagePdfExtraction(
 	context: WorkflowRunContext,
 	article: ProcessableArticleShell,
 	step: WorkflowStep,
+	workflowInstanceId: string,
 ): Promise<PdfTextTempResult | null> {
 	const { target, table } = context;
 	const storageKey = article.storage_key;
@@ -363,7 +364,7 @@ async function stagePdfExtraction(
 				const obj = await env.R2.get(storageKey);
 				if (!obj) throw new Error(`PDF source object missing: ${storageKey}`);
 				const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
-				const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${target.articleId}/${crypto.randomUUID()}.md`;
+				const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${target.articleId}/${workflowIdPart(workflowInstanceId)}.md`;
 				await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: PDF_TEXT_CONTENT_TYPE } });
 				console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: target.articleId, status, chars, pages });
 				return { status, chars, pages, textStorageKey };
@@ -653,7 +654,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
-			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
+			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step, event.instanceId);
 
 			const paperEnrichment = await enrichPaperMetadata(this.env, context, article, pdfTextTemp, step);
 
