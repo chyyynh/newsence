@@ -17,15 +17,9 @@ export interface Env {
 	MONITOR_WORKFLOW: Workflow<unknown>;
 	SCRAPE_WORKFLOW: Workflow<unknown>;
 	AI_GATEWAY_NAME: string;
-	POSTHOG_HOST?: string;
-	BETTER_AUTH_SECRET?: string;
 	CORE_WORKER_INTERNAL_TOKEN?: string;
 	KAITO_API_KEY?: string;
 	YOUTUBE_API_KEY?: string;
-	/** Exa client key. Optional; the `search-web` tool refuses to run without it. */
-	EXA_API_KEY?: string;
-	/** PostHog project key (server). Set via `wrangler secret put POSTHOG_API_KEY`. */
-	POSTHOG_API_KEY?: string;
 	/** Semantic Scholar API key (optional). Set via `wrangler secret put S2_API_KEY`.
 	 *  Without it, paper enrichment uses the unauthenticated (shared) S2 pool. */
 	S2_API_KEY?: string;
