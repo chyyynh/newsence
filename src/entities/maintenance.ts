@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// Entity maintenance: batch repair / backfill selection / pruning.
+// Entity maintenance: batch repair / pruning.
 // Driven by the internal /entities/* HTTP endpoints.
 // ─────────────────────────────────────────────────────────────
 
@@ -92,51 +92,6 @@ export async function repairMissingArticleEntityLinks(
 		nextBefore,
 		nextCursor,
 	};
-}
-
-export type MissingEntityArticle = { id: string; publishedDate: string | null };
-
-export async function getArticlesMissingEntities(
-	db: DbClient,
-	limit: number,
-	options: { before?: Date | string; cursor?: MaintenanceCursor; includeEmpty?: boolean; sourceType?: string } = {},
-): Promise<MissingEntityArticle[]> {
-	const cursorDate = options.cursor?.publishedDate ?? options.before ?? null;
-	const cursorId = options.cursor?.id ?? null;
-	const result = await db.query<{ id: string; published_date: string | Date | null }>(
-		`SELECT id, published_date FROM ${ARTICLES_TABLE}
-		  WHERE (
-		      $2::timestamptz IS NULL
-		      OR published_date < $2
-		      OR ($3::uuid IS NOT NULL AND published_date = $2 AND id > $3::uuid)
-		    )
-		    AND (
-		      entities IS NULL
-		      OR jsonb_typeof(entities) <> 'array'
-		      OR (
-		        $4::boolean
-		        AND CASE
-		          WHEN jsonb_typeof(entities) = 'array' THEN jsonb_array_length(entities) = 0
-		          ELSE false
-		        END
-		      )
-		    )
-		    AND (
-		      content IS NOT NULL
-		      OR summary IS NOT NULL
-		    )
-		    AND (
-		      $5::text IS NULL
-		      OR COALESCE(NULLIF(TRIM(source_type), ''), 'unknown') = $5
-		    )
-		  ORDER BY published_date DESC, id ASC
-		  LIMIT $1`,
-		[limit, cursorDate, cursorId, options.includeEmpty === true, options.sourceType ?? null],
-	);
-	return result.rows.map((row) => ({
-		id: row.id,
-		publishedDate: row.published_date ? new Date(row.published_date).toISOString() : null,
-	}));
 }
 
 export async function pruneOrphanEntities(db: DbClient, limit: number): Promise<{ deleted: number }> {

@@ -74,7 +74,7 @@ Translation/summary and classification/entities are separate structured calls so
 
 ### Entity Quality Policy
 
-The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, caps stored entities per article, and exposes repair/backfill endpoints so old rows can be reprocessed with the current rules.
+The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, caps stored entities per article, and exposes repair endpoints so old rows can be reprocessed with the current rules.
 
 It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and OKF-style alias groups are presentation or export-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
 
@@ -82,7 +82,7 @@ Use this maintenance flow before changing schema:
 
 ```bash
 # Inspect monthly coverage, source-type coverage, monthly source-type dips,
-# source-type backfill backlog, sync gap examples, unknown type examples, top
+# extraction gap counts, sync gap examples, unknown type examples, top
 # self-source/generic offenders, over-cap rows, orphans, and DB extensions.
 curl -X POST "$CORE_WORKER_URL/entities/quality" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"
 
@@ -93,14 +93,6 @@ curl -X POST "$CORE_WORKER_URL/entities/repair-links" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
   -d '{"includeLinked": true, "sourceType": "rss"}'
-
-# Fill extraction gaps, including articles previously persisted as an empty extraction.
-# Use sourceType from /entities/quality backfill.sourceTypes to partition large runs.
-# Response includes nextCursor; pass it as cursor to page without skipping equal timestamps.
-curl -X POST "$CORE_WORKER_URL/entities/backfill-missing" \
-  -H "Content-Type: application/json" \
-  -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN" \
-  -d '{"includeEmpty": true, "sourceType": "rss"}'
 
 # Remove entities that no longer have article links after repair.
 curl -X POST "$CORE_WORKER_URL/entities/prune-orphans" -H "X-Internal-Token: $CORE_WORKER_INTERNAL_TOKEN"

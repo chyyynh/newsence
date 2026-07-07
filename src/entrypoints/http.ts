@@ -6,12 +6,7 @@ import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ing
 import { enqueueArticleBatchProcess, handleRetryCron } from '@ingest/workflows/queue';
 import { relatedCorpusArticleIds, searchCorpusArticleRanks } from '../corpus';
 import { handleExportCollectionOkf } from '../okf';
-import {
-	handleBackfillMissingEntities,
-	handleEntityQuality,
-	handlePruneOrphanEntities,
-	handleRepairEntityLinks,
-} from './entity-maintenance';
+import { handleEntityQuality, handlePruneOrphanEntities, handleRepairEntityLinks } from './entity-maintenance';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
@@ -20,7 +15,6 @@ const POST_ROUTES: Record<string, RouteHandler> = {
 	'/search/related': handleRelated,
 	'/ingest': handleIngest,
 	'/retry': handleRetry,
-	'/entities/backfill-missing': handleBackfillMissingEntities,
 	'/entities/prune-orphans': handlePruneOrphanEntities,
 	'/entities/quality': handleEntityQuality,
 	'/entities/repair-links': handleRepairEntityLinks,
@@ -48,7 +42,6 @@ const HELP_TEXT =
 	'GET  /health\n' +
 	'POST /ingest                              - Ingest URL (JSON), image URL (JSON), or user-uploaded blob (multipart)\n' +
 	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
-	'POST /entities/backfill-missing           - Internal: enqueue articles missing entities JSONB; {includeEmpty:true} also retries []; optional {sourceType}\n' +
 	'POST /entities/prune-orphans              - Internal: delete entities with no article_entities links\n' +
 	'POST /entities/quality                    - Internal: entity extraction coverage/sync/type quality snapshot\n' +
 	'POST /entities/repair-links               - Internal: repair/normalize article_entities links from stored entities JSONB; optional {sourceType}\n' +
