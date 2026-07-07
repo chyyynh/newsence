@@ -196,15 +196,24 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		const updateData: ProcessorResult['updateData'] = {};
 
 		// 1. 從 HN API 取得完整資料（包含評論）
-		const hnData = await this.fetchHnData(itemId);
+		const hnData: HnItem | null = itemId
+			? await fetchHnItem(itemId).catch((error) => {
+					console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
+					return null;
+				})
+			: null;
 
 		// 2. 收集評論與外部文章
 		const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
-		if (comments.length > 0) {
-			console.info({ tag: 'HN-PROCESSOR', msg: 'Collected comments', count: comments.length, title: article.title.slice(0, 50) });
-		}
 
-		const { content: externalPageContent } = await this.fetchExternalPage(hnData?.url, ctx.env);
+		const externalPageContent = hnData?.url
+			? await scrapeWebPage(hnData.url)
+					.then((page) => page.content || null)
+					.catch((error) => {
+						console.warn({ tag: 'HN-PROCESSOR', msg: 'Failed to scrape linked webpage', error: String(error) });
+						return null;
+					})
+			: null;
 
 		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
 		if (hnData) {
@@ -244,26 +253,5 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		if (analysis.entities) updateData.entities = analysis.entities;
 
 		return { updateData, enrichments, classificationCategory: analysis.category };
-	}
-
-	private async fetchHnData(itemId: string | null): Promise<HnItem | null> {
-		if (!itemId) return null;
-		try {
-			return await fetchHnItem(itemId);
-		} catch (error) {
-			console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
-			return null;
-		}
-	}
-
-	private async fetchExternalPage(url: string | undefined, _env: Env): Promise<{ title: string | null; content: string | null }> {
-		if (!url) return { title: null, content: null };
-		try {
-			const page = await scrapeWebPage(url);
-			return { title: page.title || null, content: page.content || null };
-		} catch (error) {
-			console.warn({ tag: 'HN-PROCESSOR', msg: 'Failed to scrape linked webpage', error: String(error) });
-			return { title: null, content: null };
-		}
 	}
 }

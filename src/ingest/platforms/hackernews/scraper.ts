@@ -2,7 +2,7 @@
 // HackerNews Scraper
 // ─────────────────────────────────────────────────────────────
 
-import { buildMetadata, type HackerNewsMetadata, type PlatformMetadata } from '@core-shared/platform-metadata';
+import type { HackerNewsMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
 
@@ -33,7 +33,7 @@ function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask
 	return 'story';
 }
 
-function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
+export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author ?? '',
@@ -42,10 +42,6 @@ function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? nul
 		itemType: hnItemTypeForMetadata(item.type),
 		storyUrl,
 	};
-}
-
-export function buildHnPlatformMetadata(item: HnItem, storyUrl?: string | null): Extract<PlatformMetadata, { type: 'hackernews' }> {
-	return buildMetadata('hackernews', buildHnMetadata(item, storyUrl));
 }
 
 export async function fetchHnItem(itemId: string | number): Promise<HnItem> {

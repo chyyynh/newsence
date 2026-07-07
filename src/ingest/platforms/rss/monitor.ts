@@ -7,10 +7,10 @@ import {
 import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Env, RSSFeed } from '@core-shared/types';
-import { detectPlatformType, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
-import { buildHnPlatformMetadata, fetchHnItem } from '../hackernews/scraper';
+import { resolveDiscussionPlatformMetadata } from '../registry';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	extractImageFromItem,
@@ -48,18 +48,6 @@ const FEED_OVERRIDES: Record<string, Partial<FeedConfig>> = {
 	'Google Deepmind': { summarySource: 'ai' },
 	'Anthropic Research': { summarySource: 'ai' },
 };
-
-function getFeedConfig(feedName: string): FeedConfig {
-	return { ...DEFAULT_CONFIG, ...FEED_OVERRIDES[feedName] };
-}
-
-async function fetchHnPlatformMetadata(commentsUrl: string): Promise<(PlatformMetadata & { type: 'hackernews' }) | null> {
-	if (detectPlatformType(commentsUrl) !== 'hackernews') return null;
-	const hnItemId = extractHackerNewsId(commentsUrl);
-	if (!hnItemId) return null;
-	const hn = await fetchHnItem(hnItemId);
-	return buildHnPlatformMetadata(hn, commentsUrl);
-}
 
 interface FetchedRssContent {
 	content: string;
@@ -99,22 +87,18 @@ async function fetchContentForRssItem(item: RSSItem, config: FeedConfig, url: st
 	}
 }
 
-async function detectHnSource(
-	commentsUrl: string | undefined,
-	feedName: string,
-): Promise<{ sourceType: string; platformMetadata: PlatformMetadata | null }> {
-	if (!commentsUrl) return { sourceType: 'rss', platformMetadata: null };
-	try {
-		const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
-		if (hnMeta) return { sourceType: 'hackernews', platformMetadata: hnMeta };
-	} catch (err) {
-		console.warn({ tag: 'RSS', msg: 'Failed to fetch HN metadata', feed: feedName, error: String(err) });
-	}
-	return { sourceType: 'rss', platformMetadata: null };
-}
-
 async function enqueueRssSourceArticle(env: Env, item: RSSItem, url: string, feed: RSSFeed, config: FeedConfig): Promise<void> {
-	const { sourceType, platformMetadata } = await detectHnSource(toPlainText(item.comments) || undefined, feed.name);
+	let sourceType = 'rss';
+	let platformMetadata: PlatformMetadata | null = null;
+	const commentsUrl = toPlainText(item.comments) || undefined;
+	if (commentsUrl) {
+		try {
+			platformMetadata = await resolveDiscussionPlatformMetadata(commentsUrl);
+			sourceType = platformMetadata?.type ?? sourceType;
+		} catch (err) {
+			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
+		}
+	}
 
 	const fetched = sourceType === 'rss' ? await fetchContentForRssItem(item, config, url) : EMPTY_CONTENT;
 	const crawledContent = fetched.content;
@@ -127,7 +111,7 @@ async function enqueueRssSourceArticle(env: Env, item: RSSItem, url: string, fee
 	const publishedDate = pubDate ? new Date(pubDate) : new Date();
 	const title = toPlainText(item.title) || toPlainText(item.text) || 'No Title';
 	const source = feed.name ?? 'Unknown';
-	const summary = sourceType === 'hackernews' || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
+	const summary = platformMetadata || config.summarySource === 'ai' ? '' : stripHtml(item.description ?? item.summary ?? '');
 
 	const metadataToStore = platformMetadata
 		? { ...platformMetadata, ogImageWidth, ogImageHeight }
@@ -186,13 +170,10 @@ async function prepareExistingArticleSourceUpgrade(
 	const commentsUrl = rssItem ? toPlainText(rssItem.comments) || undefined : undefined;
 	if (commentsUrl) {
 		try {
-			const hnMeta = await fetchHnPlatformMetadata(commentsUrl);
-			if (hnMeta) {
-				sourceType = 'hackernews';
-				platformMetadata = hnMeta;
-			}
+			platformMetadata = (await resolveDiscussionPlatformMetadata(commentsUrl)) ?? undefined;
+			sourceType = platformMetadata?.type;
 		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Failed to fetch HN metadata for upgrade', url: normalized, error: String(err) });
+			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata for upgrade', url: normalized, error: String(err) });
 		}
 	}
 
@@ -222,7 +203,7 @@ async function processFeed(env: Env, feed: RSSFeed, parser: XMLParser): Promise<
 		return;
 	}
 
-	const config = getFeedConfig(feed.name);
+	const config = { ...DEFAULT_CONFIG, ...FEED_OVERRIDES[feed.name] };
 	if (items.length > 30) items = items.slice(0, 30);
 
 	const itemUrls = extractFeedItemUrls(items);
