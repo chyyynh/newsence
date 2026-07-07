@@ -1,10 +1,11 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
-import { decodeHtmlEntities, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
+import TurndownService from 'turndown';
 import { resolveDiscussionPlatformMetadata } from '../registry';
 import { scrapeWebPage } from '../web-scraper';
 
@@ -14,6 +15,12 @@ import { scrapeWebPage } from '../web-scraper';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
+const turndown = new TurndownService({
+	headingStyle: 'atx',
+	codeBlockStyle: 'fenced',
+	bulletListMarker: '-',
+});
+turndown.remove(['script', 'style']);
 
 type RSSItem = FeedEntry & {
 	comments?: unknown;
@@ -30,42 +37,10 @@ function toPlainText(value: unknown): string {
 	return '';
 }
 
-function htmlToMarkdown(html: string): string {
-	const markdown = html
-		.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
-		.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
-		.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
-		.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
-		.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n\n##### $1\n\n')
-		.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n\n###### $1\n\n')
-		.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
-		.replace(/<\/?[ou]l[^>]*>/gi, '\n')
-		.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
-		.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
-		.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
-		.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
-		.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-		.replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '^($1)')
-		.replace(/<br\s*\/?>/gi, '\n')
-		.replace(/<\/p>/gi, '\n\n')
-		.replace(/<hr\s*\/?>/gi, '\n\n---\n\n')
-		.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) =>
-			content
-				.trim()
-				.split('\n')
-				.map((line: string) => `> ${line}`)
-				.join('\n'),
-		)
-		.replace(/<[^>]*>/g, '');
-	return decodeHtmlEntities(markdown)
-		.replace(/\n{3,}/g, '\n\n')
-		.trim();
-}
-
 function extractRssFullContent(item: RSSItem): string {
 	const raw = toPlainText(item.rawContent) || item.description || '';
 	if (!raw || raw.length < 800) return '';
-	return htmlToMarkdown(raw);
+	return turndown.turndown(raw).trim();
 }
 
 async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<boolean> {
