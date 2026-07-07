@@ -11,7 +11,6 @@ import {
 	USER_FILES_TABLE,
 	updateProcessedArticle,
 } from '@core-shared/article-store';
-import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
@@ -19,7 +18,7 @@ import { syncArticleEntities } from '@entities/sync';
 import { syncPaperGraph } from '@papers/sync';
 import { Client } from 'pg';
 import { articleProcessors, buildProcessorUpdatePayload, type ProcessorResult } from './domain/processors';
-import { type PdfTextStatus, parsePdf } from './extract';
+import { type PdfTextTempResult, stagePdfTextExtraction } from './pdf';
 import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
 import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
 import {
@@ -240,9 +239,6 @@ type WorkflowParams = {
 	target: WorkflowTarget;
 };
 
-const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
-const PDF_TEXT_CONTENT_TYPE = 'text/markdown; charset=utf-8';
-
 type WorkflowRunContext = {
 	target: WorkflowTarget;
 	table: ProcessableTable;
@@ -257,13 +253,6 @@ type WorkflowPersistenceInput = {
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 	paperEnrichment: PaperMetadata | null;
 };
-
-interface PdfTextTempResult {
-	status: PdfTextStatus | 'failed';
-	chars: number;
-	pages: number;
-	textStorageKey?: string;
-}
 
 function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
 	const readSourceDraft = async () => {
@@ -309,59 +298,6 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 	const pdfTextObj = await env.R2.get(pdfTextTemp.textStorageKey);
 	if (!pdfTextObj) throw new Error(`PDF text temp object missing: ${pdfTextTemp.textStorageKey}`);
 	return { ...article, content: await pdfTextObj.text() };
-}
-
-async function stagePdfExtraction(
-	env: Env,
-	context: WorkflowRunContext,
-	article: ProcessableArticleShell,
-	step: WorkflowStep,
-	workflowInstanceId: string,
-): Promise<PdfTextTempResult | null> {
-	const { target, table } = context;
-	const storageKey = article.storage_key;
-	if (
-		target.kind !== 'row' ||
-		table !== USER_FILES_TABLE ||
-		article.has_content ||
-		!storageKey ||
-		!(article.origin_type === 'upload' || article.origin_type === 'saved_url') ||
-		article.file_type !== PDF_MIME
-	) {
-		return null;
-	}
-
-	try {
-		const pdfTextTemp = await step.do(
-			'extract-pdf-text',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			async () => {
-				const obj = await env.R2.get(storageKey);
-				if (!obj) throw new Error(`PDF source object missing: ${storageKey}`);
-				const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
-				const textStorageKey = `${TMP_PDF_TEXT_PREFIX}${target.articleId}/${workflowIdPart(workflowInstanceId)}.md`;
-				await env.R2.put(textStorageKey, text, { httpMetadata: { contentType: PDF_TEXT_CONTENT_TYPE } });
-				console.info({ tag: 'WORKFLOW', msg: 'PDF extracted', article_id: target.articleId, status, chars, pages });
-				return { status, chars, pages, textStorageKey };
-			},
-		);
-		console.info({
-			tag: 'WORKFLOW',
-			msg: 'PDF extraction staged',
-			article_id: target.articleId,
-			status: pdfTextTemp.status,
-			chars: pdfTextTemp.chars,
-		});
-		return pdfTextTemp;
-	} catch (error) {
-		console.warn({
-			tag: 'WORKFLOW',
-			msg: 'PDF extraction failed, continuing without content',
-			article_id: target.articleId,
-			error: String(error),
-		});
-		return { status: 'failed', chars: 0, pages: 0 };
-	}
 }
 
 async function enrichPaperMetadataStep(
@@ -579,7 +515,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
-			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step, event.instanceId);
+			const pdfTextTemp =
+				context.target.kind === 'row'
+					? await stagePdfTextExtraction(this.env, step, {
+							articleId: context.target.articleId,
+							isUserFile: context.table === USER_FILES_TABLE,
+							hasContent: 'has_content' in article && !!article.has_content,
+							storageKey: article.storage_key,
+							originType: article.origin_type,
+							fileType: article.file_type,
+							tempId: workflowIdPart(event.instanceId),
+						})
+					: null;
 
 			const paperEnrichment = await enrichPaperMetadataStep(this.env, context, article, pdfTextTemp, step);
 

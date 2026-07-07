@@ -1,8 +1,7 @@
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
-import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
-import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
+import { type ParsedPdf, parsePdf } from './pdf';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
 import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
 import { scrapeHtmlFromResponse } from './platforms/web-scraper';
@@ -33,15 +32,6 @@ export interface NormalizedContent {
 	status: 'ok' | 'needs_ocr' | 'failed';
 }
 
-export type PdfTextStatus = 'ok' | 'needs_ocr';
-
-export interface ParsedPdf {
-	text: string;
-	status: PdfTextStatus;
-	pages: number;
-	chars: number;
-}
-
 export interface ScrapeOptions {
 	youtubeApiKey?: string;
 	kaitoApiKey?: string;
@@ -67,31 +57,12 @@ const EMPTY_METADATA: NormalizedContent['metadata'] = {
 	ogImageUrl: null,
 };
 
-const MIN_PDF_CHARS = 40;
-const MIN_PDF_CHARS_PER_PAGE = 20;
-
-let pdfParserReady = false;
-
 const GENERIC_URL_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_URL_FETCH_HEADERS: HeadersInit = {
 	'User-Agent': BROWSER_UA,
 	Accept: '*/*',
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
-
-export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
-	if (!pdfParserReady) {
-		initSync({ module: wasmModule });
-		pdfParserReady = true;
-	}
-	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'markdown', imageMode: 'off' });
-	const raw = (await parser.parse(bytes)) as { text?: string; pages?: unknown[] };
-	const text = (raw.text ?? '').trim();
-	const pages = raw.pages?.length ?? 0;
-	const chars = text.length;
-	const status = chars < MIN_PDF_CHARS || chars / Math.max(pages, 1) < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
-	return { text, pages, chars, status };
-}
 
 function parseContentDisposition(header: string | null): string | null {
 	if (!header) return null;
