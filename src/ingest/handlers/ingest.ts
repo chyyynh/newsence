@@ -1,5 +1,4 @@
 import { parseJsonBody, requireAuth } from '@core-shared/auth';
-import type { Env } from '@core-shared/types';
 import { type IngestImageUrlErrorCode, ingestBlob, ingestImageUrl, QUOTA_EXCEEDED_CODE } from '../blob';
 import { ingestUrls } from '../urls';
 

@@ -22,7 +22,6 @@ import {
 	sniffMediaTypeStream,
 	UnsupportedMediaError,
 } from '@core-shared/mime';
-import type { Env } from '@core-shared/types';
 import {
 	assertExternalFetchable,
 	BROWSER_UA,

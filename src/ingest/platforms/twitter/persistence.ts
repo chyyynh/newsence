@@ -1,7 +1,7 @@
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Env, Tweet } from '@core-shared/types';
+import type { Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
 import { startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
 import { scrapeWebPage } from '../web-scraper';

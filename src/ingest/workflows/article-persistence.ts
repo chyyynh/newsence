@@ -1,7 +1,7 @@
 import { insertFinalSourceArticle, type ProcessableTable, USER_FILES_TABLE, updateProcessedArticle } from '@core-shared/article-store';
 import { withDbTransaction } from '@core-shared/db';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article, Env } from '@core-shared/types';
+import type { Article } from '@core-shared/types';
 import { validateImageUrl } from '@core-shared/web';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';

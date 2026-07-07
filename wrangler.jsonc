@@ -126,16 +126,14 @@
 	 * `AI_GATEWAY_NAME` — AI Gateway name used by Workers AI text generation.
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *
-	 * Required secret:
+	 * Required secrets:
 	 * - CORE_WORKER_INTERNAL_TOKEN protects direct HTTP maintenance endpoints.
-	 *
-	 * Optional secrets:
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
 	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
 	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
 	 */
 	"secrets": {
-		"required": ["CORE_WORKER_INTERNAL_TOKEN"]
+		"required": ["CORE_WORKER_INTERNAL_TOKEN", "KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
 		"AI_GATEWAY_NAME": "default"

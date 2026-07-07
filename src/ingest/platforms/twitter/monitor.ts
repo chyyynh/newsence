@@ -1,5 +1,5 @@
 import { withDbClient } from '@core-shared/db';
-import type { Env, RSSFeed, Tweet } from '@core-shared/types';
+import type { RSSFeed, Tweet } from '@core-shared/types';
 import { fetchJsonWithTimeout } from '@core-shared/web';
 import { saveTweetGroups } from './persistence';
 import { normalizeRetweet } from './source-events';

@@ -1,9 +1,7 @@
 // Semantic Scholar client for academic-paper enrichment. Preferred over OpenAlex
 // because OpenAlex rate-limits by IP and Cloudflare Workers share egress IPs
-// (chronic 429s). S2's unauthenticated limit is a *global shared pool*, not
-// per-IP, so it survives the shared Worker IP; an optional S2_API_KEY grants a
-// dedicated per-key rate. S2 also returns richer reference metadata (DOI +
-// author) in a single call.
+// (chronic 429s). S2_API_KEY gives us a dedicated per-key rate. S2 also returns
+// richer reference metadata (DOI + author) in a single call.
 
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
 import { fetchWithTimeout } from '@core-shared/web';

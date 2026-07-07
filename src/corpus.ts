@@ -1,7 +1,7 @@
 import { generateArticleEmbedding } from '@core-ai/embedding';
 import type { ArticleSearchInput, ArticleSummary, ReadContextItem, ReadContextResult } from '@core-rpc/contracts';
 import { type DbClient, withDbClient } from '@core-shared/db';
-import type { Env, TranscriptSegment } from '@core-shared/types';
+import type { TranscriptSegment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 
 type SearchRanks = Map<string, number>;

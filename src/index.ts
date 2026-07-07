@@ -1,6 +1,5 @@
 import { WorkerEntrypoint, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import type { ArticleSearchInput, CoreRpc, ReadContextItem, ScrapedUrlContent, StoreGeneratedImageInput } from '@core-rpc/contracts';
-import type { Env } from '@core-shared/types';
 import { routeRequest } from '@entry/http';
 import { persistGeneratedImage } from '@ingest/blob';
 import { type ExtractInput, extractSource, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';

@@ -1,30 +1,5 @@
 import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
 
-/**
- * Core-worker-owned environment bindings.
- *
- * Keep this owner-local instead of extending the ambient Cloudflare.Env. Wrangler
- * multi-config service binding typegen imports the callee source into the
- * caller's TypeScript program; an ambient Cloudflare.Env reference would then
- * resolve to the caller worker's Env instead of the core worker's Env.
- */
-export interface Env {
-	R2: R2Bucket;
-	HYPERDRIVE: Hyperdrive;
-	ARTICLE_QUEUE: Queue;
-	USER_INGEST_LIMITER: RateLimit;
-	AI: Ai;
-	MONITOR_WORKFLOW: Workflow<unknown>;
-	SCRAPE_WORKFLOW: Workflow<unknown>;
-	AI_GATEWAY_NAME: string;
-	CORE_WORKER_INTERNAL_TOKEN?: string;
-	KAITO_API_KEY?: string;
-	YOUTUBE_API_KEY?: string;
-	/** Semantic Scholar API key (optional). Set via `wrangler secret put S2_API_KEY`.
-	 *  Without it, paper enrichment uses the unauthenticated (shared) S2 pool. */
-	S2_API_KEY?: string;
-}
-
 // Article related types
 export interface Article {
 	id: string;

@@ -4,7 +4,7 @@
 
 import { generateText } from '@core-ai/embedding';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
-import type { Article, Env } from '@core-shared/types';
+import type { Article } from '@core-shared/types';
 import { decodeHtmlEntities, htmlToText } from '@core-shared/web';
 import {
 	type ArticleProcessor,

@@ -4,7 +4,6 @@
 
 import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { withDbTransaction } from '@core-shared/db';
-import type { Env } from '@core-shared/types';
 import { type MaintenanceCursor, pruneOrphanEntities, repairMissingArticleEntityLinks } from '@entities/maintenance';
 import { getEntityQualitySnapshot } from '@entities/quality-report';
 

@@ -9,7 +9,7 @@ import {
 } from '@core-shared/article-store';
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article, Env, TranscriptSegment } from '@core-shared/types';
+import type { Article, TranscriptSegment } from '@core-shared/types';
 import {
 	cleanupSourceArticleDraftRef,
 	readSourceArticleDraft,

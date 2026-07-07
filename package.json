@@ -38,6 +38,6 @@
 		"@types/pg": "^8.18.0",
 		"@types/turndown": "^5.0.6",
 		"typescript": "^5.9.3",
-		"wrangler": "^4.69.0"
+		"wrangler": "^4.107.0"
 	}
 }

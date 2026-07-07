@@ -1,5 +1,3 @@
-import type { Env } from './types';
-
 const ENCODER = new TextEncoder();
 
 export const INTERNAL_CORS_HEADERS: Record<string, string> = {

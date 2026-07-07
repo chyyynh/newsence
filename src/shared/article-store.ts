@@ -1,5 +1,5 @@
 import { type DbClient, withDbClient } from './db';
-import type { Article, Env } from './types';
+import type { Article } from './types';
 import { normalizeUrl } from './web';
 
 export const ARTICLES_TABLE = 'articles';

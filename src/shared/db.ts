@@ -1,5 +1,4 @@
 import { Client } from 'pg';
-import type { Env } from './types';
 export type DbClient = Client;
 
 export async function withDbClient<T>(env: Env, fn: (db: DbClient) => Promise<T>): Promise<T> {

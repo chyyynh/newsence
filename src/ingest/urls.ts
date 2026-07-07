@@ -1,6 +1,6 @@
 import { withDbClient } from '@core-shared/db';
 import { PDF_MIME } from '@core-shared/mime';
-import type { Env, ScrapedContent } from '@core-shared/types';
+import type { ScrapedContent } from '@core-shared/types';
 import { detectUrlKind, normalizeUrl, validateImageUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflows/queue';

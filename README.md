@@ -145,12 +145,13 @@ Workflows are provisioned automatically on first deploy via the `workflows` bind
 
 ### 4. Secrets
 
-AI analysis and embeddings use the Workers AI binding, so no external LLM secret is required. Optional secrets enable specific platforms:
+AI analysis and embeddings use the Workers AI binding, so no external LLM secret is required. Platform/API secrets are required by Wrangler config:
 
 ```bash
-wrangler secret put KAITO_API_KEY            # optional — Twitter monitoring
-wrangler secret put YOUTUBE_API_KEY          # optional — YouTube monitoring
 wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # auth for protected HTTP endpoints
+wrangler secret put KAITO_API_KEY            # Twitter monitoring
+wrangler secret put YOUTUBE_API_KEY          # YouTube monitoring
+wrangler secret put S2_API_KEY               # Semantic Scholar quota
 ```
 
 ### 5. Deploy
@@ -257,8 +258,9 @@ Secrets (via `wrangler secret put`):
 | Variable                       | Required | Description                              |
 | ------------------------------ | -------- | ---------------------------------------- |
 | `CORE_WORKER_INTERNAL_TOKEN`   | Yes      | Token for protected HTTP endpoints; service-binding RPC callers do not use it |
-| `KAITO_API_KEY`                | No       | Enables Twitter monitoring               |
-| `YOUTUBE_API_KEY`              | No       | Enables YouTube channel monitoring       |
+| `KAITO_API_KEY`                | Yes      | Enables Twitter monitoring               |
+| `YOUTUBE_API_KEY`              | Yes      | Enables YouTube channel monitoring       |
+| `S2_API_KEY`                   | Yes      | Increases Semantic Scholar quota for paper enrichment |
 
 ## Adding a Platform
 

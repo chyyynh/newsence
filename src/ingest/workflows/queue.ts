@@ -7,7 +7,7 @@ import {
 } from '@core-shared/article-store';
 import { type DbClient, withDbClient } from '@core-shared/db';
 import type { TwitterMedia } from '@core-shared/platform-metadata';
-import type { Env, Tweet } from '@core-shared/types';
+import type { Tweet } from '@core-shared/types';
 import type { YoutubeTranscriptRow } from '@ingest/platforms/youtube/transcripts';
 
 export type WorkflowQueueTarget =

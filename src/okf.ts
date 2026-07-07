@@ -8,7 +8,6 @@
 
 import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { type DbClient, withDbClient } from '@core-shared/db';
-import type { Env } from '@core-shared/types';
 import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@entities/normalize';
 
 type OkfFile = { path: string; content: string };

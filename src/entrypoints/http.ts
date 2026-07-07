@@ -1,6 +1,5 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
-import type { Env } from '@core-shared/types';
 import { handleIngest } from '@ingest/handlers/ingest';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { enqueueArticleBatchProcess, handleRetryCron } from '@ingest/workflows/queue';

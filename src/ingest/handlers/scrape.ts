@@ -1,6 +1,5 @@
 import { parseJsonBody, requireAuth } from '@core-shared/auth';
 import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
-import type { Env } from '@core-shared/types';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/web';
 import { extractSource, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
 

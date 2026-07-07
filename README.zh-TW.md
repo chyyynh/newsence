@@ -117,12 +117,13 @@ Workflow 會在第一次 deploy 時透過 `wrangler.jsonc` 裡的 `workflows` bi
 
 ### 4. Secrets
 
-AI 分析與向量生成都走 Workers AI binding，不需要外部 LLM secret。其他 secrets 是啟用特定平台用的：
+AI 分析與向量生成都走 Workers AI binding，不需要外部 LLM secret。平台/API secrets 由 Wrangler config 設為必填：
 
 ```bash
-wrangler secret put KAITO_API_KEY            # 可選 — Twitter 監控
-wrangler secret put YOUTUBE_API_KEY          # 可選 — YouTube 監控
 wrangler secret put CORE_WORKER_INTERNAL_TOKEN  # protected HTTP endpoints 驗證
+wrangler secret put KAITO_API_KEY            # Twitter 監控
+wrangler secret put YOUTUBE_API_KEY          # YouTube 監控
+wrangler secret put S2_API_KEY               # Semantic Scholar quota
 ```
 
 ### 5. 部署
@@ -230,8 +231,9 @@ Secrets（透過 `wrangler secret put` 設定）：
 | 變數                           | 必要 | 說明                          |
 | ------------------------------ | ---- | ----------------------------- |
 | `CORE_WORKER_INTERNAL_TOKEN`   | 是   | protected HTTP endpoints token；service-binding RPC 呼叫端不使用 |
-| `KAITO_API_KEY`                | 否   | 啟用 Twitter 監控             |
-| `YOUTUBE_API_KEY`              | 否   | 啟用 YouTube 頻道監控         |
+| `KAITO_API_KEY`                | 是   | 啟用 Twitter 監控             |
+| `YOUTUBE_API_KEY`              | 是   | 啟用 YouTube 頻道監控         |
+| `S2_API_KEY`                   | 是   | 提高 Semantic Scholar paper enrichment quota |
 
 ## 新增平台
 

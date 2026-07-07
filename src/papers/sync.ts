@@ -11,7 +11,6 @@
 import type { DbClient } from '@core-shared/db';
 import { withDbTransaction } from '@core-shared/db';
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
-import type { Env } from '@core-shared/types';
 
 const MAX_EDGES = 50;
 

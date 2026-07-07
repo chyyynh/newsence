@@ -6,7 +6,7 @@ import {
 } from '@core-shared/article-store';
 import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Env, RSSFeed } from '@core-shared/types';
+import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { XMLParser } from 'fast-xml-parser';
