@@ -1,6 +1,4 @@
-import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
-import { enqueueArticleBatchProcess, handleRetryCron } from '@ingest/workflows/queue';
 import { handleExportCollectionOkf } from '../okf';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
@@ -19,7 +17,6 @@ const SCRAPE_CORS_HEADERS: Record<string, string> = {
 const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/retry': handleRetry,
 	'/okf/collections/export': handleExportCollectionOkf,
 	'/scrape': handleScrape,
 	'/scrape/jobs': handleScrapeJobCreate,
@@ -74,33 +71,11 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints:\n' +
 	'GET  /health\n' +
-	'POST /retry                               - Internal: enqueue article/user_file workflow retries\n' +
 	'POST /okf/collections/export              - Export a collection as an OKF v0.1 bundle tar.gz (internal token) -> gzip stream\n' +
 	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
-
-async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-	let body: { articleIds?: string[]; userFileIds?: string[] };
-	try {
-		body = (await request.json()) as typeof body;
-	} catch {
-		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid JSON body' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
-	}
-
-	const articleIds = body.articleIds?.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) ?? [];
-	const userFileIds = body.userFileIds?.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) ?? [];
-
-	if (articleIds.length || userFileIds.length) {
-		if (articleIds.length) await enqueueArticleBatchProcess(env, articleIds);
-		if (userFileIds.length) await enqueueArticleBatchProcess(env, userFileIds, USER_FILES_TABLE);
-		return Response.json({ articles: articleIds.length, userFiles: userFileIds.length }, { headers: INTERNAL_CORS_HEADERS });
-	}
-
-	ctx.waitUntil(handleRetryCron(env));
-	return Response.json({ queued: true }, { headers: INTERNAL_CORS_HEADERS });
-}
 
 async function handleWorkflowStream(request: Request, instanceId: string, env: Env): Promise<Response> {
 	const encoder = new TextEncoder();
