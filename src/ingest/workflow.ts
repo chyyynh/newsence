@@ -320,8 +320,10 @@ async function stagePdfExtraction(
 	if (!request) return null;
 
 	try {
-		return step.do('extract-pdf-text', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-			extractPdfTextToTemp(env, request),
+		return await step.do(
+			'extract-pdf-text',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => extractPdfTextToTemp(env, request),
 		);
 	} catch (error) {
 		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: request.articleId, error: String(error) });
@@ -340,7 +342,7 @@ async function enrichPaperMetadataStep(
 		return null;
 
 	try {
-		return step.do(
+		return await step.do(
 			'enrich-paper-metadata',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
