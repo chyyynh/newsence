@@ -41,50 +41,36 @@ type YoutubeHighlightsInput =
 	| { kind: 'article'; article: Article };
 
 function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
-	let draft: Promise<SourceArticleDraft> | undefined;
-	let article: Promise<Article> | undefined;
-
-	const readSourceDraft = () => {
+	const readSourceDraft = async () => {
 		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
-		draft ??= env.R2.get(target.sourceArticle.r2Key)
-			.then((obj) => {
-				if (!obj) throw new Error(`source article draft missing: ${target.sourceArticle.r2Key}`);
-				return obj.json<SourceArticleDraft>();
-			})
-			.catch((error) => {
-				draft = undefined;
-				article = undefined;
-				throw error;
-			});
-		return draft;
+		const obj = await env.R2.get(target.sourceArticle.r2Key);
+		if (!obj) throw new Error(`source article draft missing: ${target.sourceArticle.r2Key}`);
+		return obj.json<SourceArticleDraft>();
 	};
 
 	return {
 		target,
 		table: target.kind === 'row' ? (target.targetTable ?? ARTICLES_TABLE) : ARTICLES_TABLE,
 		readSourceDraft,
-		readSourceArticle: () => {
-			article ??= readSourceDraft().then((draft) => {
-				const data = draft.article;
-				return {
-					id: data.url,
-					title: data.title,
-					title_cn: null,
-					summary: data.summary || null,
-					summary_cn: null,
-					content: data.content,
-					content_cn: null,
-					url: data.url,
-					source: data.source,
-					published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-					tags: data.tags ?? [],
-					keywords: data.keywords ?? [],
-					source_type: data.sourceType,
-					og_image_url: null,
-					platform_metadata: data.platformMetadata as Article['platform_metadata'],
-				};
-			});
-			return article;
+		readSourceArticle: async () => {
+			const data = (await readSourceDraft()).article;
+			return {
+				id: data.url,
+				title: data.title,
+				title_cn: null,
+				summary: data.summary || null,
+				summary_cn: null,
+				content: data.content,
+				content_cn: null,
+				url: data.url,
+				source: data.source,
+				published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+				tags: data.tags ?? [],
+				keywords: data.keywords ?? [],
+				source_type: data.sourceType,
+				og_image_url: null,
+				platform_metadata: data.platformMetadata as Article['platform_metadata'],
+			};
 		},
 	};
 }

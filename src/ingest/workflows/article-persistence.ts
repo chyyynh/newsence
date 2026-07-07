@@ -12,14 +12,14 @@ import { upsertTwitterSourceEvent } from '../platforms/twitter/persistence';
 
 type RowTarget = Extract<WorkflowTarget, { kind: 'row' }>;
 
-export type WorkflowPersistenceContext = {
+type WorkflowPersistenceContext = {
 	target: WorkflowTarget;
 	table: ProcessableTable;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 	readSourceArticle(): Promise<Article>;
 };
 
-export type WorkflowPersistenceInput = {
+type WorkflowPersistenceInput = {
 	article: Article;
 	result: ProcessorResult;
 	embedding: number[] | null;
