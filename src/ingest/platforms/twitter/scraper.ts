@@ -280,7 +280,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', articleUrl });
 		const articleContent = await scrapeTwitterArticle(tweetId, apiKey);
 		if (articleContent) return articleContent;
-		console.warn({ tag: 'TWITTER', msg: 'Article API failed, falling through to regular tweet handling' });
+		throw new Error('Twitter Article API failed');
 	}
 
 	// 2. Tweet has external link — scrape the linked page directly
@@ -288,28 +288,29 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
 		try {
 			const linked = await scrapeWebPage(externalUrl);
-			if (linked.content && linked.content.length > 100) {
-				console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
-				return {
-					title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
-					content: linked.content,
-					summary: linked.summary || tweet.text,
-					ogImageUrl: linked.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
-					siteName: linked.siteName || 'Twitter',
-					author: tweet.author?.userName || linked.author || null,
-					publishedDate: tweet.createdAt,
-					metadata: buildTweetPlatformMetadata(tweet, {
-						media,
-						tweetText,
-						externalUrl,
-						externalOgImage: linked.ogImageUrl || null,
-						externalTitle: linked.title || null,
-						originalTweetUrl: tweet.url,
-					}),
-				};
+			if (!linked.content || linked.content.length <= 100) {
+				throw new Error('Linked article content too short');
 			}
-		} catch (e) {
-			console.warn({ tag: 'TWITTER', msg: 'Failed to scrape linked URL', externalUrl, error: String(e) });
+			console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
+			return {
+				title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
+				content: linked.content,
+				summary: linked.summary || tweet.text,
+				ogImageUrl: linked.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
+				siteName: linked.siteName || 'Twitter',
+				author: tweet.author?.userName || linked.author || null,
+				publishedDate: tweet.createdAt,
+				metadata: buildTweetPlatformMetadata(tweet, {
+					media,
+					tweetText,
+					externalUrl,
+					externalOgImage: linked.ogImageUrl || null,
+					externalTitle: linked.title || null,
+					originalTweetUrl: tweet.url,
+				}),
+			};
+		} catch (error) {
+			throw new Error(`Failed to scrape linked URL ${externalUrl}: ${String(error)}`);
 		}
 	}
 
