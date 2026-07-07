@@ -3,7 +3,7 @@ import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Env, ScrapedContent, Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
-import { enqueueArticleProcess, startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
+import { startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,
@@ -32,7 +32,7 @@ async function recordTwitterSourceEvent(env: Env, tweet: Tweet, event: TwitterSo
 
 async function enqueueMissingTwitterTranslation(env: Env, article: { id: string; summary_cn: string | null }): Promise<void> {
 	if (article.summary_cn) return;
-	await enqueueArticleProcess(env, article.id);
+	await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: article.id });
 }
 
 async function enqueueTwitterArticle(
@@ -268,7 +268,7 @@ async function saveThread(tweets: Tweet[], env: Env): Promise<boolean> {
 				raw: { tweets: sorted },
 			});
 		});
-		await enqueueArticleProcess(env, existingId);
+		await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}

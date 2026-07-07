@@ -40,10 +40,6 @@ const RETRY_BATCH_SIZE = 20;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 
-export async function enqueueArticleProcess(env: Env, articleId: string, targetTable?: ProcessableTable): Promise<void> {
-	await env.ARTICLE_QUEUE.send({ kind: 'row', articleId, ...(targetTable ? { targetTable } : {}) });
-}
-
 export async function enqueueArticleBatchProcess(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<void> {
 	if (!articleIds.length) return;
 	await env.ARTICLE_QUEUE.sendBatch(
