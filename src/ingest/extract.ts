@@ -1,3 +1,4 @@
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
@@ -224,5 +225,26 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 			if (!obj) throw new Error(`scrape input temp object missing: ${input.key}`);
 			return extractFile(await obj.bytes());
 		}
+	}
+}
+
+// Non-persisting scrape job. Unlike NewsenceMonitorWorkflow this creates no DB
+// row; callers poll the Workflow output for NormalizedContent.
+export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ExtractInput> {
+	async run(event: WorkflowEvent<ExtractInput>, step: WorkflowStep): Promise<NormalizedContent> {
+		const input = event.payload;
+
+		const result = await step.do(
+			'extract',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => extractSource(this.env, input),
+		);
+
+		if (input.kind === 'r2' && input.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) {
+			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () => this.env.R2.delete(input.key));
+		}
+
+		console.info({ tag: 'SCRAPE_WORKFLOW', msg: 'Completed', kind: input.kind, status: result.status, chars: result.metadata.chars });
+		return result;
 	}
 }

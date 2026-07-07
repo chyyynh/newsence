@@ -1,6 +1,6 @@
-import { getExistingArticlesByUrl } from '@core-shared/article-store';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
+import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
 import { startSourceArticleWorkflow } from '@ingest/workflow';
 import { Client } from 'pg';
 

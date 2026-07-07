@@ -1,5 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
+import type { PaperMetadata } from '@core-shared/platform-metadata';
+import type { Article } from '@core-shared/types';
+import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
+import { syncArticleEntities } from '@entities/sync';
 import {
 	getIncompleteWorkflowTargetIds,
 	getUserFileWorkflowInstanceId,
@@ -9,11 +13,7 @@ import {
 	loadArticleForProcessing,
 	patchUserFileWorkflowMetadata,
 	updateArticleAfterProcessing,
-} from '@core-shared/article-store';
-import type { PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article } from '@core-shared/types';
-import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
-import { syncArticleEntities } from '@entities/sync';
+} from '@ingest/domain/article-store';
 import { Client } from 'pg';
 import {
 	buildProcessorUpdatePayload,

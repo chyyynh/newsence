@@ -3,11 +3,11 @@
 // ─────────────────────────────────────────────────────────────
 
 import { generateObject, generateText } from '@core-ai/embedding';
-import type { ArticleStoreTable } from '@core-shared/article-store';
 import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform-metadata';
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
+import type { ArticleStoreTable } from './article-store';
 
 // ─────────────────────────────────────────────────────────────
 // Types

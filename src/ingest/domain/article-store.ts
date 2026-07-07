@@ -1,5 +1,5 @@
+import type { Article } from '@core-shared/types';
 import { Client } from 'pg';
-import type { Article } from './types';
 
 export type ArticleStoreTable = 'articles' | 'user_files';
 

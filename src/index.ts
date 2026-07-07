@@ -1,4 +1,4 @@
-import { WorkerEntrypoint, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { WorkerEntrypoint } from 'cloudflare:workers';
 import type {
 	ArticleRankSearchInput,
 	ArticleSearchInput,
@@ -12,7 +12,7 @@ import type {
 } from '@core-rpc/contracts';
 import { routeRequest } from '@entry/http';
 import { ingestUploadedFile, persistGeneratedImage } from '@ingest/blob';
-import { type ExtractInput, extractSource, extractUrl, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';
+import { extractUrl, ScrapeWorkflow } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -21,29 +21,7 @@ import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, sea
 import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';
 
-export { NewsenceMonitorWorkflow };
-
-// Non-persisting scrape job. Unlike NewsenceMonitorWorkflow this creates no DB
-// row — the result is returned as the Workflow `output`, polled via
-// GET /scrape/jobs/:id.
-export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ExtractInput> {
-	async run(event: WorkflowEvent<ExtractInput>, step: WorkflowStep): Promise<NormalizedContent> {
-		const input = event.payload;
-
-		const result = await step.do(
-			'extract',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => extractSource(this.env, input),
-		);
-
-		if (input.kind === 'r2' && input.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) {
-			await step.do('cleanup', { retries: { limit: 2, delay: '5 seconds' }, timeout: '15 seconds' }, () => this.env.R2.delete(input.key));
-		}
-
-		console.info({ tag: 'SCRAPE_WORKFLOW', msg: 'Completed', kind: input.kind, status: result.status, chars: result.metadata.chars });
-		return result;
-	}
-}
+export { NewsenceMonitorWorkflow, ScrapeWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
 	override async fetch(request: Request): Promise<Response> {

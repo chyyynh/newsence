@@ -1,7 +1,7 @@
-import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@core-shared/article-store';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
+import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@ingest/domain/article-store';
 import { startArticleWorkflow, startSourceArticleWorkflow } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
