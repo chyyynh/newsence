@@ -2,10 +2,12 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
 	getIncompleteWorkflowTargetIds,
+	getUserFileWorkflowInstanceId,
 	type InsertArticleData,
 	insertArticleDataToArticle,
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
+	patchUserFileWorkflowMetadata,
 	updateArticleAfterProcessing,
 } from '@core-shared/article-store';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
@@ -184,11 +186,7 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string> {
 	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	if (!db) await client.connect();
-	const result = await client.query(`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM user_files WHERE id = $1`, [
-		userFileId,
-	]);
-	const row = result.rows[0] as { instance_id?: string | null } | undefined;
-	const storedInstanceId = row?.instance_id ?? null;
+	const storedInstanceId = await getUserFileWorkflowInstanceId(client, userFileId);
 	if (storedInstanceId) {
 		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
@@ -201,20 +199,6 @@ export async function createUserFileWorkflow(env: Env, userFileId: string, db?: 
 		monitor_started_at: new Date().toISOString(),
 	});
 	return instanceId;
-}
-
-async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: Record<string, string>): Promise<void> {
-	await db.query(
-		`UPDATE user_files
-		 SET metadata = jsonb_set(
-		   COALESCE(metadata, '{}'::jsonb),
-		   '{workflow}',
-		   COALESCE(metadata->'workflow', '{}'::jsonb) || $1::jsonb,
-		   TRUE
-		 )
-		 WHERE id = $2`,
-		[JSON.stringify(patch), userFileId],
-	);
 }
 
 async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {
