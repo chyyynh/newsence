@@ -20,8 +20,7 @@ import { syncPaperGraph } from '@papers/sync';
 import { Client } from 'pg';
 import { articleProcessors, buildProcessorUpdatePayload, type ProcessorResult } from './domain/processors';
 import { type PdfTextStatus, parsePdf } from './extract';
-import { detectPaperId, extractPaperTitle } from './platforms/paper/detect';
-import { enrichS2ByTitle, enrichS2FromId } from './platforms/paper/semanticscholar';
+import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
 import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
 import {
 	persistYouTubeWorkflowData,
@@ -365,54 +364,23 @@ async function stagePdfExtraction(
 	}
 }
 
-// Best-effort academic-paper enrichment. Detects a DOI/arXiv id from the URL
-// (always) or the extracted PDF text (only when we have staged PDF text), then
-// pulls structured metadata + references from Semantic Scholar. Never fails the
-// workflow: a non-paper resolves to null cheaply, and API errors are swallowed.
-async function enrichPaperMetadata(
+async function enrichPaperMetadataStep(
 	env: Env,
 	context: WorkflowRunContext,
 	shell: ProcessableArticleShell,
 	pdfTextTemp: PdfTextTempResult | null,
 	step: WorkflowStep,
 ): Promise<PaperMetadata | null> {
-	const hasStagedText = !!pdfTextTemp?.textStorageKey;
-	const isPdfRow = shell.file_type === PDF_MIME;
-	// Bail before scheduling a step unless this could be a paper: staged PDF text
-	// (fresh upload), an already-extracted PDF row (retry), or a URL paper signal.
-	if (!hasStagedText && !isPdfRow && !detectPaperId(shell.url, null, false).hasAcademicMarker) return null;
+	if (!shouldAttemptPaperEnrichment({ url: shell.url, fileType: shell.file_type, hasStagedText: !!pdfTextTemp?.textStorageKey }))
+		return null;
 
 	try {
 		return step.do(
 			'enrich-paper-metadata',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				// Content comes from the staged temp (fresh) or the persisted
-				// extracted_text (retry); loadFullTargetArticle resolves both.
 				const content = (await loadFullTargetArticle(env, context, pdfTextTemp)).content;
-				const detection = detectPaperId(shell.url, content, !!content);
-				// Prefer the title parsed from the PDF body over the (often noisy,
-				// filename-derived) row title — the latter rarely matches a search. For
-				// uploaded PDFs, a title search is attempted even without a DOI marker
-				// (placeholder/absent DOIs, or markers stripped by content cleanup) — the
-				// Dice title match guards against false positives.
-				const searchTitle = (content ? extractPaperTitle(content) : null) ?? shell.title;
-				const canTitleSearch = detection.hasAcademicMarker || isPdfRow;
-				const apiKey = env.S2_API_KEY;
-
-				const paper =
-					(detection.id ? await enrichS2FromId(detection.id, apiKey) : null) ??
-					(canTitleSearch && searchTitle ? await enrichS2ByTitle(searchTitle, apiKey) : null);
-				if (paper) {
-					console.info({
-						tag: 'WORKFLOW',
-						msg: 'Paper enriched',
-						source: paper.source,
-						doi: paper.doi,
-						refs: paper.references.length,
-					});
-				}
-				return paper;
+				return enrichPaperMetadata({ url: shell.url, title: shell.title, fileType: shell.file_type, content }, env.S2_API_KEY);
 			},
 		);
 	} catch (error) {
@@ -613,7 +581,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step, event.instanceId);
 
-			const paperEnrichment = await enrichPaperMetadata(this.env, context, article, pdfTextTemp, step);
+			const paperEnrichment = await enrichPaperMetadataStep(this.env, context, article, pdfTextTemp, step);
 
 			const processorResult = await step.do(
 				'ai-analysis',

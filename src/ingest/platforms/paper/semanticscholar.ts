@@ -2,9 +2,10 @@
 // dedicated per-key rate, avoiding shared Worker egress IP rate limits, and S2
 // returns reference metadata (DOI + author) in a single call.
 
+import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
 import { fetchWithTimeout } from '@core-shared/web';
-import type { PaperId } from './detect';
+import { detectPaperId, extractPaperTitle, type PaperId } from './detect';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -56,6 +57,12 @@ interface S2Paper {
 }
 interface S2MatchResponse {
 	data?: S2Paper[];
+}
+
+type PaperEnrichmentCandidate = { url?: string | null; title: string; fileType?: string | null; content?: string | null };
+
+export function shouldAttemptPaperEnrichment(input: { url?: string | null; fileType?: string | null; hasStagedText: boolean }): boolean {
+	return input.hasStagedText || input.fileType === PDF_MIME || detectPaperId(input.url, null, false).hasAcademicMarker;
 }
 
 async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
@@ -136,7 +143,7 @@ function idPath(id: PaperId): string {
 }
 
 /** Resolve a paper by DOI or arXiv id. Returns null on miss / error — never throws. */
-export async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetadata | null> {
+async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetadata | null> {
 	const paper = await fetchS2<S2Paper>(`/paper/${idPath(id)}?fields=${PAPER_FIELDS}`, apiKey);
 	if (!paper?.paperId) return null;
 	return normalizePaper(paper, id.kind === 'arxiv' ? id.value : undefined);
@@ -149,7 +156,7 @@ export async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<Pape
  * (2) fetch full metadata + references by paperId, then verify the match
  * against the original title.
  */
-export async function enrichS2ByTitle(title: string, apiKey?: string): Promise<PaperMetadata | null> {
+async function enrichS2ByTitle(title: string, apiKey?: string): Promise<PaperMetadata | null> {
 	const trimmed = title.trim();
 	if (trimmed.length < 12) return null;
 	const query = encodeURIComponent(
@@ -164,4 +171,18 @@ export async function enrichS2ByTitle(title: string, apiKey?: string): Promise<P
 	const paper = await fetchS2<S2Paper>(`/paper/${hit.paperId}?fields=${PAPER_FIELDS}`, apiKey);
 	if (!paper?.paperId) return null;
 	return normalizePaper(paper);
+}
+
+export async function enrichPaperMetadata(candidate: PaperEnrichmentCandidate, apiKey?: string): Promise<PaperMetadata | null> {
+	const content = candidate.content ?? null;
+	const detection = detectPaperId(candidate.url, content, !!content);
+	const searchTitle = (content ? extractPaperTitle(content) : null) ?? candidate.title;
+	const canTitleSearch = detection.hasAcademicMarker || candidate.fileType === PDF_MIME;
+	const paper =
+		(detection.id ? await enrichS2FromId(detection.id, apiKey) : null) ??
+		(canTitleSearch && searchTitle ? await enrichS2ByTitle(searchTitle, apiKey) : null);
+
+	if (paper) console.info({ tag: 'S2', msg: 'Paper enriched', doi: paper.doi, refs: paper.references.length });
+
+	return paper;
 }
