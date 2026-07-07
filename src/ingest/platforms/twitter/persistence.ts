@@ -56,7 +56,7 @@ type TwitterSourceEventAttachment = {
 	event: TwitterSourceEventDraft;
 };
 
-export function isTwitterSourceEventAttachment(value: unknown): value is TwitterSourceEventAttachment {
+function isTwitterSourceEventAttachment(value: unknown): value is TwitterSourceEventAttachment {
 	return !!value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'twitter-source-event';
 }
 
@@ -176,6 +176,13 @@ export async function upsertTwitterSourceEvent(
 	} catch (err) {
 		console.warn({ tag: 'TWITTER', msg: 'Source event write skipped', tweetId: eventTweetId, error: String(err) });
 	}
+}
+
+export async function upsertTwitterSourceEventAttachment(db: Client, articleId: string, attachments?: unknown[]): Promise<void> {
+	const event = attachments?.find(isTwitterSourceEventAttachment)?.event;
+	if (!event) return;
+	const { tweet, eventType, text, media, raw } = event;
+	await upsertTwitterSourceEvent(db, tweet, { articleId, eventType, text, media, raw });
 }
 
 async function enqueueTwitterArticle(

@@ -22,7 +22,7 @@ import { articleProcessors, buildProcessorUpdatePayload, type ProcessorResult } 
 import { type PdfTextStatus, parsePdf } from './extract';
 import { detectPaperId, extractPaperTitle } from './platforms/paper/detect';
 import { enrichS2ByTitle, enrichS2FromId } from './platforms/paper/semanticscholar';
-import { isTwitterSourceEventAttachment, upsertTwitterSourceEvent } from './platforms/twitter/persistence';
+import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
 import {
 	isYoutubeTranscriptAttachment,
 	prepareYouTubeHighlights,
@@ -508,7 +508,6 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	}
 	const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
 	const entities = entityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
-	const twitterSourceEvent = draft.attachments?.find(isTwitterSourceEventAttachment)?.event;
 	const youtubeTranscript = draft.attachments?.find(isYoutubeTranscriptAttachment)?.transcript;
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
@@ -518,15 +517,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
 		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
-		if (twitterSourceEvent) {
-			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
-				articleId,
-				eventType: twitterSourceEvent.eventType,
-				text: twitterSourceEvent.text,
-				media: twitterSourceEvent.media,
-				raw: twitterSourceEvent.raw,
-			});
-		}
+		await upsertTwitterSourceEventAttachment(db, articleId, draft.attachments);
 		await db.query('COMMIT');
 		return articleId;
 	} catch (error) {
