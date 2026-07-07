@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// Web Scraper (cheerio + Readability hybrid)
-// ─────────────────────────────────────────────────────────────
-
 import type { ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Readability } from '@mozilla/readability';
@@ -9,11 +5,6 @@ import * as cheerio from 'cheerio';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
-
-/** Filter out avatar/icon images by URL patterns and alt text */
 function isJunkImage(src: string, alt?: string): boolean {
 	const lower = src.toLowerCase();
 	if (/[_/,](w|h|width|height)[_=]?\d{1,2}[,_/&]/.test(lower)) return true;
@@ -32,7 +23,6 @@ interface ArticleMetadata {
 	publishedDate: string | null;
 }
 
-/** Extract metadata from HTML using cheerio (og:tags, author, date, etc.) */
 function extractMetadata($: cheerio.CheerioAPI, url: string): ArticleMetadata {
 	const title =
 		$('meta[property="og:title"]').attr('content') || $('meta[name="twitter:title"]').attr('content') || $('title').text() || '';
@@ -91,7 +81,6 @@ const TAG_HANDLERS: Record<string, ($el: CheerioEl, baseUrl: string) => string |
 	img: renderImageMarkdown,
 };
 
-/** Extract article content using cheerio selectors (fallback method) */
 function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string): string {
 	$('script, style, nav, footer, header, aside, .ad, .advertisement, .social-share').remove();
 
@@ -118,7 +107,6 @@ function extractContentCheerio($: cheerio.CheerioAPI, title: string, url: string
 	return content.trim();
 }
 
-/** Extract article content using Mozilla Readability + turndown (primary method) */
 function extractContentReadability(html: string, url: string): string | null {
 	try {
 		// linkedom types parseHTML as `Window & typeof globalThis`, which doesn't
@@ -159,7 +147,6 @@ function extractContentReadability(html: string, url: string): string | null {
 			codeBlockStyle: 'fenced',
 			bulletListMarker: '-',
 		});
-		// Remove empty links and script/style tags
 		turndown.remove(['script', 'style']);
 
 		const markdown = turndown.turndown($r('body').html() ?? article.content);
@@ -172,17 +159,6 @@ function extractContentReadability(html: string, url: string): string | null {
 	}
 }
 
-/** Check if extracted content is essentially just a URL or title heading (low-quality extraction) */
-function isLowQualityContent(content: string): boolean {
-	const trimmed = content.trim();
-	// Content is just a markdown heading with a URL
-	if (/^#\s+https?:\/\/\S+\s*$/.test(trimmed)) return true;
-	// Content is only a single heading line (title only, no body)
-	const lines = trimmed.split('\n').filter((l) => l.trim().length > 0);
-	if (lines.length <= 1 && trimmed.length < 200) return true;
-	return false;
-}
-
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 
@@ -192,12 +168,6 @@ const HTML_FETCH_HEADERS: HeadersInit = {
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
 
-/**
- * Parse HTML from an already-fetched Response into ScrapedContent. Used both
- * by `scrapeWebPage` (for the retry path) and by `registry.ts` (single-fetch
- * dispatch). Caller is responsible for verifying status + content-type before
- * handing over the response.
- */
 export async function scrapeHtmlFromResponse(response: Response, url: string): Promise<ScrapedContent> {
 	const contentLength = Number(response.headers.get('content-length') || '0');
 	if (contentLength > MAX_HTML_BYTES) {
@@ -223,7 +193,7 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 	};
 }
 
-async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl: string }> {
+async function fetchAndExtract(url: string): Promise<ScrapedContent> {
 	const response = await fetchWithTimeout(url, { headers: HTML_FETCH_HEADERS }, FETCH_TIMEOUT_MS);
 	if (!response.ok) {
 		await response.body?.cancel();
@@ -236,66 +206,13 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent & { finalUrl
 		throw new Error(`Non-HTML response: ${contentType}`);
 	}
 
-	const scraped = await scrapeHtmlFromResponse(response, url);
-	return { ...scraped, finalUrl: response.url || url };
-}
-
-/** Collect candidate retry URLs when content extraction fails */
-function getRetryUrls(inputUrl: string, finalUrl: string, content: string): string[] {
-	const candidates = new Set<string>();
-
-	// Strip query params from input URL
-	const inputObj = new URL(inputUrl);
-	if (inputObj.search) candidates.add(`${inputObj.origin}${inputObj.pathname}`);
-
-	// Strip query params from final redirected URL
-	if (finalUrl !== inputUrl) {
-		const finalObj = new URL(finalUrl);
-		if (finalObj.search) candidates.add(`${finalObj.origin}${finalObj.pathname}`);
-		// Also add the final URL without query params even if it has none (different domain after redirect)
-		if (!finalObj.search) candidates.add(finalUrl);
-	}
-
-	// Extract URL from content itself (e.g. when title is the redirect URL with query params)
-	const urlMatch = content.match(/^#\s+(https?:\/\/\S+)/);
-	if (urlMatch) {
-		try {
-			const embeddedObj = new URL(urlMatch[1]);
-			candidates.add(`${embeddedObj.origin}${embeddedObj.pathname}`);
-		} catch {
-			/* ignore invalid URLs */
-		}
-	}
-
-	// Remove the original input URL from candidates
-	candidates.delete(inputUrl);
-	return [...candidates];
+	return scrapeHtmlFromResponse(response, url);
 }
 
 export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 	console.info({ tag: 'WEB', msg: 'Scraping', url });
 
 	const result = await fetchAndExtract(url);
-
-	// If content is low-quality, try one alternative URL (stripped query params / URL extracted from content)
-	if (isLowQualityContent(result.content)) {
-		const retryUrls = getRetryUrls(url, result.finalUrl, result.content);
-		if (retryUrls.length > 0) {
-			const retryUrl = retryUrls[0];
-			console.info({ tag: 'WEB', msg: 'Low-quality content, retrying', url, retryUrl });
-			try {
-				const retryResult = await fetchAndExtract(retryUrl);
-				if (!isLowQualityContent(retryResult.content) && retryResult.content.length > result.content.length) {
-					console.info({ tag: 'WEB', msg: 'Retry succeeded', url: retryUrl, chars: retryResult.content.length });
-					return retryResult;
-				}
-			} catch (err) {
-				console.warn({ tag: 'WEB', msg: 'Retry failed', url: retryUrl, error: String(err) });
-			}
-		}
-	}
-
 	console.info({ tag: 'WEB', msg: 'Scraped', url, chars: result.content.length });
-
 	return result;
 }
