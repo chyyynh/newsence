@@ -5,7 +5,6 @@ import { detectUrlKind, extractHackerNewsId, FEED_UA, fetchWithTimeout, normaliz
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
-import TurndownService from 'turndown';
 import { buildHnMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web-scraper';
 
@@ -15,37 +14,15 @@ import { scrapeWebPage } from '../web-scraper';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
-const turndown = new TurndownService({
-	headingStyle: 'atx',
-	codeBlockStyle: 'fenced',
-	bulletListMarker: '-',
-});
-turndown.remove(['script', 'style']);
 
 type RSSItem = FeedEntry & {
 	comments?: unknown;
-	rawContent?: unknown;
 };
-
-function toPlainText(value: unknown): string {
-	if (value === null || value === undefined) return '';
-	if (typeof value === 'string') return value;
-	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-	if (Array.isArray(value)) return value.map(toPlainText).filter(Boolean).join(' ');
-	if (typeof value === 'object') return Object.values(value).map(toPlainText).filter(Boolean).join(' ');
-	return '';
-}
-
-function extractRssFullContent(item: RSSItem): string {
-	const raw = toPlainText(item.rawContent) || item.description || '';
-	if (!raw || raw.length < 800) return '';
-	return turndown.turndown(raw).trim();
-}
 
 async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<void> {
 	let sourceType = 'rss';
 	let platformMetadata: PlatformMetadata | null = null;
-	const commentsUrl = toPlainText(item.comments) || undefined;
+	const commentsUrl = typeof item.comments === 'string' ? item.comments.trim() : undefined;
 	const hnItemId = commentsUrl && detectUrlKind(commentsUrl) === 'hackernews' ? extractHackerNewsId(commentsUrl) : null;
 	if (hnItemId) {
 		try {
@@ -57,18 +34,12 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 		}
 	}
 
-	let crawledContent = '';
+	let crawledContent: string | null = null;
 	if (sourceType === 'rss') {
-		const rssContent = extractRssFullContent(item);
-		if (rssContent) {
-			crawledContent = rssContent;
-		} else {
-			try {
-				const scraped = await scrapeWebPage(url);
-				crawledContent = scraped.content;
-			} catch (e) {
-				console.warn({ tag: 'RSS', msg: 'Scrape fallback failed', url, error: String(e) });
-			}
+		try {
+			crawledContent = (await scrapeWebPage(url)).content;
+		} catch (e) {
+			console.warn({ tag: 'RSS', msg: 'Article scrape failed, continuing with feed summary', url, error: String(e) });
 		}
 	}
 
@@ -82,7 +53,7 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 			publishedDate: pubDate ? new Date(pubDate) : new Date(),
 			summary: platformMetadata ? '' : (item.description ?? ''),
 			sourceType,
-			content: crawledContent || null,
+			content: crawledContent,
 			ogImageUrl: null,
 			platformMetadata,
 		},
@@ -94,7 +65,6 @@ function parseFeedItems(xml: string): RSSItem[] {
 		descriptionMaxLen: 0,
 		getExtraEntryFields: (entry) => ({
 			comments: entry.comments,
-			rawContent: entry['content:encoded'] ?? entry.content ?? entry.description ?? entry.summary,
 		}),
 	}).entries ?? []) as RSSItem[];
 }
