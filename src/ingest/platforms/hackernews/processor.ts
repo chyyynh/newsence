@@ -210,42 +210,40 @@ export class HackerNewsProcessor implements ArticleProcessor {
 					})
 			: null;
 
-		// 3. generateHnEditorial — 平行產生 content (EN) + content_cn
-		if (hnData) {
-			const editorial = await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments, externalPageContent);
-			if (editorial.cn) {
-				updateData.content_cn = editorial.cn;
-				console.info({ tag: 'HN-PROCESSOR', msg: 'Generated editorial content_cn', chars: editorial.cn.length });
-			}
-			if (editorial.en) {
-				updateData.content = editorial.en;
-				console.info({ tag: 'HN-PROCESSOR', msg: 'Generated editorial content', chars: editorial.en.length });
-			}
+		const editorial = hnData ? await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments, externalPageContent) : null;
+		Object.assign(updateData, {
+			...(editorial?.cn ? { content_cn: editorial.cn } : {}),
+			...(editorial?.en ? { content: editorial.en } : {}),
+		});
 
-			// Fallback: if editorial generation failed, use scraped page content directly
-			if (!updateData.content && externalPageContent && externalPageContent.length > 100) {
-				updateData.content = externalPageContent;
-				console.warn({ tag: 'HN-PROCESSOR', msg: 'Editorial failed, falling back to scraped content', chars: externalPageContent.length });
-			}
-
-			enrichments.hnUrl = `https://news.ycombinator.com/item?id=${hnData.id}`;
-			enrichments.externalUrl = hnData.url || null;
-			enrichments.hnText = hnData.text || null;
-			enrichments.commentCount = comments.length;
-			enrichments.links = extractPostLinks(hnData.url, hnData.text);
+		// Fallback: if editorial generation failed, use scraped page content directly
+		if (!updateData.content && externalPageContent && externalPageContent.length > 100) {
+			updateData.content = externalPageContent;
+			console.warn({ tag: 'HN-PROCESSOR', msg: 'Editorial failed, falling back to scraped content', chars: externalPageContent.length });
 		}
+
+		if (hnData)
+			Object.assign(enrichments, {
+				hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
+				externalUrl: hnData.url || null,
+				hnText: hnData.text || null,
+				commentCount: comments.length,
+				links: extractPostLinks(hnData.url, hnData.text),
+			});
 
 		// 4. 用外部文章（若有）做分析，品質更好
 		const articleForAnalysis = externalPageContent ? { ...article, content: externalPageContent, summary: null } : article;
 		const analysis = await generateArticleAnalysis(articleForAnalysis, ctx.env);
 		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), 'HackerNews'])];
 
-		if (!article.tags?.length) updateData.tags = allTags;
-		if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-		if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
-		if (analysis.summary_en) updateData.summary = analysis.summary_en;
-		if (analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
-		if (analysis.entities) updateData.entities = analysis.entities;
+		Object.assign(updateData, {
+			...(!article.tags?.length ? { tags: allTags } : {}),
+			...(!article.keywords?.length && analysis.keywords?.length ? { keywords: analysis.keywords } : {}),
+			...(isEmpty(article.title_cn) && analysis.title_cn ? { title_cn: analysis.title_cn } : {}),
+			...(analysis.summary_en ? { summary: analysis.summary_en } : {}),
+			...(analysis.summary_cn ? { summary_cn: analysis.summary_cn } : {}),
+			...(analysis.entities ? { entities: analysis.entities } : {}),
+		});
 
 		return { updateData, enrichments, classificationCategory: analysis.category };
 	}
