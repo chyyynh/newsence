@@ -1,5 +1,4 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
-import type { YouTubeMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
@@ -36,10 +35,7 @@ function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
 
 async function queueYouTubeVideo(env: Env, apiKey: string, channel: RSSFeed, video: YouTubeFeedVideo): Promise<boolean> {
 	const scraped = await scrapeYouTube(video.videoId, apiKey, { minDurationSecondsForTranscript: SHORTS_MAX_SECONDS });
-	const youtubeMetadata: YouTubeMetadata = {
-		...scraped.metadata.data,
-		videoId: video.videoId,
-	};
+	const youtubeMetadata = scraped.metadata.data;
 	const duration = youtubeMetadata.duration;
 	if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
@@ -56,7 +52,7 @@ async function queueYouTubeVideo(env: Env, apiKey: string, channel: RSSFeed, vid
 			sourceType: 'youtube',
 			content: scraped.content,
 			ogImageUrl: scraped.ogImageUrl,
-			platformMetadata: { type: 'youtube', fetchedAt: new Date().toISOString(), data: youtubeMetadata },
+			platformMetadata: scraped.metadata,
 		},
 		...(scraped.youtubeTranscript ? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] } : {}),
 	});

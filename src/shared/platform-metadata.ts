@@ -61,7 +61,7 @@ interface TwitterMetadata extends TwitterAuthorFields {
 
 // ── YouTube ──────────────────────────────────────────────────
 
-export interface YouTubeMetadata {
+interface YouTubeMetadata {
 	videoId: string;
 	channelName: string;
 	channelId?: string;
