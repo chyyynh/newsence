@@ -29,16 +29,34 @@ export interface SourceArticleDraft {
 }
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
-const RETRY_BATCH_SIZE = 20;
+const RETRY_BATCH_SIZE = 100;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
+const WORKFLOW_ID_MAX_LENGTH = 100;
 
 async function startRowWorkflowBatch(env: Env, articleIds: string[], targetTable?: ProcessableTable): Promise<number> {
 	if (!articleIds.length) return 0;
-	const instanceIds = await Promise.all(
-		articleIds.map((articleId) => startRowWorkflow(env, { articleId, ...(targetTable ? { targetTable } : {}) })),
+	const targets = articleIds.map((articleId) => rowWorkflowTarget({ articleId, ...(targetTable ? { targetTable } : {}) }));
+	const created = await env.MONITOR_WORKFLOW.createBatch(
+		targets.map(({ workflowId, workflowTarget }) => ({ id: workflowId, params: { target: workflowTarget } })),
 	);
-	return instanceIds.reduce((count, instanceId) => count + (instanceId ? 1 : 0), 0);
+	const createdIds = new Set(created.map((instance) => instance.id));
+	const retryTargets: typeof targets = [];
+	let active = 0;
+	for (const target of targets) {
+		if (createdIds.has(target.workflowId)) continue;
+		const existing = await getMonitorWorkflowStatus(env, target.workflowId);
+		if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) active++;
+		else retryTargets.push(target);
+	}
+	if (!retryTargets.length) return created.length + active;
+	const retried = await env.MONITOR_WORKFLOW.createBatch(
+		retryTargets.map(({ workflowId, workflowTarget }) => ({
+			id: retryWorkflowId(workflowId),
+			params: { target: workflowTarget },
+		})),
+	);
+	return created.length + active + retried.length;
 }
 
 export async function handleRetryCron(env: Env): Promise<void> {
@@ -71,17 +89,14 @@ export async function startRowWorkflow(
 	env: Env,
 	target: { articleId: string; targetTable?: ProcessableTable },
 ): Promise<string | undefined> {
-	const targetTable = target.targetTable ?? ARTICLES_TABLE;
-	const workflowTarget: WorkflowTarget = { kind: 'row', articleId: target.articleId, targetTable };
-	const workflowId = ['article', workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-');
+	const { workflowId, workflowTarget } = rowWorkflowTarget(target);
 	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 	if (created[0]) return created[0].id;
 
 	const existing = await getMonitorWorkflowStatus(env, workflowId);
 	if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
 
-	const retryWorkflowId = `${workflowId}-${crypto.randomUUID()}`;
-	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId, params: { target: workflowTarget } }]);
+	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId(workflowId), params: { target: workflowTarget } }]);
 	return retried[0]?.id;
 }
 
@@ -117,6 +132,19 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 
 function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
+}
+
+function rowWorkflowTarget(target: { articleId: string; targetTable?: ProcessableTable }): {
+	workflowId: string;
+	workflowTarget: WorkflowTarget;
+} {
+	const targetTable = target.targetTable ?? ARTICLES_TABLE;
+	const workflowTarget: WorkflowTarget = { kind: 'row', articleId: target.articleId, targetTable };
+	return { workflowId: ['article', workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'), workflowTarget };
+}
+
+function retryWorkflowId(workflowId: string): string {
+	return `${workflowId.slice(0, WORKFLOW_ID_MAX_LENGTH - 37)}-${crypto.randomUUID()}`;
 }
 
 async function sourceArticleWorkflowId(url: string): Promise<string> {
