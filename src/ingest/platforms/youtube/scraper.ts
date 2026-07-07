@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// YouTube Scraper
-// ─────────────────────────────────────────────────────────────
-
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { ScrapedContent, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';

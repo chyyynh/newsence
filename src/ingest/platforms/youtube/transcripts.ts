@@ -18,8 +18,6 @@ export interface YouTubeHighlightsUpdate {
 		highlights: YouTubeHighlight[];
 		generatedAt: string;
 	};
-	generatedAt: string;
-	count: number;
 }
 
 export interface YoutubeTranscriptRow {
@@ -78,7 +76,7 @@ export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTra
 export async function saveYouTubeHighlights(db: Client, update: YouTubeHighlightsUpdate): Promise<void> {
 	await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
 		JSON.stringify(update.value),
-		update.generatedAt,
+		update.value.generatedAt,
 		update.videoId,
 	]);
 }
@@ -137,7 +135,5 @@ export async function prepareYouTubeHighlightsFromTranscript(
 			highlights: highlights.highlights,
 			generatedAt,
 		},
-		generatedAt,
-		count: highlights.highlights.length,
 	};
 }
