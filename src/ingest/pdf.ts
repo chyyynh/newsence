@@ -43,7 +43,6 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 
 export function preparePdfTextExtraction(input: {
 	articleId: string;
-	isUserFile: boolean;
 	hasContent?: boolean;
 	storageKey?: string | null;
 	originType?: string | null;
@@ -51,7 +50,6 @@ export function preparePdfTextExtraction(input: {
 	tempId: string;
 }): PdfTextExtractionRequest | null {
 	if (
-		!input.isUserFile ||
 		input.hasContent ||
 		!input.storageKey ||
 		!(input.originType === 'upload' || input.originType === 'saved_url') ||

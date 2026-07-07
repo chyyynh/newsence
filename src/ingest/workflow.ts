@@ -307,10 +307,9 @@ async function stagePdfExtraction(
 	step: WorkflowStep,
 	workflowInstanceId: string,
 ): Promise<PdfTextTempResult | null> {
-	if (context.target.kind !== 'row') return null;
+	if (context.target.kind !== 'row' || context.table !== USER_FILES_TABLE) return null;
 	const request = preparePdfTextExtraction({
 		articleId: context.target.articleId,
-		isUserFile: context.table === USER_FILES_TABLE,
 		hasContent: 'has_content' in article && !!article.has_content,
 		storageKey: article.storage_key,
 		originType: article.origin_type,
