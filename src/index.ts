@@ -50,7 +50,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 		if (event.cron === '*/5 * * * *') this.ctx.waitUntil(handleRSSCron(this.env, this.ctx));
 		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env, this.ctx));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env, this.ctx));
-		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env, this.ctx));
+		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env));
 	}
 
 	override async queue(batch: MessageBatch<QueueMessage>): Promise<void> {

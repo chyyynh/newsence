@@ -53,7 +53,7 @@ export async function enqueueArticleBatchProcess(env: Env, articleIds: string[],
 	);
 }
 
-export async function handleRetryCron(env: Env, _ctx: ExecutionContext): Promise<void> {
+export async function handleRetryCron(env: Env): Promise<void> {
 	console.info({ tag: 'RETRY', msg: 'start' });
 	await withDbClient(env, async (db) => {
 		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();

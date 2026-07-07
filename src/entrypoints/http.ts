@@ -16,17 +16,17 @@ import {
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 
 const POST_ROUTES: Record<string, RouteHandler> = {
-	'/search': (req, env) => handleSearch(req, env),
-	'/search/related': (req, env) => handleRelated(req, env),
-	'/ingest': (req, env) => handleIngest(req, env),
-	'/retry': (req, env, ctx) => handleRetry(req, env, ctx),
-	'/entities/backfill-missing': (req, env) => handleBackfillMissingEntities(req, env),
-	'/entities/prune-orphans': (req, env) => handlePruneOrphanEntities(req, env),
-	'/entities/quality': (req, env) => handleEntityQuality(req, env),
-	'/entities/repair-links': (req, env) => handleRepairEntityLinks(req, env),
-	'/okf/collections/export': (req, env) => handleExportCollectionOkf(req, env),
-	'/scrape': (req, env) => handleScrape(req, env),
-	'/scrape/jobs': (req, env) => handleScrapeJobCreate(req, env),
+	'/search': handleSearch,
+	'/search/related': handleRelated,
+	'/ingest': handleIngest,
+	'/retry': handleRetry,
+	'/entities/backfill-missing': handleBackfillMissingEntities,
+	'/entities/prune-orphans': handlePruneOrphanEntities,
+	'/entities/quality': handleEntityQuality,
+	'/entities/repair-links': handleRepairEntityLinks,
+	'/okf/collections/export': handleExportCollectionOkf,
+	'/scrape': handleScrape,
+	'/scrape/jobs': handleScrapeJobCreate,
 };
 
 const SCRAPE_PREFLIGHT_ROUTES = new Set(['/scrape', '/scrape/jobs']);
@@ -117,7 +117,7 @@ async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): P
 		return jsonData({ articles: articleIds.length, userFiles: userFileIds.length }, INTERNAL_CORS_HEADERS);
 	}
 
-	ctx.waitUntil(handleRetryCron(env, ctx));
+	ctx.waitUntil(handleRetryCron(env));
 	return jsonData({ queued: true }, INTERNAL_CORS_HEADERS);
 }
 
