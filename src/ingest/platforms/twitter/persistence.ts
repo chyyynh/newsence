@@ -19,20 +19,9 @@ import {
 } from './scraper';
 import { upsertTwitterSourceEvent } from './source-events';
 
-type TwitterSourceEventInput = Parameters<typeof upsertTwitterSourceEvent>[2];
-
 async function findArticleByUrl(env: Env, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
 	const [article] = await withDbClient(env, (db) => getExistingArticlesByUrl(db, [url]));
 	return article ? { id: article.id, summary_cn: article.summary_cn } : null;
-}
-
-async function recordTwitterSourceEvent(env: Env, tweet: Tweet, event: TwitterSourceEventInput): Promise<void> {
-	await withDbClient(env, (db) => upsertTwitterSourceEvent(db, tweet, event));
-}
-
-async function enqueueMissingTwitterTranslation(env: Env, article: { id: string; summary_cn: string | null }): Promise<void> {
-	if (article.summary_cn) return;
-	await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: article.id });
 }
 
 async function enqueueTwitterArticle(
@@ -132,8 +121,10 @@ async function handleFollowLink(tweet: Tweet, textWithoutUrls: string, externalU
 	}
 	const existingArticle = await findArticleByUrl(env, resolvedUrl);
 	if (existingArticle) {
-		await recordTwitterSourceEvent(env, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls });
-		await enqueueMissingTwitterTranslation(env, existingArticle);
+		await withDbClient(env, (db) =>
+			upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text: textWithoutUrls }),
+		);
+		if (!existingArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: resolvedUrl });
 		return { status: 'handled' };
 	}
@@ -181,12 +172,14 @@ async function saveTweet(tweet: Tweet, env: Env): Promise<boolean> {
 
 	const existingTweetArticle = await findArticleByUrl(env, tweetUrl);
 	if (existingTweetArticle) {
-		await recordTwitterSourceEvent(env, tweet, {
-			articleId: existingTweetArticle.id,
-			eventType: externalUrl ? 'share' : 'tweet',
-			text: textWithoutUrls,
-		});
-		await enqueueMissingTwitterTranslation(env, existingTweetArticle);
+		await withDbClient(env, (db) =>
+			upsertTwitterSourceEvent(db, tweet, {
+				articleId: existingTweetArticle.id,
+				eventType: externalUrl ? 'share' : 'tweet',
+				text: textWithoutUrls,
+			}),
+		);
+		if (!existingTweetArticle.summary_cn) await env.ARTICLE_QUEUE.send({ kind: 'row', articleId: existingTweetArticle.id });
 		return false;
 	}
 
