@@ -16,8 +16,6 @@ import type { PdfTextStatus } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
 
-const OG_IMAGE_UPDATE_KEY = 'og_image_url';
-
 type RowTarget = Extract<WorkflowQueueTarget, { kind: 'row' }>;
 
 export type WorkflowPersistenceContext = {
@@ -34,11 +32,6 @@ export type WorkflowPersistenceInput = {
 	pdfTextTemp: PdfTextTempResult | null;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 	paperEnrichment: PaperMetadata | null;
-};
-
-type SourceFinalInsert = {
-	article: SourceArticleDraft['article'];
-	updatePayload: Record<string, unknown>;
 };
 
 export interface PdfTextTempResult {
@@ -74,24 +67,29 @@ export async function recordWorkflowFailure(env: Env, context: WorkflowPersisten
 async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = await context.readSourceArticle();
-	const finalInsert = await prepareSourceFinalInsert(
-		draft.article,
+	let articleForInsert = draft.article;
+	let updatePayload = buildProcessorUpdatePayload(
 		fullArticle,
 		input.result,
 		input.embedding,
 		input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : undefined,
 	);
-	const platformMetadata = finalInsert.updatePayload.platform_metadata ?? finalInsert.article.platformMetadata;
-	const entities = entityUpdatePayload(finalInsert.updatePayload, finalInsert.article.source, platformMetadata);
+	if (Object.hasOwn(updatePayload, 'og_image_url')) {
+		updatePayload = { ...updatePayload, og_image_url: null };
+	} else {
+		articleForInsert = { ...draft.article, ogImageUrl: null };
+	}
+	const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
+	const entities = entityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
 	const twitterSourceEvent = draft.attachments?.find((attachment) => attachment.kind === 'twitter-source-event')?.event;
 	const youtubeTranscript = draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
 	try {
-		const articleId = await insertFinalSourceArticle(db, finalInsert.article, finalInsert.updatePayload);
+		const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
 		if (youtubeTranscript) await upsertYoutubeTranscript(db, youtubeTranscript);
-		if (entities) await syncArticleEntities(db, articleId, entities, finalInsert.article.source, platformMetadata);
+		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
 		if (input.youtubeHighlights) await saveYouTubeHighlights(db, input.youtubeHighlights);
 		if (twitterSourceEvent) {
 			await upsertTwitterSourceEvent(db, twitterSourceEvent.tweet, {
@@ -110,19 +108,6 @@ async function persistSourceTarget(env: Env, context: WorkflowPersistenceContext
 			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'source article rollback failed', error: String(rollbackError) }));
 		throw error;
 	}
-}
-
-function prepareSourceFinalInsert(
-	base: SourceArticleDraft['article'],
-	article: Article,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	metadataPatch: Record<string, unknown> | undefined,
-): SourceFinalInsert {
-	const updatePayload = buildProcessorUpdatePayload(article, result, embedding, metadataPatch);
-	const hasPayloadOgImage = Object.hasOwn(updatePayload, OG_IMAGE_UPDATE_KEY);
-	if (hasPayloadOgImage) return { article: base, updatePayload: { ...updatePayload, [OG_IMAGE_UPDATE_KEY]: null } };
-	return { article: { ...base, ogImageUrl: null }, updatePayload };
 }
 
 async function persistRowTarget(env: Env, target: RowTarget, table: ProcessableTable, input: WorkflowPersistenceInput): Promise<string> {
