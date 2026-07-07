@@ -1,10 +1,4 @@
-import {
-	type ArticleCategory,
-	type PlatformEnrichments,
-	type PlatformMetadata,
-	withClassification,
-	withOgDimensions,
-} from '@core-shared/platform-metadata';
+import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
 
@@ -49,46 +43,12 @@ const processors: Record<string, ArticleProcessor> = {
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 
-function getProcessor(sourceType: string | undefined): ArticleProcessor {
-	return processors[sourceType ?? 'default'] ?? processors.default;
-}
-
-function mergePlatformMetadata(
-	baseMetadata: PlatformMetadata | null | undefined,
-	enrichments?: PlatformEnrichments,
-	ogImageDimensions?: { width: number; height: number },
-): PlatformMetadata | null {
-	const hasEnrichments = !!enrichments && Object.keys(enrichments).length > 0;
-	const hasDims = !!ogImageDimensions && ogImageDimensions.width > 0 && ogImageDimensions.height > 0;
-	if (!hasEnrichments && !hasDims) return baseMetadata ?? null;
-
-	// Dimensions can stand alone — they synthesize a `default` envelope when the
-	// article has none yet. Enrichments still require a base envelope (they
-	// describe an already-typed platform), so an enrichments-only merge with no
-	// base is dropped, matching the prior behavior.
-	let result = hasDims ? withOgDimensions(baseMetadata, ogImageDimensions.width, ogImageDimensions.height) : (baseMetadata ?? null);
-	if (!result) return null;
-
-	if (hasEnrichments) {
-		result = {
-			...result,
-			enrichments: { ...(result.enrichments || {}), ...enrichments, processedAt: new Date().toISOString() },
-		};
-	}
-	return result;
-}
-
-function categoryFromTags(value: unknown): ArticleCategory | null {
-	if (!Array.isArray(value)) return null;
-	return value.find((tag): tag is ArticleCategory => typeof tag === 'string' && ARTICLE_CATEGORIES.has(tag as ArticleCategory)) ?? null;
-}
-
 export async function runArticleProcessor(
 	article: Article,
 	sourceType: string | undefined,
 	deps: ProcessorContext,
 ): Promise<ProcessorResult> {
-	return getProcessor(sourceType).process(article, deps);
+	return (processors[sourceType ?? 'default'] ?? processors.default).process(article, deps);
 }
 
 export function buildProcessorUpdatePayload(
@@ -98,9 +58,39 @@ export function buildProcessorUpdatePayload(
 	metadataPatch?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	const category = result.classificationCategory ?? categoryFromTags(updatePayload.tags);
-	let mergedMetadata = mergePlatformMetadata(article.platform_metadata, result.enrichments, result.ogImageDimensions);
-	if (category) mergedMetadata = withClassification(mergedMetadata ?? article.platform_metadata, category);
+	const category =
+		result.classificationCategory ??
+		(Array.isArray(updatePayload.tags)
+			? updatePayload.tags.find((tag): tag is ArticleCategory => typeof tag === 'string' && ARTICLE_CATEGORIES.has(tag as ArticleCategory))
+			: null);
+	const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
+	const hasDims = !!result.ogImageDimensions && result.ogImageDimensions.width > 0 && result.ogImageDimensions.height > 0;
+	let mergedMetadata: PlatformMetadata | null = article.platform_metadata ?? null;
+	if (hasDims) {
+		mergedMetadata = {
+			...(mergedMetadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null }),
+			ogImageWidth: result.ogImageDimensions!.width,
+			ogImageHeight: result.ogImageDimensions!.height,
+		};
+	}
+	if (hasEnrichments && mergedMetadata) {
+		mergedMetadata = {
+			...mergedMetadata,
+			enrichments: { ...(mergedMetadata.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
+		};
+	}
+	if (category) {
+		const base = mergedMetadata ??
+			article.platform_metadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null };
+		mergedMetadata = {
+			...base,
+			classification: {
+				...(base.classification ?? {}),
+				category,
+				classifiedAt: new Date().toISOString(),
+			},
+		};
+	}
 	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
 	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
 	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;

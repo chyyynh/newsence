@@ -173,28 +173,6 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-/**
- * Attach OG image dimensions to an envelope, synthesizing a `default` envelope
- * when the article has none yet. Used only when a source scraper already
- * provided dimensions with its processor result.
- */
-export function withOgDimensions(metadata: PlatformMetadata | null | undefined, width: number, height: number): PlatformMetadata {
-	const base: PlatformMetadata = metadata ?? { type: 'default', fetchedAt: new Date().toISOString(), data: null };
-	return { ...base, ogImageWidth: width, ogImageHeight: height };
-}
-
-export function withClassification(metadata: PlatformMetadata | null | undefined, category: ArticleCategory): PlatformMetadata {
-	const base: PlatformMetadata = metadata ?? { type: 'default', fetchedAt: new Date().toISOString(), data: null };
-	return {
-		...base,
-		classification: {
-			...(base.classification ?? {}),
-			category,
-			classifiedAt: new Date().toISOString(),
-		},
-	};
-}
-
 export type PlatformMetadata =
 	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & OgImageDimensions &
 			ClassificationEnvelope)

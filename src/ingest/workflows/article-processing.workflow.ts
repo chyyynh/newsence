@@ -244,7 +244,21 @@ async function prepareYoutubeHighlights(
 	sourceType: string,
 	step: WorkflowStep,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	const input = await prepareYoutubeHighlightsInput(context, article, sourceType);
+	if (article.platform_metadata?.type !== 'youtube') return null;
+
+	let input: YoutubeHighlightsInput | null = null;
+	if (context.target.kind === 'source') {
+		const draft = await context.readSourceDraft();
+		const transcript = draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
+		if (!transcript) return null;
+		input = {
+			kind: 'transcript',
+			videoId: article.platform_metadata.data.videoId,
+			segments: transcript.segments as TranscriptSegment[],
+		};
+	} else if (sourceType === 'youtube') {
+		input = { kind: 'article', article };
+	}
 	if (!input) return null;
 
 	return step.do(
@@ -255,27 +269,6 @@ async function prepareYoutubeHighlights(
 				? prepareYouTubeHighlightsFromTranscript(env, input.videoId, input.segments)
 				: prepareYouTubeHighlights(env, input.article),
 	);
-}
-
-async function prepareYoutubeHighlightsInput(
-	context: WorkflowRunContext,
-	article: Article,
-	sourceType: string,
-): Promise<YoutubeHighlightsInput | null> {
-	if (article.platform_metadata?.type !== 'youtube') return null;
-
-	if (context.target.kind === 'source') {
-		const draft = await context.readSourceDraft();
-		const transcript = draft.attachments?.find((attachment) => attachment.kind === 'youtube-transcript')?.transcript;
-		if (!transcript) return null;
-		return {
-			kind: 'transcript',
-			videoId: article.platform_metadata.data.videoId,
-			segments: transcript.segments as TranscriptSegment[],
-		};
-	}
-
-	return sourceType === 'youtube' ? { kind: 'article', article } : null;
 }
 
 async function cleanupTargetTemps(
