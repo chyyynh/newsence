@@ -1,3 +1,4 @@
+import { USER_FILES_TABLE } from '@core-shared/article-store';
 import { PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { detectUrlKind, normalizeUrl } from '@core-shared/web';
@@ -6,15 +7,11 @@ import { createUserFileWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
 import { persistSavedUrlBlob } from './blob';
 import { type ScrapeResult, scrapeUrl } from './platforms/registry';
-import {
-	type ExistingUrlUserFile,
-	getUrlUserFileByNormalizedSourceUrl,
-	type InsertUrlUserFileResult,
-	insertUrlUserFile,
-} from './url-user-files';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
+const EXISTING_URL_USER_FILE_FIELDS =
+	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
 
 type IngestResult = {
 	url: string;
@@ -36,6 +33,29 @@ type IngestResult = {
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
 
+type InsertUrlUserFileResult = {
+	id: string;
+	created: boolean;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[];
+	platform_type: string | null;
+	og_image_url: string | null;
+};
+
+type ExistingUrlUserFile = {
+	id: string;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[] | null;
+	platform_type: string | null;
+	og_image_url: string | null;
+	resource_kind: string;
+	has_embedding: boolean;
+};
+
 type InsertOutcome =
 	| { kind: 'page'; row: InsertUrlUserFileResult }
 	| { kind: 'blob'; userFileId: string; fileType: string }
@@ -55,19 +75,42 @@ async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: strin
 	}
 
 	try {
-		const userFile = await insertUrlUserFile(db, {
-			url,
-			normalizedUrl: url,
-			title: scraped.title,
-			source: scraped.siteName || 'External',
-			publishedDate: scraped.publishedDate || new Date().toISOString(),
-			summary: scraped.summary || '',
-			platformType: urlKind,
-			content: scraped.content || null,
-			ogImageUrl: null,
-			platformMetadata: scraped.metadata ?? null,
-			userId,
-		});
+		const inserted = await db.query(
+			`WITH inserted AS (
+				INSERT INTO ${USER_FILES_TABLE}
+				(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
+				 summary, extracted_text, og_image_url, keywords, tags, metadata,
+				 user_id)
+				VALUES ($1, $2, 'url', 'saved_url', $2, $3, $3, $1, $4, $5, $6, $7, NULL, $8, $9, $10, $11)
+				ON CONFLICT (user_id, normalized_source_url)
+				WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
+				DO NOTHING
+				RETURNING id, title, title_cn, summary_cn, tags, platform_type, og_image_url, TRUE AS created
+			)
+			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, created FROM inserted
+			UNION ALL
+			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, FALSE AS created
+			FROM ${USER_FILES_TABLE}
+			WHERE user_id = $11
+			  AND normalized_source_url = $3
+			  AND resource_kind = 'url'
+			  AND NOT EXISTS (SELECT 1 FROM inserted)
+			LIMIT 1`,
+			[
+				scraped.title,
+				urlKind,
+				url,
+				scraped.siteName || 'External',
+				scraped.publishedDate || new Date().toISOString(),
+				scraped.summary || '',
+				scraped.content || null,
+				[],
+				[],
+				scraped.metadata == null ? null : JSON.stringify(scraped.metadata),
+				userId,
+			],
+		);
+		const userFile = inserted.rows[0] as InsertUrlUserFileResult | undefined;
 
 		if (!userFile) {
 			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
@@ -166,7 +209,14 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 }
 
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
-	const existingRow = await getUrlUserFileByNormalizedSourceUrl(db, userId, url);
+	const existing = await db.query<ExistingUrlUserFile>(
+		`SELECT ${EXISTING_URL_USER_FILE_FIELDS} FROM ${USER_FILES_TABLE}
+		 WHERE user_id = $1
+		   AND normalized_source_url = $2
+		 LIMIT 1`,
+		[userId, url],
+	);
+	const existingRow = existing.rows[0] ?? null;
 	if (existingRow) {
 		return returnExisting(db, url, existingRow, env);
 	}
