@@ -1,4 +1,3 @@
-import { prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
 	type ArticleCategory,
 	type PlatformEnrichments,
@@ -106,17 +105,4 @@ export function buildProcessorUpdatePayload(
 	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
 	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
 	return updatePayload;
-}
-
-export function buildEmbeddingTextForArticle(
-	article: Pick<Article, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>,
-	result: ProcessorResult,
-): string {
-	return prepareArticleTextForEmbedding({
-		title: article.title,
-		summary: result.updateData.summary ?? article.summary,
-		content: result.updateData.content ?? article.content,
-		tags: result.updateData.tags ?? article.tags,
-		keywords: result.updateData.keywords ?? article.keywords,
-	});
 }

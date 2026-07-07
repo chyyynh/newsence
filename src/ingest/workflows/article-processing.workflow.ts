@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { generateArticleEmbedding } from '@core-ai/embedding';
+import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
 	ARTICLES_TABLE,
 	loadProcessableArticle,
@@ -18,7 +18,7 @@ import {
 	type WorkflowQueueTarget,
 } from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
-import { buildEmbeddingTextForArticle, runArticleProcessor } from '../domain/processors';
+import { runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';
 import { enrichPaperByTitle, enrichPaperFromId } from '../platforms/paper/openalex';
 import { enrichS2ByTitle, enrichS2FromId } from '../platforms/paper/semanticscholar';
@@ -346,7 +346,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 				'generate-embedding',
 				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 				async () => {
-					const text = buildEmbeddingTextForArticle(await loadFullTargetArticle(this.env, context, pdfTextTemp), processorResult);
+					const article = await loadFullTargetArticle(this.env, context, pdfTextTemp);
+					const text = prepareArticleTextForEmbedding({
+						title: article.title,
+						summary: processorResult.updateData.summary ?? article.summary,
+						content: processorResult.updateData.content ?? article.content,
+						tags: processorResult.updateData.tags ?? article.tags,
+						keywords: processorResult.updateData.keywords ?? article.keywords,
+					});
 					return text && this.env.AI ? generateArticleEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
 				},
 			);
