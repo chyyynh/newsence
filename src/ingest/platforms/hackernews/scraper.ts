@@ -33,7 +33,7 @@ function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask
 	return 'story';
 }
 
-export function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
+function buildHnMetadata(item: HnItem, storyUrl: string | null = item.url ?? null): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author ?? '',

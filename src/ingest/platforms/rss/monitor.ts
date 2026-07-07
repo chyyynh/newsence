@@ -1,11 +1,9 @@
 import { getExistingArticlesByUrl } from '@core-shared/article-store';
-import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { RSSFeed } from '@core-shared/types';
-import { detectUrlKind, extractHackerNewsId, FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
-import { buildHnMetadata, fetchHnItem } from '../hackernews/scraper';
 import { scrapeWebPage } from '../web-scraper';
 
 // ─────────────────────────────────────────────────────────────
@@ -15,32 +13,12 @@ import { scrapeWebPage } from '../web-scraper';
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
-type RSSItem = FeedEntry & {
-	comments?: unknown;
-};
-
-async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string): Promise<void> {
-	let sourceType = 'rss';
-	let platformMetadata: PlatformMetadata | null = null;
-	const commentsUrl = typeof item.comments === 'string' ? item.comments.trim() : undefined;
-	const hnItemId = commentsUrl && detectUrlKind(commentsUrl) === 'hackernews' ? extractHackerNewsId(commentsUrl) : null;
-	if (hnItemId) {
-		try {
-			const hnItem = await fetchHnItem(hnItemId);
-			platformMetadata = { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(hnItem, commentsUrl) };
-			sourceType = 'hackernews';
-		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Failed to resolve discussion metadata', feed: feed.name, error: String(err) });
-		}
-	}
-
+async function queueRssItem(env: Env, feed: RSSFeed, item: FeedEntry, url: string): Promise<void> {
 	let crawledContent: string | null = null;
-	if (sourceType === 'rss') {
-		try {
-			crawledContent = (await scrapeWebPage(url)).content;
-		} catch (e) {
-			console.warn({ tag: 'RSS', msg: 'Article scrape failed, continuing with feed summary', url, error: String(e) });
-		}
+	try {
+		crawledContent = (await scrapeWebPage(url)).content;
+	} catch (e) {
+		console.warn({ tag: 'RSS', msg: 'Article scrape failed, continuing with feed summary', url, error: String(e) });
 	}
 
 	const pubDate = item.published ?? '';
@@ -51,22 +29,19 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: RSSItem, url: string)
 			title: item.title || 'No Title',
 			source: feed.name,
 			publishedDate: pubDate ? new Date(pubDate) : new Date(),
-			summary: platformMetadata ? '' : (item.description ?? ''),
-			sourceType,
+			summary: item.description ?? '',
+			sourceType: 'rss',
 			content: crawledContent,
 			ogImageUrl: null,
-			platformMetadata,
+			platformMetadata: null,
 		},
 	});
 }
 
-function parseFeedItems(xml: string): RSSItem[] {
+function parseFeedItems(xml: string): FeedEntry[] {
 	return (extractFromXml(xml, {
 		descriptionMaxLen: 0,
-		getExtraEntryFields: (entry) => ({
-			comments: entry.comments,
-		}),
-	}).entries ?? []) as RSSItem[];
+	}).entries ?? []) as FeedEntry[];
 }
 
 async function processFeed(env: Env, db: Client, feed: RSSFeed): Promise<void> {
