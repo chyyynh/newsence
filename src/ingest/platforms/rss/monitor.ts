@@ -4,7 +4,6 @@ import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@cor
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { startSourceArticleWorkflow } from '@ingest/workflows/queue';
 import { Client } from 'pg';
-import { scrapeWebPage } from '../web-scraper';
 
 // ─────────────────────────────────────────────────────────────
 // RSS Monitor
@@ -14,14 +13,8 @@ const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink", url, type, scraped_at, avatar_url';
 
 async function queueRssItem(env: Env, feed: RSSFeed, item: FeedEntry, url: string): Promise<void> {
-	let crawledContent: string | null = null;
-	try {
-		crawledContent = (await scrapeWebPage(url)).content;
-	} catch (e) {
-		console.warn({ tag: 'RSS', msg: 'Article scrape failed, continuing with feed summary', url, error: String(e) });
-	}
-
 	const pubDate = item.published ?? '';
+	const description = item.description ?? '';
 
 	await startSourceArticleWorkflow(env, {
 		article: {
@@ -29,9 +22,9 @@ async function queueRssItem(env: Env, feed: RSSFeed, item: FeedEntry, url: strin
 			title: item.title || 'No Title',
 			source: feed.name,
 			publishedDate: pubDate ? new Date(pubDate) : new Date(),
-			summary: item.description ?? '',
+			summary: description,
 			sourceType: 'rss',
-			content: crawledContent,
+			content: description || null,
 			ogImageUrl: null,
 			platformMetadata: null,
 		},
