@@ -12,8 +12,12 @@ import { PDF_MIME } from '@core-shared/mime';
 import { hasOgDimensions, type PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article, Env, TranscriptSegment } from '@core-shared/types';
 import { BROWSER_UA, decodeHtmlEntities, fetchWithTimeout } from '@core-shared/web';
-import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
-import { cleanupSourceArticleDraftRef, readSourceArticleDraft, type SourceArticleDraft } from '@ingest/workflows/source-draft';
+import {
+	cleanupSourceArticleDraftRef,
+	readSourceArticleDraft,
+	type SourceArticleDraft,
+	type WorkflowQueueTarget,
+} from '@ingest/workflows/queue';
 import { syncPaperGraph } from '@papers/sync';
 import { buildEmbeddingTextForArticle, type ProcessorResult, runArticleProcessor } from '../domain/processors';
 import { detectPaperId, extractPaperTitle } from '../platforms/paper/detect';

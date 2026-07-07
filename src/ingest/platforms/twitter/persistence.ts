@@ -3,8 +3,7 @@ import { withDbClient } from '@core-shared/db';
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Env, ScrapedContent, Tweet } from '@core-shared/types';
 import { isSocialMediaUrl, normalizeUrl, resolveUrl } from '@core-shared/web';
-import { enqueueArticleProcess, startSourceArticleWorkflow } from '@ingest/workflows/queue';
-import type { TwitterSourceEventDraft } from '@ingest/workflows/source-draft';
+import { enqueueArticleProcess, startSourceArticleWorkflow, type TwitterSourceEventDraft } from '@ingest/workflows/queue';
 import { scrapeWebPage } from '../web-scraper';
 import {
 	buildTweetPlatformMetadata,

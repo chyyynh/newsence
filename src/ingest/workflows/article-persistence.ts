@@ -6,8 +6,12 @@ import { validateImageUrl } from '@core-shared/web';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
-import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed, type WorkflowQueueTarget } from '@ingest/workflows/queue';
-import type { SourceArticleDraft } from '@ingest/workflows/source-draft';
+import {
+	recordUserFileWorkflowComplete,
+	recordUserFileWorkflowFailed,
+	type SourceArticleDraft,
+	type WorkflowQueueTarget,
+} from '@ingest/workflows/queue';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { type PdfTextStatus, parsePdf } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
