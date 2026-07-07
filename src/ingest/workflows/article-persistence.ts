@@ -6,13 +6,12 @@ import { validateImageUrl } from '@core-shared/web';
 import { type ArticleEntityInput, isArticleEntityInput, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { saveYouTubeHighlights, upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
-import type { WorkflowQueueTarget } from '@ingest/workflows/queue';
+import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed, type WorkflowQueueTarget } from '@ingest/workflows/queue';
 import { type SourceArticleDraft, sourceDraftTwitterSourceEvent, sourceDraftYoutubeTranscript } from '@ingest/workflows/source-draft';
 import { buildProcessorUpdatePayload, type ProcessorResult } from '../domain/processors';
 import { type PdfTextStatus, parsePdf } from '../extract';
 import { upsertTwitterSourceEvent } from '../platforms/twitter/source-events';
 import type { YouTubeHighlightsUpdate } from '../platforms/youtube/highlights';
-import { recordUserFileWorkflowComplete, recordUserFileWorkflowFailed } from './user-file-state';
 
 const OG_IMAGE_UPDATE_KEY = 'og_image_url';
 const TMP_PDF_TEXT_PREFIX = 'tmp/workflow/pdf-text/';
