@@ -7,10 +7,6 @@ import { type MaintenanceCursor, pruneOrphanEntities, repairMissingArticleEntity
 import { getEntityQualitySnapshot } from '@entities/quality-report';
 import { Client } from 'pg';
 
-function boundedMaintenanceLimit(value: unknown, fallback = 100, max = 500): number {
-	return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(Number(value)) : fallback, 1), max);
-}
-
 function parseMaintenanceCursor(value: unknown): MaintenanceCursor | null {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
 	const record = value as Record<string, unknown>;
@@ -33,7 +29,8 @@ export async function handleRepairEntityLinks(request: Request, env: Env): Promi
 	}>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const limit = boundedMaintenanceLimit(body.limit);
+	const limitRaw = Number(body.limit);
+	const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 100, 1), 500);
 	const before = body.before?.trim() || undefined;
 	if (before && Number.isNaN(Date.parse(before))) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid before timestamp' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
@@ -74,7 +71,8 @@ export async function handleEntityQuality(request: Request, env: Env): Promise<R
 	const body = await parseJsonBody<{ months?: number }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const months = boundedMaintenanceLimit(body.months, 6, 24);
+	const monthsRaw = Number(body.months);
+	const months = Math.min(Math.max(Number.isFinite(monthsRaw) ? Math.trunc(monthsRaw) : 6, 1), 24);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	const result = await getEntityQualitySnapshot(db, { months });
@@ -88,7 +86,8 @@ export async function handlePruneOrphanEntities(request: Request, env: Env): Pro
 	const body = await parseJsonBody<{ limit?: number }>(request, INTERNAL_CORS_HEADERS);
 	if (body instanceof Response) return body;
 
-	const limit = boundedMaintenanceLimit(body.limit);
+	const limitRaw = Number(body.limit);
+	const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 100, 1), 500);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
