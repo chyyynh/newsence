@@ -2,9 +2,11 @@
 // dedicated per-key rate, avoiding shared Worker egress IP rate limits, and S2
 // returns reference metadata (DOI + author) in a single call.
 
+import type { WorkflowStep } from 'cloudflare:workers';
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
 import { fetchWithTimeout } from '@core-shared/web';
+import { syncPaperGraph } from '@papers/sync';
 import { detectPaperId, extractPaperTitle, type PaperId } from './detect';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
@@ -60,10 +62,7 @@ interface S2MatchResponse {
 }
 
 type PaperEnrichmentCandidate = { url?: string | null; title: string; fileType?: string | null; content?: string | null };
-
-export function shouldAttemptPaperEnrichment(input: { url?: string | null; fileType?: string | null; hasStagedText: boolean }): boolean {
-	return input.hasStagedText || input.fileType === PDF_MIME || detectPaperId(input.url, null, false).hasAcademicMarker;
-}
+type PaperWorkflowCandidate = { url?: string | null; title: string; file_type?: string | null };
 
 async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
@@ -185,4 +184,47 @@ export async function enrichPaperMetadata(candidate: PaperEnrichmentCandidate, a
 	if (paper) console.info({ tag: 'S2', msg: 'Paper enriched', doi: paper.doi, refs: paper.references.length });
 
 	return paper;
+}
+
+export async function stagePaperEnrichment(
+	env: Env,
+	step: WorkflowStep,
+	candidate: PaperWorkflowCandidate,
+	input: { hasStagedText: boolean; loadContent: () => Promise<string | null | undefined> },
+): Promise<PaperMetadata | null> {
+	if (!input.hasStagedText && candidate.file_type !== PDF_MIME && !detectPaperId(candidate.url, null, false).hasAcademicMarker) return null;
+
+	try {
+		return await step.do(
+			'enrich-paper-metadata',
+			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			async () =>
+				enrichPaperMetadata(
+					{ url: candidate.url, title: candidate.title, fileType: candidate.file_type, content: await input.loadContent() },
+					env.S2_API_KEY,
+				),
+		);
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'Paper enrichment failed, continuing', url: candidate.url, error: String(error) });
+		return null;
+	}
+}
+
+export async function syncPaperGraphForEnrichment(
+	env: Env,
+	step: WorkflowStep,
+	articleId: string,
+	paperEnrichment: PaperMetadata | null,
+): Promise<void> {
+	if (!paperEnrichment?.openAlexId) return;
+	try {
+		const summary = await step.do(
+			'sync-paper-graph',
+			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => syncPaperGraph(env, articleId, paperEnrichment),
+		);
+		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', article_id: articleId, edges: summary?.edges ?? 0 });
+	} catch (error) {
+		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', article_id: articleId, error: String(error) });
+	}
 }

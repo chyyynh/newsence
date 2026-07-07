@@ -1,7 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import {
-	type ArticleForProcessing,
 	getIncompleteWorkflowTargetIds,
 	type InsertArticleData,
 	insertArticleDataToArticle,
@@ -13,7 +12,6 @@ import type { PaperMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
-import { syncPaperGraph } from '@papers/sync';
 import { Client } from 'pg';
 import {
 	buildProcessorUpdatePayload,
@@ -21,7 +19,7 @@ import {
 	type PlatformWorkflowData,
 	type ProcessorResult,
 } from './domain/processors';
-import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
+import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
 
 type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
@@ -275,45 +273,6 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 	return pdfText === null ? article : { ...article, content: pdfText };
 }
 
-async function enrichPaperMetadataStep(
-	env: Env,
-	context: WorkflowRunContext,
-	shell: ArticleForProcessing,
-	pdfTextTemp: PdfTextTempResult | null,
-	step: WorkflowStep,
-): Promise<PaperMetadata | null> {
-	if (!shouldAttemptPaperEnrichment({ url: shell.url, fileType: shell.file_type, hasStagedText: !!pdfTextTemp?.textStorageKey }))
-		return null;
-
-	try {
-		return await step.do(
-			'enrich-paper-metadata',
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => {
-				const content = (await loadFullTargetArticle(env, context, pdfTextTemp)).content;
-				return enrichPaperMetadata({ url: shell.url, title: shell.title, fileType: shell.file_type, content }, env.S2_API_KEY);
-			},
-		);
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper enrichment failed, continuing', url: shell.url, error: String(error) });
-		return null;
-	}
-}
-
-async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: PaperMetadata | null, step: WorkflowStep): Promise<void> {
-	if (!paperEnrichment?.openAlexId) return;
-	try {
-		const summary = await step.do(
-			'sync-paper-graph',
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => syncPaperGraph(env, articleId, paperEnrichment),
-		);
-		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', article_id: articleId, edges: summary?.edges ?? 0 });
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', article_id: articleId, error: String(error) });
-	}
-}
-
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = insertArticleDataToArticle(draft.article);
@@ -429,7 +388,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				tempId: workflowIdPart(event.instanceId),
 			});
 
-			const paperEnrichment = await enrichPaperMetadataStep(this.env, context, article, pdfTextTemp, step);
+			const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
+				hasStagedText: !!pdfTextTemp?.textStorageKey,
+				loadContent: async () => (await loadFullTargetArticle(this.env, context, pdfTextTemp)).content,
+			});
 
 			const processorResult = await step.do(
 				'ai-analysis',
@@ -481,7 +443,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			await syncPaperGraphStep(this.env, articleId, paperEnrichment, step);
+			await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
 
 			if (pdfTextTemp?.textStorageKey || context.target.kind === 'source') {
 				await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, async () => {
