@@ -142,7 +142,7 @@ async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent>
 	// blob: stream the body into the appropriate extractor, or cancel it for unsupported extractors.
 	if (result.contentType === PDF_MIME) {
 		const limited = streamWithByteLimit(result.body, MAX_UPLOAD_BYTES);
-		const bytes = new Uint8Array(await new Response(limited.stream).arrayBuffer());
+		const bytes = new Uint8Array(await new Response(limited).arrayBuffer());
 		return normalizePdf(await parsePdf(bytes), result.sourceUrl);
 	}
 	await result.body.cancel();

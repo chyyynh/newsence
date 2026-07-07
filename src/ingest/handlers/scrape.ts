@@ -94,7 +94,7 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 	const limited = streamWithByteLimit(request.body, MAX_UPLOAD_BYTES);
 	let bytes: Uint8Array;
 	try {
-		bytes = new Uint8Array(await new Response(limited.stream).arrayBuffer());
+		bytes = new Uint8Array(await new Response(limited).arrayBuffer());
 	} catch (error) {
 		if (error instanceof PayloadTooLargeError)
 			return Response.json({ error: `Body exceeds ${MAX_UPLOAD_BYTES} bytes` }, { status: 413, headers: CORS_HEADERS });

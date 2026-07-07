@@ -144,12 +144,9 @@ export async function fetchJsonWithTimeout<T>(
 	return JSON.parse(await readTextWithLimit(response, maxBytes)) as T;
 }
 
-export function streamWithByteLimit(
-	body: ReadableStream<Uint8Array>,
-	maxBytes: number,
-): { stream: ReadableStream<Uint8Array>; getBytesSeen: () => number } {
+export function streamWithByteLimit(body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> {
 	let bytesSeen = 0;
-	const stream = body.pipeThrough(
+	return body.pipeThrough(
 		new TransformStream<Uint8Array, Uint8Array>({
 			transform(chunk, controller) {
 				bytesSeen += chunk.byteLength;
@@ -161,7 +158,6 @@ export function streamWithByteLimit(
 			},
 		}),
 	);
-	return { stream, getBytesSeen: () => bytesSeen };
 }
 
 export async function resolveUrl(url: string): Promise<string> {

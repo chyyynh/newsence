@@ -43,11 +43,6 @@ const FREE_MAX_USER_FILE_STORAGE_BYTES = 100 * 1024 * 1024;
 const FREE_MAX_USER_FILES = 50;
 const UNLIMITED_UPLOAD_PLANS = new Set(['pro', 'test']);
 
-type BlobUploadQuota = {
-	maxUserFileStorageBytes: number | null;
-	maxUserFiles: number | null;
-};
-
 interface BlobIngestResult {
 	userFileId: string;
 	storageKey: string;
@@ -165,23 +160,12 @@ function userGeneratedImageKey(userId: string, extension: string): string {
 	return `users/${userId}/illustrations/${crypto.randomUUID()}.${extension}`;
 }
 
-function getBlobUploadQuota(planId: string): BlobUploadQuota {
-	if (UNLIMITED_UPLOAD_PLANS.has(planId)) {
-		return { maxUserFileStorageBytes: null, maxUserFiles: null };
-	}
-	return {
-		maxUserFileStorageBytes: FREE_MAX_USER_FILE_STORAGE_BYTES,
-		maxUserFiles: FREE_MAX_USER_FILES,
-	};
-}
-
 async function assertBlobUploadQuotaTx(db: Client, userId: string, incomingBytes: number): Promise<void> {
 	await db.query('SELECT pg_advisory_xact_lock(752617, hashtext($1))', [userId]);
 
 	const settings = await db.query<{ plan_id: string }>('SELECT plan_id FROM user_settings WHERE user_id = $1 LIMIT 1', [userId]);
 	const planId = settings.rows[0]?.plan_id ?? 'free';
-	const { maxUserFileStorageBytes, maxUserFiles } = getBlobUploadQuota(planId);
-	if (maxUserFileStorageBytes === null && maxUserFiles === null) return;
+	if (UNLIMITED_UPLOAD_PLANS.has(planId)) return;
 
 	const usage = await db.query<{ total_bytes: string | null; total_files: string }>(
 		`SELECT COALESCE(SUM(file_size), 0)::text AS total_bytes, COUNT(*)::text AS total_files
@@ -193,17 +177,17 @@ async function assertBlobUploadQuotaTx(db: Client, userId: string, incomingBytes
 	const currentBytes = Number.parseInt(usage.rows[0]?.total_bytes ?? '0', 10);
 	const currentFiles = Number.parseInt(usage.rows[0]?.total_files ?? '0', 10);
 
-	if (maxUserFiles !== null && currentFiles >= maxUserFiles) {
+	if (currentFiles >= FREE_MAX_USER_FILES) {
 		throw new UploadQuotaExceededError(UPLOAD_FILE_QUOTA_EXCEEDED_MESSAGE, {
-			limit: maxUserFiles,
+			limit: FREE_MAX_USER_FILES,
 			used: currentFiles,
 			planId,
 		});
 	}
 
-	if (maxUserFileStorageBytes !== null && currentBytes + incomingBytes > maxUserFileStorageBytes) {
+	if (currentBytes + incomingBytes > FREE_MAX_USER_FILE_STORAGE_BYTES) {
 		throw new UploadQuotaExceededError(UPLOAD_STORAGE_QUOTA_EXCEEDED_MESSAGE, {
-			limit: maxUserFileStorageBytes,
+			limit: FREE_MAX_USER_FILE_STORAGE_BYTES,
 			used: currentBytes,
 			incoming: incomingBytes,
 			planId,
@@ -408,9 +392,10 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 	// Content-Type was attacker-influenced, so confirm the bytes are a real raster
 	// image (no PDF/SVG/HTML) before R2 commits the object.
 	const limited = streamWithByteLimit(upstream.body, MAX_UPLOAD_BYTES);
-	const sniffed = sniffMediaTypeStream(limited.stream, (type) => type !== 'application/pdf');
+	const sniffed = sniffMediaTypeStream(limited, (type) => type !== 'application/pdf');
+	let stored: R2Object | null;
 	try {
-		await env.R2.put(storageKey, sniffed.stream, { httpMetadata: { contentType, cacheControl: UPLOAD_CACHE_CONTROL } });
+		stored = await env.R2.put(storageKey, sniffed.stream, { httpMetadata: { contentType, cacheControl: UPLOAD_CACHE_CONTROL } });
 	} catch (err) {
 		if (err instanceof PayloadTooLargeError) {
 			return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: 'Image exceeds 10MB' };
@@ -421,8 +406,11 @@ export async function ingestImageUrl(env: Env, args: IngestImageUrlArgs): Promis
 		console.error({ tag: 'INGEST_IMAGE_URL', msg: 'R2 put failed', imageUrl: trimmed, storageKey, error: String(err) });
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 	}
+	if (!stored) {
+		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
+	}
 
-	const fileSize = limited.getBytesSeen();
+	const fileSize = stored.size;
 	const title = args.title?.trim() || DEFAULT_IMAGE_TITLE;
 	const persisted = await persistBlobRow(env, {
 		userId,
@@ -461,8 +449,9 @@ export async function persistSavedUrlBlob(
 
 	const storageKey = userUploadKey(args.userId, extensionFromMime(args.contentType, args.suggestedFilename));
 	const limited = streamWithByteLimit(args.body, MAX_UPLOAD_BYTES);
+	let stored: R2Object | null;
 	try {
-		await env.R2.put(storageKey, limited.stream, {
+		stored = await env.R2.put(storageKey, limited, {
 			httpMetadata: { contentType: args.contentType, cacheControl: UPLOAD_CACHE_CONTROL },
 		});
 	} catch (err) {
@@ -478,8 +467,9 @@ export async function persistSavedUrlBlob(
 		});
 		return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 	}
+	if (!stored) return { ok: false, code: 'INTERNAL_ERROR', message: 'R2 put failed' };
 
-	const fileSize = limited.getBytesSeen();
+	const fileSize = stored.size;
 	const title = deriveFileTitle(args.suggestedFilename);
 	const persisted = await persistBlobRow(env, {
 		userId: args.userId,
