@@ -19,12 +19,7 @@ import { articleProcessors, buildProcessorUpdatePayload, type ProcessorResult } 
 import { extractPdfTextToTemp, type PdfTextTempResult, preparePdfTextExtraction } from './pdf';
 import { enrichPaperMetadata, shouldAttemptPaperEnrichment } from './platforms/paper/semanticscholar';
 import { upsertTwitterSourceEventAttachment } from './platforms/twitter/persistence';
-import {
-	persistYouTubeWorkflowData,
-	prepareYouTubeHighlights,
-	prepareYouTubeHighlightsFromAttachments,
-	type YouTubeHighlightsUpdate,
-} from './platforms/youtube/transcripts';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
 
 type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
 
@@ -368,30 +363,6 @@ async function syncPaperGraphStep(env: Env, articleId: string, paperEnrichment: 
 	}
 }
 
-async function prepareYoutubeHighlights(
-	env: Env,
-	context: WorkflowRunContext,
-	article: Article,
-	step: WorkflowStep,
-): Promise<YouTubeHighlightsUpdate | null> {
-	const platformMetadata = article.platform_metadata;
-	if (platformMetadata?.type !== 'youtube') return null;
-	const videoId = platformMetadata.data.videoId;
-	if (!videoId) return null;
-
-	return await step.do(
-		'generate-youtube-highlights',
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-		async () => {
-			if (context.target.kind === 'source') {
-				const draft = await context.readSourceDraft();
-				return prepareYouTubeHighlightsFromAttachments(env, article, draft.attachments);
-			}
-			return prepareYouTubeHighlights(env, article);
-		},
-	);
-}
-
 async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = sourceDraftToArticle(draft.article);
@@ -545,7 +516,19 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			const youtubeHighlights = await prepareYoutubeHighlights(this.env, context, article, step);
+			const youtubeHighlights =
+				article.platform_metadata?.type === 'youtube'
+					? await step.do(
+							'generate-youtube-highlights',
+							{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+							async () =>
+								prepareYouTubeHighlights(
+									this.env,
+									article,
+									context.target.kind === 'source' ? (await context.readSourceDraft()).attachments : undefined,
+								),
+						)
+					: null;
 			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },

@@ -103,11 +103,17 @@ export async function persistYouTubeWorkflowData(
 	if (input.highlights) await saveYouTubeHighlights(db, input.highlights);
 }
 
-export async function prepareYouTubeHighlights(env: Env, article: Article): Promise<YouTubeHighlightsUpdate | null> {
+export async function prepareYouTubeHighlights(
+	env: Env,
+	article: Article,
+	attachments?: unknown[],
+): Promise<YouTubeHighlightsUpdate | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;
 
 	const videoId = article.platform_metadata.data.videoId;
 	if (!videoId) return null;
+	const attachedTranscript = youtubeTranscriptAttachment(attachments);
+	if (attachedTranscript) return prepareYouTubeHighlightsFromTranscript(env, videoId, attachedTranscript.segments);
 
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
@@ -120,18 +126,6 @@ export async function prepareYouTubeHighlights(env: Env, article: Article): Prom
 	if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
 	return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
-}
-
-export async function prepareYouTubeHighlightsFromAttachments(
-	env: Env,
-	article: Article,
-	attachments?: unknown[],
-): Promise<YouTubeHighlightsUpdate | null> {
-	if (article.platform_metadata?.type !== 'youtube') return null;
-	const videoId = article.platform_metadata.data.videoId;
-	if (!videoId) return null;
-	const transcript = youtubeTranscriptAttachment(attachments);
-	return transcript ? prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments) : null;
 }
 
 async function prepareYouTubeHighlightsFromTranscript(
