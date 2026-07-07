@@ -132,46 +132,6 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ se
 	return { segments, language: null };
 }
 
-async function fetchTranscriptViaLegacyPackage(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	const { YoutubeTranscript } = await import('youtube-transcript');
-	const items = await YoutubeTranscript.fetchTranscript(videoId, { fetch: transcriptFetch });
-
-	if (!items?.length) return EMPTY_TRANSCRIPT;
-
-	// In Worker environment, the ANDROID InnerTube path usually succeeds while
-	// the web page fallback is often blocked by YouTube on datacenter IPs.
-	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => ({
-		startTime: item.offset / 1000,
-		endTime: (item.offset + item.duration) / 1000,
-		text: item.text,
-	}));
-
-	const language = items[0].lang ?? null;
-	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', provider: 'youtube-transcript', count: segments.length, language });
-	return { segments, language };
-}
-
-async function fetchTranscript(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-
-	try {
-		const first = await fetchTranscriptViaCaptionExtractor(videoId);
-		if (first.segments.length > 0) return first;
-
-		console.info({ tag: 'YOUTUBE', msg: 'Transcript provider returned empty', provider: 'youtube-caption-extractor', videoId });
-	} catch (error) {
-		console.warn({
-			tag: 'YOUTUBE',
-			msg: 'Transcript provider failed',
-			provider: 'youtube-caption-extractor',
-			videoId,
-			error: String(error),
-		});
-	}
-
-	return fetchTranscriptViaLegacyPackage(videoId);
-}
-
 export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
@@ -203,7 +163,8 @@ export async function scrapeYouTube(
 		!options.minDurationSecondsForTranscript || !durationSeconds || durationSeconds >= options.minDurationSecondsForTranscript;
 	if (shouldFetchTranscript) {
 		try {
-			transcriptResult = await fetchTranscript(videoId);
+			console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
+			transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
 		} catch (e) {
 			console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch transcript', videoId, error: String(e) });
 		}
