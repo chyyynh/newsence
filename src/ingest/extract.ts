@@ -63,15 +63,12 @@ const MIN_PDF_CHARS_PER_PAGE = 20;
 // LiteParse WASM is instantiated once per isolate; the CompiledWasm wrangler
 // rule turns the import into a WebAssembly.Module.
 let pdfParserReady = false;
-function ensurePdfParser(): void {
+
+export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	if (!pdfParserReady) {
 		initSync({ module: wasmModule });
 		pdfParserReady = true;
 	}
-}
-
-export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
-	ensurePdfParser();
 	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'markdown', imageMode: 'off' });
 	const raw = (await parser.parse(bytes)) as { text?: string; pages?: unknown[] };
 	const text = (raw.text ?? '').trim();

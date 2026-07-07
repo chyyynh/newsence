@@ -51,10 +51,6 @@ export interface PdfTextTempResult {
 	textStorageKey?: string;
 }
 
-function assertPdfTextTempKey(key: string): void {
-	if (!key.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text temp object key: ${key}`);
-}
-
 export async function createPdfTextTemp(env: Env, articleId: string, storageKey: string): Promise<PdfTextTempResult> {
 	const obj = await env.R2.get(storageKey);
 	if (!obj) throw new Error(`PDF source object missing: ${storageKey}`);
@@ -67,14 +63,14 @@ export async function createPdfTextTemp(env: Env, articleId: string, storageKey:
 }
 
 export async function readPdfTextTemp(env: Env, textStorageKey: string): Promise<string> {
-	assertPdfTextTempKey(textStorageKey);
+	if (!textStorageKey.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text temp object key: ${textStorageKey}`);
 	const obj = await env.R2.get(textStorageKey);
 	if (!obj) throw new Error(`PDF text temp object missing: ${textStorageKey}`);
 	return obj.text();
 }
 
 export async function deletePdfTextTemp(env: Env, textStorageKey: string): Promise<void> {
-	assertPdfTextTempKey(textStorageKey);
+	if (!textStorageKey.startsWith(TMP_PDF_TEXT_PREFIX)) throw new Error(`Invalid PDF text temp object key: ${textStorageKey}`);
 	await env.R2.delete(textStorageKey);
 }
 
