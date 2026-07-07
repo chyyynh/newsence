@@ -93,17 +93,6 @@ function createWorkflowRunContext(env: Env, target: WorkflowQueueTarget): Workfl
 	};
 }
 
-function targetLogContext(context: WorkflowRunContext, article: Article): Record<string, string> {
-	return context.target.kind === 'row'
-		? { article_id: context.target.articleId, table: context.table }
-		: { url: article.url, table: context.table };
-}
-
-async function loadTargetShell(env: Env, context: WorkflowRunContext): Promise<ProcessableArticleShell> {
-	if (context.target.kind !== 'source') return loadProcessableArticle(env, context.table, context.target.articleId, true);
-	return { ...(await context.readSourceArticle()), content: null };
-}
-
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
 	const article =
 		context.target.kind === 'source'
@@ -271,33 +260,16 @@ async function prepareYoutubeHighlights(
 	);
 }
 
-async function cleanupTargetTemps(
-	env: Env,
-	context: WorkflowRunContext,
-	pdfTextTemp: PdfTextTempResult | null,
-	step: WorkflowStep,
-): Promise<void> {
-	const { target } = context;
-	if (!pdfTextTemp?.textStorageKey && target.kind !== 'source') return;
-
-	await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
-		cleanupWorkflowTempObjects(env, context, pdfTextTemp),
-	);
-}
-
 async function cleanupWorkflowTempObjects(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<void> {
 	const { target } = context;
 	const failures: Array<{ object: string; key: string; error: string }> = [];
-	const deleteTemp = async (object: string, key: string, deleteFn: () => Promise<void>) => {
-		try {
-			await deleteFn();
-		} catch (error) {
-			failures.push({ object, key, error: String(error) });
-		}
-	};
 
 	if (pdfTextTemp?.textStorageKey) {
-		await deleteTemp('pdf_text', pdfTextTemp.textStorageKey, () => deletePdfTextTemp(env, pdfTextTemp.textStorageKey!));
+		try {
+			await deletePdfTextTemp(env, pdfTextTemp.textStorageKey);
+		} catch (error) {
+			failures.push({ object: 'pdf_text', key: pdfTextTemp.textStorageKey, error: String(error) });
+		}
 	}
 
 	if (target.kind === 'source') {
@@ -314,11 +286,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 			const article = await step.do(
 				context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => loadTargetShell(this.env, context),
+				async () =>
+					context.target.kind === 'source'
+						? { ...(await context.readSourceArticle()), content: null }
+						: loadProcessableArticle(this.env, context.table, context.target.articleId, true),
 			);
 			const sourceType = article.source_type ?? 'default';
+			const logContext =
+				context.target.kind === 'row'
+					? { article_id: context.target.articleId, table: context.table }
+					: { url: article.url, table: context.table };
 
-			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...targetLogContext(context, article) });
+			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
 			const pdfTextTemp = await stagePdfExtraction(this.env, context, article, step);
 
@@ -367,9 +346,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, WorkflowPar
 
 			await syncPaperGraphStep(this.env, articleId, paperEnrichment, step);
 
-			await cleanupTargetTemps(this.env, context, pdfTextTemp, step);
+			if (pdfTextTemp?.textStorageKey || context.target.kind === 'source') {
+				await step.do('cleanup-workflow-temp-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, () =>
+					cleanupWorkflowTempObjects(this.env, context, pdfTextTemp),
+				);
+			}
 
-			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...targetLogContext(context, article) });
+			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 			return { success: true, article_id: articleId };
 		} catch (error) {
 			await recordWorkflowFailure(this.env, context, error);

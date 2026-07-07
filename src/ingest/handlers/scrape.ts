@@ -53,7 +53,18 @@ export async function handleScrapeJobCreate(request: Request, env: Env): Promise
 			const instance = await env.SCRAPE_WORKFLOW.create({ params });
 			return Response.json({ jobId: instance.id, status: 'queued' }, { status: 202, headers: CORS_HEADERS });
 		} catch (error) {
-			await cleanupStagedScrapeInput(env, params);
+			if (params.kind === 'r2' && params.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) {
+				try {
+					await env.R2.delete(params.key);
+				} catch (cleanupError) {
+					console.warn({
+						tag: 'SCRAPE_JOB',
+						msg: 'Failed to cleanup staged scrape input',
+						key: params.key,
+						error: String(cleanupError),
+					});
+				}
+			}
 			throw error;
 		}
 	} catch (error) {
@@ -107,15 +118,6 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 	const key = `${SCRAPE_INPUT_TEMP_PREFIX}${crypto.randomUUID()}.${extensionFromMime(sniffed)}`;
 	await env.R2.put(key, input.bytes, { httpMetadata: { contentType: sniffed } });
 	return { kind: 'r2', key };
-}
-
-async function cleanupStagedScrapeInput(env: Env, params: { kind: 'url'; url: string } | { kind: 'r2'; key: string }): Promise<void> {
-	if (params.kind !== 'r2') return;
-	try {
-		if (params.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) await env.R2.delete(params.key);
-	} catch (error) {
-		console.warn({ tag: 'SCRAPE_JOB', msg: 'Failed to cleanup staged scrape input', key: params.key, error: String(error) });
-	}
 }
 
 // GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent
