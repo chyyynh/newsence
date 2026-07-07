@@ -74,7 +74,8 @@ export async function handleRetryCron(env: Env): Promise<void> {
 }
 
 export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<void> {
-	const sourceArticle = await createSourceArticleDraftRef(env, draft);
+	const sourceArticle = { url: draft.article.url, r2Key: `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json` };
+	await env.R2.put(sourceArticle.r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
 
 	try {
 		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
@@ -105,17 +106,13 @@ export async function createWorkflowsForQueueMessages(env: Env, messages: readon
 		messages.map(({ id, body: target }) => {
 			const targetTable = resolveProcessableTable(target.targetTable);
 			return {
-				id: articleWorkflowId(id, targetTable, target.articleId),
+				id: ['article', workflowIdPart(id), workflowIdPart(targetTable), workflowIdPart(target.articleId)].join('-'),
 				params: { target: { kind: 'row', articleId: target.articleId, targetTable } },
 			};
 		}),
 	);
 
 	return { count: messages.length, created: instances.length, existing: messages.length - instances.length };
-}
-
-function articleWorkflowId(messageId: string, targetTable: ProcessableTable, articleId: string): string {
-	return ['article', workflowIdPart(messageId), workflowIdPart(targetTable), workflowIdPart(articleId)].join('-');
 }
 
 function workflowIdPart(value: string): string {
@@ -168,12 +165,6 @@ function isReusableSourceWorkflowStatus(status: string): boolean {
 	return status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(status);
 }
 
-async function createSourceArticleDraftRef(env: Env, draft: SourceArticleDraft): Promise<SourceArticleDraftRef> {
-	const r2Key = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
-	await env.R2.put(r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
-	return { url: draft.article.url, r2Key };
-}
-
 export async function cleanupSourceArticleDraftRef(
 	env: Env,
 	ref: SourceArticleDraftRef,
@@ -196,7 +187,14 @@ export async function cleanupSourceArticleDraftRef(
 
 export async function createUserFileWorkflow(env: Env, userFileId: string): Promise<string | undefined> {
 	try {
-		const storedInstanceId = await getUserFileWorkflowInstanceId(env, userFileId);
+		const storedInstanceId = await withDbClient(env, async (db) => {
+			const result = await db.query(
+				`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
+				[userFileId],
+			);
+			const row = result.rows[0] as { instance_id?: string | null } | undefined;
+			return row?.instance_id ?? null;
+		});
 		if (storedInstanceId) {
 			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
@@ -204,8 +202,33 @@ export async function createUserFileWorkflow(env: Env, userFileId: string): Prom
 
 		const baseId = `user-file-${workflowIdPart(userFileId)}`;
 		const workflowId = storedInstanceId ? `${baseId}-${crypto.randomUUID()}` : baseId;
-		const instanceId = await createUserFileWorkflowInstance(env, workflowId, userFileId);
-		await recordUserFileWorkflowInstanceId(env, userFileId, instanceId);
+		let instanceId: string;
+		try {
+			const instance = await env.MONITOR_WORKFLOW.create({
+				id: workflowId,
+				params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
+			});
+			instanceId = instance.id;
+		} catch (err) {
+			const existing = await getMonitorWorkflowStatus(env, workflowId);
+			if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
+				instanceId = existing.id;
+			} else {
+				if (existing.status === 'unknown') throw err;
+				const instance = await env.MONITOR_WORKFLOW.create({
+					id: `${workflowId}-${crypto.randomUUID()}`,
+					params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
+				});
+				instanceId = instance.id;
+			}
+		}
+		await withDbClient(env, (db) =>
+			patchUserFileWorkflowMetadata(db, userFileId, {
+				monitor_instance_id: instanceId,
+				monitor_status: 'running',
+				monitor_started_at: new Date().toISOString(),
+			}),
+		);
 		return instanceId;
 	} catch (err) {
 		console.error({ tag: 'WORKFLOW', msg: 'create failed', userFileId, error: String(err) });
@@ -231,27 +254,6 @@ export async function recordUserFileWorkflowFailed(env: Env, userFileId: string,
 	);
 }
 
-async function getUserFileWorkflowInstanceId(env: Env, userFileId: string): Promise<string | null> {
-	return withDbClient(env, async (db) => {
-		const result = await db.query(
-			`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM ${USER_FILES_TABLE} WHERE id = $1`,
-			[userFileId],
-		);
-		const row = result.rows[0] as { instance_id?: string | null } | undefined;
-		return row?.instance_id ?? null;
-	});
-}
-
-async function recordUserFileWorkflowInstanceId(env: Env, userFileId: string, instanceId: string): Promise<void> {
-	await withDbClient(env, (db) =>
-		patchUserFileWorkflowMetadata(db, userFileId, {
-			monitor_instance_id: instanceId,
-			monitor_status: 'running',
-			monitor_started_at: new Date().toISOString(),
-		}),
-	);
-}
-
 async function patchUserFileWorkflowMetadata(db: DbClient, userFileId: string, patch: UserFileWorkflowMetadataPatch): Promise<void> {
 	await db.query(
 		`UPDATE ${USER_FILES_TABLE}
@@ -264,26 +266,6 @@ async function patchUserFileWorkflowMetadata(db: DbClient, userFileId: string, p
 		 WHERE id = $2`,
 		[JSON.stringify(patch), userFileId],
 	);
-}
-
-async function createUserFileWorkflowInstance(env: Env, workflowId: string, userFileId: string): Promise<string> {
-	try {
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: workflowId,
-			params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
-		});
-		return instance.id;
-	} catch (err) {
-		const existing = await getMonitorWorkflowStatus(env, workflowId);
-		if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
-		if (existing.status === 'unknown') throw err;
-
-		const instance = await env.MONITOR_WORKFLOW.create({
-			id: `${workflowId}-${crypto.randomUUID()}`,
-			params: { target: { kind: 'row', articleId: userFileId, targetTable: USER_FILES_TABLE } },
-		});
-		return instance.id;
-	}
 }
 
 async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {
