@@ -11,7 +11,7 @@ import type {
 } from '@core-rpc/contracts';
 import { routeRequest } from '@entry/http';
 import { ingestUploadedFile, persistGeneratedImage } from '@ingest/blob';
-import { type ExtractInput, extractSource, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';
+import { type ExtractInput, extractSource, extractUrl, type NormalizedContent, SCRAPE_INPUT_TEMP_PREFIX } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -97,7 +97,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 
 	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
 	scrapeUrl(url: string): Promise<ScrapedUrlContent> {
-		return extractSource(this.env, { kind: 'url', url });
+		return extractUrl(this.env, url);
 	}
 
 	/** Read article/collection/url resources from the core corpus. */

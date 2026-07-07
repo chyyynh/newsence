@@ -1,10 +1,10 @@
 import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/web';
-import { extractSource, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
+import { extractFile, extractUrl, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
 
 // HTTP surface for content extraction (Firecrawl-style). All routes share the
 // same wildcard CORS and 10 MB body cap. The actual extraction lives in
-// extractSource (sync) / ScrapeWorkflow (async); this file is just the edge.
+// extractUrl/extractFile (sync) / ScrapeWorkflow (async); this file is just the edge.
 const CORS_HEADERS: Record<string, string> = {
 	'Access-Control-Allow-Origin': '*',
 	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -21,7 +21,9 @@ export async function handleScrape(request: Request, env: Env): Promise<Response
 	try {
 		const input = await readScrapeInput(request);
 		if (input instanceof Response) return input;
-		return Response.json(await extractSource(env, input), { headers: CORS_HEADERS });
+		return Response.json(input.kind === 'url' ? await extractUrl(env, input.url) : await extractFile(input.bytes), {
+			headers: CORS_HEADERS,
+		});
 	} catch (error) {
 		console.error({ tag: 'SCRAPE', msg: 'Extraction failed', error: String(error) });
 		return Response.json(

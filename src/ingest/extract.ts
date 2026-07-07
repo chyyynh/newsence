@@ -214,17 +214,13 @@ function normalizePdf(parsed: ParsedPdf, sourceUrl: string | null): NormalizedCo
 	};
 }
 
-function emptyResult(contentType: string, sourceUrl: string | null, status: 'needs_ocr' | 'failed'): NormalizedContent {
-	return { sourceUrl, contentType, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status };
-}
-
-async function extractFromBytes(bytes: Uint8Array): Promise<NormalizedContent> {
+export async function extractFile(bytes: Uint8Array): Promise<NormalizedContent> {
 	const type = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES)) ?? 'application/octet-stream';
 	if (type === PDF_MIME) return normalizePdf(await parsePdf(bytes), null);
-	return emptyResult(type, null, 'failed');
+	return { sourceUrl: null, contentType: type, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status: 'failed' };
 }
 
-async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent> {
+export async function extractUrl(env: Env, url: string): Promise<NormalizedContent> {
 	const result = await scrapeUrl(url, { youtubeApiKey: env.YOUTUBE_API_KEY, kaitoApiKey: env.KAITO_API_KEY });
 	if (result.kind === 'page') return normalizeHtml(result.scraped, url);
 
@@ -234,20 +230,28 @@ async function extractFromUrl(env: Env, url: string): Promise<NormalizedContent>
 		return normalizePdf(await parsePdf(bytes), result.sourceUrl);
 	}
 	await result.body.cancel();
-	return emptyResult(result.contentType, result.sourceUrl, 'failed');
+	return {
+		sourceUrl: result.sourceUrl,
+		contentType: result.contentType,
+		title: null,
+		markdown: '',
+		text: '',
+		metadata: { ...EMPTY_METADATA },
+		status: 'failed',
+	};
 }
 
 export async function extractSource(env: Env, input: ExtractInput): Promise<NormalizedContent> {
 	switch (input.kind) {
 		case 'url':
-			return extractFromUrl(env, input.url);
+			return extractUrl(env, input.url);
 		case 'bytes':
-			return extractFromBytes(input.bytes);
+			return extractFile(input.bytes);
 		case 'r2': {
 			if (!input.key.startsWith(SCRAPE_INPUT_TEMP_PREFIX)) throw new Error(`Invalid scrape input temp object key: ${input.key}`);
 			const obj = await env.R2.get(input.key);
 			if (!obj) throw new Error(`scrape input temp object missing: ${input.key}`);
-			return extractFromBytes(await obj.bytes());
+			return extractFile(await obj.bytes());
 		}
 	}
 }
