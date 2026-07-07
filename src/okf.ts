@@ -6,7 +6,6 @@
 // the ingest pipeline stores with, so bundles never diverge from the DB gate.
 // ─────────────────────────────────────────────────────────────
 
-import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@entities/normalize';
 import { Client } from 'pg';
 
@@ -58,7 +57,12 @@ type ExportQuality = {
 	unknownTypes: Record<string, number>;
 };
 
-const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
+const OKF_EXPORT_CORS = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
+	'Access-Control-Expose-Headers': 'Content-Disposition',
+};
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const OKF_ENTITY_TYPES = new Set(['person', 'organization', 'product', 'technology', 'event', 'location']);
@@ -66,11 +70,12 @@ const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Bus
 const encoder = new TextEncoder();
 
 export async function handleExportCollectionOkf(request: Request, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env, OKF_EXPORT_CORS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; collectionId?: string }>(request, OKF_EXPORT_CORS);
-	if (body instanceof Response) return body;
+	let body: { userId?: string; collectionId?: string };
+	try {
+		body = (await request.json()) as typeof body;
+	} catch {
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid JSON body' }, { status: 400, headers: OKF_EXPORT_CORS });
+	}
 	const viewerId = body.userId?.trim() || null;
 	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400, headers: OKF_EXPORT_CORS });

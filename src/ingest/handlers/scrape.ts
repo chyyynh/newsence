@@ -1,4 +1,3 @@
-import { parseJsonBody, requireAuth } from '@core-shared/auth';
 import { extensionFromMime, MAGIC_SNIFF_BYTES, sniffMediaType } from '@core-shared/mime';
 import { MAX_UPLOAD_BYTES, PayloadTooLargeError, streamWithByteLimit } from '@core-shared/web';
 import { extractSource, SCRAPE_INPUT_TEMP_PREFIX } from '../extract';
@@ -19,9 +18,6 @@ const CORS_HEADERS: Record<string, string> = {
 export async function handleScrape(request: Request, env: Env): Promise<Response> {
 	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
-	const unauth = await requireAuth(request, env, CORS_HEADERS);
-	if (unauth) return unauth;
-
 	try {
 		const input = await readScrapeInput(request);
 		if (input instanceof Response) return input;
@@ -41,9 +37,6 @@ export async function handleScrape(request: Request, env: Env): Promise<Response
 // would exceed the sync /scrape request budget.
 export async function handleScrapeJobCreate(request: Request, env: Env): Promise<Response> {
 	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-
-	const unauth = await requireAuth(request, env, CORS_HEADERS);
-	if (unauth) return unauth;
 
 	try {
 		const params = await buildJobParams(request, env);
@@ -83,8 +76,12 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 	const contentType = request.headers.get('content-type')?.toLowerCase() ?? '';
 
 	if (contentType.startsWith('application/json')) {
-		const body = await parseJsonBody<{ url?: string }>(request, CORS_HEADERS);
-		if (body instanceof Response) return body;
+		let body: { url?: string };
+		try {
+			body = (await request.json()) as typeof body;
+		} catch {
+			return Response.json({ code: 'BAD_REQUEST', message: 'Invalid JSON body' }, { status: 400, headers: CORS_HEADERS });
+		}
 		const url = body.url?.trim();
 		if (!url) return Response.json({ error: 'Missing "url"' }, { status: 400, headers: CORS_HEADERS });
 		return { kind: 'url', url };
@@ -124,9 +121,6 @@ async function buildJobParams(request: Request, env: Env): Promise<{ kind: 'url'
 // once the Workflow completes (from its `output`).
 export async function handleScrapeJobStatus(request: Request, jobId: string, env: Env): Promise<Response> {
 	if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
-
-	const unauth = await requireAuth(request, env, CORS_HEADERS);
-	if (unauth) return unauth;
 
 	try {
 		const instance = await env.SCRAPE_WORKFLOW.get(jobId);

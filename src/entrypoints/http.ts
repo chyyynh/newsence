@@ -1,10 +1,22 @@
 import { USER_FILES_TABLE } from '@core-shared/article-store';
-import { INTERNAL_CORS_HEADERS, parseJsonBody, requireAuth } from '@core-shared/auth';
 import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus } from '@ingest/handlers/scrape';
 import { enqueueArticleBatchProcess, handleRetryCron } from '@ingest/workflows/queue';
 import { handleExportCollectionOkf } from '../okf';
 
 type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
+
+const ENCODER = new TextEncoder();
+const INTERNAL_CORS_HEADERS: Record<string, string> = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
+};
+const SCRAPE_CORS_HEADERS: Record<string, string> = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
+};
+const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
 
 const POST_ROUTES: Record<string, RouteHandler> = {
 	'/retry': handleRetry,
@@ -26,6 +38,38 @@ type WorkflowStreamEvent = {
 	status: string;
 };
 
+function routeAuthHeaders(pathname: string): HeadersInit | undefined {
+	if (pathname === '/scrape' || pathname.startsWith('/scrape/jobs')) return SCRAPE_CORS_HEADERS;
+	if (pathname === '/okf/collections/export') return OKF_EXPORT_CORS;
+	if (POST_ROUTES[pathname]) return INTERNAL_CORS_HEADERS;
+	return undefined;
+}
+
+async function unauthorizedInternalRequest(request: Request, env: Env, pathname: string): Promise<Response | null> {
+	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
+	const provided = (
+		request.headers.get('x-internal-token') ??
+		request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
+		''
+	).trim();
+	let authorized = false;
+	if (!expected) {
+		console.error({ tag: 'AUTH', msg: 'CORE_WORKER_INTERNAL_TOKEN is not set — rejecting internal-token request' });
+	} else if (provided) {
+		const [providedHash, expectedHash] = await Promise.all([
+			crypto.subtle.digest('SHA-256', ENCODER.encode(provided)),
+			crypto.subtle.digest('SHA-256', ENCODER.encode(expected)),
+		]);
+		authorized = crypto.subtle.timingSafeEqual(providedHash, expectedHash);
+	}
+	return authorized
+		? null
+		: Response.json(
+				{ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' },
+				{ status: 401, headers: routeAuthHeaders(pathname) },
+			);
+}
+
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints:\n' +
@@ -38,11 +82,12 @@ const HELP_TEXT =
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
 
 async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-	const unauth = await requireAuth(request, env, INTERNAL_CORS_HEADERS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ articleIds?: string[]; userFileIds?: string[] }>(request, INTERNAL_CORS_HEADERS);
-	if (body instanceof Response) return body;
+	let body: { articleIds?: string[]; userFileIds?: string[] };
+	try {
+		body = (await request.json()) as typeof body;
+	} catch {
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid JSON body' }, { status: 400, headers: INTERNAL_CORS_HEADERS });
+	}
 
 	const articleIds = body.articleIds?.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) ?? [];
 	const userFileIds = body.userFileIds?.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) ?? [];
@@ -58,9 +103,6 @@ async function handleRetry(request: Request, env: Env, ctx: ExecutionContext): P
 }
 
 async function handleWorkflowStream(request: Request, instanceId: string, env: Env): Promise<Response> {
-	const unauth = await requireAuth(request, env);
-	if (unauth) return unauth;
-
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
@@ -103,9 +145,11 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 	});
 }
 
-export function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
+export async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const { pathname } = new URL(request.url);
 	const { method } = request;
+	const scrapeJobId = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
+	const streamInstanceId = WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId;
 
 	if (pathname === '/health') {
 		return Response.json({
@@ -118,8 +162,13 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 		if (SCRAPE_PREFLIGHT_ROUTES.has(pathname)) return POST_ROUTES[pathname](request, env, ctx);
 		if (INTERNAL_PREFLIGHT_ROUTES.has(pathname)) return new Response(null, { headers: INTERNAL_CORS_HEADERS });
 
-		const id = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
-		if (id) return handleScrapeJobStatus(request, id, env);
+		if (scrapeJobId) return handleScrapeJobStatus(request, scrapeJobId, env);
+	}
+
+	const needsAuth = (method === 'POST' && !!POST_ROUTES[pathname]) || (method === 'GET' && (!!streamInstanceId || !!scrapeJobId));
+	if (needsAuth) {
+		const unauthorized = await unauthorizedInternalRequest(request, env, pathname);
+		if (unauthorized) return unauthorized;
 	}
 
 	if (method === 'POST') {
@@ -128,11 +177,9 @@ export function routeRequest(request: Request, env: Env, ctx: ExecutionContext):
 	}
 
 	if (method === 'GET') {
-		const instanceId = WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId;
-		if (instanceId) return handleWorkflowStream(request, instanceId, env);
+		if (streamInstanceId) return handleWorkflowStream(request, streamInstanceId, env);
 
-		const id = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
-		if (id) return handleScrapeJobStatus(request, id, env);
+		if (scrapeJobId) return handleScrapeJobStatus(request, scrapeJobId, env);
 	}
 
 	return new Response(HELP_TEXT, { headers: { 'Content-Type': 'text/plain' } });
