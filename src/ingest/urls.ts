@@ -1,5 +1,5 @@
 import type { NormalizedContent } from '@core-shared/types';
-import { detectUrlKind, normalizeUrl } from '@core-shared/web';
+import { normalizeUrl } from '@core-shared/web';
 import { getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
@@ -20,29 +20,19 @@ type IngestResult = {
 };
 
 async function fetchUrlContent(url: string, env: Env): Promise<NormalizedContent> {
-	switch (detectUrlKind(url)) {
-		case 'youtube': {
-			const videoId = extractYouTubeId(url);
-			if (!videoId) throw new Error('Invalid YouTube URL');
-			return await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
-		}
-		case 'twitter': {
-			const tweetId = extractTweetId(url);
-			if (!tweetId) throw new Error('Invalid Twitter URL');
-			return await scrapeTweet(tweetId, env.KAITO_API_KEY);
-		}
-		case 'hackernews': {
-			const itemId = extractHackerNewsId(url);
-			if (!itemId) throw new Error('Invalid HackerNews URL');
-			return await scrapeHackerNews(itemId);
-		}
-		case 'web':
-			break;
-	}
+	const videoId = extractYouTubeId(url);
+	if (videoId) return await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
+
+	const tweetId = extractTweetId(url);
+	if (tweetId) return await scrapeTweet(tweetId, env.KAITO_API_KEY);
+
+	const itemId = extractHackerNewsId(url);
+	if (itemId) return await scrapeHackerNews(itemId);
 
 	const parsed = new URL(url);
 	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
 	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+
 	return scrapeWebPage(url);
 }
 

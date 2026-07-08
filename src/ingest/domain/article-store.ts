@@ -1,5 +1,4 @@
 import type { Article, NormalizedContent } from '@core-shared/types';
-import { detectUrlKind } from '@core-shared/web';
 import { Client } from 'pg';
 
 type ArticleStoreTable = 'articles' | 'user_files';
@@ -126,10 +125,11 @@ export async function insertScrapedUrlUserFile(
 	url: string,
 	userId: string,
 ): Promise<{ ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string }> {
-	const urlKind = detectUrlKind(url);
+	const platformType =
+		scraped.platformMetadata?.type && scraped.platformMetadata.type !== 'default' ? scraped.platformMetadata.type : 'web';
 	const title = scraped.title || new URL(url).hostname;
 
-	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
+	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
 	if (!skipContentCheck && (!scraped.markdown || scraped.markdown.length < 50)) {
 		return { ok: false, error: 'Content too short' };
 	}
@@ -158,7 +158,7 @@ export async function insertScrapedUrlUserFile(
 			LIMIT 1`,
 			[
 				title,
-				urlKind,
+				platformType,
 				url,
 				scraped.metadata.siteName || 'External',
 				scraped.metadata.publishedDate || new Date().toISOString(),

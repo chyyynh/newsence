@@ -53,13 +53,9 @@ const DOMAIN_ALIASES: Record<string, string> = {
 	'mobile.twitter.com': 'x.com',
 	'www.x.com': 'x.com',
 };
-const HACKERNEWS_HOSTS = new Set(['news.ycombinator.com', 'ycombinator.com']);
-const TWITTER_HOSTS = new Set(['twitter.com', 'x.com']);
 const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
-
-type UrlKind = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
 function hostMatches(hostname: string, hosts: ReadonlySet<string>): boolean {
 	if (hosts.has(hostname)) return true;
@@ -134,17 +130,6 @@ export function normalizeUrl(url: string): string {
 	for (const param of TRACKING_PARAMS) parsed.searchParams.delete(param);
 	parsed.searchParams.sort();
 	return parsed.toString();
-}
-
-export function detectUrlKind(url: string): UrlKind {
-	const parsed = parseUrl(url);
-	if (!parsed) return 'web';
-
-	const hostname = canonicalHost(parsed.hostname);
-	if (hostMatches(hostname, HACKERNEWS_HOSTS)) return 'hackernews';
-	if (isYouTubeHost(hostname)) return 'youtube';
-	if (hostMatches(hostname, TWITTER_HOSTS)) return 'twitter';
-	return 'web';
 }
 
 function extractYouTubeId(url: string): string | null {
