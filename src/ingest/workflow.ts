@@ -16,13 +16,6 @@ import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
-type ArticleProcessor = (article: Article, env: CoreEnv) => Promise<ProcessorResult>;
-
-const articlePlatforms: Partial<Record<string, ArticleProcessor>> = {
-	hackernews: processHackerNewsArticle,
-	twitter: processTwitterArticle,
-};
-
 const PDF_MIME = 'application/pdf';
 
 function sourceRecordToArticle(data: SourceArticleRecord): Article {
@@ -223,7 +216,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const metadataType = article.platform_metadata?.type;
 		const sourceType =
 			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
-		const platform = articlePlatforms[sourceType];
 		const logContext =
 			target.kind === 'source' ? { url: article.url, table: 'articles' } : { article_id: target.rowId, table: target.table };
 
@@ -248,7 +240,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
 				const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
-				if (platform) return platform(article, this.env);
+				if (sourceType === 'hackernews') return processHackerNewsArticle(article, this.env);
+				if (sourceType === 'twitter') return processTwitterArticle(article, this.env);
 				return mergeArticleAnalysis(article, await generateArticleAnalysis(article, this.env));
 			},
 		);
