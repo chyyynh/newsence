@@ -77,8 +77,12 @@ export function getArticlePlatform(sourceType?: string | null): ArticlePlatformA
 	return articlePlatforms[sourceType ?? ''] ?? articlePlatforms.default;
 }
 
+export function platformIdentity(article: Article): string {
+	return article.platform_metadata?.type ?? article.source_type ?? 'default';
+}
+
 export function getArticlePlatformForArticle(article: Article): ArticlePlatformAdapter {
-	return getArticlePlatform(article.platform_metadata?.type ?? article.source_type);
+	return getArticlePlatform(platformIdentity(article));
 }
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);

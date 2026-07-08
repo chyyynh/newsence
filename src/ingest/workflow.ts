@@ -20,6 +20,7 @@ import {
 	getArticlePlatformForArticle,
 	type PlatformWorkflowData,
 	type ProcessorResult,
+	platformIdentity,
 } from './domain/processors';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
@@ -376,7 +377,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 					return loadArticleForProcessing(this.env, context.table, context.rowId, true);
 				},
 			);
-			const sourceType = article.source_type ?? 'default';
+			const sourceType = platformIdentity(article);
 			const platform = getArticlePlatformForArticle(article);
 			const logContext =
 				context.target.kind === 'source' ? { url: article.url, table: context.table } : { article_id: context.rowId, table: context.table };
