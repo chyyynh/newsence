@@ -12,7 +12,7 @@ export type ArticleEntityInput = { name: string; name_cn: string; type: string }
 type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
 
 /** Canonical names that are too generic to be useful entity pages (audit 2026-07-02, issue #197). */
-export const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
+const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES);
 const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
 const SOURCE_FEED_SUFFIX_CANONICALS = new Set([
@@ -189,7 +189,7 @@ export function normalizeArticleEntityUpdatePayload(
 	return entities;
 }
 
-export function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
+function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
 	if (!value || typeof value !== 'object') return false;
 	const record = value as Record<string, unknown>;
 	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';
