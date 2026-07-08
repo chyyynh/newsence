@@ -140,12 +140,12 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 	const orphanReplies = selfReplies.filter((t) => !t.conversationId || !rootConversationIds.has(t.conversationId));
 
 	const groups = new Map<string, Tweet[]>();
-	for (const tweet of [...rootTweets, ...threadReplies, ...orphanReplies]) {
+	for (const tweet of [...rootTweets, ...threadReplies]) {
 		const key = tweet.conversationId || tweet.id || tweet.url;
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)!.push(tweet);
 	}
-	return [...groups.values()];
+	return [...groups.values(), ...orphanReplies.map((tweet) => [tweet])];
 }
 
 export async function handleTwitterCron(env: Env): Promise<void> {
