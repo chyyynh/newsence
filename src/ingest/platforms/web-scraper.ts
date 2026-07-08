@@ -168,7 +168,7 @@ const HTML_FETCH_HEADERS: HeadersInit = {
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
 
-export async function scrapeHtmlFromResponse(response: Response, url: string): Promise<NormalizedContent> {
+async function scrapeHtmlFromResponse(response: Response, url: string): Promise<NormalizedContent> {
 	const contentLength = Number(response.headers.get('content-length') || '0');
 	if (contentLength > MAX_HTML_BYTES) {
 		throw new Error(`Response too large: ${contentLength} bytes`);

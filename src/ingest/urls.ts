@@ -1,21 +1,15 @@
 import type { NormalizedContent } from '@core-shared/types';
-import { BROWSER_UA, detectUrlKind, normalizeUrl } from '@core-shared/web';
+import { detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
 import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
-import { scrapeHtmlFromResponse } from './platforms/web-scraper';
+import { scrapeWebPage } from './platforms/web-scraper';
 import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
-const URL_FETCH_TIMEOUT_MS = 8_000;
-const URL_FETCH_HEADERS: HeadersInit = {
-	'User-Agent': BROWSER_UA,
-	Accept: '*/*',
-	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-};
 
 type ExistingUrlUserFile = NonNullable<Awaited<ReturnType<typeof getExistingUrlUserFile>>>;
 
@@ -32,27 +26,6 @@ type IngestResult = {
 	alreadyExists?: boolean;
 	error?: string;
 };
-
-async function fetchGenericUrlContent(url: string): Promise<NormalizedContent> {
-	const res = await fetch(url, {
-		redirect: 'follow',
-		signal: AbortSignal.timeout(URL_FETCH_TIMEOUT_MS),
-		headers: URL_FETCH_HEADERS,
-	});
-	if (!res.ok) {
-		await res.body?.cancel();
-		throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-	}
-
-	const contentType = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
-
-	if (contentType.includes('text/html') || contentType.includes('text/xml') || contentType.includes('application/xhtml')) {
-		return await scrapeHtmlFromResponse(res, url);
-	}
-
-	await res.body?.cancel();
-	throw new Error(`Unsupported content-type: ${contentType}`);
-}
 
 async function fetchUrlContent(url: string, env: Env): Promise<NormalizedContent> {
 	switch (detectUrlKind(url)) {
@@ -78,7 +51,7 @@ async function fetchUrlContent(url: string, env: Env): Promise<NormalizedContent
 	const parsed = new URL(url);
 	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
 	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
-	return fetchGenericUrlContent(url);
+	return scrapeWebPage(url);
 }
 
 function buildUserFileResult(
