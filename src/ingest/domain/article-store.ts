@@ -300,17 +300,18 @@ export async function getExistingArticlesByUrl(db: Client, urls: string[], batch
 	return records;
 }
 
+export async function getExistingArticleByUrl(db: Client, url: string): Promise<ExistingArticleRecord | null> {
+	const [article] = await getExistingArticlesByUrl(db, [url], 1);
+	return article ?? null;
+}
+
 export type ArticleReprocessingTextUpdate = {
 	summary: string;
 	content: string;
 	platformMetadata: unknown;
 };
 
-export async function updateArticleTextForReprocessing(
-	db: Client,
-	articleId: string,
-	update: ArticleReprocessingTextUpdate,
-): Promise<void> {
+export async function reopenArticleForReprocessing(db: Client, articleId: string, update: ArticleReprocessingTextUpdate): Promise<void> {
 	await db.query(
 		`UPDATE articles
 		 SET summary = $1,

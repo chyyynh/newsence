@@ -1,7 +1,7 @@
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Tweet, TwitterSourceEventDraft } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
-import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@ingest/domain/article-store';
+import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
@@ -34,11 +34,6 @@ function isSocialMediaUrl(url: string): boolean {
 		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
 	}
 	return false;
-}
-
-async function findArticleByUrl(db: Client, url: string): Promise<{ id: string; summary_cn: string | null } | null> {
-	const [article] = await getExistingArticlesByUrl(db, [url]);
-	return article ? { id: article.id, summary_cn: article.summary_cn } : null;
 }
 
 async function enqueueTwitterArticle(
@@ -119,7 +114,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 	const articleUrl = normalizeUrl(externalUrl);
 	if (isSocialMediaUrl(articleUrl)) return false;
 
-	const existingArticle = await findArticleByUrl(db, articleUrl);
+	const existingArticle = await getExistingArticleByUrl(db, articleUrl);
 	if (existingArticle) {
 		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text });
 		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', articleId: existingArticle.id });
@@ -188,7 +183,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 	const tweetId = tweet.id ?? extractTweetId(tweet.url);
 	const textWithoutUrls = stripTweetUrls(tweet.text);
 
-	const existingTweetArticle = await findArticleByUrl(db, tweetUrl);
+	const existingTweetArticle = await getExistingArticleByUrl(db, tweetUrl);
 	if (existingTweetArticle) {
 		await upsertTwitterSourceEvent(db, tweet, {
 			articleId: existingTweetArticle.id,
@@ -212,7 +207,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 	const first = sorted[0];
 	const firstUrl = normalizeUrl(first.url);
 
-	const existing = await findArticleByUrl(db, firstUrl);
+	const existing = await getExistingArticleByUrl(db, firstUrl);
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
 	for (const t of sorted.slice(0, 10)) {
@@ -229,7 +224,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 
 	if (existing) {
 		const existingId = existing.id;
-		await updateArticleTextForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
+		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
 		await upsertTwitterSourceEvent(db, first, {
 			articleId: existingId,
 			eventType: 'thread',
