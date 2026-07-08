@@ -297,7 +297,6 @@ async function scrapeTwitterArticle(
 	console.info({ tag: 'TWITTER', msg: 'Article fetched', title });
 
 	return {
-		sourceUrl: `https://x.com/i/status/${tweetId}`,
 		title,
 		markdown: md,
 		metadata: {
@@ -324,7 +323,6 @@ async function scrapeExternalLinkTweet(
 		if (!linked.markdown || linked.markdown.length <= 100) throw new Error('Linked article content too short');
 		console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
 		return {
-			sourceUrl: externalUrl,
 			title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
 			markdown: linked.markdown,
 			metadata: {
@@ -365,7 +363,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 			return {
 				kind: 'article' as const,
 				scraped: articleContent,
-				canonicalUrl: tweet.url || articleContent.sourceUrl || `https://x.com/i/status/${tweetId}`,
+				canonicalUrl: tweet.url || `https://x.com/i/status/${tweetId}`,
 				eventText: articleContent.metadata.description || tweetText,
 			};
 		}
@@ -384,7 +382,6 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	return {
 		kind: 'tweet' as const,
 		scraped: {
-			sourceUrl: tweet.url,
 			title,
 			markdown: tweet.text,
 			metadata: {

@@ -183,7 +183,6 @@ async function scrapeHtmlFromResponse(response: Response, url: string): Promise<
 	const content = extractContentReadability(html, finalUrl) ?? extractContentCheerio($, metadata.title, finalUrl);
 
 	return {
-		sourceUrl: finalUrl,
 		title: metadata.title,
 		markdown: content,
 		metadata: {

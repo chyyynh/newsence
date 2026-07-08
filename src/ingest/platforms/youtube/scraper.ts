@@ -212,7 +212,6 @@ export async function scrapeYouTube(
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
-		sourceUrl: `https://www.youtube.com/watch?v=${video.id}`,
 		title: snippet.title,
 		markdown: content,
 		metadata: {

@@ -92,7 +92,6 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 	const markdown = buildHnMarkdown(item);
 
 	return {
-		sourceUrl: `https://news.ycombinator.com/item?id=${item.id}`,
 		title,
 		markdown,
 		metadata: {
