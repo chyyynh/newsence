@@ -13,20 +13,12 @@ import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
-async function processDefaultArticle(article: Article, env: CoreEnv): Promise<ProcessorResult> {
-	const analysis = await generateArticleAnalysis(article, env);
-	return mergeArticleAnalysis(article, analysis);
-}
+type ArticleProcessor = (article: Article, env: CoreEnv) => Promise<ProcessorResult>;
 
-const articlePlatforms: Partial<Record<string, typeof processDefaultArticle>> = {
+const articlePlatforms: Partial<Record<string, ArticleProcessor>> = {
 	hackernews: processHackerNewsArticle,
 	twitter: processTwitterArticle,
 };
-
-function platformIdentity(article: Article): string {
-	const metadataType = article.platform_metadata?.type;
-	return metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
-}
 
 function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	return {
@@ -94,7 +86,7 @@ interface SourceArticleDraft {
 type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
-const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'terminated', 'timeout']);
+const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'terminated']);
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const WORKFLOW_ID_MAX_LENGTH = 100;
@@ -348,8 +340,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				return loadArticleForProcessing(this.env, target.table, target.rowId, true);
 			},
 		);
-		const sourceType = platformIdentity(article);
-		const platform = articlePlatforms[sourceType] ?? processDefaultArticle;
+		const metadataType = article.platform_metadata?.type;
+		const sourceType =
+			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
+		const platform = articlePlatforms[sourceType];
 		const logContext =
 			target.kind === 'source' ? { url: article.url, table: 'articles' } : { article_id: target.rowId, table: target.table };
 
@@ -371,7 +365,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const processorResult = await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-			async () => platform(await loadFullTargetArticle(this.env, target, pdfTextArtifact), this.env),
+			async () => {
+				const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
+				if (platform) return platform(article, this.env);
+				return mergeArticleAnalysis(article, await generateArticleAnalysis(article, this.env));
+			},
 		);
 
 		const embedding = await step.do(
@@ -390,13 +388,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			},
 		);
 
-		let youtubeTranscript: YoutubeTranscript | undefined;
-		if (sourceType === 'youtube') {
-			if (target.kind === 'source') {
-				const draft = await readSourceDraft(this.env, target);
-				youtubeTranscript = draft.youtubeTranscript;
-			}
-		}
+		const youtubeTranscript =
+			sourceType === 'youtube' && target.kind === 'source' ? (await readSourceDraft(this.env, target)).youtubeTranscript : undefined;
 		const youtubeHighlights =
 			sourceType === 'youtube'
 				? await step.do(
