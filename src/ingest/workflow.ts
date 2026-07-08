@@ -71,7 +71,7 @@ function buildProcessorUpdatePayload(
 	return updatePayload;
 }
 
-type StoredWorkflowTarget = { kind: 'stored'; table: 'articles' | 'user_files'; rowId: string };
+type StoredWorkflowTarget = { kind: 'article' | 'userFile'; rowId: string };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
@@ -100,8 +100,12 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
+function storedTargetTable(target: StoredWorkflowTarget): 'articles' | 'user_files' {
+	return target.kind === 'article' ? 'articles' : 'user_files';
+}
+
 function storedWorkflowId(target: StoredWorkflowTarget): string {
-	return ['article', workflowIdPart(target.table), workflowIdPart(target.rowId)].join('-');
+	return ['article', workflowIdPart(storedTargetTable(target)), workflowIdPart(target.rowId)].join('-');
 }
 
 async function sourceArticleWorkflowId(url: string): Promise<string> {
@@ -119,7 +123,7 @@ async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTe
 	if (target.kind === 'source') {
 		article = sourceRecordToArticle(target.draft.article);
 	} else {
-		article = await loadArticleForProcessing(env, target.table, target.rowId);
+		article = await loadArticleForProcessing(env, storedTargetTable(target), target.rowId);
 	}
 	const extractedPdfText = pdfTextArtifact?.text?.trim() || null;
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
@@ -178,8 +182,9 @@ async function persistWorkflowTarget(
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 
-			await updateArticleAfterProcessing(db, target.table, target.rowId, updatePayload);
-			if (target.table === 'articles' && entities) await syncArticleEntities(db, target.rowId, entities, article.source, platformMetadata);
+			const table = storedTargetTable(target);
+			await updateArticleAfterProcessing(db, table, target.rowId, updatePayload);
+			if (table === 'articles' && entities) await syncArticleEntities(db, target.rowId, entities, article.source, platformMetadata);
 			articleId = target.rowId;
 		}
 		if (youtubeTranscript || youtubeHighlights)
@@ -202,20 +207,20 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				if (target.kind === 'source') return { ...sourceRecordToArticle(target.draft.article), content: null };
-				return loadArticleForProcessing(this.env, target.table, target.rowId, true);
+				return loadArticleForProcessing(this.env, storedTargetTable(target), target.rowId, true);
 			},
 		);
 		const metadataType = article.platform_metadata?.type;
 		const sourceType =
 			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
 		const logContext =
-			target.kind === 'source' ? { url: article.url, table: 'articles' } : { article_id: target.rowId, table: target.table };
+			target.kind === 'source' ? { url: article.url, table: 'articles' } : { article_id: target.rowId, table: storedTargetTable(target) };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
 		const hasContent = 'has_content' in article && !!article.has_content;
 		const pdfTextArtifact =
-			target.kind === 'stored' && target.table === 'user_files' && !hasContent && article.storage_key && article.file_type === PDF_MIME
+			target.kind === 'userFile' && !hasContent && article.storage_key && article.file_type === PDF_MIME
 				? await stagePdfTextExtraction(this.env, step, {
 						sourceStorageKey: article.storage_key,
 					})
