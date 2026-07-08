@@ -82,7 +82,7 @@ function extractTweetAuthor(tweet: Tweet): TwitterAuthorFields {
 	};
 }
 
-export function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
+function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
 	return (
 		tweet.extendedEntities?.media?.flatMap((m) => {
 			if (!m.media_url_https) return [];
@@ -107,7 +107,7 @@ function extractExpandedUrls(tweet: Tweet): string[] {
 	return urls.map((u) => u.expanded_url || u.url || '').filter(Boolean);
 }
 
-export function stripTweetUrls(text: string): string {
+function stripTweetUrls(text: string): string {
 	return text.replace(/https?:\/\/\S+/g, '').trim();
 }
 
