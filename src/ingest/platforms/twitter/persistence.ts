@@ -7,13 +7,12 @@ import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import { upsertTwitterSourceEventDraft } from './processor';
 import {
+	buildThreadArticleParts,
 	buildTweetPlatformMetadata,
 	buildTweetTitle,
 	buildTwitterArticlePlatformMetadata,
 	extractExpandedUrls,
-	extractQuotedTweet,
 	extractTweetId,
-	extractTweetMedia,
 	findExternalUrl,
 	findTwitterArticleUrl,
 	isSocialMediaUrl,
@@ -198,28 +197,14 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 }
 
 async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolean> {
-	const sorted = tweets.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-	const first = sorted[0];
+	const { first, sorted, combinedText, media, platformMetadata } = buildThreadArticleParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 
 	const existing = await getExistingArticleByUrl(db, firstUrl);
-	const seen = new Set<string>();
-	const uniqueTexts: string[] = [];
-	for (const t of sorted.slice(0, 10)) {
-		const text = stripTweetUrls(t.text);
-		if (text && !seen.has(text)) {
-			seen.add(text);
-			uniqueTexts.push(text);
-		}
-	}
-	const combinedText = uniqueTexts.join('\n\n');
-	const allMedia = sorted.flatMap(extractTweetMedia);
-	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
-	const metadata = buildTweetPlatformMetadata(first, { media: allMedia, quotedTweet });
 
 	if (existing) {
 		const existingId = existing.id;
-		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
+		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
 		await recordExistingTwitterSourceEvent(
 			db,
 			env,
@@ -228,7 +213,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 				tweet: first,
 				eventType: 'thread',
 				text: combinedText,
-				media: allMedia,
+				media,
 				raw: { tweets: sorted },
 			},
 			{ enqueueIfIncomplete: false },
@@ -245,10 +230,10 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 		publishedDate: new Date(first.createdAt),
 		summary: combinedText,
 		content: combinedText,
-		ogImage: allMedia[0]?.url ?? null,
-		platformMetadata: metadata,
+		ogImage: media[0]?.url ?? null,
+		platformMetadata,
 		hashTags: first.hashTags,
-		sourceEvent: { tweet: first, eventType: 'thread', text: combinedText, media: allMedia, raw: { tweets: sorted } },
+		sourceEvent: { tweet: first, eventType: 'thread', text: combinedText, media, raw: { tweets: sorted } },
 	});
 
 	if (queued) {

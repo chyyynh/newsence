@@ -127,6 +127,40 @@ export function buildTweetTitle(tweet: TwitterLikeTweet, maxLength = 100): strin
 	return `@${tweet.author?.userName}: ${tweet.text.substring(0, maxLength)}${suffix}`;
 }
 
+export function buildThreadArticleParts<T extends TwitterLikeTweet>(
+	tweets: T[],
+): {
+	first: T;
+	sorted: T[];
+	combinedText: string;
+	media: TwitterMedia[];
+	platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }>;
+} {
+	const sorted = [...tweets].sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
+	const first = sorted[0];
+	if (!first) throw new Error('Cannot build twitter thread article from empty tweets');
+
+	const seen = new Set<string>();
+	const uniqueTexts: string[] = [];
+	for (const tweet of sorted.slice(0, 10)) {
+		const text = stripTweetUrls(tweet.text);
+		if (text && !seen.has(text)) {
+			seen.add(text);
+			uniqueTexts.push(text);
+		}
+	}
+
+	const media = sorted.flatMap(extractTweetMedia);
+	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
+	return {
+		first,
+		sorted,
+		combinedText: uniqueTexts.join('\n\n'),
+		media,
+		platformMetadata: buildTweetPlatformMetadata(first, { media, quotedTweet }),
+	};
+}
+
 interface TweetMetadataOptions {
 	externalUrl?: string;
 	externalOgImage?: string | null;
