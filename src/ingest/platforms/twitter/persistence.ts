@@ -36,6 +36,24 @@ function isSocialMediaUrl(url: string): boolean {
 	return false;
 }
 
+async function recordExistingTwitterSourceEvent(
+	db: Client,
+	env: Env,
+	article: { id: string; summary_cn: string | null },
+	event: TwitterSourceEventDraft,
+	options: { enqueueIfIncomplete?: boolean } = {},
+): Promise<void> {
+	await upsertTwitterSourceEvent(db, event.tweet, {
+		articleId: article.id,
+		eventType: event.eventType,
+		text: event.text,
+		media: event.media,
+		raw: event.raw,
+	});
+	if (options.enqueueIfIncomplete !== false && !article.summary_cn)
+		await enqueueProcessing(env, { kind: 'article', articleId: article.id });
+}
+
 async function enqueueTwitterArticle(
 	env: Env,
 	data: {
@@ -116,8 +134,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 
 	const existingArticle = await getExistingArticleByUrl(db, articleUrl);
 	if (existingArticle) {
-		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text });
-		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', articleId: existingArticle.id });
+		await recordExistingTwitterSourceEvent(db, env, existingArticle, { tweet, eventType: 'share', text });
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: articleUrl });
 		return true;
 	}
@@ -185,12 +202,11 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 
 	const existingTweetArticle = await getExistingArticleByUrl(db, tweetUrl);
 	if (existingTweetArticle) {
-		await upsertTwitterSourceEvent(db, tweet, {
-			articleId: existingTweetArticle.id,
+		await recordExistingTwitterSourceEvent(db, env, existingTweetArticle, {
+			tweet,
 			eventType: articleUrl ? 'article' : externalUrl ? 'share' : 'tweet',
 			text: textWithoutUrls,
 		});
-		if (!existingTweetArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', articleId: existingTweetArticle.id });
 		return false;
 	}
 
@@ -225,13 +241,19 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 	if (existing) {
 		const existingId = existing.id;
 		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata: metadata });
-		await upsertTwitterSourceEvent(db, first, {
-			articleId: existingId,
-			eventType: 'thread',
-			text: combinedText,
-			media: allMedia,
-			raw: { tweets: sorted },
-		});
+		await recordExistingTwitterSourceEvent(
+			db,
+			env,
+			existing,
+			{
+				tweet: first,
+				eventType: 'thread',
+				text: combinedText,
+				media: allMedia,
+				raw: { tweets: sorted },
+			},
+			{ enqueueIfIncomplete: false },
+		);
 		await enqueueProcessing(env, { kind: 'article', articleId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
