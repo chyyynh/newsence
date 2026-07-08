@@ -238,7 +238,6 @@ export async function getIncompleteWorkflowTargetIds(
 		       title_cn IS NULL
 		       OR summary_cn IS NULL
 		       OR embedding IS NULL
-		       OR (extracted_text IS NOT NULL AND length(extracted_text) >= 120 AND content_cn IS NULL)
 		     ))
 		     OR (
 		       resource_kind = 'blob'
