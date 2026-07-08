@@ -7,13 +7,17 @@ import type { PaperMetadata, PaperReference } from '@core-shared/platform-metada
 import { fetchWithTimeout } from '@core-shared/web';
 import type { Client } from 'pg';
 import { Client as PgClient } from 'pg';
-import { detectPaperId, extractPaperTitle, type PaperId } from './detect';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_REFERENCES = 50;
 const MAX_EDGES = 50;
 const PDF_MIME = 'application/pdf';
+const ARXIV_URL_RE = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/i;
+const ARXIV_INLINE_RE = /arxiv[:\s]\s*(\d{4}\.\d{4,5})(?:v\d+)?/i;
+const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
+const CONTENT_SCAN_CHARS = 4_000;
+const TITLE_STOP_RE = /^(abstract|introduction|keywords|ccs concepts|acm reference|permission|copyright)/i;
 
 const PAPER_FIELDS = [
 	'title',
@@ -30,6 +34,9 @@ const PAPER_FIELDS = [
 	'references.externalIds',
 	'references.authors',
 ].join(',');
+
+type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string };
+type PaperDetection = { id: PaperId | null; hasAcademicMarker: boolean };
 
 // ── S2 response shapes (only the fields we read) ─────────────────
 interface S2Author {
@@ -74,6 +81,74 @@ type PaperRow = {
 	citedByCount: number | null;
 	oaPdfUrl: string | null;
 };
+
+function trimDoi(doi: string): string {
+	return doi.replace(/[.,;)\]]+$/, '');
+}
+
+function isPlaceholderDoi(doi: string): boolean {
+	return /n{4,}|x{4,}/i.test(doi);
+}
+
+function extractArxivId(text: string): string | null {
+	return text.match(ARXIV_URL_RE)?.[1] ?? text.match(ARXIV_INLINE_RE)?.[1] ?? null;
+}
+
+function extractDoi(text: string): { value: string | null; marker: boolean } {
+	const raw = text.match(DOI_RE)?.[1];
+	if (!raw) return { value: null, marker: false };
+	const doi = trimDoi(raw).toLowerCase();
+	return isPlaceholderDoi(doi) ? { value: null, marker: true } : { value: doi, marker: true };
+}
+
+function extractPaperTitle(content: string): string | null {
+	const lines = content
+		.split('\n')
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const parts: string[] = [];
+	for (const line of lines.slice(0, 15)) {
+		const heading = line.match(/^#{1,3}\s+(.+)$/);
+		if (!heading) {
+			if (parts.length) break;
+			continue;
+		}
+		const text = heading[1].trim();
+		if (TITLE_STOP_RE.test(text)) break;
+		parts.push(text);
+	}
+	const title = parts.join(' ').replace(/\s+/g, ' ').trim();
+	return title.length >= 12 ? title : null;
+}
+
+function detectPaperId(url: string | null | undefined, content: string | null, scanContent: boolean): PaperDetection {
+	const safeUrl = typeof url === 'string' ? url : '';
+	let host = '';
+	try {
+		host = new URL(safeUrl).hostname.toLowerCase();
+	} catch {
+		// non-URL sources, such as uploads, fall through to content scanning
+	}
+
+	const urlArxiv = extractArxivId(safeUrl);
+	if (urlArxiv) return { id: { kind: 'arxiv', value: urlArxiv }, hasAcademicMarker: true };
+
+	if (host === 'doi.org' || host === 'dx.doi.org' || host.endsWith('arxiv.org')) {
+		const urlDoi = extractDoi(safeUrl);
+		if (urlDoi.value) return { id: { kind: 'doi', value: urlDoi.value }, hasAcademicMarker: true };
+	}
+
+	if (scanContent && content) {
+		const head = content.slice(0, CONTENT_SCAN_CHARS);
+		const arxiv = extractArxivId(head);
+		if (arxiv) return { id: { kind: 'arxiv', value: arxiv }, hasAcademicMarker: true };
+		const doi = extractDoi(head);
+		if (doi.value) return { id: { kind: 'doi', value: doi.value }, hasAcademicMarker: true };
+		if (doi.marker) return { id: null, hasAcademicMarker: true };
+	}
+
+	return { id: null, hasAcademicMarker: false };
+}
 
 async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
