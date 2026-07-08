@@ -467,28 +467,23 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				fileType: article.file_type,
 				workflowRunId: workflowIdPart(event.instanceId),
 			});
-			let fullArticlePromise: Promise<Article> | null = null;
-			const loadArticleWithDerivedContent = () => {
-				fullArticlePromise ??= loadFullTargetArticle(this.env, target, pdfTextArtifact);
-				return fullArticlePromise;
-			};
 
 			const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
 				hasStagedText: !!pdfTextArtifact?.extractedTextKey,
-				loadContent: async () => (await loadArticleWithDerivedContent()).content,
+				loadContent: async () => (await loadFullTargetArticle(this.env, target, pdfTextArtifact)).content,
 			});
 
 			const processorResult = await step.do(
 				'ai-analysis',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-				async () => platform(await loadArticleWithDerivedContent(), this.env),
+				async () => platform(await loadFullTargetArticle(this.env, target, pdfTextArtifact), this.env),
 			);
 
 			const embedding = await step.do(
 				'generate-embedding',
 				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 				async () => {
-					const article = await loadArticleWithDerivedContent();
+					const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
 					const text = prepareArticleTextForEmbedding({
 						title: article.title,
 						summary: processorResult.updateData.summary ?? article.summary,
@@ -522,7 +517,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () =>
 					persistWorkflowTarget(this.env, target, {
-						article: pdfTextArtifact?.extractedTextKey ? await loadArticleWithDerivedContent() : article,
+						article: pdfTextArtifact?.extractedTextKey ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
 						result: processorResult,
 						embedding,
 						pdfTextArtifact,
