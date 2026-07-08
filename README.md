@@ -36,7 +36,7 @@ Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls content
 | **YouTube**          | Monitor   | Every 30 min  | Atom feed → video metadata, transcripts, chapters, AI highlights            |
 | **Hacker News**      | Processor | Via RSS       | Detects HN links → fetches comments via Algolia → generates editorial notes |
 | **Web**              | Scraper   | On demand     | Full content extraction (Readability + Cheerio), OG metadata                |
-| **User Uploads**     | Ingestion | Real-time     | App service-binding RPC — URL/image/blob ingest, returns saved resource + workflow id |
+| **User Files**       | Ingestion | Real-time     | App service-binding RPC — saved URL scrape + enrichment; blob lifecycle stays app-owned |
 
 All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 
@@ -45,7 +45,7 @@ All platforms output a unified `ScrapedContent` shape → same AI pipeline.
 Each article goes through an automated workflow with independent retries:
 
 ```
-Content arrives (source monitor / user upload / retry)
+Content arrives (source monitor / saved URL / retry)
   │
   ├─ 1. Load Content ───────── Source draft from R2, or user_file/article row for upload/retry
   ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
@@ -80,7 +80,7 @@ Change the DB schema only when the product needs a query shape that the current 
 | Layer         | Technology                                        |
 | ------------- | ------------------------------------------------- |
 | Runtime       | Cloudflare Workers (V8 isolates)                  |
-| Orchestration | Cloudflare Queues + Workflows                     |
+| Orchestration | Cloudflare Workflows                              |
 | Database      | PostgreSQL + pgvector (via Cloudflare Hyperdrive) |
 | LLM           | Cloudflare AI Gateway                             |
 | Embeddings    | Cloudflare Workers AI → BGE-M3                    |
@@ -88,7 +88,7 @@ Change the DB schema only when the product needs a query shape that the current 
 
 ## Self-Hosting
 
-The one-click Deploy button above handles Worker + Queue + Workflow, but **Hyperdrive, the database, and secrets need manual setup**. Full walkthrough:
+The one-click Deploy button above handles Worker + Workflows, but **Hyperdrive, the database, and secrets need manual setup**. Full walkthrough:
 
 ### 1. Database
 
@@ -107,16 +107,9 @@ wrangler hyperdrive create newsence-db \
 
 Copy the returned ID into `wrangler.jsonc` under the `hyperdrive[].id` field.
 
-### 3. Cloudflare Queues + Workflow
+### 3. Cloudflare Workflows
 
-Create the article-processing queue (the Worker is already configured as both producer and consumer):
-
-```bash
-wrangler queues create article-processing-queue-core
-wrangler queues create article-processing-dlq-core
-```
-
-Workflows are provisioned automatically on first deploy via the `workflows` binding in `wrangler.jsonc`.
+Workflows are provisioned automatically on first deploy via the `workflows` bindings in `wrangler.jsonc`.
 
 ### 4. Secrets
 
@@ -190,30 +183,31 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 ```
 src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
-├── entrypoints/          # HTTP router + scheduled + queue dispatch, health
-├── shared/               # cross-subsystem base — used by both pipelines below
-│   ├── auth/             # internal-token middleware for ingest/search/maintenance HTTP endpoints
-│   ├── ai.ts             # Workers AI text + JSON helpers
-│   ├── db.ts             # Hyperdrive clients + article/user_file helpers
-│   ├── embedding.ts      # BGE-M3 wrapper (Workers AI)
-│   ├── platform-metadata.ts  # PlatformMetadata discriminated union + builders
-│   ├── scraped-content.ts    # unified ScrapedContent shape + detectPlatformType
-│   └── …                 # fetch, web, mime, streams, log, cors, types
+├── entrypoints/          # HTTP router, protected endpoints, health
+├── rpc/                  # service-binding RPC contract
+├── ai/                   # Workers AI / AI Gateway helpers
+├── entities/             # entity normalization + graph sync
+├── media/                # OG image helpers
+├── papers/               # paper enrichment helpers
+├── shared/               # small cross-subsystem primitives
+│   ├── mime.ts           # MIME sniffing and upload limits
+│   ├── platform-metadata.ts
+│   ├── types.ts          # Article, ScrapedContent, WorkflowAttachment
+│   └── web.ts            # fetch, URL normalization, stream limits
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
 │   ├── extract.ts        # URL detection dispatch → platform scraper
+│   ├── workflow.ts       # Workflow class + enqueueProcessing
+│   ├── urls.ts           # saved URL orchestration; app persists blob results
+│   ├── handlers/         # scrape HTTP handler
+│   ├── domain/           # sink, processor registry, AI merge helpers
 │   ├── platforms/        # each platform lives in its own folder
-│   │   ├── twitter/      # monitor + scraper + processor + metadata
-│   │   ├── youtube/      # monitor + scraper + highlights + metadata
-│   │   ├── hackernews/   # scraper + processor + metadata (no monitor — fed by RSS)
-│   │   ├── bilibili/     # monitor + scraper + metadata
-│   │   ├── xiaohongshu/  # monitor + scraper + metadata
-│   │   ├── rss/          # monitor + parser + feed-config
-│   │   └── web/          # shared scraper (Readability + Cheerio + OG extraction)
-│   ├── workflows/        # Queue consumer, Workflow class, and workflow steps
-│   ├── domain/           # AI processor registry, content cleanup, entity sync
-│   ├── handlers/         # ingest / scrape HTTP handlers
-│   ├── monitors/         # cross-platform scheduled maintenance
-│   └── urls.ts · blob.ts · image-url.ts   # ingestion entrypoints (URL / blob / image)
+│   │   ├── rss/          # feed polling
+│   │   ├── twitter/      # monitor + scraper + processor
+│   │   ├── youtube/      # monitor + scraper + transcript/highlights
+│   │   ├── hackernews/   # scraper + processor (fed by RSS or URL)
+│   │   ├── paper/        # Semantic Scholar enrichment
+│   │   ├── pdf.ts        # PDF text extraction stage
+│   │   └── web-scraper.ts
 └── corpus.ts · okf.ts     # engine read/search/export helpers
 ```
 
@@ -224,8 +218,9 @@ Bindings (in `wrangler.jsonc`):
 | Binding            | Purpose                                      |
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
-| `ARTICLE_QUEUE`    | Producer for `article-processing-queue-core` |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
+| `SCRAPE_WORKFLOW`  | Non-persisting scrape workflow               |
+| `R2`               | Source drafts, scrape temp objects, and app-owned blob reads |
 | `AI`               | Workers AI binding (AI Gateway text calls + BGE-M3 embeddings) |
 
 Secrets (via `wrangler secret put`):
@@ -251,7 +246,7 @@ Minimum to add a new source:
 4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts`.
 5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `ingest/domain/processors.ts`.
 
-The new article goes through the same Queue → Workflow pipeline as every other platform — you don't touch the AI steps.
+The new article goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
 
 ## License
 

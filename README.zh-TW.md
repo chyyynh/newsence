@@ -36,7 +36,7 @@
 | **YouTube**     | 監控   | 每 30 分鐘 | Atom feed → 影片資訊、字幕、章節、AI 精華段落    |
 | **Hacker News** | 處理器 | 經由 RSS   | 偵測 HN 連結 → Algolia 取評論 → 生成編輯筆記     |
 | **網頁**        | 爬蟲   | 按需       | 全文擷取（Readability + Cheerio）、OG metadata   |
-| **用戶上傳**    | 入口   | 即時       | App service-binding RPC — URL / 圖片 / blob ingest，回傳資源與 workflow id |
+| **用戶檔案**    | 入口   | 即時       | App service-binding RPC — saved URL scrape + enrichment；blob 生命週期由 app 擁有 |
 
 所有平台輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
 
@@ -45,7 +45,7 @@
 每篇文章經過自動化 workflow，各步驟獨立重試：
 
 ```
-內容進入（source monitor / user upload / retry）
+內容進入（source monitor / saved URL / retry）
   │
   ├─ 1. 讀取內容 ─────────── source draft 從 R2 載入；upload/retry 則讀既有 row
   ├─ 2. AI 分析 ──────────── AI Gateway text/JSON calls → 中英標題、摘要、標籤、關鍵字、實體
@@ -72,7 +72,7 @@
 | 層級         | 技術                                                |
 | ------------ | --------------------------------------------------- |
 | 運行環境     | Cloudflare Workers（V8 isolates）                   |
-| 任務編排     | Cloudflare Queues + Workflows                       |
+| 任務編排     | Cloudflare Workflows                                |
 | 資料庫       | PostgreSQL + pgvector（透過 Cloudflare Hyperdrive） |
 | 大語言模型   | Cloudflare AI Gateway                               |
 | 向量生成     | Cloudflare Workers AI → BGE-M3                      |
@@ -80,7 +80,7 @@
 
 ## 自行部署
 
-上方的一鍵 Deploy 按鈕會幫你建好 Worker + Queue + Workflow，**但 Hyperdrive、資料庫、secrets 需要手動設定**。完整步驟：
+上方的一鍵 Deploy 按鈕會幫你建好 Worker + Workflows，**但 Hyperdrive、資料庫、secrets 需要手動設定**。完整步驟：
 
 ### 1. 資料庫
 
@@ -99,16 +99,9 @@ wrangler hyperdrive create newsence-db \
 
 把回傳的 ID 填進 `wrangler.jsonc` 的 `hyperdrive[].id` 欄位。
 
-### 3. Cloudflare Queues + Workflow
+### 3. Cloudflare Workflows
 
-建立 article-processing queue（Worker 同時當 producer 和 consumer）：
-
-```bash
-wrangler queues create article-processing-queue-core
-wrangler queues create article-processing-dlq-core
-```
-
-Workflow 會在第一次 deploy 時透過 `wrangler.jsonc` 裡的 `workflows` binding 自動建立。
+Workflows 會在第一次 deploy 時透過 `wrangler.jsonc` 裡的 `workflows` bindings 自動建立。
 
 ### 4. Secrets
 
@@ -182,31 +175,31 @@ claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 ```
 src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
-├── entrypoints/          # HTTP router + scheduled + queue dispatch、health
-├── shared/               # 跨子系統共用基礎 — 下面兩條 pipeline 都用
-│   ├── auth/             # ingest/search/maintenance HTTP endpoints 的 internal-token middleware
-│   ├── ai.ts             # Workers AI 文字 + JSON helpers
-│   ├── db.ts             # Hyperdrive clients + article/user_file helpers
-│   ├── embedding.ts      # BGE-M3 wrapper（Workers AI）
-│   ├── platform-metadata.ts  # PlatformMetadata 聯合型別 + builders
-│   ├── scraped-content.ts    # 統一的 ScrapedContent 格式 + detectPlatformType
-│   └── …                 # fetch、web、mime、streams、log、cors、types
+├── entrypoints/          # HTTP router、protected endpoints、health
+├── rpc/                  # service-binding RPC contract
+├── ai/                   # Workers AI / AI Gateway helpers
+├── entities/             # entity normalization + graph sync
+├── media/                # OG image helpers
+├── papers/               # paper enrichment helpers
+├── shared/               # 小型跨子系統 primitives
+│   ├── mime.ts           # MIME sniffing 與 upload limits
+│   ├── platform-metadata.ts
+│   ├── types.ts          # Article、ScrapedContent、WorkflowAttachment
+│   └── web.ts            # fetch、URL normalization、stream limits
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
 │   ├── extract.ts        # URL 偵測 dispatch → platform scraper
+│   ├── workflow.ts       # Workflow class + enqueueProcessing
+│   ├── urls.ts           # saved URL orchestration；blob result 由 app 持久化
+│   ├── handlers/         # scrape HTTP handler
+│   ├── domain/           # sink、processor registry、AI merge helpers
 │   ├── platforms/        # 每個平台一個資料夾
-│   │   ├── twitter/      # monitor + scraper + processor + metadata
-│   │   ├── youtube/      # monitor + scraper + highlights + metadata
-│   │   ├── hackernews/   # scraper + processor + metadata（沒有 monitor — 由 RSS 觸發）
-│   │   ├── bilibili/     # monitor + scraper + metadata
-│   │   ├── xiaohongshu/  # monitor + scraper + metadata
-│   │   ├── rss/          # monitor + parser + feed-config
-│   │   └── web/          # 共用爬蟲（Readability + Cheerio + OG 擷取）
-│   ├── workflows/        # Queue consumer、Workflow class、workflow steps
-│   ├── domain/           # AI processor registry、內容清理、實體同步
-│   ├── handlers/         # ingest / scrape HTTP handlers
-│   ├── monitors/         # 跨平台排程維護
-│   └── urls.ts · blob.ts · image-url.ts   # 入庫進入點（URL / blob / 圖片）
-├── media/                # 入庫使用的 OG 圖片尺寸輔助
+│   │   ├── rss/          # feed polling
+│   │   ├── twitter/      # monitor + scraper + processor
+│   │   ├── youtube/      # monitor + scraper + transcript/highlights
+│   │   ├── hackernews/   # scraper + processor（由 RSS 或 URL 觸發）
+│   │   ├── paper/        # Semantic Scholar enrichment
+│   │   ├── pdf.ts        # PDF text extraction stage
+│   │   └── web-scraper.ts
 └── corpus.ts · okf.ts     # engine 讀取、搜尋、匯出輔助
 ```
 
@@ -217,8 +210,9 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | Binding            | 用途                                        |
 | ------------------ | ------------------------------------------- |
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
-| `ARTICLE_QUEUE`    | `article-processing-queue-core` 的 producer |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
+| `SCRAPE_WORKFLOW`  | 不持久化的 scrape workflow                  |
+| `R2`               | Source drafts、scrape temp objects、app-owned blob reads |
 | `AI`               | Workers AI binding（AI Gateway 文字呼叫 + BGE-M3 向量生成） |
 
 Secrets（透過 `wrangler secret put` 設定）：
@@ -244,7 +238,7 @@ Secrets（透過 `wrangler secret put` 設定）：
 4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts` 裡接上。
 5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `ingest/domain/processors.ts` 註冊。
 
-新文章一樣走 Queue → Workflow pipeline，AI 步驟你不用動。
+新文章一樣走 Workflow pipeline，AI 步驟你不用動。
 
 ## 授權
 
