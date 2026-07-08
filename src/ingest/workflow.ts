@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
-import type { ArticleCategory, PaperMetadata, PlatformMetadata } from '@core-shared/platform-metadata';
+import type { PaperMetadata, PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
@@ -37,8 +37,6 @@ function platformIdentity(article: Article): string {
 	return metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
 }
 
-const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
-
 function buildProcessorUpdatePayload(
 	article: Article,
 	result: ProcessorResult,
@@ -46,11 +44,7 @@ function buildProcessorUpdatePayload(
 	metadataPatch?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	const category =
-		result.classificationCategory ??
-		(Array.isArray(updatePayload.tags)
-			? updatePayload.tags.find((tag): tag is ArticleCategory => typeof tag === 'string' && ARTICLE_CATEGORIES.has(tag as ArticleCategory))
-			: null);
+	const category = result.classificationCategory;
 	const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
 	let mergedMetadata: PlatformMetadata | null = article.platform_metadata ?? null;
 	if (hasEnrichments && mergedMetadata) {
