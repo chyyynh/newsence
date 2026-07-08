@@ -1,5 +1,5 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import type { Article, TranscriptSegment, WorkflowAttachment, YoutubeTranscript } from '@core-shared/types';
+import type { Article, TranscriptSegment, YoutubeTranscript } from '@core-shared/types';
 import { Client } from 'pg';
 import { z } from 'zod';
 
@@ -21,16 +21,6 @@ export interface YouTubeHighlightsUpdate {
 }
 
 export type YoutubeTranscriptRow = YoutubeTranscript;
-
-function isYoutubeTranscriptAttachment(
-	attachment: WorkflowAttachment,
-): attachment is Extract<WorkflowAttachment, { kind: 'youtube-transcript' }> {
-	return attachment.kind === 'youtube-transcript';
-}
-
-function youtubeTranscriptAttachment(attachments?: WorkflowAttachment[]): YoutubeTranscriptRow | null {
-	return attachments?.find(isYoutubeTranscriptAttachment)?.transcript ?? null;
-}
 
 const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 YouTube 影片逐字稿，找出 5-8 個最重要的主題段落。
 
@@ -87,24 +77,22 @@ async function saveYouTubeHighlights(db: Client, update: YouTubeHighlightsUpdate
 
 export async function persistYouTubeWorkflowData(
 	db: Client,
-	input: { attachments?: WorkflowAttachment[]; highlights?: YouTubeHighlightsUpdate | null },
+	input: { transcript?: YoutubeTranscript | null; highlights?: YouTubeHighlightsUpdate | null },
 ): Promise<void> {
-	const transcript = youtubeTranscriptAttachment(input.attachments);
-	if (transcript) await upsertYoutubeTranscript(db, transcript);
+	if (input.transcript) await upsertYoutubeTranscript(db, input.transcript);
 	if (input.highlights) await saveYouTubeHighlights(db, input.highlights);
 }
 
 export async function prepareYouTubeHighlights(
 	env: Env,
 	article: Article,
-	attachments?: WorkflowAttachment[],
+	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;
 
 	const videoId = article.platform_metadata.data.videoId;
 	if (!videoId) return null;
-	const attachedTranscript = youtubeTranscriptAttachment(attachments);
-	if (attachedTranscript) return prepareYouTubeHighlightsFromTranscript(env, videoId, attachedTranscript.segments);
+	if (transcript) return prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments);
 
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();

@@ -1,4 +1,3 @@
-import type { WorkflowAttachment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { type ExistingUrlUserFile, getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
@@ -107,11 +106,16 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	if (!inserted.ok) return { url, error: inserted.error };
 
 	const { row } = inserted;
-	const attachments: WorkflowAttachment[] | undefined = scrapeResult.scraped.youtubeTranscript
-		? [{ kind: 'youtube-transcript', transcript: scrapeResult.scraped.youtubeTranscript }]
-		: undefined;
 	const instanceId = row.created
-		? await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id, ...(attachments ? { attachments } : {}) }, { db })
+		? await enqueueProcessing(
+				env,
+				{
+					kind: 'userFile',
+					userFileId: row.id,
+					...(scrapeResult.scraped.youtubeTranscript ? { youtubeTranscript: scrapeResult.scraped.youtubeTranscript } : {}),
+				},
+				{ db },
+			)
 		: undefined;
 	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }

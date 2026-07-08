@@ -134,8 +134,3 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 	retweetedBy?: RetweetedByData;
 }
-
-export type WorkflowAttachment = {
-	kind: 'youtube-transcript';
-	transcript: YoutubeTranscript;
-};

@@ -184,7 +184,7 @@ src/
 ├── shared/               # 小型跨子系統 primitives
 │   ├── mime.ts           # MIME sniffing 與 upload limits
 │   ├── platform-metadata.ts
-│   ├── types.ts          # Article、ScrapedContent、WorkflowAttachment
+│   ├── types.ts          # Article、ScrapedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
 │   ├── extract.ts        # URL 偵測 dispatch → platform scraper

@@ -1,5 +1,5 @@
 import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Article, WorkflowAttachment } from '@core-shared/types';
+import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
 import type { Client } from 'pg';
 import {
@@ -20,14 +20,14 @@ export type PlatformWorkflowData = { type: 'youtube'; highlights: YouTubeHighlig
 type PlatformWorkflowPersistenceInput = {
 	articleId: string;
 	data?: PlatformWorkflowData | null;
-	attachments?: WorkflowAttachment[];
+	youtubeTranscript?: YoutubeTranscript | null;
 };
 
 export type ArticlePlatformAdapter = ArticleProcessor & {
 	prepareWorkflowData?: (
 		article: Article,
 		ctx: ProcessorContext,
-		attachments?: WorkflowAttachment[],
+		youtubeTranscript?: YoutubeTranscript | null,
 	) => Promise<PlatformWorkflowData | null>;
 	persistWorkflowData?: (db: Client, input: PlatformWorkflowPersistenceInput) => Promise<void>;
 };
@@ -49,13 +49,13 @@ export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
 	web: defaultProcessor,
 	youtube: {
 		process: (article, ctx) => defaultProcessor.process(article, ctx),
-		async prepareWorkflowData(article, ctx, attachments) {
-			const highlights = await prepareYouTubeHighlights(ctx.env, article, attachments);
+		async prepareWorkflowData(article, ctx, youtubeTranscript) {
+			const highlights = await prepareYouTubeHighlights(ctx.env, article, youtubeTranscript);
 			return highlights ? { type: 'youtube', highlights } : null;
 		},
 		persistWorkflowData: (db, input) =>
 			persistYouTubeWorkflowData(db, {
-				attachments: input.attachments,
+				transcript: input.youtubeTranscript,
 				highlights: input.data?.type === 'youtube' ? input.data.highlights : null,
 			}),
 	},

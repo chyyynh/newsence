@@ -192,7 +192,7 @@ src/
 ├── shared/               # small cross-subsystem primitives
 │   ├── mime.ts           # MIME sniffing and upload limits
 │   ├── platform-metadata.ts
-│   ├── types.ts          # Article, ScrapedContent, WorkflowAttachment
+│   ├── types.ts          # Article, ScrapedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
 │   ├── extract.ts        # URL detection dispatch → platform scraper

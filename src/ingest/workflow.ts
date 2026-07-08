@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article, WorkflowAttachment } from '@core-shared/types';
+import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import {
@@ -27,13 +27,13 @@ import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, sta
 
 type StoredWorkflowTarget =
 	| { kind: 'article'; articleId: string }
-	| { kind: 'userFile'; userFileId: string; attachments?: WorkflowAttachment[] };
+	| { kind: 'userFile'; userFileId: string; youtubeTranscript?: YoutubeTranscript };
 
 export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 export interface SourceArticleDraft {
 	article: InsertArticleData;
-	attachments?: WorkflowAttachment[];
+	youtubeTranscript?: YoutubeTranscript;
 }
 
 export type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
@@ -234,7 +234,7 @@ type WorkflowRunContext = {
 	rowId: string | null;
 	userFileId: string | null;
 	readSourceDraft(): Promise<SourceArticleDraft>;
-	readAttachments(): Promise<WorkflowAttachment[] | undefined>;
+	readYoutubeTranscript(): Promise<YoutubeTranscript | undefined>;
 };
 type WorkflowPersistenceInput = {
 	article: Article;
@@ -255,8 +255,12 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 		sourceDraft = await obj.json<SourceArticleDraft>();
 		return sourceDraft;
 	};
-	const readAttachments = async (): Promise<WorkflowAttachment[] | undefined> =>
-		target.kind === 'source' ? (await readSourceDraft()).attachments : target.kind === 'userFile' ? target.attachments : undefined;
+	const readYoutubeTranscript = async (): Promise<YoutubeTranscript | undefined> =>
+		target.kind === 'source'
+			? (await readSourceDraft()).youtubeTranscript
+			: target.kind === 'userFile'
+				? target.youtubeTranscript
+				: undefined;
 
 	return {
 		target,
@@ -264,7 +268,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 		rowId: target.kind === 'article' ? target.articleId : target.kind === 'userFile' ? target.userFileId : null,
 		userFileId: target.kind === 'userFile' ? target.userFileId : null,
 		readSourceDraft,
-		readAttachments,
+		readYoutubeTranscript,
 	};
 }
 
@@ -304,7 +308,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 		await getArticlePlatformForArticle(fullArticle).persistWorkflowData?.(db, {
 			articleId,
 			data: input.platformWorkflowData,
-			attachments: draft.attachments,
+			youtubeTranscript: draft.youtubeTranscript,
 		});
 		await db.query('COMMIT');
 		return articleId;
@@ -354,7 +358,7 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 		await getArticlePlatformForArticle(input.article).persistWorkflowData?.(db, {
 			articleId: context.rowId,
 			data: input.platformWorkflowData,
-			attachments: await context.readAttachments(),
+			youtubeTranscript: await context.readYoutubeTranscript(),
 		});
 		await db.query('COMMIT');
 		return context.rowId;
@@ -428,8 +432,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						'prepare-platform-workflow-data',
 						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 						async () => {
-							const attachments = await context.readAttachments();
-							return platform.prepareWorkflowData?.(article, { env: this.env, table: context.table }, attachments) ?? null;
+							const youtubeTranscript = await context.readYoutubeTranscript();
+							return platform.prepareWorkflowData?.(article, { env: this.env, table: context.table }, youtubeTranscript) ?? null;
 						},
 					)
 				: null;
