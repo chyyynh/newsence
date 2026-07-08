@@ -32,11 +32,9 @@ const articlePlatforms: Partial<Record<string, typeof processDefaultArticle>> = 
 	twitter: processTwitterArticle,
 };
 
-const CONTENT_STAGE_METADATA_TYPES = new Set(['pdf', 'paper']);
-
 function platformIdentity(article: Article): string {
 	const metadataType = article.platform_metadata?.type;
-	return metadataType && !CONTENT_STAGE_METADATA_TYPES.has(metadataType) ? metadataType : (article.source_type ?? 'default');
+	return metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
 }
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
@@ -99,7 +97,6 @@ const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'ter
 const RETRY_BATCH_SIZE = 100;
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
-const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 const WORKFLOW_ID_MAX_LENGTH = 100;
 
 async function startStoredWorkflowBatch(env: Env, targets: StoredWorkflowTarget[]): Promise<number> {
@@ -181,7 +178,7 @@ async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Pr
 async function enqueueSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<string> {
 	const sourceDraftKey = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
 	const workflowTarget: WorkflowTarget = { kind: 'source', sourceDraftKey };
-	await env.R2.put(sourceDraftKey, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
+	await env.R2.put(sourceDraftKey, JSON.stringify(draft), { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
 
 	let keepDraft = false;
 	let cleanupReason = 'workflow create failed';
