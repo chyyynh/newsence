@@ -2,7 +2,7 @@ import type { Article } from '@core-shared/types';
 import { type ZodType, z } from 'zod';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
-const CORE_TEXT_MODEL = 'google/gemini-3-flash';
+const CORE_TEXT_MODEL = 'google/gemini-3.1-flash-lite';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 const MAX_TEXT_LENGTH = 8000;
 const DEFAULT_AI_GATEWAY_ID = 'default';

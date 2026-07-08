@@ -28,20 +28,25 @@ export async function loadArticleForProcessing(
 ): Promise<ArticleForProcessing> {
 	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
-		articleId,
-	]);
-	if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-	return result.rows[0] as ArticleForProcessing;
+	try {
+		await db.connect();
+		const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
+			articleId,
+		]);
+		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		return result.rows[0] as ArticleForProcessing;
+	} finally {
+		await closeArticleStoreClient(db);
+	}
 }
 
 export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: string): Promise<boolean> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const row = (
-		await db.query<{ complete: boolean }>(
-			`SELECT title_cn IS NOT NULL
+	try {
+		await db.connect();
+		const row = (
+			await db.query<{ complete: boolean }>(
+				`SELECT title_cn IS NOT NULL
 			        AND length(title_cn) > 0
 			        AND summary_cn IS NOT NULL
 			        AND length(summary_cn) > 0
@@ -49,11 +54,24 @@ export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: str
 			   FROM user_files
 			  WHERE id = $1
 			  LIMIT 1`,
-			[userFileId],
-		)
-	).rows[0];
-	if (!row) throw new Error(`Failed to fetch user_file ${userFileId}: not found`);
-	return row.complete;
+				[userFileId],
+			)
+		).rows[0];
+		if (!row) throw new Error(`Failed to fetch user_file ${userFileId}: not found`);
+		return row.complete;
+	} finally {
+		await closeArticleStoreClient(db);
+	}
+}
+
+async function closeArticleStoreClient(db: Client): Promise<void> {
+	await db.end().catch((error) =>
+		console.warn({
+			tag: 'ARTICLE_STORE',
+			msg: 'client close failed',
+			error: String(error),
+		}),
+	);
 }
 
 interface PreparedArticleRecord {
