@@ -102,6 +102,8 @@ const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
 const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
+const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
+const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
 const RRF_K = 60;
 const RECENCY_HALF_LIFE_DAYS = 30;
@@ -379,6 +381,21 @@ function truncate(content: string | null | undefined, max: number): string {
 	return content.length > max ? `${content.slice(0, max)}\n\n[Content truncated]` : content;
 }
 
+function capReadContextContent(results: ReadContextResult[]): ReadContextResult[] {
+	const contentCount = results.filter((r) => r.content).length;
+	if (contentCount === 0) return results;
+
+	const perItemMax = Math.min(
+		CONTENT_MAX,
+		Math.max(READ_CONTEXT_MIN_ITEM_CONTENT_MAX, Math.floor(READ_CONTEXT_TOTAL_CONTENT_MAX / contentCount)),
+	);
+	return results.map((result) => {
+		const content = result.content;
+		if (!content || content.length <= perItemMax) return result;
+		return { ...result, content: truncate(content, perItemMax) };
+	});
+}
+
 function formatArticleReadResult(
 	article: ArticleContentRow,
 	transcript?: { segments: TranscriptSegment[]; highlights?: TranscriptHighlight[] } | null,
@@ -391,7 +408,7 @@ function formatArticleReadResult(
 	};
 	if (transcript) {
 		meta.videoId = extractVideoId(article.url);
-		meta.transcript = transcript.segments;
+		meta.transcriptSegmentCount = transcript.segments.length;
 		if (transcript.highlights) meta.aiHighlights = transcript.highlights;
 	}
 	return {
@@ -612,8 +629,10 @@ async function readItems(client: Client, items: ReadContextItem[], userId: strin
 		}),
 	);
 
-	return items.map(
-		(item) =>
-			resultMaps.get(item.type)?.get(item.id) ?? { type: 'error' as const, id: item.id, error: `${item.type} not found: ${item.id}` },
+	return capReadContextContent(
+		items.map(
+			(item) =>
+				resultMaps.get(item.type)?.get(item.id) ?? { type: 'error' as const, id: item.id, error: `${item.type} not found: ${item.id}` },
+		),
 	);
 }
