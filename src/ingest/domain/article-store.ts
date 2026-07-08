@@ -52,8 +52,19 @@ interface PreparedArticleRecord {
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
 	platform_metadata: 'metadata',
+	source: 'site_name',
+	source_type: 'platform_type',
 };
 
+/**
+ * Core sink dedup policy:
+ * - Source articles are globally unique by URL. Discovery may pre-query with
+ *   getExistingArticlesByUrl, but insertFinalSourceArticle is the authoritative
+ *   ON CONFLICT guard.
+ * - user_files rows are created by the app worker. Saved URLs dedup per user on
+ *   (user_id, normalized_source_url); blob uploads intentionally keep one row
+ *   per upload. Core only updates enrichment fields here.
+ */
 export async function updateArticleAfterProcessing(
 	db: Client,
 	table: ArticleStoreTable,
