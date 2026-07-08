@@ -288,7 +288,8 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 export function streamWorkflowStatus(env: Env, workflowId: string): Response {
 	const encoder = new TextEncoder();
 	let cancelled = false;
-	const stream = new ReadableStream<Uint8Array>({
+	const stream = new ReadableStream({
+		type: 'bytes',
 		async start(controller) {
 			const writeEvent = (data: { error?: unknown; output?: unknown; status: string }) => {
 				if (cancelled) return false;
