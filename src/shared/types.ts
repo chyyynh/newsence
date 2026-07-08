@@ -67,13 +67,12 @@ export interface YoutubeTranscript {
 }
 
 export interface NormalizedContent {
-	/** null for raw-bytes / R2 input with no originating URL. */
-	sourceUrl: string | null;
+	sourceUrl: string;
 	contentType: string;
 	title: string | null;
-	/** HTML -> turndown markdown; PDF -> reflowed text. */
+	/** HTML -> turndown markdown; platform APIs -> markdown/plain text. */
 	markdown: string;
-	/** Plain text; PDF -> reflowed text; HTML -> markdown-stripped. */
+	/** Plain text or markdown-like text, depending on source API. */
 	text: string;
 	metadata: {
 		author: string | null;
@@ -81,10 +80,8 @@ export interface NormalizedContent {
 		siteName: string | null;
 		description: string | null;
 		ogImageUrl: string | null;
-		pages?: number;
-		chars?: number;
 	};
-	status: 'ok' | 'needs_ocr' | 'failed';
+	status: 'ok' | 'failed';
 	platformMetadata?: PlatformMetadata;
 	youtubeTranscript?: YoutubeTranscript;
 }
