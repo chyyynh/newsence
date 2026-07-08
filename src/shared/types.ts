@@ -74,7 +74,7 @@ export interface ScrapedContent {
 	siteName: string | null;
 	author: string | null;
 	publishedDate: string | null;
-	metadata?: PlatformMetadata;
+	platformMetadata?: PlatformMetadata;
 	youtubeTranscript?: YoutubeTranscript;
 }
 

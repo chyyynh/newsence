@@ -212,7 +212,7 @@ interface TwitterArticle {
 export async function scrapeTwitterArticle(
 	tweetId: string,
 	apiKey: string,
-): Promise<(ScrapedContent & { metadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
+): Promise<(ScrapedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
 	let data: { article?: TwitterArticle; status?: string };
@@ -262,7 +262,7 @@ export async function scrapeTwitterArticle(
 		siteName: 'Twitter',
 		author: article.author?.userName || null,
 		publishedDate: article.createdAt || null,
-		metadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
+		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
 	};
 }
 
@@ -286,7 +286,7 @@ async function scrapeExternalLinkTweet(
 			siteName: linked.siteName || 'Twitter',
 			author: tweet.author?.userName || linked.author || null,
 			publishedDate: tweet.createdAt,
-			metadata: buildTweetPlatformMetadata(tweet, {
+			platformMetadata: buildTweetPlatformMetadata(tweet, {
 				media,
 				tweetText,
 				externalUrl,
@@ -345,6 +345,6 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 		siteName: 'Twitter',
 		author: tweet.author?.userName || null,
 		publishedDate: tweet.createdAt,
-		metadata: buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}),
+		platformMetadata: buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}),
 	};
 }

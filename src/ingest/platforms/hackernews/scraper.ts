@@ -101,7 +101,7 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 		siteName: 'Hacker News',
 		author: item.author || null,
 		publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
-		metadata: { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
+		platformMetadata: { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 	};
 }
 

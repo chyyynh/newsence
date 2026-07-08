@@ -76,7 +76,7 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 					const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
 						minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
 					});
-					const youtubeMetadata = scraped.metadata.data;
+					const youtubeMetadata = scraped.platformMetadata.data;
 					const duration = youtubeMetadata.duration;
 					if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
 						console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
@@ -95,7 +95,7 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 								sourceType: 'youtube',
 								content: scraped.content,
 								ogImageUrl: scraped.ogImageUrl,
-								platformMetadata: scraped.metadata,
+								platformMetadata: scraped.platformMetadata,
 							},
 							...(scraped.youtubeTranscript
 								? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }

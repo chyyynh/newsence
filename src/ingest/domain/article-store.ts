@@ -150,7 +150,7 @@ export async function insertScrapedUrlUserFile(
 				scraped.content || null,
 				[],
 				[],
-				scraped.metadata == null ? null : JSON.stringify(scraped.metadata),
+				scraped.platformMetadata == null ? null : JSON.stringify(scraped.platformMetadata),
 				userId,
 			],
 		);

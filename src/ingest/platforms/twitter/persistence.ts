@@ -51,7 +51,7 @@ async function enqueueTwitterArticle(
 		summary: string;
 		content: string | null;
 		ogImage: string | null;
-		metadata: PlatformMetadata;
+		platformMetadata: PlatformMetadata;
 		hashTags?: string[];
 		sourceEvent?: TwitterSourceEventDraft;
 	},
@@ -68,7 +68,7 @@ async function enqueueTwitterArticle(
 				sourceType: 'twitter',
 				content: data.content,
 				ogImageUrl: data.ogImage,
-				platformMetadata: data.metadata,
+				platformMetadata: data.platformMetadata,
 				keywords: data.hashTags,
 			},
 			...(data.sourceEvent ? { attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }] } : {}),
@@ -93,7 +93,7 @@ async function saveTwitterArticleTweet(
 		return false;
 	}
 
-	const meta = scraped.metadata?.data;
+	const meta = scraped.platformMetadata?.data;
 	const authorVerified = typeof meta?.authorVerified === 'boolean' ? meta.authorVerified : tweet.author?.isBlueVerified;
 	const queued = await enqueueTwitterArticle(env, {
 		url: tweetUrl,
@@ -103,7 +103,7 @@ async function saveTwitterArticleTweet(
 		summary: scraped.summary || '',
 		content: scraped.content,
 		ogImage: scraped.ogImageUrl,
-		metadata: buildTwitterArticlePlatformMetadata(tweetId, {
+		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, {
 			name: typeof meta?.authorName === 'string' ? meta.authorName : tweet.author?.name,
 			userName: typeof meta?.authorUserName === 'string' ? meta.authorUserName : tweet.author?.userName,
 			profilePicture: typeof meta?.authorProfilePicture === 'string' ? meta.authorProfilePicture : tweet.author?.profilePicture,
@@ -141,7 +141,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 		summary: '',
 		content: scraped.content,
 		ogImage: scraped.ogImageUrl,
-		metadata: buildTweetPlatformMetadata(tweet, {
+		platformMetadata: buildTweetPlatformMetadata(tweet, {
 			tweetText: text,
 			externalUrl: articleUrl,
 			externalOgImage: scraped.ogImageUrl,
@@ -171,7 +171,7 @@ async function saveStandaloneTweet(env: Env, tweet: Tweet, tweetUrl: string, tex
 		summary: text,
 		content: text || null,
 		ogImage: media[0]?.url ?? null,
-		metadata,
+		platformMetadata: metadata,
 		hashTags: tweet.hashTags,
 		sourceEvent: { tweet, eventType: externalUrl ? 'share' : 'tweet', text },
 	});
@@ -250,7 +250,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 		summary: combinedText,
 		content: combinedText,
 		ogImage: allMedia[0]?.url ?? null,
-		metadata,
+		platformMetadata: metadata,
 		hashTags: first.hashTags,
 		sourceEvent: { tweet: first, eventType: 'thread', text: combinedText, media: allMedia, raw: { tweets: sorted } },
 	});
