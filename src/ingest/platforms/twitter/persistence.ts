@@ -16,25 +16,10 @@ import {
 	extractTweetMedia,
 	findExternalUrl,
 	findTwitterArticleUrl,
+	isSocialMediaUrl,
 	scrapeTwitterArticle,
 	stripTweetUrls,
 } from './scraper';
-
-const SOCIAL_MEDIA_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
-
-function isSocialMediaUrl(url: string): boolean {
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (hostname.startsWith('www.')) hostname = hostname.slice(4);
-	for (const host of SOCIAL_MEDIA_HOSTS) {
-		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
-	}
-	return false;
-}
 
 async function recordExistingTwitterSourceEvent(
 	db: Client,

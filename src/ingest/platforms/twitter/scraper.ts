@@ -38,6 +38,22 @@ function isTwitterHost(hostname: string): boolean {
 	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
 }
 
+const SOCIAL_MEDIA_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
+
+export function isSocialMediaUrl(url: string): boolean {
+	let hostname: string;
+	try {
+		hostname = new URL(url).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	if (hostname.startsWith('www.')) hostname = hostname.slice(4);
+	for (const host of SOCIAL_MEDIA_HOSTS) {
+		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
+	}
+	return false;
+}
+
 export function extractTweetId(url: string): string | null {
 	let parsed: URL;
 	try {
