@@ -5,7 +5,6 @@ import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import {
-	getIncompleteWorkflowTargetIds,
 	getUserFileWorkflowInstanceId,
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
@@ -84,67 +83,9 @@ type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'terminated', 'timeout']);
-const RETRY_BATCH_SIZE = 100;
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const WORKFLOW_ID_MAX_LENGTH = 100;
-
-async function startStoredWorkflowBatch(env: CoreEnv, targets: StoredWorkflowTarget[]): Promise<number> {
-	if (!targets.length) return 0;
-	const descriptors = targets.map((workflowTarget) => ({ workflowId: storedWorkflowId(workflowTarget), workflowTarget }));
-	const created = await env.MONITOR_WORKFLOW.createBatch(
-		descriptors.map(({ workflowId, workflowTarget }) => ({ id: workflowId, params: { target: workflowTarget } })),
-	);
-	const createdIds = new Set(created.map((instance) => instance.id));
-	const retryTargets: typeof descriptors = [];
-	let active = 0;
-	for (const target of descriptors) {
-		if (createdIds.has(target.workflowId)) continue;
-		const existing = await getMonitorWorkflowStatus(env, target.workflowId);
-		if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) active++;
-		else retryTargets.push(target);
-	}
-	if (!retryTargets.length) return created.length + active;
-	const retried = await env.MONITOR_WORKFLOW.createBatch(
-		retryTargets.map(({ workflowId, workflowTarget }) => ({
-			id: retryWorkflowId(workflowId),
-			params: { target: workflowTarget },
-		})),
-	);
-	return created.length + active + retried.length;
-}
-
-export async function handleRetryCron(env: CoreEnv): Promise<void> {
-	console.info({ tag: 'RETRY', msg: 'start' });
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-	const { articleIds, userFileIds } = await getIncompleteWorkflowTargetIds(db, since);
-	const total = articleIds.length + userFileIds.length;
-
-	if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
-	let started = 0;
-	for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startStoredWorkflowBatch(
-			env,
-			articleIds.slice(i, i + RETRY_BATCH_SIZE).map((articleId) => ({ kind: 'article', articleId })),
-		);
-	}
-	for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startStoredWorkflowBatch(
-			env,
-			userFileIds.slice(i, i + RETRY_BATCH_SIZE).map((userFileId) => ({ kind: 'userFile', userFileId })),
-		);
-	}
-	console.info({
-		tag: 'RETRY',
-		msg: 'Started workflows for retry',
-		articles: articleIds.length,
-		userFiles: userFileIds.length,
-		started,
-		batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
-	});
-}
 
 export async function enqueueProcessing(
 	env: CoreEnv,

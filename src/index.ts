@@ -2,7 +2,7 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
+import { enqueueProcessing, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
 import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
@@ -24,7 +24,6 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		if (event.cron === '*/5 * * * *') this.ctx.waitUntil(handleRSSCron(this.env));
 		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
-		else if (event.cron === '0 3 * * *') this.ctx.waitUntil(handleRetryCron(this.env));
 	}
 
 	// ── Service-binding RPC for engine capabilities ─────────────────────────
