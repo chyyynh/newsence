@@ -20,15 +20,6 @@ export interface PdfTextTempResult {
 	textStorageKey?: string;
 }
 
-type PdfWorkflowExtractionInput = {
-	articleId: string | null;
-	hasContent?: boolean;
-	storageKey?: string | null;
-	originType?: string | null;
-	fileType?: string | null;
-	tempId: string;
-};
-
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
 const WORKFLOW_PDF_TEXT_TEMP_PREFIX = 'tmp/workflow/pdf-text/';
@@ -86,7 +77,14 @@ async function extractPdfTextToTemp(
 export async function stagePdfTextExtraction(
 	env: Env,
 	step: WorkflowStep,
-	input: PdfWorkflowExtractionInput,
+	input: {
+		articleId: string | null;
+		hasContent?: boolean;
+		storageKey?: string | null;
+		originType?: string | null;
+		fileType?: string | null;
+		tempId: string;
+	},
 ): Promise<PdfTextTempResult | null> {
 	if (
 		input.hasContent ||

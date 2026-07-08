@@ -61,9 +61,6 @@ interface S2MatchResponse {
 	data?: S2Paper[];
 }
 
-type PaperEnrichmentCandidate = { url?: string | null; title: string; fileType?: string | null; content?: string | null };
-type PaperWorkflowCandidate = { url?: string | null; title: string; file_type?: string | null };
-
 async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (apiKey) headers['x-api-key'] = apiKey;
@@ -172,7 +169,10 @@ async function enrichS2ByTitle(title: string, apiKey?: string): Promise<PaperMet
 	return normalizePaper(paper);
 }
 
-export async function enrichPaperMetadata(candidate: PaperEnrichmentCandidate, apiKey?: string): Promise<PaperMetadata | null> {
+export async function enrichPaperMetadata(
+	candidate: { url?: string | null; title: string; fileType?: string | null; content?: string | null },
+	apiKey?: string,
+): Promise<PaperMetadata | null> {
 	const content = candidate.content ?? null;
 	const detection = detectPaperId(candidate.url, content, !!content);
 	const searchTitle = (content ? extractPaperTitle(content) : null) ?? candidate.title;
@@ -189,7 +189,7 @@ export async function enrichPaperMetadata(candidate: PaperEnrichmentCandidate, a
 export async function stagePaperEnrichment(
 	env: Env,
 	step: WorkflowStep,
-	candidate: PaperWorkflowCandidate,
+	candidate: { url?: string | null; title: string; file_type?: string | null },
 	input: { hasStagedText: boolean; loadContent: () => Promise<string | null | undefined> },
 ): Promise<PaperMetadata | null> {
 	if (!input.hasStagedText && candidate.file_type !== PDF_MIME && !detectPaperId(candidate.url, null, false).hasAcademicMarker) return null;

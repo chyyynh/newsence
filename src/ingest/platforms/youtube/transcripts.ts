@@ -3,12 +3,14 @@ import type { Article, TranscriptSegment, YoutubeTranscript } from '@core-shared
 import { Client } from 'pg';
 import { z } from 'zod';
 
-interface YouTubeHighlight {
-	title: string;
-	summary: string;
-	startTime: number;
-	endTime: number;
-}
+const YouTubeHighlightSchema = z.object({
+	title: z.string().min(1),
+	summary: z.string().min(1),
+	startTime: z.number().nonnegative(),
+	endTime: z.number().nonnegative(),
+});
+
+type YouTubeHighlight = z.infer<typeof YouTubeHighlightSchema>;
 
 export interface YouTubeHighlightsUpdate {
 	videoId: string;
@@ -19,8 +21,6 @@ export interface YouTubeHighlightsUpdate {
 		generatedAt: string;
 	};
 }
-
-export type YoutubeTranscriptRow = YoutubeTranscript;
 
 const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 YouTube 影片逐字稿，找出 5-8 個最重要的主題段落。
 
@@ -34,19 +34,10 @@ const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 
 只回傳符合 schema 的資料。`;
 
 const YouTubeHighlightsSchema = z.object({
-	highlights: z
-		.array(
-			z.object({
-				title: z.string().min(1),
-				summary: z.string().min(1),
-				startTime: z.number().nonnegative(),
-				endTime: z.number().nonnegative(),
-			}),
-		)
-		.min(1),
+	highlights: z.array(YouTubeHighlightSchema).min(1),
 });
 
-export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTranscriptRow): Promise<void> {
+export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTranscript): Promise<void> {
 	await db.query(
 		`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
 		VALUES ($1, $2, $3, $4, $5, $6)

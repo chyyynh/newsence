@@ -194,7 +194,7 @@ function buildTwitterArticlePlatformMetadata(
 	};
 }
 
-export type ResolvedTweetContent = {
+type ResolvedTweetContent = {
 	kind: 'tweet' | 'share' | 'article';
 	scraped: ScrapedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> };
 	canonicalUrl: string;

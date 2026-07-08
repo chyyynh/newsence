@@ -15,15 +15,10 @@ import {
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
-import {
-	buildProcessorUpdatePayload,
-	getArticlePlatformForArticle,
-	type PlatformWorkflowData,
-	type ProcessorResult,
-	platformIdentity,
-} from './domain/processors';
+import { buildProcessorUpdatePayload, getArticlePlatformForArticle, type ProcessorResult, platformIdentity } from './domain/processors';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
+import type { YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
 
 type StoredWorkflowTarget =
 	| { kind: 'article'; articleId: string }
@@ -241,7 +236,7 @@ type WorkflowPersistenceInput = {
 	result: ProcessorResult;
 	embedding: number[] | null;
 	pdfTextTemp: PdfTextTempResult | null;
-	platformWorkflowData: PlatformWorkflowData | null;
+	youtubeHighlights: YouTubeHighlightsUpdate | null;
 	paperEnrichment: PaperMetadata | null;
 };
 
@@ -307,7 +302,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
 		await getArticlePlatformForArticle(fullArticle).persistWorkflowData?.(db, {
 			articleId,
-			data: input.platformWorkflowData,
+			youtubeHighlights: input.youtubeHighlights,
 			youtubeTranscript: draft.youtubeTranscript,
 		});
 		await db.query('COMMIT');
@@ -357,7 +352,7 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 		if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
 		await getArticlePlatformForArticle(input.article).persistWorkflowData?.(db, {
 			articleId: context.rowId,
-			data: input.platformWorkflowData,
+			youtubeHighlights: input.youtubeHighlights,
 			youtubeTranscript: await context.readYoutubeTranscript(),
 		});
 		await db.query('COMMIT');
@@ -427,7 +422,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			const platformWorkflowData = platform.prepareWorkflowData
+			const youtubeHighlights = platform.prepareWorkflowData
 				? await step.do(
 						'prepare-platform-workflow-data',
 						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
@@ -446,7 +441,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						result: processorResult,
 						embedding,
 						pdfTextTemp,
-						platformWorkflowData,
+						youtubeHighlights,
 						paperEnrichment,
 					};
 					return context.target.kind === 'source'

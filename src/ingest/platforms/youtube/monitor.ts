@@ -5,26 +5,15 @@ import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { parseDurationSeconds, scrapeYouTube } from './scraper';
 
-interface YouTubeFeedVideo {
-	videoId: string;
-	url: string;
-}
-type YouTubeFeedEntry = FeedEntry & { videoId?: unknown };
-type YouTubeChannelSource = {
-	id: string;
-	name: string;
-	RSSLink: string | null;
-};
-
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
 const SOURCE_FEED_FIELDS = 'id, name, "RSSLink"';
 
-function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
+function parseFeedVideos(xml: string) {
 	const entries = (extractFromXml(xml, {
 		descriptionMaxLen: 0,
 		getExtraEntryFields: (entry) => ({ videoId: entry['yt:videoId'] }),
-	}).entries ?? []) as YouTubeFeedEntry[];
+	}).entries ?? []) as Array<FeedEntry & { videoId?: unknown }>;
 
 	return entries.flatMap((entry) =>
 		typeof entry.videoId === 'string'
@@ -33,7 +22,7 @@ function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
 	);
 }
 
-async function queueYouTubeVideo(env: Env, channel: YouTubeChannelSource, video: YouTubeFeedVideo): Promise<boolean> {
+async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { videoId: string; url: string }): Promise<boolean> {
 	try {
 		const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
 			minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
@@ -79,7 +68,9 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	const channels = (
-		await db.query<YouTubeChannelSource>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['youtube_channel'])
+		await db.query<{ id: string; name: string; RSSLink: string | null }>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, [
+			'youtube_channel',
+		])
 	).rows;
 
 	let totalQueued = 0;

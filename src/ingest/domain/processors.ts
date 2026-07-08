@@ -15,11 +15,9 @@ export type { ProcessorResult } from './ai-utils';
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
-export type PlatformWorkflowData = { type: 'youtube'; highlights: YouTubeHighlightsUpdate };
-
 type PlatformWorkflowPersistenceInput = {
 	articleId: string;
-	data?: PlatformWorkflowData | null;
+	youtubeHighlights?: YouTubeHighlightsUpdate | null;
 	youtubeTranscript?: YoutubeTranscript | null;
 };
 
@@ -28,7 +26,7 @@ export type ArticlePlatformAdapter = ArticleProcessor & {
 		article: Article,
 		ctx: ProcessorContext,
 		youtubeTranscript?: YoutubeTranscript | null,
-	) => Promise<PlatformWorkflowData | null>;
+	) => Promise<YouTubeHighlightsUpdate | null>;
 	persistWorkflowData?: (db: Client, input: PlatformWorkflowPersistenceInput) => Promise<void>;
 };
 
@@ -51,12 +49,12 @@ export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
 		process: (article, ctx) => defaultProcessor.process(article, ctx),
 		async prepareWorkflowData(article, ctx, youtubeTranscript) {
 			const highlights = await prepareYouTubeHighlights(ctx.env, article, youtubeTranscript);
-			return highlights ? { type: 'youtube', highlights } : null;
+			return highlights;
 		},
 		persistWorkflowData: (db, input) =>
 			persistYouTubeWorkflowData(db, {
 				transcript: input.youtubeTranscript,
-				highlights: input.data?.type === 'youtube' ? input.data.highlights : null,
+				highlights: input.youtubeHighlights ?? null,
 			}),
 	},
 	default: defaultProcessor,

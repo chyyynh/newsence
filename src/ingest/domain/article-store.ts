@@ -4,7 +4,7 @@ import { Client } from 'pg';
 
 export type ArticleStoreTable = 'articles' | 'user_files';
 
-export type ArticleForProcessing = Article & { has_content?: boolean };
+type ArticleForProcessing = Article & { has_content?: boolean };
 
 const ARTICLE_FIELDS: Record<ArticleStoreTable, string> = {
 	articles:
@@ -92,7 +92,7 @@ export function insertArticleDataToArticle(data: InsertArticleData): Article {
 	};
 }
 
-export type InsertUrlUserFileResult = {
+type InsertUrlUserFileResult = {
 	id: string;
 	created: boolean;
 	title: string;
@@ -129,14 +129,12 @@ export async function getExistingUrlUserFile(db: Client, userId: string, normali
 	return result.rows[0] ?? null;
 }
 
-export type InsertScrapedUrlUserFileResult = { ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string };
-
 export async function insertScrapedUrlUserFile(
 	db: Client,
 	scraped: ScrapedContent,
 	url: string,
 	userId: string,
-): Promise<InsertScrapedUrlUserFileResult> {
+): Promise<{ ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string }> {
 	const urlKind = detectUrlKind(url);
 
 	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
@@ -197,7 +195,7 @@ export async function insertScrapedUrlUserFile(
 	}
 }
 
-export type ArticleProcessingUpdate = Record<string, unknown>;
+type ArticleProcessingUpdate = Record<string, unknown>;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
@@ -305,13 +303,11 @@ export async function getExistingArticleByUrl(db: Client, url: string): Promise<
 	return article ?? null;
 }
 
-export type ArticleReprocessingTextUpdate = {
-	summary: string;
-	content: string;
-	platformMetadata: unknown;
-};
-
-export async function reopenArticleForReprocessing(db: Client, articleId: string, update: ArticleReprocessingTextUpdate): Promise<void> {
+export async function reopenArticleForReprocessing(
+	db: Client,
+	articleId: string,
+	update: { summary: string; content: string; platformMetadata: unknown },
+): Promise<void> {
 	await db.query(
 		`UPDATE articles
 		 SET summary = $1,
@@ -326,12 +322,10 @@ export async function reopenArticleForReprocessing(db: Client, articleId: string
 	);
 }
 
-export type IncompleteWorkflowTargetIds = {
-	articleIds: string[];
-	userFileIds: string[];
-};
-
-export async function getIncompleteWorkflowTargetIds(db: Client, since: Date | string): Promise<IncompleteWorkflowTargetIds> {
+export async function getIncompleteWorkflowTargetIds(
+	db: Client,
+	since: Date | string,
+): Promise<{ articleIds: string[]; userFileIds: string[] }> {
 	const articleResult = await db.query<{ id: string }>(
 		`SELECT id FROM articles
 		 WHERE scraped_date >= $1

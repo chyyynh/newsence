@@ -22,8 +22,6 @@ type TwitterSourceFeed = {
 	scraped_at?: string | null;
 };
 
-type MonitoredTwitterUser = TwitterSourceFeed & { twitterUserName: string };
-
 function normalizeRetweet(tweet: Tweet): Tweet | null {
 	if (tweet.retweeted_tweet) {
 		return {
@@ -165,11 +163,10 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 		return;
 	}
 
-	const monitoredUsers: MonitoredTwitterUser[] = [];
-	for (const user of users) {
+	const monitoredUsers = users.flatMap((user) => {
 		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
-		if (twitterUserName) monitoredUsers.push({ ...user, twitterUserName });
-	}
+		return twitterUserName ? [{ ...user, twitterUserName }] : [];
+	});
 	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
 	if (userNames.length === 0) {
 		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });

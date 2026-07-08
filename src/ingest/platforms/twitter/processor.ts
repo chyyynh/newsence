@@ -11,11 +11,9 @@ import {
 	type ProcessorResult,
 } from '../../domain/ai-utils';
 
-type UpdateData = ProcessorResult['updateData'];
-
 export class TwitterProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const updateData: UpdateData = {};
+		const updateData: ProcessorResult['updateData'] = {};
 		const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
 		if (hasFullContent) {
@@ -42,13 +40,6 @@ export class TwitterProcessor implements ArticleProcessor {
 	}
 }
 
-interface TweetAnalysis {
-	summary_cn: string;
-	tags: string[];
-	keywords: string[];
-	entities: Array<{ name: string; name_cn: string; type: string }>;
-}
-
 const TweetAnalysisSchema = z.object({
 	summary_cn: z.string().min(1),
 	tags: z.array(z.string().min(1)),
@@ -61,6 +52,8 @@ const TweetAnalysisSchema = z.object({
 		}),
 	),
 });
+
+type TweetAnalysis = z.infer<typeof TweetAnalysisSchema>;
 
 const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，並提供 tags、keywords、entities。
 
