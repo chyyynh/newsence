@@ -2,7 +2,13 @@ import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-me
 import type { Article, WorkflowAttachment } from '@core-shared/types';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
 import type { Client } from 'pg';
-import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
+import {
+	type ArticleProcessor,
+	generateArticleAnalysis,
+	mergeArticleAnalysis,
+	type ProcessorContext,
+	type ProcessorResult,
+} from './ai-utils';
 
 export type { ProcessorResult } from './ai-utils';
 
@@ -13,20 +19,7 @@ export type { ProcessorResult } from './ai-utils';
 class DefaultProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const analysis = await generateArticleAnalysis(article, ctx.env);
-		const updateData: ProcessorResult['updateData'] = {};
-
-		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
-
-		if (!article.tags?.length && allTags.length) updateData.tags = allTags;
-		if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-		if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
-		if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
-		if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
-		if (analysis.content) updateData.content = analysis.content;
-		if (isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
-		if (analysis.entities) updateData.entities = analysis.entities;
-
-		return { updateData, classificationCategory: analysis.category };
+		return mergeArticleAnalysis(article, analysis);
 	}
 }
 

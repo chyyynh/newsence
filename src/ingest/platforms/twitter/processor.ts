@@ -1,13 +1,6 @@
 import { generateObject } from '@core-ai/embedding';
-import type { ArticleCategory, TwitterMedia } from '@core-shared/platform-metadata';
-import {
-	type AIAnalysisResult,
-	type Article,
-	ENTITY_TYPES,
-	type Tweet,
-	type TwitterSourceEventInputType,
-	type WorkflowAttachment,
-} from '@core-shared/types';
+import type { TwitterMedia } from '@core-shared/platform-metadata';
+import { type Article, ENTITY_TYPES, type Tweet, type TwitterSourceEventInputType, type WorkflowAttachment } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import type { Client } from 'pg';
 import { z } from 'zod';
@@ -15,6 +8,7 @@ import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
 	isEmpty,
+	mergeArticleAnalysis,
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
@@ -155,19 +149,6 @@ export async function upsertTwitterSourceEventAttachment(db: Client, articleId: 
 	await upsertTwitterSourceEvent(db, tweet, { articleId, eventType, text, media, raw });
 }
 
-function applyArticleAnalysis(article: Article, analysis: AIAnalysisResult, updateData: UpdateData): ArticleCategory | undefined {
-	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
-	if (isEmpty(article.summary) && analysis.summary_en) updateData.summary = analysis.summary_en;
-	if (isEmpty(article.summary_cn) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
-	if (analysis.content) updateData.content = analysis.content;
-	if (isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
-	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : [])])];
-	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
-	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-	if (analysis.entities) updateData.entities = analysis.entities;
-	return analysis.category;
-}
-
 export class TwitterProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const updateData: UpdateData = {};
@@ -176,7 +157,7 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (hasFullContent) {
 			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
 			const analysis = await generateArticleAnalysis(article, ctx.env);
-			return { updateData, classificationCategory: applyArticleAnalysis(article, analysis, updateData) };
+			return mergeArticleAnalysis(article, analysis, { updateData });
 		}
 
 		const tweetText = article.summary?.trim() || article.content || '';

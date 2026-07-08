@@ -46,6 +46,34 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
+export type ArticleAnalysisMergeOptions = {
+	updateData?: ProcessorResult['updateData'];
+	extraTags?: string[];
+	overwriteSummary?: boolean;
+	includeContent?: boolean;
+};
+
+export function mergeArticleAnalysis(
+	article: Article,
+	analysis: AIAnalysisResult,
+	options: ArticleAnalysisMergeOptions = {},
+): { updateData: ProcessorResult['updateData']; classificationCategory?: ArticleCategory } {
+	const updateData = options.updateData ?? {};
+	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
+	const includeContent = options.includeContent ?? true;
+
+	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
+	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
+	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+	if ((options.overwriteSummary || isEmpty(article.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
+	if ((options.overwriteSummary || isEmpty(article.summary_cn)) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
+	if (includeContent && analysis.content) updateData.content = analysis.content;
+	if (includeContent && isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
+	if (analysis.entities) updateData.entities = analysis.entities;
+
+	return { updateData, classificationCategory: analysis.category };
+}
+
 // ─────────────────────────────────────────────────────────────
 // AI Analysis Functions
 // ─────────────────────────────────────────────────────────────

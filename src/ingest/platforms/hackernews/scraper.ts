@@ -5,7 +5,7 @@ import { decodeHtmlEntities, fetchWithTimeout, htmlToText, readTextWithLimit } f
 import {
 	type ArticleProcessor,
 	generateArticleAnalysis,
-	isEmpty,
+	mergeArticleAnalysis,
 	type ProcessorContext,
 	type ProcessorResult,
 } from '../../domain/ai-utils';
@@ -271,17 +271,13 @@ export class HackerNewsProcessor implements ArticleProcessor {
 			});
 
 		const analysis = await generateArticleAnalysis(article, ctx.env);
-		const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), 'HackerNews'])];
-
-		Object.assign(updateData, {
-			...(!article.tags?.length ? { tags: allTags } : {}),
-			...(!article.keywords?.length && analysis.keywords?.length ? { keywords: analysis.keywords } : {}),
-			...(isEmpty(article.title_cn) && analysis.title_cn ? { title_cn: analysis.title_cn } : {}),
-			...(analysis.summary_en ? { summary: analysis.summary_en } : {}),
-			...(analysis.summary_cn ? { summary_cn: analysis.summary_cn } : {}),
-			...(analysis.entities ? { entities: analysis.entities } : {}),
+		const merged = mergeArticleAnalysis(article, analysis, {
+			updateData,
+			extraTags: ['HackerNews'],
+			overwriteSummary: true,
+			includeContent: false,
 		});
 
-		return { updateData, enrichments, classificationCategory: analysis.category };
+		return { updateData: merged.updateData, enrichments, classificationCategory: merged.classificationCategory };
 	}
 }
