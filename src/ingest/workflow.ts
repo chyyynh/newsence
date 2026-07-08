@@ -20,7 +20,7 @@ import { processHackerNewsArticle } from './platforms/hackernews/scraper';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter/monitor';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/transcripts';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/monitor';
 
 async function processDefaultArticle(article: Article, env: Env): Promise<ProcessorResult> {
 	const analysis = await generateArticleAnalysis(article, env);
