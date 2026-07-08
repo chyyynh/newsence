@@ -19,7 +19,7 @@ import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } f
 import { processHackerNewsArticle } from './platforms/hackernews/scraper';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction } from './platforms/pdf';
-import { processTwitterArticle } from './platforms/twitter/processor';
+import { processTwitterArticle } from './platforms/twitter/monitor';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/transcripts';
 
 async function processDefaultArticle(article: Article, env: Env): Promise<ProcessorResult> {
