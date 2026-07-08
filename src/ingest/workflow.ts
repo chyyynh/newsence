@@ -1,7 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
-import type { PaperMetadata, PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Article, YoutubeTranscript } from '@core-shared/types';
+import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import { insertFinalSourceArticle, loadArticleForProcessing, updateArticleAfterProcessing } from '@ingest/domain/article-store';

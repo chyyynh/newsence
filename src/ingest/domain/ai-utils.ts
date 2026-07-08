@@ -3,8 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { generateObject, generateText } from '@core-ai/embedding';
-import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform-metadata';
-import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
+import { type AIAnalysisResult, type Article, type ArticleCategory, ENTITY_TYPES, type PlatformEnrichments } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 

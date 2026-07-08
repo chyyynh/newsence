@@ -1,6 +1,14 @@
 import { generateObject } from '@core-ai/embedding';
-import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
-import { type Article, ENTITY_TYPES, type NormalizedContent } from '@core-shared/types';
+import {
+	type Article,
+	ENTITY_TYPES,
+	type NormalizedContent,
+	type PlatformMetadata,
+	type QuotedTweetData,
+	type RetweetedByData,
+	type TwitterAuthorFields,
+	type TwitterMedia,
+} from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';

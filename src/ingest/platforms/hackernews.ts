@@ -1,6 +1,5 @@
 import { generateText } from '@core-ai/embedding';
-import type { PlatformEnrichments } from '@core-shared/platform-metadata';
-import type { Article } from '@core-shared/types';
+import type { Article, PlatformEnrichments } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
 

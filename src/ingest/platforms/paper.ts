@@ -3,7 +3,7 @@
 // returns reference metadata (DOI + author) in a single call.
 
 import type { WorkflowStep } from 'cloudflare:workers';
-import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
+import type { PaperMetadata, PaperReference } from '@core-shared/types';
 import { fetchWithTimeout } from '@core-shared/web';
 import type { Client } from 'pg';
 import { Client as PgClient } from 'pg';

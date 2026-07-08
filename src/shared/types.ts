@@ -1,5 +1,3 @@
-import type { ArticleCategory, PlatformMetadata } from './platform-metadata';
-
 // Article related types
 export interface Article {
 	id: string;
@@ -77,3 +75,132 @@ export interface NormalizedContent {
 	platformMetadata?: PlatformMetadata;
 	youtubeTranscript?: YoutubeTranscript;
 }
+
+export interface TwitterMedia {
+	url: string;
+	type: 'photo' | 'video' | 'animated_gif';
+	videoUrl?: string;
+	width?: number;
+	height?: number;
+}
+
+export interface TwitterAuthorFields {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	authorVerified?: boolean;
+}
+
+export interface QuotedTweetData {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	text: string;
+}
+
+export interface RetweetedByData {
+	tweetId?: string;
+	tweetUrl?: string;
+	retweetedAt?: string;
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	authorVerified?: boolean;
+}
+
+interface TwitterMetadata extends TwitterAuthorFields {
+	variant?: 'shared' | 'article';
+	tweetId?: string;
+	media?: TwitterMedia[];
+	createdAt?: string;
+	quotedTweet?: QuotedTweetData;
+	retweetedBy?: RetweetedByData;
+	tweetText?: string;
+	externalUrl?: string;
+	externalOgImage?: string | null;
+	externalTitle?: string | null;
+	originalTweetUrl?: string;
+}
+
+interface YouTubeMetadata {
+	videoId: string;
+	channelName: string;
+	channelId?: string;
+	channelAvatar?: string;
+	duration?: string;
+	thumbnailUrl?: string;
+	viewCount?: number;
+	likeCount?: number;
+	commentCount?: number;
+	publishedAt?: string;
+	description?: string;
+	tags?: string[];
+}
+
+export interface HackerNewsMetadata {
+	itemId: string;
+	author: string;
+	points: number;
+	commentCount: number;
+	itemType?: 'story' | 'ask' | 'show' | 'job';
+	storyUrl?: string | null;
+}
+
+interface PdfMetadata {
+	fileName: string;
+	fileSize: number;
+}
+
+export interface PaperReference {
+	openAlexId?: string;
+	doi?: string;
+	title?: string;
+	year?: number;
+	author?: string;
+}
+
+export interface PaperMetadata {
+	source: 'openalex' | 'semanticscholar';
+	/** Legacy field name; new values are source-native Semantic Scholar paperIds. */
+	openAlexId?: string;
+	doi?: string;
+	arxivId?: string;
+	title?: string;
+	authors: string[];
+	abstract?: string;
+	venue?: string;
+	year?: number;
+	citedByCount?: number;
+	referenceCount: number;
+	oaPdfUrl?: string;
+	landingPageUrl?: string;
+	references: PaperReference[];
+}
+
+export interface PlatformEnrichments {
+	hnUrl?: string;
+	externalUrl?: string | null;
+	hnText?: string | null;
+	commentCount?: number;
+	links?: string[];
+	processedAt?: string;
+}
+
+export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
+
+interface ClassificationMetadata {
+	category?: ArticleCategory;
+	classifiedAt?: string;
+}
+
+interface ClassificationEnvelope {
+	classification?: ClassificationMetadata | null;
+}
+
+export type PlatformMetadata =
+	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope);

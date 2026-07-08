@@ -1,6 +1,12 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Article, NormalizedContent, TranscriptSegment, YouTubeChapter, YoutubeTranscript } from '@core-shared/types';
+import type {
+	Article,
+	NormalizedContent,
+	PlatformMetadata,
+	TranscriptSegment,
+	YouTubeChapter,
+	YoutubeTranscript,
+} from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
