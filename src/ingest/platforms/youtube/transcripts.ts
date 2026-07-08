@@ -1,5 +1,5 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import type { Article, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
+import type { Article, TranscriptSegment, WorkflowAttachment, YoutubeTranscript } from '@core-shared/types';
 import { Client } from 'pg';
 import { z } from 'zod';
 
@@ -20,24 +20,15 @@ export interface YouTubeHighlightsUpdate {
 	};
 }
 
-export interface YoutubeTranscriptRow {
-	videoId: string;
-	segments: TranscriptSegment[];
-	language: string | null;
-	chapters?: YouTubeChapter[];
-	chaptersFromDescription?: boolean;
+export type YoutubeTranscriptRow = YoutubeTranscript;
+
+function isYoutubeTranscriptAttachment(
+	attachment: WorkflowAttachment,
+): attachment is Extract<WorkflowAttachment, { kind: 'youtube-transcript' }> {
+	return attachment.kind === 'youtube-transcript';
 }
 
-type YoutubeTranscriptAttachment = {
-	kind: 'youtube-transcript';
-	transcript: YoutubeTranscriptRow;
-};
-
-function isYoutubeTranscriptAttachment(value: unknown): value is YoutubeTranscriptAttachment {
-	return !!value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'youtube-transcript';
-}
-
-function youtubeTranscriptAttachment(attachments?: unknown[]): YoutubeTranscriptRow | null {
+function youtubeTranscriptAttachment(attachments?: WorkflowAttachment[]): YoutubeTranscriptRow | null {
 	return attachments?.find(isYoutubeTranscriptAttachment)?.transcript ?? null;
 }
 
@@ -96,7 +87,7 @@ async function saveYouTubeHighlights(db: Client, update: YouTubeHighlightsUpdate
 
 export async function persistYouTubeWorkflowData(
 	db: Client,
-	input: { attachments?: unknown[]; highlights?: YouTubeHighlightsUpdate | null },
+	input: { attachments?: WorkflowAttachment[]; highlights?: YouTubeHighlightsUpdate | null },
 ): Promise<void> {
 	const transcript = youtubeTranscriptAttachment(input.attachments);
 	if (transcript) await upsertYoutubeTranscript(db, transcript);
@@ -106,7 +97,7 @@ export async function persistYouTubeWorkflowData(
 export async function prepareYouTubeHighlights(
 	env: Env,
 	article: Article,
-	attachments?: unknown[],
+	attachments?: WorkflowAttachment[],
 ): Promise<YouTubeHighlightsUpdate | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;
 

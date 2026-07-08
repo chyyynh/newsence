@@ -1,11 +1,11 @@
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Tweet } from '@core-shared/types';
+import type { Tweet, TwitterSourceEventDraft } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
-import { type TwitterSourceEventDraft, upsertTwitterSourceEvent } from './processor';
+import { upsertTwitterSourceEvent } from './processor';
 import {
 	buildTweetPlatformMetadata,
 	buildTweetTitle,

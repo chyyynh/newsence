@@ -1,6 +1,13 @@
 import { generateObject } from '@core-ai/embedding';
 import type { ArticleCategory, TwitterMedia } from '@core-shared/platform-metadata';
-import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Tweet } from '@core-shared/types';
+import {
+	type AIAnalysisResult,
+	type Article,
+	ENTITY_TYPES,
+	type Tweet,
+	type TwitterSourceEventInputType,
+	type WorkflowAttachment,
+} from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import type { Client } from 'pg';
 import { z } from 'zod';
@@ -15,24 +22,12 @@ import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type UpdateData = ProcessorResult['updateData'];
 
-type TwitterSourceEventInputType = 'tweet' | 'thread' | 'share' | 'article';
 type TwitterSourceEventType = TwitterSourceEventInputType | 'quote' | 'retweet';
 
-export type TwitterSourceEventDraft = {
-	tweet: Tweet;
-	eventType: TwitterSourceEventInputType;
-	text?: string | null;
-	media?: TwitterMedia[];
-	raw?: unknown;
-};
-
-type TwitterSourceEventAttachment = {
-	kind: 'twitter-source-event';
-	event: TwitterSourceEventDraft;
-};
-
-function isTwitterSourceEventAttachment(value: unknown): value is TwitterSourceEventAttachment {
-	return !!value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'twitter-source-event';
+function isTwitterSourceEventAttachment(
+	attachment: WorkflowAttachment,
+): attachment is Extract<WorkflowAttachment, { kind: 'twitter-source-event' }> {
+	return attachment.kind === 'twitter-source-event';
 }
 
 export async function upsertTwitterSourceEvent(
@@ -153,7 +148,7 @@ export async function upsertTwitterSourceEvent(
 	}
 }
 
-export async function upsertTwitterSourceEventAttachment(db: Client, articleId: string, attachments?: unknown[]): Promise<void> {
+export async function upsertTwitterSourceEventAttachment(db: Client, articleId: string, attachments?: WorkflowAttachment[]): Promise<void> {
 	const event = attachments?.find(isTwitterSourceEventAttachment)?.event;
 	if (!event) return;
 	const { tweet, eventType, text, media, raw } = event;

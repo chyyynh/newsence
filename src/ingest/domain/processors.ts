@@ -1,5 +1,5 @@
 import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Article } from '@core-shared/types';
+import type { Article, WorkflowAttachment } from '@core-shared/types';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
 import type { Client } from 'pg';
 import { type ArticleProcessor, generateArticleAnalysis, isEmpty, type ProcessorContext, type ProcessorResult } from './ai-utils';
@@ -42,11 +42,15 @@ export type PlatformWorkflowData = { type: 'youtube'; highlights: YouTubeHighlig
 type PlatformWorkflowPersistenceInput = {
 	articleId: string;
 	data?: PlatformWorkflowData | null;
-	attachments?: unknown[];
+	attachments?: WorkflowAttachment[];
 };
 
 export type ArticlePlatformAdapter = ArticleProcessor & {
-	prepareWorkflowData?: (article: Article, ctx: ProcessorContext, attachments?: unknown[]) => Promise<PlatformWorkflowData | null>;
+	prepareWorkflowData?: (
+		article: Article,
+		ctx: ProcessorContext,
+		attachments?: WorkflowAttachment[],
+	) => Promise<PlatformWorkflowData | null>;
 	persistWorkflowData?: (db: Client, input: PlatformWorkflowPersistenceInput) => Promise<void>;
 };
 

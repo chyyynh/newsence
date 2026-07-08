@@ -1,3 +1,4 @@
+import type { WorkflowAttachment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { type InsertUrlUserFileResult, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
@@ -43,7 +44,7 @@ type ExistingUrlUserFile = {
 };
 
 type InsertOutcome =
-	| { kind: 'page'; row: InsertUrlUserFileResult }
+	| { kind: 'page'; row: InsertUrlUserFileResult; attachments?: WorkflowAttachment[] }
 	| { kind: 'blob'; blob: Extract<ScrapeResult, { kind: 'blob' }> }
 	| { error: string };
 
@@ -114,7 +115,10 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 		});
 		if (scrapeResult.kind === 'page') {
 			const inserted = await insertScrapedUrlUserFile(db, scrapeResult.scraped, url, userId);
-			result = inserted.ok ? { kind: 'page', row: inserted.row } : { error: inserted.error };
+			const attachments: WorkflowAttachment[] | undefined = scrapeResult.scraped.youtubeTranscript
+				? [{ kind: 'youtube-transcript', transcript: scrapeResult.scraped.youtubeTranscript }]
+				: undefined;
+			result = inserted.ok ? { kind: 'page', row: inserted.row, ...(attachments ? { attachments } : {}) } : { error: inserted.error };
 		} else {
 			result = { kind: 'blob', blob: scrapeResult };
 		}
@@ -136,7 +140,13 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	}
 
 	const { row } = result;
-	const instanceId = row.created ? await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db }) : undefined;
+	const instanceId = row.created
+		? await enqueueProcessing(
+				env,
+				{ kind: 'userFile', userFileId: row.id, ...(result.attachments ? { attachments: result.attachments } : {}) },
+				{ db },
+			)
+		: undefined;
 	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 

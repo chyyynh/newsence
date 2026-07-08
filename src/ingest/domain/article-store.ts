@@ -1,6 +1,5 @@
 import type { Article, ScrapedContent } from '@core-shared/types';
 import { detectUrlKind } from '@core-shared/web';
-import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { Client } from 'pg';
 
 export type ArticleStoreTable = 'articles' | 'user_files';
@@ -163,19 +162,6 @@ export async function insertScrapedUrlUserFile(
 		}
 
 		if (!userFile.created) return { ok: true, row: userFile };
-
-		if (scraped.youtubeTranscript) {
-			try {
-				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-			} catch (transcriptErr) {
-				console.error({
-					tag: 'YOUTUBE',
-					msg: 'Failed to save transcript',
-					videoId: scraped.youtubeTranscript.videoId,
-					error: String(transcriptErr),
-				});
-			}
-		}
 
 		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
 		return { ok: true, row: userFile };

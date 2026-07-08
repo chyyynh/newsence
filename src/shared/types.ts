@@ -1,4 +1,4 @@
-import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
+import type { ArticleCategory, PlatformMetadata, RetweetedByData, TwitterMedia } from './platform-metadata';
 
 // Article related types
 export interface Article {
@@ -58,6 +58,14 @@ export interface YouTubeChapter {
 	endTime: number;
 }
 
+export interface YoutubeTranscript {
+	videoId: string;
+	segments: TranscriptSegment[];
+	language: string | null;
+	chapters: YouTubeChapter[];
+	chaptersFromDescription: boolean;
+}
+
 export interface ScrapedContent {
 	title: string;
 	content: string;
@@ -67,13 +75,7 @@ export interface ScrapedContent {
 	author: string | null;
 	publishedDate: string | null;
 	metadata?: PlatformMetadata;
-	youtubeTranscript?: {
-		videoId: string;
-		segments: TranscriptSegment[];
-		language: string | null;
-		chapters: YouTubeChapter[];
-		chaptersFromDescription: boolean;
-	};
+	youtubeTranscript?: YoutubeTranscript;
 }
 
 // Twitter related (Kaito API response shape)
@@ -115,3 +117,23 @@ export interface Tweet {
 	retweeted_tweet?: Tweet | null;
 	retweetedBy?: RetweetedByData;
 }
+
+export type TwitterSourceEventInputType = 'tweet' | 'thread' | 'share' | 'article';
+
+export type TwitterSourceEventDraft = {
+	tweet: Tweet;
+	eventType: TwitterSourceEventInputType;
+	text?: string | null;
+	media?: TwitterMedia[];
+	raw?: unknown;
+};
+
+export type WorkflowAttachment =
+	| {
+			kind: 'youtube-transcript';
+			transcript: YoutubeTranscript;
+	  }
+	| {
+			kind: 'twitter-source-event';
+			event: TwitterSourceEventDraft;
+	  };
