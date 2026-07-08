@@ -38,8 +38,11 @@ const articlePlatforms: Record<string, ArticleProcessor> = {
 	default: processDefaultArticle,
 };
 
+const CONTENT_STAGE_METADATA_TYPES = new Set(['pdf', 'paper']);
+
 function platformIdentity(article: Article): string {
-	return article.platform_metadata?.type ?? article.source_type ?? 'default';
+	const metadataType = article.platform_metadata?.type;
+	return metadataType && !CONTENT_STAGE_METADATA_TYPES.has(metadataType) ? metadataType : (article.source_type ?? 'default');
 }
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
