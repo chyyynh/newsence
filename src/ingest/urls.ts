@@ -1,11 +1,6 @@
 import type { WorkflowAttachment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
-import {
-	type ExistingUrlUserFile,
-	getExistingUrlUserFile,
-	type InsertUrlUserFileResult,
-	insertScrapedUrlUserFile,
-} from '@ingest/domain/article-store';
+import { type ExistingUrlUserFile, getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { type ScrapeResult, scrapeUrl } from './extract';
@@ -33,11 +28,6 @@ type IngestResult = {
 
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
-
-type InsertOutcome =
-	| { kind: 'page'; row: InsertUrlUserFileResult; attachments?: WorkflowAttachment[] }
-	| { kind: 'blob'; blob: Extract<ScrapeResult, { kind: 'blob' }> }
-	| { error: string };
 
 type UserFileUrlResultRow = Pick<
 	ExistingUrlUserFile,
@@ -91,45 +81,37 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 		return returnExisting(db, url, existingRow, env);
 	}
 
-	let result: InsertOutcome;
+	let scrapeResult: ScrapeResult;
 	try {
-		const scrapeResult = await scrapeUrl(url, {
+		scrapeResult = await scrapeUrl(url, {
 			youtubeApiKey: env.YOUTUBE_API_KEY,
 			kaitoApiKey: env.KAITO_API_KEY,
 		});
-		if (scrapeResult.kind === 'page') {
-			const inserted = await insertScrapedUrlUserFile(db, scrapeResult.scraped, url, userId);
-			const attachments: WorkflowAttachment[] | undefined = scrapeResult.scraped.youtubeTranscript
-				? [{ kind: 'youtube-transcript', transcript: scrapeResult.scraped.youtubeTranscript }]
-				: undefined;
-			result = inserted.ok ? { kind: 'page', row: inserted.row, ...(attachments ? { attachments } : {}) } : { error: inserted.error };
-		} else {
-			result = { kind: 'blob', blob: scrapeResult };
-		}
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
-	if ('error' in result) return { url, error: result.error };
 
-	if (result.kind === 'blob') {
+	if (scrapeResult.kind === 'blob') {
 		return {
 			url,
 			resourceKind: 'blob',
 			originType: 'saved_url',
-			fileType: result.blob.contentType,
-			blob: result.blob,
+			fileType: scrapeResult.contentType,
+			blob: scrapeResult,
 			alreadyExists: false,
 		};
 	}
 
-	const { row } = result;
+	const inserted = await insertScrapedUrlUserFile(db, scrapeResult.scraped, url, userId);
+	if (!inserted.ok) return { url, error: inserted.error };
+
+	const { row } = inserted;
+	const attachments: WorkflowAttachment[] | undefined = scrapeResult.scraped.youtubeTranscript
+		? [{ kind: 'youtube-transcript', transcript: scrapeResult.scraped.youtubeTranscript }]
+		: undefined;
 	const instanceId = row.created
-		? await enqueueProcessing(
-				env,
-				{ kind: 'userFile', userFileId: row.id, ...(result.attachments ? { attachments: result.attachments } : {}) },
-				{ db },
-			)
+		? await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id, ...(attachments ? { attachments } : {}) }, { db })
 		: undefined;
 	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }

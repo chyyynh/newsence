@@ -12,21 +12,6 @@ import {
 
 export type { ProcessorResult } from './ai-utils';
 
-// ─────────────────────────────────────────────────────────────
-// Default Processor
-// ─────────────────────────────────────────────────────────────
-
-class DefaultProcessor implements ArticleProcessor {
-	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const analysis = await generateArticleAnalysis(article, ctx.env);
-		return mergeArticleAnalysis(article, analysis);
-	}
-}
-
-// ─────────────────────────────────────────────────────────────
-// Factory
-// ─────────────────────────────────────────────────────────────
-
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor, upsertTwitterSourceEventAttachment } from '../platforms/twitter/processor';
 
@@ -47,7 +32,12 @@ export type ArticlePlatformAdapter = ArticleProcessor & {
 	persistWorkflowData?: (db: Client, input: PlatformWorkflowPersistenceInput) => Promise<void>;
 };
 
-const defaultProcessor = new DefaultProcessor();
+const defaultProcessor: ArticlePlatformAdapter = {
+	async process(article, ctx) {
+		const analysis = await generateArticleAnalysis(article, ctx.env);
+		return mergeArticleAnalysis(article, analysis);
+	},
+};
 const twitterProcessor = new TwitterProcessor();
 
 export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
