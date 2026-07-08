@@ -21,7 +21,6 @@ interface PdfTextArtifact {
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
 const WORKFLOW_PDF_TEXT_SCRATCH_PREFIX = 'workflow/scratch/pdf-text/';
-const PDF_TEXT_MARKDOWN_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
 let pdfParserReady = false;
 
@@ -47,7 +46,7 @@ async function writeExtractedPdfText(
 	if (!obj) throw new Error(`PDF source object missing: ${input.sourceStorageKey}`);
 	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
 	const extractedTextKey = `${WORKFLOW_PDF_TEXT_SCRATCH_PREFIX}${input.articleId}/${input.workflowRunId}.md`;
-	await env.R2.put(extractedTextKey, text, { httpMetadata: { contentType: PDF_TEXT_MARKDOWN_CONTENT_TYPE } });
+	await env.R2.put(extractedTextKey, text, { httpMetadata: { contentType: 'text/markdown; charset=utf-8' } });
 	return { status, chars, pages, extractedTextKey };
 }
 
@@ -73,10 +72,4 @@ export async function readExtractedPdfText(env: CoreEnv, result: PdfTextArtifact
 	const obj = await env.R2.get(result.extractedTextKey);
 	if (!obj) throw new Error(`PDF extracted text object missing: ${result.extractedTextKey}`);
 	return obj.text();
-}
-
-export function pdfTextExtractionMetadata(result: PdfTextArtifact | null): Record<string, unknown> | undefined {
-	if (!result) return undefined;
-	const extraction = { status: result.status, parser: 'liteparse' };
-	return { extraction: result.status === 'failed' ? extraction : { ...extraction, chars: result.chars, pages: result.pages } };
 }

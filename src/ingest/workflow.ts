@@ -12,7 +12,7 @@ import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { processHackerNewsArticle } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
-import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction } from './platforms/pdf';
+import { readExtractedPdfText, stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
@@ -171,8 +171,14 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 				input.pdfTextArtifact?.extractedTextKey && input.article.content
 					? { ...input.result, updateData: { ...input.result.updateData, content: input.article.content } }
 					: input.result;
+			const pdf = input.pdfTextArtifact;
+			const extraction = pdf && {
+				status: pdf.status,
+				parser: 'liteparse',
+				...(pdf.status === 'failed' ? {} : { chars: pdf.chars, pages: pdf.pages }),
+			};
 			const metadataPatch = {
-				...(pdfTextExtractionMetadata(input.pdfTextArtifact) ?? {}),
+				...(extraction ? { extraction } : {}),
 				...(input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : {}),
 			};
 			const updatePayload = buildProcessorUpdatePayload(
