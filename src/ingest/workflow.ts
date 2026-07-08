@@ -237,9 +237,14 @@ function storedWorkflowTarget(target: StoredWorkflowTarget): {
 	workflowId: string;
 	workflowTarget: WorkflowTarget;
 } {
-	const id = target.kind === 'article' ? target.articleId : target.userFileId;
-	const table = target.kind === 'article' ? 'articles' : 'user_files';
-	return { workflowId: ['article', workflowIdPart(table), workflowIdPart(id)].join('-'), workflowTarget: target };
+	const { table, rowId } = storedWorkflowRecord(target);
+	return { workflowId: ['article', workflowIdPart(table), workflowIdPart(rowId)].join('-'), workflowTarget: target };
+}
+
+function storedWorkflowRecord(target: StoredWorkflowTarget) {
+	return target.kind === 'article'
+		? { table: 'articles' as const, rowId: target.articleId }
+		: { table: 'user_files' as const, rowId: target.userFileId };
 }
 
 function retryWorkflowId(workflowId: string): string {
@@ -334,8 +339,6 @@ export function streamWorkflowStatus(env: Env, workflowId: string): Response {
 
 type WorkflowRunContext = {
 	target: WorkflowTarget;
-	table: 'articles' | 'user_files';
-	rowId: string | null;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 };
 type WorkflowPersistenceInput = {
@@ -360,8 +363,6 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 	};
 	return {
 		target,
-		table: target.kind === 'userFile' ? 'user_files' : 'articles',
-		rowId: target.kind === 'article' ? target.articleId : target.kind === 'userFile' ? target.userFileId : null,
 		readSourceDraft,
 	};
 }
@@ -371,8 +372,8 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 	if (context.target.kind === 'source') {
 		article = preparedArticleToArticle((await context.readSourceDraft()).article);
 	} else {
-		if (!context.rowId) throw new Error('Stored workflow target is missing row id');
-		article = await loadArticleForProcessing(env, context.table, context.rowId);
+		const { table, rowId } = storedWorkflowRecord(context.target);
+		article = await loadArticleForProcessing(env, table, rowId);
 	}
 	const extractedPdfText = await readExtractedPdfText(env, pdfTextArtifact);
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
@@ -398,8 +399,8 @@ async function persistSourceTarget(db: Client, context: WorkflowRunContext, inpu
 	return articleId;
 }
 
-async function persistStoredTarget(db: Client, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
-	if (!context.rowId) throw new Error('Stored workflow target is missing row id');
+async function persistStoredTarget(db: Client, target: StoredWorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
+	const { table, rowId } = storedWorkflowRecord(target);
 	const finalResult =
 		input.pdfTextArtifact?.extractedTextKey && input.article.content
 			? { ...input.result, updateData: { ...input.result.updateData, content: input.article.content } }
@@ -417,15 +418,15 @@ async function persistStoredTarget(db: Client, context: WorkflowRunContext, inpu
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
-	await updateArticleAfterProcessing(db, context.table, context.rowId, updatePayload);
-	if (context.target.kind === 'userFile')
-		await patchUserFileWorkflowMetadata(db, context.target.userFileId, {
+	await updateArticleAfterProcessing(db, table, rowId, updatePayload);
+	if (target.kind === 'userFile')
+		await patchUserFileWorkflowMetadata(db, target.userFileId, {
 			monitor_status: 'complete',
 			monitor_completed_at: new Date().toISOString(),
-			article_id: context.rowId,
+			article_id: rowId,
 		});
-	else if (entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
-	return context.rowId;
+	else if (entities) await syncArticleEntities(db, rowId, entities, input.article.source, platformMetadata);
+	return rowId;
 }
 
 async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
@@ -434,7 +435,9 @@ async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, inpu
 	await db.query('BEGIN');
 	try {
 		const articleId =
-			context.target.kind === 'source' ? await persistSourceTarget(db, context, input) : await persistStoredTarget(db, context, input);
+			context.target.kind === 'source'
+				? await persistSourceTarget(db, context, input)
+				: await persistStoredTarget(db, context.target, input);
 		await persistYouTubeWorkflowData(db, {
 			transcript: input.youtubeTranscript,
 			highlights: input.youtubeHighlights,
@@ -459,14 +462,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				async () => {
 					if (context.target.kind === 'source')
 						return { ...preparedArticleToArticle((await context.readSourceDraft()).article), content: null };
-					if (!context.rowId) throw new Error('Stored workflow target is missing row id');
-					return loadArticleForProcessing(this.env, context.table, context.rowId, true);
+					const { table, rowId } = storedWorkflowRecord(context.target);
+					return loadArticleForProcessing(this.env, table, rowId, true);
 				},
 			);
 			const sourceType = platformIdentity(article);
 			const platform = articlePlatforms[sourceType] ?? articlePlatforms.default;
+			const storedRecord = context.target.kind === 'source' ? null : storedWorkflowRecord(context.target);
 			const logContext =
-				context.target.kind === 'source' ? { url: article.url, table: context.table } : { article_id: context.rowId, table: context.table };
+				storedRecord === null ? { url: article.url, table: 'articles' } : { article_id: storedRecord.rowId, table: storedRecord.table };
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
