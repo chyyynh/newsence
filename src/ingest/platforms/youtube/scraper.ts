@@ -40,6 +40,11 @@ type YouTubeVideosResponse = {
 
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
+function isYouTubeHost(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/^www\./, '');
+	return host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
+}
+
 export function extractYouTubeId(url: string): string | null {
 	let parsed: URL;
 	try {
@@ -47,6 +52,7 @@ export function extractYouTubeId(url: string): string | null {
 	} catch {
 		return null;
 	}
+	if (!isYouTubeHost(parsed.hostname)) return null;
 
 	const watchId = parsed.searchParams.get('v');
 	if (watchId?.match(YOUTUBE_VIDEO_ID_RE)) return watchId;
