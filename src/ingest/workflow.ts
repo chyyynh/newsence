@@ -146,19 +146,16 @@ async function persistWorkflowTarget(
 	try {
 		let articleId: string;
 		if (target.kind === 'source') {
-			const fullArticle = sourceRecordToArticle(target.draft.article);
-			const updatePayload: Record<string, unknown> = {
-				...buildProcessorUpdatePayload(
-					fullArticle,
-					result,
-					embedding,
-					paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined,
-				),
-			};
-			const platformMetadata = updatePayload.platform_metadata ?? target.draft.article.platformMetadata;
-			const entities = normalizeArticleEntityUpdatePayload(updatePayload, target.draft.article.source, platformMetadata);
+			const updatePayload = buildProcessorUpdatePayload(
+				article,
+				result,
+				embedding,
+				paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined,
+			);
+			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
+			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 			articleId = await insertFinalSourceArticle(db, target.draft.article, updatePayload);
-			if (entities) await syncArticleEntities(db, articleId, entities, target.draft.article.source, platformMetadata);
+			if (entities) await syncArticleEntities(db, articleId, entities, article.source, platformMetadata);
 		} else {
 			const finalResult =
 				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
@@ -274,7 +271,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				persistWorkflowTarget(
 					this.env,
 					target,
-					pdfTextArtifact?.text ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
+					target.kind === 'source' || pdfTextArtifact?.text ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
 					processorResult,
 					embedding,
 					pdfTextArtifact,

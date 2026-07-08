@@ -47,7 +47,7 @@
 ```
 內容進入（source monitor / saved URL / retry）
   │
-  ├─ 1. 讀取內容 ─────────── source draft 從 R2 載入；upload/retry 則讀既有 row
+  ├─ 1. 讀取內容 ─────────── source draft payload，或 upload/retry 的 user_file/article row
   ├─ 2. AI 分析 ──────────── AI Gateway text/JSON calls → 中英標題、摘要、標籤、關鍵字、實體
   ├─ 3. 存入資料庫 ────────── source 單次 final INSERT；row-based 單次 final UPDATE
   ├─    同步實體 ─────────── （條件性）將實體寫入正規化表格，建立關聯
@@ -161,26 +161,21 @@ claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 ```
 src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
-├── rpc/                  # service-binding RPC contract
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
-├── media/                # OG image helpers
 ├── shared/               # 小型跨子系統 primitives
-│   ├── platform-metadata.ts
 │   ├── types.ts          # Article、NormalizedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
-│   ├── urls.ts           # saved URL 偵測、fetch、orchestration；asset result 由 app 持久化
 │   ├── domain/           # sink、AI merge helpers
-│   ├── platforms/        # 每個平台一個資料夾
-│   │   ├── rss/          # feed polling
-│   │   ├── twitter/      # monitor + scraper + processor
-│   │   ├── youtube/      # monitor + scraper + transcript/highlights
-│   │   ├── hackernews/   # scraper + processor（由 RSS 或 URL 觸發）
-│   │   ├── paper/        # Semantic Scholar enrichment
-│   │   ├── pdf.ts        # PDF text extraction stage
-│   │   └── web-scraper.ts
+│   └── platforms/        # 每個來源或 stage 一個檔案
+│       ├── rss.ts        # feed polling
+│       ├── twitter.ts    # monitor + scraper + processor
+│       ├── youtube.ts    # monitor + transcript/highlights
+│       ├── hackernews.ts # HN processor
+│       ├── paper.ts      # Semantic Scholar enrichment stage
+│       └── pdf.ts        # PDF text extraction stage
 └── corpus.ts · okf.ts     # engine 讀取、搜尋、匯出輔助
 ```
 
@@ -192,7 +187,7 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | ------------------ | ------------------------------------------- |
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
-| `R2`               | Source drafts、PDF text temp objects、app-owned blob reads |
+| `R2`               | 讀取 app-owned `user_files` blob，供 PDF extraction 使用 |
 | `AI`               | Workers AI binding（AI Gateway 文字呼叫 + BGE-M3 向量生成） |
 
 Secrets（透過 `wrangler secret put` 設定）：
@@ -205,17 +200,16 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 ## 新增平台
 
-平台是來源 adapter。每個平台資料夾裡會有 `monitor.ts`（定時 discovery）、`scraper.ts`（URL 觸發）、metadata builder 的一些組合，可選 `processor.ts`（自訂 AI 分析）。不是每個平台四件都有；挑一個最接近的平台複製它的形狀。
+平台是來源 adapter。每個平台集中在一個 `ingest/platforms/*.ts` 檔案裡，只放它真正需要的 discovery / scrape / process 邏輯。App-owned saved URL 和 upload 進來時已經是 `user_files` row ID；cron 來源才 enqueue source draft。SQL 寫入留在 `ingest/domain/article-store.ts`。
 
 三個軸要分開：platform（`rss`、`web`、`youtube`、`twitter`、`hackernews`）不是 content shape（`pdf`、academic paper），也不是 origin（`upload`、`saved_url`、`generated`）。PDF 解析和 Semantic Scholar paper enrichment 是 workflow stage，根據 row 內容或 metadata 觸發，不是 platform adapter。
 
 新增一個來源最少要做：
 
-1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `NormalizedContent` 的函式。
-2. **Metadata**（`ingest/platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `shared/platform-metadata.ts` 註冊。
-3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並從 `ingest/urls.ts` 路由到 scraper。
-4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts` 裡接上。
-5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於預設 workflow processor 的 AI 行為時才寫；從 `ingest/workflow.ts` 註冊。
+1. **Platform file**（`ingest/platforms/foo.ts`）— discovery / scrape helpers 和可選自訂 processor。
+2. **Metadata shape** — 只加入 `platform_metadata` 真的需要的平台 JSON payload。
+3. **Monitor**（可選）— 如果來源可以輪詢，從 `src/index.ts` 接上 cron handler。
+4. **Workflow hook**（可選）— 只有在來源需要不同於預設 AI merge 的行為時才加。
 
 新文章一樣走 Workflow pipeline，AI 步驟你不用動。
 

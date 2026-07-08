@@ -49,8 +49,6 @@ interface PreparedArticleRecord {
 	tags?: string[];
 }
 
-type ArticleProcessingUpdate = Record<string, unknown>;
-
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
 	platform_metadata: 'metadata',
@@ -60,7 +58,7 @@ export async function updateArticleAfterProcessing(
 	db: Client,
 	table: ArticleStoreTable,
 	articleId: string,
-	updatePayload: ArticleProcessingUpdate,
+	updatePayload: Record<string, unknown>,
 ): Promise<void> {
 	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
 	const columns = Object.keys(updatePayload);
@@ -85,7 +83,7 @@ export async function updateArticleAfterProcessing(
 export async function insertFinalSourceArticle(
 	db: Client,
 	base: PreparedArticleRecord,
-	updatePayload: ArticleProcessingUpdate,
+	updatePayload: Record<string, unknown>,
 ): Promise<string> {
 	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
 	const entities = updatePayload.entities ?? null;

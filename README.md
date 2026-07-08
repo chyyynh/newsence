@@ -47,7 +47,7 @@ Each article goes through an automated workflow with independent retries:
 ```
 Content arrives (source monitor / saved URL / retry)
   │
-  ├─ 1. Load Content ───────── Source draft from R2, or user_file/article row for upload/retry
+  ├─ 1. Load Content ───────── Source draft payload, or user_file/article row for upload/retry
   ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
   ├─ 3. Save to DB ─────────── Source: single final INSERT; row-based: one final UPDATE
   ├─    Sync Entities ──────── (conditional) Upsert entities, link to article
@@ -169,26 +169,21 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 ```
 src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
-├── rpc/                  # service-binding RPC contract
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
-├── media/                # OG image helpers
 ├── shared/               # small cross-subsystem primitives
-│   ├── platform-metadata.ts
 │   ├── types.ts          # Article, NormalizedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
-│   ├── urls.ts           # saved URL detection, fetch, and orchestration; app persists asset results
 │   ├── domain/           # sink and AI merge helpers
-│   ├── platforms/        # each platform lives in its own folder
-│   │   ├── rss/          # feed polling
-│   │   ├── twitter/      # monitor + scraper + processor
-│   │   ├── youtube/      # monitor + scraper + transcript/highlights
-│   │   ├── hackernews/   # scraper + processor (fed by RSS or URL)
-│   │   ├── paper/        # Semantic Scholar enrichment
-│   │   ├── pdf.ts        # PDF text extraction stage
-│   │   └── web-scraper.ts
+│   └── platforms/        # one file per source/stage
+│       ├── rss.ts        # feed polling
+│       ├── twitter.ts    # monitor + scraper + processor
+│       ├── youtube.ts    # monitor + transcript/highlights
+│       ├── hackernews.ts # HN processor
+│       ├── paper.ts      # Semantic Scholar enrichment stage
+│       └── pdf.ts        # PDF text extraction stage
 └── corpus.ts · okf.ts     # engine read/search/export helpers
 ```
 
@@ -200,7 +195,7 @@ Bindings (in `wrangler.jsonc`):
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
-| `R2`               | Source drafts, PDF text temp objects, and app-owned blob reads |
+| `R2`               | App-owned `user_files` blob reads for PDF extraction |
 | `AI`               | Workers AI binding (AI Gateway text calls + BGE-M3 embeddings) |
 
 Secrets (via `wrangler secret put`):
@@ -213,17 +208,16 @@ Secrets (via `wrangler secret put`):
 
 ## Adding a Platform
 
-Platforms are source adapters. Each platform folder contains some combination of `monitor.ts` (cron discovery), `scraper.ts` (URL-triggered fetch), metadata builders, and optionally `processor.ts` (custom AI analysis). Not every platform has all four; pick the closest existing one and copy its shape.
+Platforms are source adapters. Each platform lives in one `ingest/platforms/*.ts` file with the discovery/scrape/process pieces it actually needs. App-owned saved URLs and uploads arrive as `user_files` row IDs; cron sources enqueue source drafts. SQL writes stay in `ingest/domain/article-store.ts`.
 
 Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernews`) is not content shape (`pdf`, academic paper) and not origin (`upload`, `saved_url`, `generated`). PDF extraction and Semantic Scholar paper enrichment are workflow stages keyed from row content/metadata, not platform adapters.
 
 Minimum to add a new source:
 
-1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `NormalizedContent`.
-2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
-3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it from `ingest/urls.ts`.
-4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts`.
-5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from the default workflow processor; register it from `ingest/workflow.ts`.
+1. **Platform file** (`ingest/platforms/foo.ts`) — discovery/scrape helpers and optional custom processor.
+2. **Metadata shape** — add only the platform-specific JSON payload needed by `platform_metadata`.
+3. **Monitor** (optional) — if the source is pollable, wire its cron handler from `src/index.ts`.
+4. **Workflow hook** (optional) — only if the source needs behavior beyond the default AI merge.
 
 The new article goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
 
