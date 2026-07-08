@@ -75,7 +75,7 @@ function buildProcessorUpdatePayload(
 
 type StoredWorkflowTarget = { kind: 'stored'; table: 'articles' | 'user_files'; rowId: string };
 
-type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceDraftKey: string };
+type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
 
 interface SourceArticleDraft {
@@ -88,7 +88,6 @@ type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'terminated']);
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
-const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const WORKFLOW_ID_MAX_LENGTH = 100;
 
 export async function enqueueProcessing(
@@ -113,47 +112,18 @@ async function enqueueStoredWorkflow(env: CoreEnv, target: StoredWorkflowTarget)
 }
 
 async function enqueueSourceArticleWorkflow(env: CoreEnv, draft: SourceArticleDraft): Promise<string> {
-	const sourceDraftKey = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
-	const workflowTarget: WorkflowTarget = { kind: 'source', sourceDraftKey };
-	await env.R2.put(sourceDraftKey, JSON.stringify(draft), { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
+	const workflowId = await sourceArticleWorkflowId(draft.article.url);
+	const target: WorkflowTarget = { kind: 'source', draft };
+	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
+	if (created.length) return created[0].id;
 
-	let keepDraft = false;
-	let cleanupReason = 'workflow create failed';
-	let cleanupWorkflowId: string | undefined;
-	try {
-		const workflowId = await sourceArticleWorkflowId(draft.article.url);
-		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
-		if (created.length) {
-			keepDraft = true;
-			return created[0].id;
-		}
+	const existing = await getMonitorWorkflowStatus(env, workflowId);
+	if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
 
-		const existing = await getMonitorWorkflowStatus(env, workflowId);
-		if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
-			cleanupReason = 'workflow already exists';
-			cleanupWorkflowId = existing.id;
-			return existing.id;
-		}
-
-		const retryId = retryWorkflowId(workflowId);
-		const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryId, params: { target: workflowTarget } }]);
-		if (!retried.length) throw new Error(`Failed to create source workflow ${retryId}`);
-		keepDraft = true;
-		return retried[0].id;
-	} finally {
-		if (!keepDraft) {
-			await env.R2.delete(sourceDraftKey).catch((error) =>
-				console.warn({
-					tag: 'SOURCE-WORKFLOW',
-					msg: 'Failed to cleanup source article draft',
-					reason: cleanupReason,
-					workflowId: cleanupWorkflowId,
-					sourceUrl: draft.article.url,
-					error: String(error),
-				}),
-			);
-		}
-	}
+	const retryId = retryWorkflowId(workflowId);
+	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryId, params: { target } }]);
+	if (!retried.length) throw new Error(`Failed to create source workflow ${retryId}`);
+	return retried[0].id;
 }
 
 function workflowIdPart(value: string): string {
@@ -246,16 +216,10 @@ type WorkflowPersistenceInput = {
 	paperEnrichment: PaperMetadata | null;
 };
 
-async function readSourceDraft(env: CoreEnv, target: Extract<WorkflowTarget, { kind: 'source' }>): Promise<SourceArticleDraft> {
-	const obj = await env.R2.get(target.sourceDraftKey);
-	if (!obj) throw new Error(`source article draft missing: ${target.sourceDraftKey}`);
-	return obj.json<SourceArticleDraft>();
-}
-
 async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
 	let article: Article;
 	if (target.kind === 'source') {
-		article = sourceRecordToArticle((await readSourceDraft(env, target)).article);
+		article = sourceRecordToArticle(target.draft.article);
 	} else {
 		article = await loadArticleForProcessing(env, target.table, target.rowId);
 	}
@@ -312,9 +276,7 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 	await db.query('BEGIN');
 	try {
 		const articleId =
-			target.kind === 'source'
-				? await persistSourceTarget(db, await readSourceDraft(env, target), input)
-				: await persistStoredTarget(db, target, input);
+			target.kind === 'source' ? await persistSourceTarget(db, target.draft, input) : await persistStoredTarget(db, target, input);
 		await persistYouTubeWorkflowData(db, {
 			transcript: input.youtubeTranscript,
 			highlights: input.youtubeHighlights,
@@ -336,7 +298,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				if (target.kind === 'source') return { ...sourceRecordToArticle((await readSourceDraft(this.env, target)).article), content: null };
+				if (target.kind === 'source') return { ...sourceRecordToArticle(target.draft.article), content: null };
 				return loadArticleForProcessing(this.env, target.table, target.rowId, true);
 			},
 		);
@@ -388,8 +350,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			},
 		);
 
-		const youtubeTranscript =
-			sourceType === 'youtube' && target.kind === 'source' ? (await readSourceDraft(this.env, target)).youtubeTranscript : undefined;
+		const youtubeTranscript = sourceType === 'youtube' && target.kind === 'source' ? target.draft.youtubeTranscript : undefined;
 		const youtubeHighlights =
 			sourceType === 'youtube'
 				? await step.do(
@@ -415,9 +376,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
 
-		const scratchKeys = [pdfTextArtifact?.extractedTextKey, target.kind === 'source' ? target.sourceDraftKey : null].filter(
-			(key): key is string => !!key,
-		);
+		const scratchKeys = [pdfTextArtifact?.extractedTextKey].filter((key): key is string => !!key);
 		if (scratchKeys.length) {
 			await step.do('cleanup-workflow-scratch-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, async () => {
 				try {
