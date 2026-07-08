@@ -2,46 +2,37 @@ import { generateObject } from '@core-ai/embedding';
 import { type Article, ENTITY_TYPES } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import {
-	type ArticleProcessor,
-	generateArticleAnalysis,
-	isEmpty,
-	mergeArticleAnalysis,
-	type ProcessorContext,
-	type ProcessorResult,
-} from '../../domain/ai-utils';
+import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorResult } from '../../domain/ai-utils';
 
-export class TwitterProcessor implements ArticleProcessor {
-	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const updateData: ProcessorResult['updateData'] = {};
-		const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
+export async function processTwitterArticle(article: Article, env: Env): Promise<ProcessorResult> {
+	const updateData: ProcessorResult['updateData'] = {};
+	const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
-		if (hasFullContent) {
-			console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
-			const analysis = await generateArticleAnalysis(article, ctx.env);
-			return mergeArticleAnalysis(article, analysis, { updateData });
-		}
-
-		const tweetText = article.summary?.trim() || article.content || '';
-		if (isEmpty(article.summary)) updateData.summary = tweetText;
-
-		const analysis = await translateTweet(tweetText, article, ctx.env);
-		if (!analysis) return mergeArticleAnalysis(article, { tags: ['Twitter'] }, { updateData });
-		const merged = mergeArticleAnalysis(
-			article,
-			{
-				title_cn: analysis.summary_cn.slice(0, 80),
-				summary_cn: analysis.summary_cn,
-				content: isEmpty(article.content) ? tweetText : undefined,
-				content_cn: analysis.summary_cn,
-				tags: analysis.tags,
-				keywords: analysis.keywords,
-				entities: analysis.entities,
-			},
-			{ updateData },
-		);
-		return { updateData: merged.updateData, classificationCategory: merged.classificationCategory };
+	if (hasFullContent) {
+		console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
+		const analysis = await generateArticleAnalysis(article, env);
+		return mergeArticleAnalysis(article, analysis, { updateData });
 	}
+
+	const tweetText = article.summary?.trim() || article.content || '';
+	if (isEmpty(article.summary)) updateData.summary = tweetText;
+
+	const analysis = await translateTweet(tweetText, article, env);
+	if (!analysis) return mergeArticleAnalysis(article, { tags: ['Twitter'] }, { updateData });
+	const merged = mergeArticleAnalysis(
+		article,
+		{
+			title_cn: analysis.summary_cn.slice(0, 80),
+			summary_cn: analysis.summary_cn,
+			content: isEmpty(article.content) ? tweetText : undefined,
+			content_cn: analysis.summary_cn,
+			tags: analysis.tags,
+			keywords: analysis.keywords,
+			entities: analysis.entities,
+		},
+		{ updateData },
+	);
+	return { updateData: merged.updateData, classificationCategory: merged.classificationCategory };
 }
 
 const TweetAnalysisSchema = z.object({
@@ -82,7 +73,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, article: Article, env: ProcessorContext['env']): Promise<TweetAnalysis | null> {
+async function translateTweet(tweetText: string, article: Article, env: Env): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';

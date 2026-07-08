@@ -2,13 +2,7 @@ import { generateText } from '@core-ai/embedding';
 import type { HackerNewsMetadata, PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article, ExtractedContent } from '@core-shared/types';
 import { decodeHtmlEntities, fetchWithTimeout, htmlToText, readTextWithLimit } from '@core-shared/web';
-import {
-	type ArticleProcessor,
-	generateArticleAnalysis,
-	mergeArticleAnalysis,
-	type ProcessorContext,
-	type ProcessorResult,
-} from '../../domain/ai-utils';
+import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
@@ -246,44 +240,42 @@ async function generateHnEditorial(
 	return { en, cn };
 }
 
-export class HackerNewsProcessor implements ArticleProcessor {
-	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
-		const metadata = article.platform_metadata;
-		const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
+export async function processHackerNewsArticle(article: Article, env: Env): Promise<ProcessorResult> {
+	const metadata = article.platform_metadata;
+	const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
 
-		const hnData: HnItem | null = itemId
-			? await fetchHnItem(itemId).catch((error) => {
-					console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
-					return null;
-				})
-			: null;
+	const hnData: HnItem | null = itemId
+		? await fetchHnItem(itemId).catch((error) => {
+				console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
+				return null;
+			})
+		: null;
 
-		const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
+	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
-		const editorial = hnData ? await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments) : null;
-		const updateData: ProcessorResult['updateData'] = {
-			...(editorial?.cn ? { content_cn: editorial.cn } : {}),
-			...(editorial?.en ? { content: editorial.en } : {}),
-		};
+	const editorial = hnData ? await generateHnEditorial(env, article.title, hnData.text || '', comments) : null;
+	const updateData: ProcessorResult['updateData'] = {
+		...(editorial?.cn ? { content_cn: editorial.cn } : {}),
+		...(editorial?.en ? { content: editorial.en } : {}),
+	};
 
-		const enrichments: PlatformEnrichments = hnData
-			? {
-					hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
-					externalUrl: hnData.url || null,
-					hnText: hnData.text || null,
-					commentCount: comments.length,
-					links: extractPostLinks(hnData.url, hnData.text),
-				}
-			: {};
+	const enrichments: PlatformEnrichments = hnData
+		? {
+				hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
+				externalUrl: hnData.url || null,
+				hnText: hnData.text || null,
+				commentCount: comments.length,
+				links: extractPostLinks(hnData.url, hnData.text),
+			}
+		: {};
 
-		const analysis = await generateArticleAnalysis(article, ctx.env);
-		const merged = mergeArticleAnalysis(article, analysis, {
-			updateData,
-			extraTags: ['HackerNews'],
-			overwriteSummary: true,
-			includeContent: false,
-		});
+	const analysis = await generateArticleAnalysis(article, env);
+	const merged = mergeArticleAnalysis(article, analysis, {
+		updateData,
+		extraTags: ['HackerNews'],
+		overwriteSummary: true,
+		includeContent: false,
+	});
 
-		return { updateData: merged.updateData, enrichments, classificationCategory: merged.classificationCategory };
-	}
+	return { updateData: merged.updateData, enrichments, classificationCategory: merged.classificationCategory };
 }

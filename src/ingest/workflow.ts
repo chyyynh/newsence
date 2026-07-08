@@ -15,27 +15,27 @@ import {
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
-import { type ArticleProcessor, generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
-import { HackerNewsProcessor } from './platforms/hackernews/scraper';
+import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
+import { processHackerNewsArticle } from './platforms/hackernews/scraper';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
-import { TwitterProcessor } from './platforms/twitter/processor';
+import { processTwitterArticle } from './platforms/twitter/processor';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/transcripts';
 
-const defaultProcessor: ArticleProcessor = {
-	async process(article, ctx) {
-		const analysis = await generateArticleAnalysis(article, ctx.env);
-		return mergeArticleAnalysis(article, analysis);
-	},
-};
+type ArticleProcessor = (article: Article, env: Env) => Promise<ProcessorResult>;
+
+async function processDefaultArticle(article: Article, env: Env): Promise<ProcessorResult> {
+	const analysis = await generateArticleAnalysis(article, env);
+	return mergeArticleAnalysis(article, analysis);
+}
 
 const articlePlatforms: Record<string, ArticleProcessor> = {
-	hackernews: new HackerNewsProcessor(),
-	rss: defaultProcessor,
-	twitter: new TwitterProcessor(),
-	web: defaultProcessor,
-	youtube: defaultProcessor,
-	default: defaultProcessor,
+	hackernews: processHackerNewsArticle,
+	rss: processDefaultArticle,
+	twitter: processTwitterArticle,
+	web: processDefaultArticle,
+	youtube: processDefaultArticle,
+	default: processDefaultArticle,
 };
 
 function platformIdentity(article: Article): string {
@@ -449,7 +449,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			const processorResult = await step.do(
 				'ai-analysis',
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-				async () => platform.process(await loadFullTargetArticle(this.env, context, pdfTextTemp), { env: this.env, table: context.table }),
+				async () => platform(await loadFullTargetArticle(this.env, context, pdfTextTemp), this.env),
 			);
 
 			const embedding = await step.do(

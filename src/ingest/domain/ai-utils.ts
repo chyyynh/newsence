@@ -28,15 +28,6 @@ export interface ProcessorResult {
 	classificationCategory?: ArticleCategory;
 }
 
-export interface ProcessorContext {
-	env: Env;
-	table: 'articles' | 'user_files';
-}
-
-export interface ArticleProcessor {
-	process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult>;
-}
-
 // ─────────────────────────────────────────────────────────────
 // Utilities
 // ─────────────────────────────────────────────────────────────
