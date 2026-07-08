@@ -186,9 +186,8 @@ src/
 │   ├── types.ts          # Article、ExtractedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
-│   ├── extract.ts        # URL 偵測 dispatch → platform scraper
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
-│   ├── urls.ts           # saved URL orchestration；blob result 由 app 持久化
+│   ├── urls.ts           # saved URL 偵測、fetch、orchestration；asset result 由 app 持久化
 │   ├── domain/           # sink、AI merge helpers
 │   ├── platforms/        # 每個平台一個資料夾
 │   │   ├── rss/          # feed polling
@@ -231,7 +230,7 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `ExtractedContent` 的函式。
 2. **Metadata**（`ingest/platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `shared/platform-metadata.ts` 註冊。
-3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並從 `ingest/extract.ts` 路由到 scraper。
+3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並從 `ingest/urls.ts` 路由到 scraper。
 4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts` 裡接上。
 5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於預設 workflow processor 的 AI 行為時才寫；從 `ingest/workflow.ts` 註冊。
 

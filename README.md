@@ -194,9 +194,8 @@ src/
 │   ├── types.ts          # Article, ExtractedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
-│   ├── extract.ts        # URL detection dispatch → platform scraper
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
-│   ├── urls.ts           # saved URL orchestration; app persists blob results
+│   ├── urls.ts           # saved URL detection, fetch, and orchestration; app persists asset results
 │   ├── domain/           # sink and AI merge helpers
 │   ├── platforms/        # each platform lives in its own folder
 │   │   ├── rss/          # feed polling
@@ -239,7 +238,7 @@ Minimum to add a new source:
 
 1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ExtractedContent`.
 2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
-3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it from `ingest/extract.ts`.
+3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it from `ingest/urls.ts`.
 4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts`.
 5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from the default workflow processor; register it from `ingest/workflow.ts`.
 

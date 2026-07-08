@@ -1,11 +1,33 @@
-import { normalizeUrl } from '@core-shared/web';
+import { isRasterImage, PDF_MIME } from '@core-shared/mime';
+import type { ExtractedContent } from '@core-shared/types';
+import { BROWSER_UA, detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
-import { type ScrapeResult, scrapeUrl } from './extract';
+import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
+import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
+import { scrapeHtmlFromResponse } from './platforms/web-scraper';
+import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
+const URL_FETCH_TIMEOUT_MS = 8_000;
+const URL_FETCH_HEADERS: HeadersInit = {
+	'User-Agent': BROWSER_UA,
+	Accept: '*/*',
+	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+};
+
+type UrlFetchResult =
+	| { kind: 'page'; scraped: ExtractedContent }
+	| {
+			kind: 'asset';
+			body: ReadableStream<Uint8Array>;
+			contentType: string;
+			sourceUrl: string;
+			suggestedFilename: string;
+			contentLength: number | null;
+	  };
 
 type ExistingUrlUserFile = NonNullable<Awaited<ReturnType<typeof getExistingUrlUserFile>>>;
 
@@ -22,10 +44,81 @@ type IngestResult = {
 	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
-	asset?: Extract<ScrapeResult, { kind: 'asset' }>;
+	asset?: Extract<UrlFetchResult, { kind: 'asset' }>;
 	alreadyExists?: boolean;
 	error?: string;
 };
+
+function parseContentDisposition(header: string | null): string | null {
+	if (!header) return null;
+	const match = header.match(/filename\*=UTF-8''([^;]+)|filename=("([^"]+)"|([^;]+))/i);
+	const raw = match?.[1] ?? match?.[3] ?? match?.[4];
+	if (!raw) return null;
+	try {
+		return decodeURIComponent(raw.trim());
+	} catch {
+		return raw.trim();
+	}
+}
+
+async function fetchGenericUrlContent(url: string): Promise<UrlFetchResult> {
+	const res = await fetch(url, {
+		redirect: 'follow',
+		signal: AbortSignal.timeout(URL_FETCH_TIMEOUT_MS),
+		headers: URL_FETCH_HEADERS,
+	});
+	if (!res.ok) {
+		await res.body?.cancel();
+		throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+	}
+
+	const contentType = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
+
+	if (contentType.includes('text/html') || contentType.includes('text/xml') || contentType.includes('application/xhtml')) {
+		return { kind: 'page', scraped: await scrapeHtmlFromResponse(res, url) };
+	}
+
+	if (contentType === PDF_MIME || isRasterImage(contentType)) {
+		if (!res.body) throw new Error('Response body is empty');
+		const lenRaw = res.headers.get('content-length');
+		const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
+		const finalUrl = res.url || url;
+		const cdName = parseContentDisposition(res.headers.get('content-disposition'));
+		const suggestedFilename =
+			cdName ?? new URL(finalUrl).pathname.split('/').filter(Boolean).pop() ?? (contentType === PDF_MIME ? 'document.pdf' : 'image');
+		return { kind: 'asset', body: res.body, contentType, sourceUrl: finalUrl, suggestedFilename, contentLength };
+	}
+
+	await res.body?.cancel();
+	throw new Error(`Unsupported content-type: ${contentType}`);
+}
+
+async function fetchUrlContent(url: string, env: Env): Promise<UrlFetchResult> {
+	switch (detectUrlKind(url)) {
+		case 'youtube': {
+			const videoId = extractYouTubeId(url);
+			if (!videoId) throw new Error('Invalid YouTube URL');
+			return { kind: 'page', scraped: await scrapeYouTube(videoId, env.YOUTUBE_API_KEY) };
+		}
+		case 'twitter': {
+			const tweetId = extractTweetId(url);
+			if (!tweetId) throw new Error('Invalid Twitter URL');
+			return { kind: 'page', scraped: await scrapeTweet(tweetId, env.KAITO_API_KEY) };
+		}
+		case 'hackernews': {
+			const itemId = extractHackerNewsId(url);
+			if (!itemId) throw new Error('Invalid HackerNews URL');
+			return { kind: 'page', scraped: await scrapeHackerNews(itemId) };
+		}
+		case 'web':
+			break;
+	}
+
+	const parsed = new URL(url);
+	if (parsed.protocol !== 'https:') throw new Error('Only https:// URLs are allowed');
+	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+	return fetchGenericUrlContent(url);
+}
 
 function buildUserFileResult(
 	url: string,
@@ -72,29 +165,26 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 		return returnExisting(db, url, existingRow, env);
 	}
 
-	let scrapeResult: ScrapeResult;
+	let fetched: UrlFetchResult;
 	try {
-		scrapeResult = await scrapeUrl(url, {
-			youtubeApiKey: env.YOUTUBE_API_KEY,
-			kaitoApiKey: env.KAITO_API_KEY,
-		});
+		fetched = await fetchUrlContent(url, env);
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 
-	if (scrapeResult.kind === 'asset') {
+	if (fetched.kind === 'asset') {
 		return {
 			url,
 			resourceKind: 'blob',
 			originType: 'saved_url',
-			fileType: scrapeResult.contentType,
-			asset: scrapeResult,
+			fileType: fetched.contentType,
+			asset: fetched,
 			alreadyExists: false,
 		};
 	}
 
-	const inserted = await insertScrapedUrlUserFile(db, scrapeResult.scraped, url, userId);
+	const inserted = await insertScrapedUrlUserFile(db, fetched.scraped, url, userId);
 	if (!inserted.ok) return { url, error: inserted.error };
 
 	const { row } = inserted;
@@ -104,7 +194,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 				{
 					kind: 'userFile',
 					userFileId: row.id,
-					attachments: scrapeResult.scraped.attachments,
+					attachments: fetched.scraped.attachments,
 				},
 				{ db },
 			)
