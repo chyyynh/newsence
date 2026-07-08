@@ -1,7 +1,7 @@
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
-import { startSourceArticleWorkflow } from '@ingest/workflow';
+import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
@@ -49,17 +49,20 @@ async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void>
 	for (const { item, url } of newItems) {
 		try {
 			const description = item.description ?? '';
-			await startSourceArticleWorkflow(env, {
-				article: {
-					url,
-					title: item.title || 'No Title',
-					source: feed.name,
-					publishedDate: item.published ? new Date(item.published) : new Date(),
-					summary: description,
-					sourceType: 'rss',
-					content: description || null,
-					ogImageUrl: null,
-					platformMetadata: null,
+			await enqueueProcessing(env, {
+				kind: 'source',
+				draft: {
+					article: {
+						url,
+						title: item.title || 'No Title',
+						source: feed.name,
+						publishedDate: item.published ? new Date(item.published) : new Date(),
+						summary: description,
+						sourceType: 'rss',
+						content: description || null,
+						ogImageUrl: null,
+						platformMetadata: null,
+					},
 				},
 			});
 			queued++;

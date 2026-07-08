@@ -1,7 +1,7 @@
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
-import { startSourceArticleWorkflow } from '@ingest/workflow';
+import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { parseDurationSeconds, scrapeYouTube } from './scraper';
 
@@ -83,21 +83,24 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 						continue;
 					}
 
-					await startSourceArticleWorkflow(env, {
-						article: {
-							url: video.url,
-							title: scraped.title,
-							source: youtubeMetadata.channelName,
-							publishedDate: scraped.publishedDate as string,
-							summary: scraped.summary ?? '',
-							sourceType: 'youtube',
-							content: scraped.content,
-							ogImageUrl: scraped.ogImageUrl,
-							platformMetadata: scraped.metadata,
+					await enqueueProcessing(env, {
+						kind: 'source',
+						draft: {
+							article: {
+								url: video.url,
+								title: scraped.title,
+								source: youtubeMetadata.channelName,
+								publishedDate: scraped.publishedDate as string,
+								summary: scraped.summary ?? '',
+								sourceType: 'youtube',
+								content: scraped.content,
+								ogImageUrl: scraped.ogImageUrl,
+								platformMetadata: scraped.metadata,
+							},
+							...(scraped.youtubeTranscript
+								? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }
+								: {}),
 						},
-						...(scraped.youtubeTranscript
-							? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }
-							: {}),
 					});
 					totalQueued++;
 					console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });

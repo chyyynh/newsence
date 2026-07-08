@@ -13,7 +13,7 @@ import { extractUrl, ScrapeWorkflow } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
-import { createUserFileWorkflow, handleRetryCron, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';
@@ -44,7 +44,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 
 	/** Enqueue saved user_files for the enrichment workflow after app-side persistence. */
 	enqueueUserFileProcessing(userFileId: string) {
-		return createUserFileWorkflow(this.env, userFileId);
+		return enqueueProcessing(this.env, { kind: 'userFile', userFileId });
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */

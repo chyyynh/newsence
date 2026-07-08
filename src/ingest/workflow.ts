@@ -33,6 +33,12 @@ export interface SourceArticleDraft {
 	attachments?: unknown[];
 }
 
+export type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
+
+type EnqueueProcessingOptions = {
+	db?: Client;
+};
+
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const RETRY_BATCH_SIZE = 100;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
@@ -96,11 +102,13 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function startArticleWorkflow(env: Env, articleId: string): Promise<string> {
-	return startStoredWorkflow(env, { kind: 'article', articleId });
+export async function enqueueProcessing(env: Env, target: ProcessingTarget, options: EnqueueProcessingOptions = {}): Promise<string> {
+	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
+	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
+	return enqueueUserFileWorkflow(env, target.userFileId, options.db);
 }
 
-async function startStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
+async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
 	const { workflowId, workflowTarget } = storedWorkflowTarget(target);
 	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 	if (created[0]) return created[0].id;
@@ -113,7 +121,7 @@ async function startStoredWorkflow(env: Env, target: StoredWorkflowTarget): Prom
 	return retried[0].id;
 }
 
-export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<void> {
+async function enqueueSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<string> {
 	const sourceArticle = { url: draft.article.url, r2Key: `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json` };
 	const workflowTarget: WorkflowTarget = { kind: 'source', sourceArticle };
 	await env.R2.put(sourceArticle.r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
@@ -126,20 +134,21 @@ export async function startSourceArticleWorkflow(env: Env, draft: SourceArticleD
 		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 		if (created.length) {
 			keepDraft = true;
-			return;
+			return created[0].id;
 		}
 
 		const existing = await getMonitorWorkflowStatus(env, workflowId);
 		if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) {
 			cleanupReason = 'workflow already exists';
 			cleanupWorkflowId = existing.id;
-			return;
+			return existing.id;
 		}
 
 		const retryId = retryWorkflowId(workflowId);
 		const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryId, params: { target: workflowTarget } }]);
 		if (!retried.length) throw new Error(`Failed to create source workflow ${retryId}`);
 		keepDraft = true;
+		return retried[0].id;
 	} finally {
 		if (!keepDraft) {
 			await env.R2.delete(sourceArticle.r2Key).catch((error) =>
@@ -183,22 +192,26 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-export async function createUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string> {
+async function enqueueUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string> {
 	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	if (!db) await client.connect();
-	const storedInstanceId = await getUserFileWorkflowInstanceId(client, userFileId);
-	if (storedInstanceId) {
-		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
-		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
-	}
+	try {
+		const storedInstanceId = await getUserFileWorkflowInstanceId(client, userFileId);
+		if (storedInstanceId) {
+			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
+			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
+		}
 
-	const instanceId = await startStoredWorkflow(env, { kind: 'userFile', userFileId });
-	await patchUserFileWorkflowMetadata(client, userFileId, {
-		monitor_instance_id: instanceId,
-		monitor_status: 'running',
-		monitor_started_at: new Date().toISOString(),
-	});
-	return instanceId;
+		const instanceId = await enqueueStoredWorkflow(env, { kind: 'userFile', userFileId });
+		await patchUserFileWorkflowMetadata(client, userFileId, {
+			monitor_instance_id: instanceId,
+			monitor_status: 'running',
+			monitor_started_at: new Date().toISOString(),
+		});
+		return instanceId;
+	} finally {
+		if (!db) await client.end();
+	}
 }
 
 async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {

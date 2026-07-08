@@ -1,7 +1,6 @@
-import type { ScrapedContent } from '@core-shared/types';
-import { detectUrlKind, normalizeUrl } from '@core-shared/web';
-import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
-import { createUserFileWorkflow } from '@ingest/workflow';
+import { normalizeUrl } from '@core-shared/web';
+import { type InsertUrlUserFileResult, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
+import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { type ScrapeResult, scrapeUrl } from './extract';
 
@@ -31,17 +30,6 @@ type IngestResult = {
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
 
-type InsertUrlUserFileResult = {
-	id: string;
-	created: boolean;
-	title: string;
-	title_cn: string | null;
-	summary_cn: string | null;
-	tags: string[];
-	platform_type: string | null;
-	og_image_url: string | null;
-};
-
 type ExistingUrlUserFile = {
 	id: string;
 	title: string;
@@ -64,83 +52,6 @@ type UserFileUrlResultRow = Pick<
 	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
 >;
 
-async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: string, userId: string): Promise<InsertOutcome> {
-	const urlKind = detectUrlKind(url);
-
-	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
-	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
-		return { error: 'Content too short' };
-	}
-
-	try {
-		const inserted = await db.query(
-			`WITH inserted AS (
-				INSERT INTO user_files
-				(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
-				 summary, extracted_text, og_image_url, keywords, tags, metadata,
-				 user_id)
-				VALUES ($1, $2, 'url', 'saved_url', $2, $3, $3, $1, $4, $5, $6, $7, NULL, $8, $9, $10, $11)
-				ON CONFLICT (user_id, normalized_source_url)
-				WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
-				DO NOTHING
-				RETURNING id, title, title_cn, summary_cn, tags, platform_type, og_image_url, TRUE AS created
-			)
-			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, created FROM inserted
-			UNION ALL
-			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, FALSE AS created
-			FROM user_files
-			WHERE user_id = $11
-			  AND normalized_source_url = $3
-			  AND resource_kind = 'url'
-			  AND NOT EXISTS (SELECT 1 FROM inserted)
-			LIMIT 1`,
-			[
-				scraped.title,
-				urlKind,
-				url,
-				scraped.siteName || 'External',
-				scraped.publishedDate || new Date().toISOString(),
-				scraped.summary || '',
-				scraped.content || null,
-				[],
-				[],
-				scraped.metadata == null ? null : JSON.stringify(scraped.metadata),
-				userId,
-			],
-		);
-		const userFile = inserted.rows[0] as InsertUrlUserFileResult | undefined;
-
-		if (!userFile) {
-			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
-			return { error: 'DB insert failed' };
-		}
-
-		// ON CONFLICT path: row pre-existed, skip post-insert side effects.
-		if (!userFile.created) {
-			return { kind: 'page', row: userFile };
-		}
-
-		if (scraped.youtubeTranscript) {
-			try {
-				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
-			} catch (transcriptErr) {
-				console.error({
-					tag: 'YOUTUBE',
-					msg: 'Failed to save transcript',
-					videoId: scraped.youtubeTranscript.videoId,
-					error: String(transcriptErr),
-				});
-			}
-		}
-
-		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
-		return { kind: 'page', row: userFile };
-	} catch (err) {
-		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
-		return { error: 'DB insert failed' };
-	}
-}
-
 function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instanceId?: string; alreadyExists: boolean }): IngestResult {
 	return {
 		url,
@@ -159,7 +70,10 @@ function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instance
 }
 
 async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
-	const instanceId = row.title_cn && row.summary_cn && row.has_embedding ? undefined : await createUserFileWorkflow(env, row.id, db);
+	const instanceId =
+		row.title_cn && row.summary_cn && row.has_embedding
+			? undefined
+			: await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db });
 	if (row.resource_kind === 'blob') {
 		return {
 			url,
@@ -198,8 +112,12 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 			youtubeApiKey: env.YOUTUBE_API_KEY,
 			kaitoApiKey: env.KAITO_API_KEY,
 		});
-		result =
-			scrapeResult.kind === 'page' ? await insertScrapedPage(db, scrapeResult.scraped, url, userId) : { kind: 'blob', blob: scrapeResult };
+		if (scrapeResult.kind === 'page') {
+			const inserted = await insertScrapedUrlUserFile(db, scrapeResult.scraped, url, userId);
+			result = inserted.ok ? { kind: 'page', row: inserted.row } : { error: inserted.error };
+		} else {
+			result = { kind: 'blob', blob: scrapeResult };
+		}
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -218,7 +136,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	}
 
 	const { row } = result;
-	const instanceId = row.created ? await createUserFileWorkflow(env, row.id, db) : undefined;
+	const instanceId = row.created ? await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db }) : undefined;
 	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 

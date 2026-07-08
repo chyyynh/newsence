@@ -1,4 +1,6 @@
-import type { Article } from '@core-shared/types';
+import type { Article, ScrapedContent } from '@core-shared/types';
+import { detectUrlKind } from '@core-shared/web';
+import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { Client } from 'pg';
 
 export type ArticleStoreTable = 'articles' | 'user_files';
@@ -89,6 +91,98 @@ export function insertArticleDataToArticle(data: InsertArticleData): Article {
 		og_image_url: null,
 		platform_metadata: data.platformMetadata as Article['platform_metadata'],
 	};
+}
+
+export type InsertUrlUserFileResult = {
+	id: string;
+	created: boolean;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[];
+	platform_type: string | null;
+	og_image_url: string | null;
+};
+
+export type InsertScrapedUrlUserFileResult = { ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string };
+
+export async function insertScrapedUrlUserFile(
+	db: Client,
+	scraped: ScrapedContent,
+	url: string,
+	userId: string,
+): Promise<InsertScrapedUrlUserFileResult> {
+	const urlKind = detectUrlKind(url);
+
+	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
+	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
+		return { ok: false, error: 'Content too short' };
+	}
+
+	try {
+		const inserted = await db.query<InsertUrlUserFileResult>(
+			`WITH inserted AS (
+				INSERT INTO user_files
+				(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
+				 summary, extracted_text, og_image_url, keywords, tags, metadata,
+				 user_id)
+				VALUES ($1, $2, 'url', 'saved_url', $2, $3, $3, $1, $4, $5, $6, $7, NULL, $8, $9, $10, $11)
+				ON CONFLICT (user_id, normalized_source_url)
+				WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
+				DO NOTHING
+				RETURNING id, title, title_cn, summary_cn, tags, platform_type, og_image_url, TRUE AS created
+			)
+			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, created FROM inserted
+			UNION ALL
+			SELECT id, title, title_cn, summary_cn, tags, platform_type, og_image_url, FALSE AS created
+			FROM user_files
+			WHERE user_id = $11
+			  AND normalized_source_url = $3
+			  AND resource_kind = 'url'
+			  AND NOT EXISTS (SELECT 1 FROM inserted)
+			LIMIT 1`,
+			[
+				scraped.title,
+				urlKind,
+				url,
+				scraped.siteName || 'External',
+				scraped.publishedDate || new Date().toISOString(),
+				scraped.summary || '',
+				scraped.content || null,
+				[],
+				[],
+				scraped.metadata == null ? null : JSON.stringify(scraped.metadata),
+				userId,
+			],
+		);
+		const userFile = inserted.rows[0];
+
+		if (!userFile) {
+			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
+			return { ok: false, error: 'DB insert failed' };
+		}
+
+		if (!userFile.created) return { ok: true, row: userFile };
+
+		if (scraped.youtubeTranscript) {
+			try {
+				await upsertYoutubeTranscript(db, scraped.youtubeTranscript);
+			} catch (transcriptErr) {
+				console.error({
+					tag: 'YOUTUBE',
+					msg: 'Failed to save transcript',
+					videoId: scraped.youtubeTranscript.videoId,
+					error: String(transcriptErr),
+				});
+			}
+		}
+
+		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
+		return { ok: true, row: userFile };
+	} catch (err) {
+		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
+		return { ok: false, error: 'DB insert failed' };
+	}
 }
 
 export type ArticleProcessingUpdate = Record<string, unknown>;

@@ -2,7 +2,7 @@ import type { PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Tweet } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { getExistingArticlesByUrl, updateArticleTextForReprocessing } from '@ingest/domain/article-store';
-import { startArticleWorkflow, startSourceArticleWorkflow } from '@ingest/workflow';
+import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
 import { type TwitterSourceEventDraft, upsertTwitterSourceEvent } from './processor';
@@ -56,20 +56,23 @@ async function enqueueTwitterArticle(
 		sourceEvent?: TwitterSourceEventDraft;
 	},
 ): Promise<boolean> {
-	await startSourceArticleWorkflow(env, {
-		article: {
-			url: data.url,
-			title: data.title,
-			source: data.source,
-			publishedDate: data.publishedDate,
-			summary: data.summary,
-			sourceType: 'twitter',
-			content: data.content,
-			ogImageUrl: data.ogImage,
-			platformMetadata: data.metadata,
-			keywords: data.hashTags,
+	await enqueueProcessing(env, {
+		kind: 'source',
+		draft: {
+			article: {
+				url: data.url,
+				title: data.title,
+				source: data.source,
+				publishedDate: data.publishedDate,
+				summary: data.summary,
+				sourceType: 'twitter',
+				content: data.content,
+				ogImageUrl: data.ogImage,
+				platformMetadata: data.metadata,
+				keywords: data.hashTags,
+			},
+			...(data.sourceEvent ? { attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }] } : {}),
 		},
-		...(data.sourceEvent ? { attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }] } : {}),
 	});
 	return true;
 }
@@ -119,7 +122,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 	const existingArticle = await findArticleByUrl(db, articleUrl);
 	if (existingArticle) {
 		await upsertTwitterSourceEvent(db, tweet, { articleId: existingArticle.id, eventType: 'share', text });
-		if (!existingArticle.summary_cn) await startArticleWorkflow(env, existingArticle.id);
+		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', articleId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Link already exists (dedup)', url: articleUrl });
 		return true;
 	}
@@ -192,7 +195,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 			eventType: articleUrl ? 'article' : externalUrl ? 'share' : 'tweet',
 			text: textWithoutUrls,
 		});
-		if (!existingTweetArticle.summary_cn) await startArticleWorkflow(env, existingTweetArticle.id);
+		if (!existingTweetArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', articleId: existingTweetArticle.id });
 		return false;
 	}
 
@@ -234,7 +237,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 			media: allMedia,
 			raw: { tweets: sorted },
 		});
-		await startArticleWorkflow(env, existingId);
+		await enqueueProcessing(env, { kind: 'article', articleId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
