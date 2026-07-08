@@ -3,5 +3,5 @@
 	"compilerOptions": {
 		"types": ["@cloudflare/vitest-pool-workers/types"]
 	},
-	"include": ["./**/*.ts", "../worker-configuration.d.ts", "../vitest.config.ts"]
+	"include": ["./**/*.ts", "../worker-configuration.d.ts", "../vitest.config.ts", "../vitest.smoke.config.ts"]
 }

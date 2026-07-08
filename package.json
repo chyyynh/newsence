@@ -11,6 +11,7 @@
 		"start": "wrangler dev --test-scheduled",
 		"cf-typegen": "wrangler types --env-interface CoreEnv",
 		"test": "vitest run",
+		"test:smoke": "vitest run --config vitest.smoke.config.ts",
 		"typecheck": "pnpm cf-typegen && tsc --noEmit && tsc -p test/tsconfig.json --noEmit",
 		"typecheck:types": "wrangler types --check --env-interface CoreEnv",
 		"lint": "biome check .",

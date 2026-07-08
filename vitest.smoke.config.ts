@@ -3,9 +3,6 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
 process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??= 'postgresql://newsence:test@127.0.0.1:5432/newsence_test';
-process.env.KAITO_API_KEY ??= 'test-kaito-api-key';
-process.env.YOUTUBE_API_KEY ??= 'test-youtube-api-key';
-process.env.S2_API_KEY ??= 'test-s2-api-key';
 
 export default defineConfig({
 	resolve: {
@@ -21,17 +18,11 @@ export default defineConfig({
 		cloudflareTest({
 			wrangler: { configPath: './wrangler.jsonc' },
 			additionalExports: { NewsenceMonitorWorkflow: 'WorkflowEntrypoint' },
-			miniflare: {
-				bindings: {
-					KAITO_API_KEY: 'test-kaito-api-key',
-					YOUTUBE_API_KEY: 'test-youtube-api-key',
-					S2_API_KEY: 'test-s2-api-key',
-				},
-			},
 		}),
 	],
 	test: {
-		exclude: ['test/**/*.smoke.test.ts'],
-		include: ['test/**/*.test.ts'],
+		include: ['test/**/*.smoke.test.ts'],
+		testTimeout: 420_000,
+		hookTimeout: 60_000,
 	},
 });
