@@ -12,7 +12,7 @@ const YouTubeHighlightSchema = z.object({
 
 type YouTubeHighlight = z.infer<typeof YouTubeHighlightSchema>;
 
-export interface YouTubeHighlightsUpdate {
+interface YouTubeHighlightsUpdate {
 	videoId: string;
 	value: {
 		version: '1.0';

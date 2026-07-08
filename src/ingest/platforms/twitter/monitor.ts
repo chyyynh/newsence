@@ -16,12 +16,6 @@ const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
 const SOURCE_FEED_FIELDS = 'id, "RSSLink", scraped_at';
 
-type TwitterSourceFeed = {
-	id: string;
-	RSSLink: string | null;
-	scraped_at?: string | null;
-};
-
 function normalizeRetweet(tweet: Tweet): Tweet | null {
 	if (tweet.retweeted_tweet) {
 		return {
@@ -63,7 +57,7 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
  * Global sinceTime = oldest scraped_at across all users minus a 1h overlap.
  * If no user has been scraped before, fall back to 24h ago.
  */
-function calculateMonitoringSinceTime(users: TwitterSourceFeed[]): number {
+function calculateMonitoringSinceTime(users: Array<{ scraped_at?: string | null }>): number {
 	if (!users.some((u) => u.scraped_at)) {
 		return Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
 	}
@@ -157,7 +151,12 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const users = (await db.query<TwitterSourceFeed>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, ['twitter_user'])).rows;
+	const users = (
+		await db.query<{ id: string; RSSLink: string | null; scraped_at?: string | null }>(
+			`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`,
+			['twitter_user'],
+		)
+	).rows;
 	if (!users.length) {
 		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
 		return;

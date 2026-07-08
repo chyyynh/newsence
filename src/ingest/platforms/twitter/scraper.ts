@@ -132,17 +132,18 @@ export function buildThreadArticleParts<T extends Tweet>(
 	};
 }
 
-interface TweetMetadataOptions {
-	externalUrl?: string;
-	externalOgImage?: string | null;
-	externalTitle?: string | null;
-	originalTweetUrl?: string;
-	tweetText?: string;
-	media?: TwitterMedia[];
-	quotedTweet?: QuotedTweetData;
-}
-
-function buildTweetPlatformMetadata(tweet: Tweet, options: TweetMetadataOptions = {}): Extract<PlatformMetadata, { type: 'twitter' }> {
+function buildTweetPlatformMetadata(
+	tweet: Tweet,
+	options: {
+		externalUrl?: string;
+		externalOgImage?: string | null;
+		externalTitle?: string | null;
+		originalTweetUrl?: string;
+		tweetText?: string;
+		media?: TwitterMedia[];
+		quotedTweet?: QuotedTweetData;
+	} = {},
+): Extract<PlatformMetadata, { type: 'twitter' }> {
 	const media = options.media ?? extractTweetMedia(tweet);
 	const tweetText = options.tweetText ?? stripTweetUrls(tweet.text);
 	const base = {
@@ -193,13 +194,6 @@ function buildTwitterArticlePlatformMetadata(
 		},
 	};
 }
-
-type ResolvedTweetContent = {
-	kind: 'tweet' | 'share' | 'article';
-	scraped: ScrapedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> };
-	canonicalUrl: string;
-	eventText: string;
-};
 
 interface TwitterArticle {
 	title?: string;
@@ -321,7 +315,7 @@ async function scrapeExternalLinkTweet(
 	}
 }
 
-export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise<ResolvedTweetContent> {
+export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	const media = extractTweetMedia(tweet);
 	const ogImageUrl = media[0]?.url ?? null;
 	const expandedUrls = extractExpandedUrls(tweet);
@@ -336,7 +330,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise
 		const articleContent = tweetId ? await scrapeTwitterArticle(tweetId, apiKey) : null;
 		if (articleContent) {
 			return {
-				kind: 'article',
+				kind: 'article' as const,
 				scraped: articleContent,
 				canonicalUrl: tweet.url || articleContent.sourceUrl || `https://x.com/i/status/${tweetId}`,
 				eventText: articleContent.metadata.description || tweetText,
@@ -347,15 +341,16 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise
 
 	if (linkedArticleUrl) {
 		const scraped = await scrapeExternalLinkTweet(tweet, linkedArticleUrl, media, tweetText, ogImageUrl);
-		return { kind: 'share', scraped, canonicalUrl: linkedArticleUrl, eventText: tweetText };
+		return { kind: 'share' as const, scraped, canonicalUrl: linkedArticleUrl, eventText: tweetText };
 	}
 
 	const title = buildTweetTitle(tweet, 80);
+	const status = tweet.text.trim().length > 0 ? ('ok' as const) : ('failed' as const);
 
 	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });
 
 	return {
-		kind: 'tweet',
+		kind: 'tweet' as const,
 		scraped: {
 			sourceUrl: tweet.url,
 			contentType: 'text/markdown',
@@ -369,7 +364,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise
 				description: tweet.text,
 				ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 			},
-			status: tweet.text.trim().length > 0 ? 'ok' : 'failed',
+			status,
 			platformMetadata: buildTweetPlatformMetadata(tweet),
 		},
 		canonicalUrl: tweet.url,

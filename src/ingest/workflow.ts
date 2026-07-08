@@ -18,8 +18,8 @@ import { Client } from 'pg';
 import type { ProcessorResult } from './domain/ai-utils';
 import { articlePlatforms, buildProcessorUpdatePayload, platformIdentity } from './domain/processors';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
-import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
+import { pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/transcripts';
 
 type StoredWorkflowTarget =
 	| { kind: 'article'; articleId: string }
@@ -33,6 +33,8 @@ interface SourceArticleDraft {
 }
 
 type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
+type PdfTextTemp = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
+type YouTubeHighlights = Awaited<ReturnType<typeof prepareYouTubeHighlights>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const RETRY_BATCH_SIZE = 100;
@@ -231,9 +233,9 @@ type WorkflowPersistenceInput = {
 	article: Article;
 	result: ProcessorResult;
 	embedding: number[] | null;
-	pdfTextTemp: PdfTextTempResult | null;
+	pdfTextTemp: PdfTextTemp;
 	youtubeTranscript: YoutubeTranscript | undefined;
-	youtubeHighlights: YouTubeHighlightsUpdate | null;
+	youtubeHighlights: YouTubeHighlights;
 	paperEnrichment: PaperMetadata | null;
 };
 
@@ -256,7 +258,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 	};
 }
 
-async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTempResult | null): Promise<Article> {
+async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTemp): Promise<Article> {
 	let article: Article;
 	if (context.target.kind === 'source') {
 		article = insertArticleDataToArticle((await context.readSourceDraft()).article);

@@ -13,7 +13,7 @@ interface ParsedPdf {
 	chars: number;
 }
 
-export interface PdfTextTempResult {
+interface PdfTextTempResult {
 	status: PdfTextStatus | 'failed';
 	chars: number;
 	pages: number;
