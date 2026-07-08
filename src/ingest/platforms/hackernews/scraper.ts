@@ -16,11 +16,6 @@ interface HnItem {
 	id: number;
 	title?: string;
 	url?: string;
-	author?: string;
-	points?: number;
-	descendants?: number;
-	type: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
-	created_at_i?: number;
 	text?: string;
 	children?: HnComment[];
 }
