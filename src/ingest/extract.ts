@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
-import type { ScrapedContent } from '@core-shared/types';
+import type { ExtractedContent, ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
 import { parsePdf } from './platforms/pdf';
@@ -11,27 +11,6 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 
 export type ExtractInput = { kind: 'url'; url: string } | { kind: 'r2'; key: string };
-
-export interface NormalizedContent {
-	/** null for raw-bytes / R2 input (no originating URL). */
-	sourceUrl: string | null;
-	contentType: string;
-	title: string | null;
-	/** HTML → turndown markdown; PDF → reflowed text (real markdown tracked in #166). */
-	markdown: string;
-	/** Plain text; PDF → reflowed text; HTML → markdown-stripped. */
-	text: string;
-	metadata: {
-		author: string | null;
-		publishedDate: string | null;
-		siteName: string | null;
-		description: string | null;
-		ogImageUrl: string | null;
-		pages?: number;
-		chars?: number;
-	};
-	status: 'ok' | 'needs_ocr' | 'failed';
-}
 
 export interface ScrapeOptions {
 	youtubeApiKey?: string;
@@ -50,7 +29,7 @@ export type ScrapeResult =
 			contentLength: number | null;
 	  };
 
-const EMPTY_METADATA: NormalizedContent['metadata'] = {
+const EMPTY_METADATA: ExtractedContent['metadata'] = {
 	author: null,
 	publishedDate: null,
 	siteName: null,
@@ -157,7 +136,7 @@ function stripMarkdown(md: string): string {
 		.trim();
 }
 
-function normalizeHtml(scraped: ScrapedContent, sourceUrl: string | null): NormalizedContent {
+function normalizeHtml(scraped: ScrapedContent, sourceUrl: string | null): ExtractedContent {
 	const markdown = scraped.content ?? '';
 	return {
 		sourceUrl,
@@ -176,7 +155,7 @@ function normalizeHtml(scraped: ScrapedContent, sourceUrl: string | null): Norma
 	};
 }
 
-function normalizePdf(parsed: ParsedPdf, sourceUrl: string | null): NormalizedContent {
+function normalizePdf(parsed: ParsedPdf, sourceUrl: string | null): ExtractedContent {
 	return {
 		sourceUrl,
 		contentType: PDF_MIME,
@@ -188,13 +167,13 @@ function normalizePdf(parsed: ParsedPdf, sourceUrl: string | null): NormalizedCo
 	};
 }
 
-export async function extractFile(bytes: Uint8Array): Promise<NormalizedContent> {
+export async function extractFile(bytes: Uint8Array): Promise<ExtractedContent> {
 	const type = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES)) ?? 'application/octet-stream';
 	if (type === PDF_MIME) return normalizePdf(await parsePdf(bytes), null);
 	return { sourceUrl: null, contentType: type, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status: 'failed' };
 }
 
-export async function extractUrl(env: Env, url: string): Promise<NormalizedContent> {
+export async function extractUrl(env: Env, url: string): Promise<ExtractedContent> {
 	const result = await scrapeUrl(url, { youtubeApiKey: env.YOUTUBE_API_KEY, kaitoApiKey: env.KAITO_API_KEY });
 	if (result.kind === 'page') return normalizeHtml(result.scraped, url);
 
@@ -215,7 +194,7 @@ export async function extractUrl(env: Env, url: string): Promise<NormalizedConte
 	};
 }
 
-export async function extractSource(env: Env, input: ExtractInput): Promise<NormalizedContent> {
+export async function extractSource(env: Env, input: ExtractInput): Promise<ExtractedContent> {
 	switch (input.kind) {
 		case 'url':
 			return extractUrl(env, input.url);
@@ -229,9 +208,9 @@ export async function extractSource(env: Env, input: ExtractInput): Promise<Norm
 }
 
 // Non-persisting scrape job. Unlike NewsenceMonitorWorkflow this creates no DB
-// row; callers poll the Workflow output for NormalizedContent.
+// row; callers poll the Workflow output for ExtractedContent.
 export class ScrapeWorkflow extends WorkflowEntrypoint<Env, ExtractInput> {
-	async run(event: WorkflowEvent<ExtractInput>, step: WorkflowStep): Promise<NormalizedContent> {
+	async run(event: WorkflowEvent<ExtractInput>, step: WorkflowStep): Promise<ExtractedContent> {
 		const input = event.payload;
 
 		const result = await step.do(

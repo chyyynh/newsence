@@ -78,6 +78,27 @@ export interface ScrapedContent {
 	youtubeTranscript?: YoutubeTranscript;
 }
 
+export interface ExtractedContent {
+	/** null for raw-bytes / R2 input with no originating URL. */
+	sourceUrl: string | null;
+	contentType: string;
+	title: string | null;
+	/** HTML -> turndown markdown; PDF -> reflowed text. */
+	markdown: string;
+	/** Plain text; PDF -> reflowed text; HTML -> markdown-stripped. */
+	text: string;
+	metadata: {
+		author: string | null;
+		publishedDate: string | null;
+		siteName: string | null;
+		description: string | null;
+		ogImageUrl: string | null;
+		pages?: number;
+		chars?: number;
+	};
+	status: 'ok' | 'needs_ocr' | 'failed';
+}
+
 // Twitter related (Kaito API response shape)
 export interface Tweet {
 	id?: string;

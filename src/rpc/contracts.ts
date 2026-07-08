@@ -1,3 +1,5 @@
+import type { ExtractedContent } from '../shared/types';
+
 export interface ArticleSummary {
 	id: string;
 	title: string;
@@ -40,23 +42,7 @@ export interface ReadContextResult {
 	error?: string;
 }
 
-export interface ScrapedUrlContent {
-	sourceUrl: string | null;
-	contentType: string;
-	title: string | null;
-	markdown: string;
-	text: string;
-	metadata: {
-		author: string | null;
-		publishedDate: string | null;
-		siteName: string | null;
-		description: string | null;
-		ogImageUrl: string | null;
-		pages?: number;
-		chars?: number;
-	};
-	status: 'ok' | 'needs_ocr' | 'failed';
-}
+export type ScrapedUrlContent = ExtractedContent;
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;

@@ -50,7 +50,7 @@ const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints:\n' +
 	'GET  /health\n' +
-	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> NormalizedContent {markdown,text,metadata,status}\n' +
+	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> ExtractedContent {markdown,text,metadata,status}\n' +
 	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
 	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';

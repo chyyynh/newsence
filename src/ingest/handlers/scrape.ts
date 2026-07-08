@@ -14,7 +14,7 @@ export { CORS_HEADERS as SCRAPE_CORS_HEADERS };
 
 // POST /scrape — synchronous, stateless content extraction. Accepts either
 // `{ "url": "..." }` (JSON) or raw file bytes (`--data-binary`). Returns
-// NormalizedContent without touching R2/DB and without AI — the fast path.
+// ExtractedContent without touching R2/DB and without AI — the fast path.
 // Large PDFs should use the async POST /scrape/jobs.
 export async function handleScrape(request: Request, env: Env): Promise<Response> {
 	try {
@@ -113,7 +113,7 @@ async function readScrapeInput(request: Request): Promise<{ kind: 'url'; url: st
 	return { kind: 'bytes', bytes };
 }
 
-// GET /scrape/jobs/:id — poll job status. `result` carries the NormalizedContent
+// GET /scrape/jobs/:id — poll job status. `result` carries the ExtractedContent
 // once the Workflow completes (from its `output`).
 export async function handleScrapeJobStatus(jobId: string, env: Env): Promise<Response> {
 	try {
