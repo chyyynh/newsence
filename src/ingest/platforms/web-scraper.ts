@@ -184,7 +184,6 @@ async function scrapeHtmlFromResponse(response: Response, url: string): Promise<
 
 	return {
 		sourceUrl: finalUrl,
-		contentType: 'text/html',
 		title: metadata.title,
 		markdown: content,
 		text: content,
@@ -195,7 +194,6 @@ async function scrapeHtmlFromResponse(response: Response, url: string): Promise<
 			description: metadata.description,
 			ogImageUrl: metadata.ogImageUrl,
 		},
-		status: content.trim().length > 0 ? 'ok' : 'failed',
 	};
 }
 

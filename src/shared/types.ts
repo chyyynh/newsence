@@ -68,7 +68,6 @@ export interface YoutubeTranscript {
 
 export interface NormalizedContent {
 	sourceUrl: string;
-	contentType: string;
 	title: string | null;
 	/** HTML -> turndown markdown; platform APIs -> markdown/plain text. */
 	markdown: string;
@@ -81,7 +80,6 @@ export interface NormalizedContent {
 		description: string | null;
 		ogImageUrl: string | null;
 	};
-	status: 'ok' | 'failed';
 	platformMetadata?: PlatformMetadata;
 	youtubeTranscript?: YoutubeTranscript;
 }

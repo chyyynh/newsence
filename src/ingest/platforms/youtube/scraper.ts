@@ -213,7 +213,6 @@ export async function scrapeYouTube(
 
 	return {
 		sourceUrl: `https://www.youtube.com/watch?v=${video.id}`,
-		contentType: 'text/markdown',
 		title: snippet.title,
 		markdown: content,
 		text: content,
@@ -224,7 +223,6 @@ export async function scrapeYouTube(
 			description: snippet.description.substring(0, 500) || null,
 			ogImageUrl: thumbnailUrl,
 		},
-		status: content.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: {
 			type: 'youtube',
 			fetchedAt: new Date().toISOString(),

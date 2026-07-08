@@ -298,7 +298,6 @@ async function scrapeTwitterArticle(
 
 	return {
 		sourceUrl: `https://x.com/i/status/${tweetId}`,
-		contentType: 'text/markdown',
 		title,
 		markdown: md,
 		text: md,
@@ -309,7 +308,6 @@ async function scrapeTwitterArticle(
 			description: summary,
 			ogImageUrl: article.cover_media_img_url || article.author?.profilePicture || null,
 		},
-		status: md.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
 	};
 }
@@ -328,7 +326,6 @@ async function scrapeExternalLinkTweet(
 		console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
 		return {
 			sourceUrl: externalUrl,
-			contentType: linked.contentType,
 			title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
 			markdown: linked.markdown,
 			text: linked.text,
@@ -339,7 +336,6 @@ async function scrapeExternalLinkTweet(
 				description: linked.metadata.description || tweet.text,
 				ogImageUrl: linked.metadata.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
 			},
-			status: linked.status,
 			platformMetadata: buildTweetPlatformMetadata(tweet, {
 				media,
 				tweetText,
@@ -384,7 +380,6 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	}
 
 	const title = buildTweetTitle(tweet, 80);
-	const status = tweet.text.trim().length > 0 ? ('ok' as const) : ('failed' as const);
 
 	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });
 
@@ -392,7 +387,6 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		kind: 'tweet' as const,
 		scraped: {
 			sourceUrl: tweet.url,
-			contentType: 'text/markdown',
 			title,
 			markdown: tweet.text,
 			text: tweet.text,
@@ -403,7 +397,6 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 				description: tweet.text,
 				ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 			},
-			status,
 			platformMetadata: buildTweetPlatformMetadata(tweet),
 		},
 		canonicalUrl: tweet.url,

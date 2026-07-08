@@ -93,7 +93,6 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 
 	return {
 		sourceUrl: `https://news.ycombinator.com/item?id=${item.id}`,
-		contentType: 'text/markdown',
 		title,
 		markdown,
 		text: markdown,
@@ -104,7 +103,6 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 			description: summary,
 			ogImageUrl: null,
 		},
-		status: markdown.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 	};
 }
