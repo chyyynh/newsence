@@ -294,6 +294,10 @@ async function rankArticles(
 					EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($3::text[]))
 					OR title ILIKE ANY($3::text[])
 					OR title_cn ILIKE ANY($3::text[])
+					OR summary ILIKE ANY($3::text[])
+					OR summary_cn ILIKE ANY($3::text[])
+					OR source ILIKE ANY($3::text[])
+					OR url ILIKE ANY($3::text[])
 				)${dateFilter}
 				LIMIT $2
 			),
@@ -329,12 +333,24 @@ async function keywordOnly(client: Client, patterns: string[], limit: number, op
 		const result = await client.query<{ id: string; match_count: number | string }>(
 			`
 			SELECT id,
-				(SELECT COUNT(*) FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[])) AS match_count
+				(
+					(SELECT COUNT(*) FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
+					+ CASE WHEN title ILIKE ANY($1::text[]) THEN 1 ELSE 0 END
+					+ CASE WHEN title_cn ILIKE ANY($1::text[]) THEN 1 ELSE 0 END
+					+ CASE WHEN summary ILIKE ANY($1::text[]) THEN 1 ELSE 0 END
+					+ CASE WHEN summary_cn ILIKE ANY($1::text[]) THEN 1 ELSE 0 END
+					+ CASE WHEN source ILIKE ANY($1::text[]) THEN 1 ELSE 0 END
+					+ CASE WHEN url ILIKE ANY($1::text[]) THEN 1 ELSE 0 END
+				) AS match_count
 			FROM articles
 			WHERE (
 				EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
 				OR title ILIKE ANY($1::text[])
 				OR title_cn ILIKE ANY($1::text[])
+				OR summary ILIKE ANY($1::text[])
+				OR summary_cn ILIKE ANY($1::text[])
+				OR source ILIKE ANY($1::text[])
+				OR url ILIKE ANY($1::text[])
 			)${dateFilter}
 			ORDER BY match_count DESC, published_date DESC NULLS LAST
 			LIMIT $2
@@ -370,6 +386,10 @@ function tokenize(sanitized: string): string[] {
 
 function isValidUuid(id: string): boolean {
 	return UUID_RE.test(id);
+}
+
+function corpusErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function extractVideoId(url: string | null): string | null {
@@ -615,8 +635,9 @@ async function readItems(client: Client, items: ReadContextItem[], userId: strin
 	}
 
 	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>();
-	await Promise.all(
-		[...groups.entries()].map(async ([type, ids]) => {
+	const entries = [...groups.entries()];
+	const settled = await Promise.allSettled(
+		entries.map(async ([type, ids]) => {
 			const results =
 				type === 'article'
 					? await readArticles(client, ids)
@@ -625,9 +646,20 @@ async function readItems(client: Client, items: ReadContextItem[], userId: strin
 						: type === 'user_file'
 							? await readUserFiles(client, ids, userId)
 							: await readUrls(client, ids, userId);
-			resultMaps.set(type, results);
+			return [type, results] as const;
 		}),
 	);
+	for (const [index, settledResult] of settled.entries()) {
+		const [type, ids] = entries[index];
+		if (settledResult.status === 'fulfilled') {
+			resultMaps.set(settledResult.value[0], settledResult.value[1]);
+			continue;
+		}
+
+		const error = corpusErrorMessage(settledResult.reason);
+		console.warn({ tag: 'CORPUS', msg: 'read group failed', type, count: ids.length, error });
+		resultMaps.set(type, new Map(ids.map((id) => [id, { type: 'error' as const, id, error: `${type} read failed: ${error}` }])));
+	}
 
 	return capReadContextContent(
 		items.map(
