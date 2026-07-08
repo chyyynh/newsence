@@ -250,8 +250,6 @@ export class HackerNewsProcessor implements ArticleProcessor {
 	async process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult> {
 		const metadata = article.platform_metadata;
 		const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
-		const enrichments: PlatformEnrichments = {};
-		const updateData: ProcessorResult['updateData'] = {};
 
 		const hnData: HnItem | null = itemId
 			? await fetchHnItem(itemId).catch((error) => {
@@ -263,19 +261,20 @@ export class HackerNewsProcessor implements ArticleProcessor {
 		const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
 		const editorial = hnData ? await generateHnEditorial(ctx.env, article.title, hnData.text || '', comments) : null;
-		Object.assign(updateData, {
+		const updateData: ProcessorResult['updateData'] = {
 			...(editorial?.cn ? { content_cn: editorial.cn } : {}),
 			...(editorial?.en ? { content: editorial.en } : {}),
-		});
+		};
 
-		if (hnData)
-			Object.assign(enrichments, {
-				hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
-				externalUrl: hnData.url || null,
-				hnText: hnData.text || null,
-				commentCount: comments.length,
-				links: extractPostLinks(hnData.url, hnData.text),
-			});
+		const enrichments: PlatformEnrichments = hnData
+			? {
+					hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
+					externalUrl: hnData.url || null,
+					hnText: hnData.text || null,
+					commentCount: comments.length,
+					links: extractPostLinks(hnData.url, hnData.text),
+				}
+			: {};
 
 		const analysis = await generateArticleAnalysis(article, ctx.env);
 		const merged = mergeArticleAnalysis(article, analysis, {

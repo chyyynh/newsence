@@ -15,9 +15,7 @@ const twitterProcessor = new TwitterProcessor();
 export const articlePlatforms: Record<string, ArticleProcessor> = {
 	hackernews: new HackerNewsProcessor(),
 	rss: defaultProcessor,
-	twitter: {
-		process: (article, ctx) => twitterProcessor.process(article, ctx),
-	},
+	twitter: twitterProcessor,
 	web: defaultProcessor,
 	youtube: defaultProcessor,
 	default: defaultProcessor,
