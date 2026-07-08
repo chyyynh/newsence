@@ -99,8 +99,8 @@ export interface Tweet {
 	id?: string;
 	url: string;
 	createdAt: string;
-	viewCount: number;
-	author: {
+	viewCount?: number;
+	author?: {
 		id?: string;
 		userName: string;
 		name: string;
@@ -122,6 +122,7 @@ export interface Tweet {
 	};
 	hashTags?: string[];
 	urls?: Array<{ expanded_url?: string; url?: string }>;
+	entities?: { urls?: Array<{ expanded_url?: string; url?: string }> };
 	lang?: string;
 	// Thread & reply fields
 	conversationId?: string;
