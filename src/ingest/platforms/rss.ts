@@ -13,7 +13,7 @@ type RssSource = {
 	RSSLink: string;
 };
 
-async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void> {
+async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<void> {
 	let res: Response;
 	try {
 		res = await fetchWithTimeout(feed.RSSLink, {
@@ -74,7 +74,7 @@ async function processFeed(env: Env, db: Client, feed: RssSource): Promise<void>
 	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
 }
 
-export async function handleRSSCron(env: Env): Promise<void> {
+export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();

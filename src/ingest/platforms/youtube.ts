@@ -299,7 +299,7 @@ export async function persistYouTubeWorkflowData(
 }
 
 export async function prepareYouTubeHighlights(
-	env: Env,
+	env: CoreEnv,
 	article: Article,
 	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
@@ -323,7 +323,7 @@ export async function prepareYouTubeHighlights(
 }
 
 async function prepareYouTubeHighlightsFromTranscript(
-	env: Env,
+	env: CoreEnv,
 	videoId: string,
 	transcript: TranscriptSegment[],
 ): Promise<YouTubeHighlightsUpdate | null> {
@@ -373,7 +373,7 @@ function parseFeedVideos(xml: string) {
 	);
 }
 
-async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { videoId: string; url: string }): Promise<boolean> {
+async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video: { videoId: string; url: string }): Promise<boolean> {
 	try {
 		const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
 			minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
@@ -411,7 +411,7 @@ async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { v
 	}
 }
 
-export async function handleYouTubeCron(env: Env): Promise<void> {
+export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 	if (!env.YOUTUBE_API_KEY) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipped — YOUTUBE_API_KEY not configured' });
 		return;

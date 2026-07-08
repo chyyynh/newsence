@@ -262,7 +262,7 @@ async function upsertReferenceNode(db: Client, ref: PaperReference): Promise<str
 	return result.rows[0]?.id ?? null;
 }
 
-async function syncPaperGraph(env: Env, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
+async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
 	if (!paper.openAlexId) return null;
 
 	const db = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
@@ -357,7 +357,7 @@ export async function enrichPaperMetadata(
 }
 
 export async function stagePaperEnrichment(
-	env: Env,
+	env: CoreEnv,
 	step: WorkflowStep,
 	candidate: { url?: string | null; title: string; file_type?: string | null },
 	input: { hasStagedText: boolean; loadContent: () => Promise<string | null | undefined> },
@@ -381,7 +381,7 @@ export async function stagePaperEnrichment(
 }
 
 export async function syncPaperGraphForEnrichment(
-	env: Env,
+	env: CoreEnv,
 	step: WorkflowStep,
 	articleId: string,
 	paperEnrichment: PaperMetadata | null,

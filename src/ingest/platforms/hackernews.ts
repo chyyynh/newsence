@@ -140,7 +140,7 @@ ${rulesBlock}`;
 }
 
 async function generateHnEditorial(
-	env: Env,
+	env: CoreEnv,
 	title: string,
 	hnText: string,
 	comments: HnCollectedComment[],
@@ -163,7 +163,7 @@ async function generateHnEditorial(
 	return { en, cn };
 }
 
-export async function processHackerNewsArticle(article: Article, env: Env): Promise<ProcessorResult> {
+export async function processHackerNewsArticle(article: Article, env: CoreEnv): Promise<ProcessorResult> {
 	const metadata = article.platform_metadata;
 	const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
 

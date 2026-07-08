@@ -1,16 +1,50 @@
 import { generateArticleEmbedding } from '@core-ai/embedding';
-import type {
-	ArticleRankSearchInput,
-	ArticleSearchInput,
-	ArticleSummary,
-	ReadContextItem,
-	ReadContextResult,
-	RelatedArticleSearchInput,
-} from '@core-rpc/contracts';
 import type { TranscriptSegment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import type { Client } from 'pg';
 import { Client as PgClient } from 'pg';
+
+export interface ArticleSummary {
+	id: string;
+	title: string;
+	url: string;
+	publishedDate?: string;
+	source?: string | null;
+	summary?: string;
+	tags?: string[] | null;
+}
+
+export type ArticleSearchInput = {
+	query: string;
+	daysAgo?: number;
+	limit?: number;
+};
+
+export type ArticleRankSearchInput = {
+	query: string;
+	limit?: number;
+};
+
+export type RelatedArticleSearchInput = {
+	seed: { id: string; type: 'article' | 'user_file' };
+	limit?: number;
+	offset?: number;
+};
+
+export interface ReadContextItem {
+	type: 'article' | 'collection' | 'url';
+	id: string;
+}
+
+export interface ReadContextResult {
+	type: 'article' | 'collection' | 'url' | 'document' | 'error';
+	id: string;
+	title?: string;
+	content?: string;
+	articles?: Array<{ id: string; title: string; summary: string | null }>;
+	metadata?: Record<string, unknown>;
+	error?: string;
+}
 
 type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
@@ -57,7 +91,7 @@ const OVERFETCH_CAP = 200;
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>> {
+export async function searchCorpusArticleRanks(env: CoreEnv, input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
@@ -67,7 +101,7 @@ export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearc
 	return [...ranks].map(([id, score]) => ({ id, score }));
 }
 
-export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSearchInput): Promise<string[]> {
+export async function relatedCorpusArticleIds(env: CoreEnv, input: RelatedArticleSearchInput): Promise<string[]> {
 	const seed = { id: input.seed.id.trim(), type: input.seed.type };
 	if (!seed.id) return [];
 	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
@@ -78,7 +112,7 @@ export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSea
 	return [...new Set(ids)].filter((id) => id !== seed.id);
 }
 
-export async function searchCorpusArticles(env: Env, input: ArticleSearchInput): Promise<ArticleSummary[]> {
+export async function searchCorpusArticles(env: CoreEnv, input: ArticleSearchInput): Promise<ArticleSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
@@ -118,7 +152,7 @@ export async function searchCorpusArticles(env: Env, input: ArticleSearchInput):
 	return result.rows.map(formatSummary);
 }
 
-export async function readCorpusItems(env: Env, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
+export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
 	return readItems(client, items, userId);
@@ -170,7 +204,13 @@ async function relatedArticles(
 	return rows.rows.map((r) => r.id);
 }
 
-async function rankArticles(client: Client, env: Env, query: string, limit = 100, options: RankArticleOptions = {}): Promise<SearchRanks> {
+async function rankArticles(
+	client: Client,
+	env: CoreEnv,
+	query: string,
+	limit = 100,
+	options: RankArticleOptions = {},
+): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 

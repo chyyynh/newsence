@@ -201,7 +201,7 @@ function validateCleanedContent(original: string, cleaned: string | null): strin
 	return trimmed;
 }
 
-async function generateArticleContentCleanup(article: Article, env: Env): Promise<string | null> {
+async function generateArticleContentCleanup(article: Article, env: CoreEnv): Promise<string | null> {
 	const content = article.content?.trim();
 	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || article.source_type === 'youtube' || article.source_type === 'hackernews')
 		return null;
@@ -216,7 +216,7 @@ async function generateArticleContentCleanup(article: Article, env: Env): Promis
 	return validateCleanedContent(cleanupContent, cleaned);
 }
 
-export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
+export async function generateArticleAnalysis(article: Article, env: CoreEnv): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {

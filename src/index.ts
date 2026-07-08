@@ -1,22 +1,15 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type {
-	ArticleRankSearchInput,
-	ArticleSearchInput,
-	CoreRpc,
-	ExportCollectionOkfInput,
-	ReadContextItem,
-	RelatedArticleSearchInput,
-} from '@core-rpc/contracts';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
+import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
-import { exportCollectionOkf } from './okf';
+import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
 export { NewsenceMonitorWorkflow };
 
-export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
+export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override async fetch(): Promise<Response> {
 		return Response.json({
 			status: 'ok',

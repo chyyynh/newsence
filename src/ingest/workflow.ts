@@ -22,7 +22,7 @@ import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
-async function processDefaultArticle(article: Article, env: Env): Promise<ProcessorResult> {
+async function processDefaultArticle(article: Article, env: CoreEnv): Promise<ProcessorResult> {
 	const analysis = await generateArticleAnalysis(article, env);
 	return mergeArticleAnalysis(article, analysis);
 }
@@ -89,7 +89,7 @@ const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const WORKFLOW_ID_MAX_LENGTH = 100;
 
-async function startStoredWorkflowBatch(env: Env, targets: StoredWorkflowTarget[]): Promise<number> {
+async function startStoredWorkflowBatch(env: CoreEnv, targets: StoredWorkflowTarget[]): Promise<number> {
 	if (!targets.length) return 0;
 	const descriptors = targets.map((workflowTarget) => ({ workflowId: storedWorkflowId(workflowTarget), workflowTarget }));
 	const created = await env.MONITOR_WORKFLOW.createBatch(
@@ -114,7 +114,7 @@ async function startStoredWorkflowBatch(env: Env, targets: StoredWorkflowTarget[
 	return created.length + active + retried.length;
 }
 
-export async function handleRetryCron(env: Env): Promise<void> {
+export async function handleRetryCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RETRY', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
@@ -147,7 +147,7 @@ export async function handleRetryCron(env: Env): Promise<void> {
 }
 
 export async function enqueueProcessing(
-	env: Env,
+	env: CoreEnv,
 	target: StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft },
 ): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
@@ -155,7 +155,7 @@ export async function enqueueProcessing(
 	return enqueueUserFileWorkflow(env, target.userFileId);
 }
 
-async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
+async function enqueueStoredWorkflow(env: CoreEnv, target: StoredWorkflowTarget): Promise<string> {
 	const workflowId = storedWorkflowId(target);
 	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
 	if (created[0]) return created[0].id;
@@ -168,7 +168,7 @@ async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Pr
 	return retried[0].id;
 }
 
-async function enqueueSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<string> {
+async function enqueueSourceArticleWorkflow(env: CoreEnv, draft: SourceArticleDraft): Promise<string> {
 	const sourceDraftKey = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
 	const workflowTarget: WorkflowTarget = { kind: 'source', sourceDraftKey };
 	await env.R2.put(sourceDraftKey, JSON.stringify(draft), { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
@@ -241,7 +241,7 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function enqueueUserFileWorkflow(env: Env, userFileId: string): Promise<string> {
+async function enqueueUserFileWorkflow(env: CoreEnv, userFileId: string): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	const storedInstanceId = await getUserFileWorkflowInstanceId(db, userFileId);
@@ -259,7 +259,7 @@ async function enqueueUserFileWorkflow(env: Env, userFileId: string): Promise<st
 	return instanceId;
 }
 
-async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {
+async function getMonitorWorkflowStatus(env: CoreEnv, workflowId: string): Promise<{ id: string; status: string }> {
 	try {
 		const instance = await env.MONITOR_WORKFLOW.get(workflowId);
 		const status = await instance.status();
@@ -270,7 +270,7 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 	}
 }
 
-export function streamWorkflowStatus(env: Env, workflowId: string): Response {
+export function streamWorkflowStatus(env: CoreEnv, workflowId: string): Response {
 	const encoder = new TextEncoder();
 	let cancelled = false;
 	const stream = new ReadableStream({
@@ -327,13 +327,13 @@ type WorkflowPersistenceInput = {
 	paperEnrichment: PaperMetadata | null;
 };
 
-async function readSourceDraft(env: Env, target: Extract<WorkflowTarget, { kind: 'source' }>): Promise<SourceArticleDraft> {
+async function readSourceDraft(env: CoreEnv, target: Extract<WorkflowTarget, { kind: 'source' }>): Promise<SourceArticleDraft> {
 	const obj = await env.R2.get(target.sourceDraftKey);
 	if (!obj) throw new Error(`source article draft missing: ${target.sourceDraftKey}`);
 	return obj.json<SourceArticleDraft>();
 }
 
-async function loadFullTargetArticle(env: Env, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
+async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
 	let article: Article;
 	if (target.kind === 'source') {
 		article = preparedArticleToArticle((await readSourceDraft(env, target)).article);
@@ -394,7 +394,7 @@ async function persistStoredTarget(db: Client, target: StoredWorkflowTarget, inp
 	return rowId;
 }
 
-async function persistWorkflowTarget(env: Env, target: WorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
+async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
@@ -417,7 +417,7 @@ async function persistWorkflowTarget(env: Env, target: WorkflowTarget, input: Wo
 	}
 }
 
-export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: WorkflowTarget }> {
+export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { target: WorkflowTarget }> {
 	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
 		const target = event.payload.target;
 		try {

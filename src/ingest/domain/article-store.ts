@@ -20,7 +20,7 @@ const ARTICLE_SHELL_FIELDS: Record<ArticleStoreTable, string> = {
 };
 
 export async function loadArticleForProcessing(
-	env: Env,
+	env: CoreEnv,
 	table: ArticleStoreTable,
 	articleId: string,
 	shell = false,

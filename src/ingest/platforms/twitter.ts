@@ -398,7 +398,7 @@ async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 }
 
 async function enqueueTwitterArticle(
-	env: Env,
+	env: CoreEnv,
 	data: {
 		url: string;
 		title: string;
@@ -433,7 +433,7 @@ async function enqueueTwitterArticle(
 
 const MIN_TWEET_LENGTH = 150;
 
-async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
+async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolean> {
 	const resolved = await resolveTweetContent(tweet, env.KAITO_API_KEY).catch((err) => {
 		console.warn({ tag: 'TWITTER', msg: 'Tweet content resolution failed', url: tweet.url, error: String(err) });
 		return null;
@@ -474,7 +474,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 	return queued;
 }
 
-async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolean> {
+async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	const { first, combinedText, media, platformMetadata } = buildThreadArticleParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
@@ -651,7 +651,7 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 	return [...groups.values(), ...orphanReplies.map((tweet) => [tweet])];
 }
 
-export async function handleTwitterCron(env: Env): Promise<void> {
+export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
@@ -715,7 +715,7 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 	});
 }
 
-export async function processTwitterArticle(article: Article, env: Env): Promise<ProcessorResult> {
+export async function processTwitterArticle(article: Article, env: CoreEnv): Promise<ProcessorResult> {
 	const updateData: ProcessorResult['updateData'] = {};
 	const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
@@ -784,7 +784,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, article: Article, env: Env): Promise<TweetAnalysis | null> {
+async function translateTweet(tweetText: string, article: Article, env: CoreEnv): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';

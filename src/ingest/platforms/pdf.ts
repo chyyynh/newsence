@@ -42,7 +42,7 @@ async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 }
 
 async function writeExtractedPdfText(
-	env: Env,
+	env: CoreEnv,
 	input: { articleId: string; sourceStorageKey: string; workflowRunId: string },
 ): Promise<PdfTextArtifact> {
 	const obj = await env.R2.get(input.sourceStorageKey);
@@ -54,7 +54,7 @@ async function writeExtractedPdfText(
 }
 
 export async function stagePdfTextExtraction(
-	env: Env,
+	env: CoreEnv,
 	step: WorkflowStep,
 	input: {
 		articleId: string | null;
@@ -81,7 +81,7 @@ export async function stagePdfTextExtraction(
 	}
 }
 
-export async function readExtractedPdfText(env: Env, result: PdfTextArtifact | null): Promise<string | null> {
+export async function readExtractedPdfText(env: CoreEnv, result: PdfTextArtifact | null): Promise<string | null> {
 	if (!result?.extractedTextKey) return null;
 	const obj = await env.R2.get(result.extractedTextKey);
 	if (!obj) throw new Error(`PDF extracted text object missing: ${result.extractedTextKey}`);

@@ -6,8 +6,12 @@
 // normalizes before storage.
 // ─────────────────────────────────────────────────────────────
 
-import type { ExportCollectionOkfInput } from '@core-rpc/contracts';
 import { Client } from 'pg';
+
+export type ExportCollectionOkfInput = {
+	collectionId: string;
+	userId?: string | null;
+};
 
 type OkfFile = { path: string; content: string };
 
@@ -50,7 +54,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
 
-export async function exportCollectionOkf(env: Env, input: ExportCollectionOkfInput): Promise<Response> {
+export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionOkfInput): Promise<Response> {
 	const collectionId = input.collectionId.trim();
 	const viewerId = input.userId?.trim() || null;
 	if (!collectionId || !UUID_RE.test(collectionId)) {
@@ -76,7 +80,7 @@ export async function exportCollectionOkf(env: Env, input: ExportCollectionOkfIn
 }
 
 async function buildCollectionOkfBundle(
-	env: Env,
+	env: CoreEnv,
 	input: { viewerId: string | null; collectionId: string },
 ): Promise<{ slug: string; files: Iterable<OkfFile> }> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
@@ -437,7 +441,7 @@ function uniqueBy<T, K>(items: T[], key: (item: T) => K): T[] {
 function tarGzipStream(files: Iterable<OkfFile>): ReadableStream<Uint8Array> {
 	const iterator = files[Symbol.iterator]();
 	let closed = false;
-	return new ReadableStream<Uint8Array>({
+	const tarStream = new ReadableStream<Uint8Array>({
 		pull(controller) {
 			if (closed) return;
 			const next = iterator.next();
@@ -449,7 +453,13 @@ function tarGzipStream(files: Iterable<OkfFile>): ReadableStream<Uint8Array> {
 			controller.enqueue(new Uint8Array(1024));
 			controller.close();
 		},
-	}).pipeThrough(new CompressionStream('gzip'));
+	});
+	const compression = new CompressionStream('gzip');
+	const gzip: ReadableWritablePair<Uint8Array, Uint8Array> = {
+		readable: compression.readable as ReadableStream<Uint8Array>,
+		writable: compression.writable as WritableStream<Uint8Array>,
+	};
+	return tarStream.pipeThrough(gzip);
 }
 
 function enqueueTarFile(controller: ReadableStreamDefaultController<Uint8Array>, file: OkfFile): void {
