@@ -90,7 +90,7 @@ type StoredWorkflowTarget =
 	| { kind: 'userFile'; userFileId: string; youtubeTranscript?: YoutubeTranscript };
 type UserFileWorkflowTarget = Extract<StoredWorkflowTarget, { kind: 'userFile' }>;
 
-export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
+export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceDraftKey: string };
 
 interface SourceArticleDraft {
 	article: PreparedArticleRecord;
@@ -186,15 +186,15 @@ async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Pr
 }
 
 async function enqueueSourceArticleWorkflow(env: Env, draft: SourceArticleDraft): Promise<string> {
-	const sourceArticle = { url: draft.article.url, r2Key: `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json` };
-	const workflowTarget: WorkflowTarget = { kind: 'source', sourceArticle };
-	await env.R2.put(sourceArticle.r2Key, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
+	const sourceDraftKey = `${SOURCE_ARTICLE_DRAFT_PREFIX}${crypto.randomUUID()}.json`;
+	const workflowTarget: WorkflowTarget = { kind: 'source', sourceDraftKey };
+	await env.R2.put(sourceDraftKey, JSON.stringify(draft), { httpMetadata: { contentType: SOURCE_ARTICLE_DRAFT_CONTENT_TYPE } });
 
 	let keepDraft = false;
 	let cleanupReason = 'workflow create failed';
 	let cleanupWorkflowId: string | undefined;
 	try {
-		const workflowId = await sourceArticleWorkflowId(sourceArticle.url);
+		const workflowId = await sourceArticleWorkflowId(draft.article.url);
 		const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
 		if (created.length) {
 			keepDraft = true;
@@ -215,13 +215,13 @@ async function enqueueSourceArticleWorkflow(env: Env, draft: SourceArticleDraft)
 		return retried[0].id;
 	} finally {
 		if (!keepDraft) {
-			await env.R2.delete(sourceArticle.r2Key).catch((error) =>
+			await env.R2.delete(sourceDraftKey).catch((error) =>
 				console.warn({
 					tag: 'SOURCE-WORKFLOW',
 					msg: 'Failed to cleanup source article draft',
 					reason: cleanupReason,
 					workflowId: cleanupWorkflowId,
-					sourceUrl: sourceArticle.url,
+					sourceUrl: draft.article.url,
 					error: String(error),
 				}),
 			);
@@ -336,7 +336,6 @@ type WorkflowRunContext = {
 	target: WorkflowTarget;
 	table: 'articles' | 'user_files';
 	rowId: string | null;
-	userFileId: string | null;
 	readSourceDraft(): Promise<SourceArticleDraft>;
 };
 type WorkflowPersistenceInput = {
@@ -354,8 +353,8 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 	const readSourceDraft = async () => {
 		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
 		if (sourceDraft) return sourceDraft;
-		const obj = await env.R2.get(target.sourceArticle.r2Key);
-		if (!obj) throw new Error(`source article draft missing: ${target.sourceArticle.r2Key}`);
+		const obj = await env.R2.get(target.sourceDraftKey);
+		if (!obj) throw new Error(`source article draft missing: ${target.sourceDraftKey}`);
 		sourceDraft = await obj.json<SourceArticleDraft>();
 		return sourceDraft;
 	};
@@ -363,7 +362,6 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 		target,
 		table: target.kind === 'userFile' ? 'user_files' : 'articles',
 		rowId: target.kind === 'article' ? target.articleId : target.kind === 'userFile' ? target.userFileId : null,
-		userFileId: target.kind === 'userFile' ? target.userFileId : null,
 		readSourceDraft,
 	};
 }
@@ -420,13 +418,13 @@ async function persistStoredTarget(db: Client, context: WorkflowRunContext, inpu
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
 	await updateArticleAfterProcessing(db, context.table, context.rowId, updatePayload);
-	if (context.userFileId)
-		await patchUserFileWorkflowMetadata(db, context.userFileId, {
+	if (context.target.kind === 'userFile')
+		await patchUserFileWorkflowMetadata(db, context.target.userFileId, {
 			monitor_status: 'complete',
 			monitor_completed_at: new Date().toISOString(),
 			article_id: context.rowId,
 		});
-	if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
+	else if (entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
 	return context.rowId;
 }
 
@@ -473,7 +471,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
 			const pdfTextArtifact = await stagePdfTextExtraction(this.env, step, {
-				articleId: context.userFileId,
+				articleId: context.target.kind === 'userFile' ? context.target.userFileId : null,
 				hasContent: 'has_content' in article && !!article.has_content,
 				sourceStorageKey: article.storage_key,
 				fileType: article.file_type,
@@ -547,7 +545,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
 
 			if (pdfTextArtifact?.extractedTextKey || context.target.kind === 'source') {
-				const sourceDraftKey = context.target.kind === 'source' ? context.target.sourceArticle.r2Key : null;
+				const sourceDraftKey = context.target.kind === 'source' ? context.target.sourceDraftKey : null;
 				await step.do(
 					'cleanup-workflow-scratch-objects',
 					{ retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' },
@@ -568,8 +566,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 			return { success: true, article_id: articleId };
 		} catch (error) {
-			if (context.userFileId) {
-				const failedUserFileId = context.userFileId;
+			if (context.target.kind === 'userFile') {
+				const failedUserFileId = context.target.userFileId;
 				try {
 					await step.do(
 						'record-user-file-workflow-failed',
