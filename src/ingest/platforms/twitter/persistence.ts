@@ -1,25 +1,10 @@
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Tweet, WorkflowAttachment } from '@core-shared/types';
+import type { Tweet } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
-import { upsertTwitterSourceEventDraft } from './processor';
 import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent } from './scraper';
-
-type TwitterSourceEventDraft = Extract<WorkflowAttachment, { kind: 'twitter-source-event' }>['event'];
-
-async function recordExistingTwitterSourceEvent(
-	db: Client,
-	env: Env,
-	article: { id: string; summary_cn: string | null },
-	event: TwitterSourceEventDraft,
-	options: { enqueueIfIncomplete?: boolean } = {},
-): Promise<void> {
-	await upsertTwitterSourceEventDraft(db, article.id, event);
-	if (options.enqueueIfIncomplete !== false && !article.summary_cn)
-		await enqueueProcessing(env, { kind: 'article', articleId: article.id });
-}
 
 async function enqueueTwitterArticle(
 	env: Env,
@@ -33,7 +18,6 @@ async function enqueueTwitterArticle(
 		ogImage: string | null;
 		platformMetadata: PlatformMetadata;
 		hashTags?: string[];
-		sourceEvent: TwitterSourceEventDraft;
 	},
 ): Promise<boolean> {
 	await enqueueProcessing(env, {
@@ -51,7 +35,6 @@ async function enqueueTwitterArticle(
 				platformMetadata: data.platformMetadata,
 				keywords: data.hashTags,
 			},
-			attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }],
 		},
 	});
 	return true;
@@ -74,7 +57,7 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 	const articleUrl = normalizeUrl(resolved.canonicalUrl);
 	const existingArticle = await getExistingArticleByUrl(db, articleUrl);
 	if (existingArticle) {
-		await recordExistingTwitterSourceEvent(db, env, existingArticle, { tweet, eventType: resolved.kind, text: resolved.eventText });
+		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', articleId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
 		return true;
 	}
@@ -84,8 +67,6 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
-	const sourceEvent: TwitterSourceEventDraft = { tweet, eventType: resolved.kind, text: resolved.eventText };
-	await upsertTwitterSourceEventDraft(db, null, sourceEvent);
 	const queued = await enqueueTwitterArticle(env, {
 		url: articleUrl,
 		title: scraped.title,
@@ -96,30 +77,26 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 		ogImage: scraped.metadata.ogImageUrl,
 		platformMetadata: scraped.platformMetadata,
 		hashTags: tweet.hashTags,
-		sourceEvent,
 	});
 	if (queued) console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: scraped.title.slice(0, 50) });
 	return queued;
 }
 
 export async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolean> {
-	const { first, sorted, combinedText, media, platformMetadata } = buildThreadArticleParts(tweets);
+	const { first, combinedText, media, platformMetadata } = buildThreadArticleParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
+	const tweetCount = tweets.length;
 
 	const existing = await getExistingArticleByUrl(db, firstUrl);
 
 	if (existing) {
 		const existingId = existing.id;
-		const sourceEvent: TwitterSourceEventDraft = { tweet: first, eventType: 'thread', text: combinedText, media, raw: { tweets: sorted } };
-		await recordExistingTwitterSourceEvent(db, env, existing, sourceEvent, { enqueueIfIncomplete: false });
 		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
 		await enqueueProcessing(env, { kind: 'article', articleId: existingId });
-		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
+		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: tweetCount });
 		return true;
 	}
 
-	const sourceEvent: TwitterSourceEventDraft = { tweet: first, eventType: 'thread', text: combinedText, media, raw: { tweets: sorted } };
-	await upsertTwitterSourceEventDraft(db, null, sourceEvent);
 	const queued = await enqueueTwitterArticle(env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
@@ -130,11 +107,10 @@ export async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise
 		ogImage: media[0]?.url ?? null,
 		platformMetadata,
 		hashTags: first.hashTags,
-		sourceEvent,
 	});
 
 	if (queued) {
-		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
+		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: tweetCount });
 	}
 	return queued;
 }

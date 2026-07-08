@@ -13,7 +13,7 @@ import {
 export type { ProcessorResult } from './ai-utils';
 
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
-import { TwitterProcessor, upsertTwitterSourceEventAttachment } from '../platforms/twitter/processor';
+import { TwitterProcessor } from '../platforms/twitter/processor';
 
 export type PlatformWorkflowData = { type: 'youtube'; highlights: YouTubeHighlightsUpdate };
 
@@ -45,7 +45,6 @@ export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
 	rss: defaultProcessor,
 	twitter: {
 		process: (article, ctx) => twitterProcessor.process(article, ctx),
-		persistWorkflowData: (db, input) => upsertTwitterSourceEventAttachment(db, input.articleId, input.attachments),
 	},
 	web: defaultProcessor,
 	youtube: {

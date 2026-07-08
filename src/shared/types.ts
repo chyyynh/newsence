@@ -1,4 +1,4 @@
-import type { ArticleCategory, PlatformMetadata, RetweetedByData, TwitterMedia } from './platform-metadata';
+import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
 
 // Article related types
 export interface Article {
@@ -135,18 +135,7 @@ export interface Tweet {
 	retweetedBy?: RetweetedByData;
 }
 
-export type WorkflowAttachment =
-	| {
-			kind: 'youtube-transcript';
-			transcript: YoutubeTranscript;
-	  }
-	| {
-			kind: 'twitter-source-event';
-			event: {
-				tweet: Tweet;
-				eventType: 'tweet' | 'thread' | 'share' | 'article';
-				text?: string | null;
-				media?: TwitterMedia[];
-				raw?: unknown;
-			};
-	  };
+export type WorkflowAttachment = {
+	kind: 'youtube-transcript';
+	transcript: YoutubeTranscript;
+};
