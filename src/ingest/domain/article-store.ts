@@ -29,11 +29,15 @@ export async function loadArticleForProcessing(
 	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
-		articleId,
-	]);
-	if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-	return result.rows[0] as ArticleForProcessing;
+	try {
+		const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
+			articleId,
+		]);
+		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		return result.rows[0] as ArticleForProcessing;
+	} finally {
+		await db.end();
+	}
 }
 
 export async function getUserFileWorkflowInstanceId(db: Client, userFileId: string): Promise<string | null> {

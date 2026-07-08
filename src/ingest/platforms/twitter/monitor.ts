@@ -151,62 +151,66 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const users = (
-		await db.query<{ id: string; RSSLink: string | null; scraped_at?: string | null }>(
-			`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`,
-			['twitter_user'],
-		)
-	).rows;
-	if (!users.length) {
-		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
-		return;
-	}
+	try {
+		const users = (
+			await db.query<{ id: string; RSSLink: string | null; scraped_at?: string | null }>(
+				`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`,
+				['twitter_user'],
+			)
+		).rows;
+		if (!users.length) {
+			console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
+			return;
+		}
 
-	const monitoredUsers = users.flatMap((user) => {
-		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
-		return twitterUserName ? [{ ...user, twitterUserName }] : [];
-	});
-	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
-	if (userNames.length === 0) {
-		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
-		return;
-	}
-	const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
-	const batches: string[][] = [];
-	for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
-		batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
-	}
+		const monitoredUsers = users.flatMap((user) => {
+			const twitterUserName = normalizeTwitterUserName(user.RSSLink);
+			return twitterUserName ? [{ ...user, twitterUserName }] : [];
+		});
+		const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
+		if (userNames.length === 0) {
+			console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
+			return;
+		}
+		const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
+		const batches: string[][] = [];
+		for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
+			batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
+		}
 
-	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
+		console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
 
-	let processed = 0;
-	let allCompleted = true;
-	for (const batch of batches) {
-		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
-		if (!completed) allCompleted = false;
-		for (const group of groupTweetsIntoThreads(tweets)) {
-			const first = group[0];
-			if (!first) continue;
-			try {
-				const saved = group.length >= 2 ? await saveThread(db, group, env) : await saveTweet(db, first, env);
-				if (saved) processed++;
-			} catch (err) {
-				allCompleted = false;
-				console.error({ tag: 'TWITTER', msg: 'Save failed', url: first.url, error: String(err) });
+		let processed = 0;
+		let allCompleted = true;
+		for (const batch of batches) {
+			const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
+			if (!completed) allCompleted = false;
+			for (const group of groupTweetsIntoThreads(tweets)) {
+				const first = group[0];
+				if (!first) continue;
+				try {
+					const saved = group.length >= 2 ? await saveThread(db, group, env) : await saveTweet(db, first, env);
+					if (saved) processed++;
+				} catch (err) {
+					allCompleted = false;
+					console.error({ tag: 'TWITTER', msg: 'Save failed', url: first.url, error: String(err) });
+				}
 			}
 		}
-	}
 
-	if (allCompleted) {
-		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
-	}
+		if (allCompleted) {
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = ANY($2)`, [new Date(), monitoredUsers.map((u) => u.id)]);
+		}
 
-	console.info({
-		tag: 'TWITTER',
-		msg: 'end',
-		processed,
-		users: users.length,
-		validUsers: monitoredUsers.length,
-		batches: batches.length,
-	});
+		console.info({
+			tag: 'TWITTER',
+			msg: 'end',
+			processed,
+			users: users.length,
+			validUsers: monitoredUsers.length,
+			batches: batches.length,
+		});
+	} finally {
+		await db.end();
+	}
 }

@@ -63,8 +63,12 @@ export async function searchCorpusArticleRanks(env: Env, input: ArticleRankSearc
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
-	const ranks = await rankArticles(client, env, query, limit);
-	return [...ranks].map(([id, score]) => ({ id, score }));
+	try {
+		const ranks = await rankArticles(client, env, query, limit);
+		return [...ranks].map(([id, score]) => ({ id, score }));
+	} finally {
+		await client.end();
+	}
 }
 
 export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSearchInput): Promise<string[]> {
@@ -74,8 +78,12 @@ export async function relatedCorpusArticleIds(env: Env, input: RelatedArticleSea
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
-	const ids = await relatedArticles(client, seed, limit, offset);
-	return [...new Set(ids)].filter((id) => id !== seed.id);
+	try {
+		const ids = await relatedArticles(client, seed, limit, offset);
+		return [...new Set(ids)].filter((id) => id !== seed.id);
+	} finally {
+		await client.end();
+	}
 }
 
 export async function searchCorpusArticles(env: Env, input: ArticleSearchInput): Promise<ArticleSummary[]> {
@@ -83,45 +91,53 @@ export async function searchCorpusArticles(env: Env, input: ArticleSearchInput):
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
-	const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
-	const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-	const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
+	try {
+		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
+		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
+		const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
 
-	if (ranks) {
-		if (ranks.size === 0) return [];
-		const candidateIds = [...ranks.keys()].filter(isValidUuid);
-		if (candidateIds.length === 0) return [];
-		const params: unknown[] = [candidateIds];
-		let where = `id = ANY($1::uuid[])`;
+		if (ranks) {
+			if (ranks.size === 0) return [];
+			const candidateIds = [...ranks.keys()].filter(isValidUuid);
+			if (candidateIds.length === 0) return [];
+			const params: unknown[] = [candidateIds];
+			let where = `id = ANY($1::uuid[])`;
+			if (fromDate) {
+				params.push(fromDate);
+				where += ` AND published_date >= $${params.length}`;
+			}
+			const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
+			return result.rows
+				.sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0))
+				.slice(0, limit)
+				.map(formatSummary);
+		}
+
+		const params: unknown[] = [];
+		let where = 'TRUE';
 		if (fromDate) {
 			params.push(fromDate);
-			where += ` AND published_date >= $${params.length}`;
+			where = `published_date >= $${params.length}`;
 		}
-		const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
-		return result.rows
-			.sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0))
-			.slice(0, limit)
-			.map(formatSummary);
+		params.push(limit);
+		const result = await client.query<ArticleSummaryRow>(
+			`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where} ORDER BY published_date DESC LIMIT $${params.length}`,
+			params,
+		);
+		return result.rows.map(formatSummary);
+	} finally {
+		await client.end();
 	}
-
-	const params: unknown[] = [];
-	let where = 'TRUE';
-	if (fromDate) {
-		params.push(fromDate);
-		where = `published_date >= $${params.length}`;
-	}
-	params.push(limit);
-	const result = await client.query<ArticleSummaryRow>(
-		`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where} ORDER BY published_date DESC LIMIT $${params.length}`,
-		params,
-	);
-	return result.rows.map(formatSummary);
 }
 
 export async function readCorpusItems(env: Env, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await client.connect();
-	return readItems(client, items, userId);
+	try {
+		return readItems(client, items, userId);
+	} finally {
+		await client.end();
+	}
 }
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {

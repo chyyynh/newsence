@@ -78,14 +78,18 @@ export async function handleRSSCron(env: Env): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const feeds = (await db.query<RssSource>(`SELECT ${RSS_SOURCE_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
-	for (const feed of feeds) {
-		try {
-			await processFeed(env, db, feed);
-		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
+	try {
+		const feeds = (await db.query<RssSource>(`SELECT ${RSS_SOURCE_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
+		for (const feed of feeds) {
+			try {
+				await processFeed(env, db, feed);
+			} catch (err) {
+				console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
+			}
 		}
-	}
 
-	console.info({ tag: 'RSS', msg: 'end' });
+		console.info({ tag: 'RSS', msg: 'end' });
+	} finally {
+		await db.end();
+	}
 }

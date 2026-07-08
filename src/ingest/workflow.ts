@@ -136,32 +136,36 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	console.info({ tag: 'RETRY', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-	const { articleIds, userFileIds } = await getIncompleteWorkflowTargetIds(db, since);
-	const total = articleIds.length + userFileIds.length;
+	try {
+		const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+		const { articleIds, userFileIds } = await getIncompleteWorkflowTargetIds(db, since);
+		const total = articleIds.length + userFileIds.length;
 
-	if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
-	let started = 0;
-	for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startStoredWorkflowBatch(
-			env,
-			articleIds.slice(i, i + RETRY_BATCH_SIZE).map((articleId) => ({ kind: 'article', articleId })),
-		);
+		if (!total) return console.info({ tag: 'RETRY', msg: 'No incomplete articles' });
+		let started = 0;
+		for (let i = 0; i < articleIds.length; i += RETRY_BATCH_SIZE) {
+			started += await startStoredWorkflowBatch(
+				env,
+				articleIds.slice(i, i + RETRY_BATCH_SIZE).map((articleId) => ({ kind: 'article', articleId })),
+			);
+		}
+		for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
+			started += await startStoredWorkflowBatch(
+				env,
+				userFileIds.slice(i, i + RETRY_BATCH_SIZE).map((userFileId) => ({ kind: 'userFile', userFileId })),
+			);
+		}
+		console.info({
+			tag: 'RETRY',
+			msg: 'Started workflows for retry',
+			articles: articleIds.length,
+			userFiles: userFileIds.length,
+			started,
+			batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
+		});
+	} finally {
+		await db.end();
 	}
-	for (let i = 0; i < userFileIds.length; i += RETRY_BATCH_SIZE) {
-		started += await startStoredWorkflowBatch(
-			env,
-			userFileIds.slice(i, i + RETRY_BATCH_SIZE).map((userFileId) => ({ kind: 'userFile', userFileId })),
-		);
-	}
-	console.info({
-		tag: 'RETRY',
-		msg: 'Started workflows for retry',
-		articles: articleIds.length,
-		userFiles: userFileIds.length,
-		started,
-		batches: Math.ceil(articleIds.length / RETRY_BATCH_SIZE) + Math.ceil(userFileIds.length / RETRY_BATCH_SIZE),
-	});
 }
 
 export async function enqueueProcessing(env: Env, target: ProcessingTarget, options: { db?: Client } = {}): Promise<string> {
@@ -392,21 +396,27 @@ async function persistStoredTarget(env: Env, db: Client, context: WorkflowRunCon
 async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	await db.query('BEGIN');
 	try {
-		const articleId =
-			context.target.kind === 'source' ? await persistSourceTarget(db, context, input) : await persistStoredTarget(env, db, context, input);
-		await persistYouTubeWorkflowData(db, {
-			transcript: input.youtubeTranscript,
-			highlights: input.youtubeHighlights,
-		});
-		await db.query('COMMIT');
-		return articleId;
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'workflow target rollback failed', error: String(rollbackError) }));
-		throw error;
+		await db.query('BEGIN');
+		try {
+			const articleId =
+				context.target.kind === 'source'
+					? await persistSourceTarget(db, context, input)
+					: await persistStoredTarget(env, db, context, input);
+			await persistYouTubeWorkflowData(db, {
+				transcript: input.youtubeTranscript,
+				highlights: input.youtubeHighlights,
+			});
+			await db.query('COMMIT');
+			return articleId;
+		} catch (error) {
+			await db
+				.query('ROLLBACK')
+				.catch((rollbackError) => console.error({ tag: 'DB', msg: 'workflow target rollback failed', error: String(rollbackError) }));
+			throw error;
+		}
+	} finally {
+		await db.end();
 	}
 }
 
@@ -527,11 +537,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						async () => {
 							const db = new Client({ connectionString: this.env.HYPERDRIVE.connectionString });
 							await db.connect();
-							await patchUserFileWorkflowMetadata(db, failedUserFileId, {
-								monitor_status: 'failed',
-								monitor_failed_at: new Date().toISOString(),
-								error: String(error).slice(0, 500),
-							});
+							try {
+								await patchUserFileWorkflowMetadata(db, failedUserFileId, {
+									monitor_status: 'failed',
+									monitor_failed_at: new Date().toISOString(),
+									error: String(error).slice(0, 500),
+								});
+							} finally {
+								await db.end();
+							}
 						},
 					);
 				} catch (metadataError) {

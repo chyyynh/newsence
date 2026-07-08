@@ -192,40 +192,44 @@ async function syncPaperGraph(env: Env, articleId: string, paper: PaperMetadata)
 
 	const db = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	await db.query('BEGIN');
 	try {
-		const fromId = await upsertIngestedPaper(db, {
-			openAlexId: paper.openAlexId,
-			doi: paper.doi ?? null,
-			articleId,
-			title: paper.title ?? null,
-			authors: paper.authors ?? [],
-			venue: paper.venue ?? null,
-			year: paper.year ?? null,
-			abstract: paper.abstract ?? null,
-			citedByCount: paper.citedByCount ?? null,
-			oaPdfUrl: paper.oaPdfUrl ?? null,
-		});
+		await db.query('BEGIN');
+		try {
+			const fromId = await upsertIngestedPaper(db, {
+				openAlexId: paper.openAlexId,
+				doi: paper.doi ?? null,
+				articleId,
+				title: paper.title ?? null,
+				authors: paper.authors ?? [],
+				venue: paper.venue ?? null,
+				year: paper.year ?? null,
+				abstract: paper.abstract ?? null,
+				citedByCount: paper.citedByCount ?? null,
+				oaPdfUrl: paper.oaPdfUrl ?? null,
+			});
 
-		const refs = (paper.references ?? []).filter((ref) => ref.openAlexId).slice(0, MAX_EDGES);
-		let edges = 0;
-		for (let ordinal = 0; ordinal < refs.length; ordinal++) {
-			const toId = await upsertReferenceNode(db, refs[ordinal]);
-			if (!toId || toId === fromId) continue;
-			await db.query(
-				`INSERT INTO paper_references (from_paper_id, to_paper_id, ordinal)
+			const refs = (paper.references ?? []).filter((ref) => ref.openAlexId).slice(0, MAX_EDGES);
+			let edges = 0;
+			for (let ordinal = 0; ordinal < refs.length; ordinal++) {
+				const toId = await upsertReferenceNode(db, refs[ordinal]);
+				if (!toId || toId === fromId) continue;
+				await db.query(
+					`INSERT INTO paper_references (from_paper_id, to_paper_id, ordinal)
 				 VALUES ($1, $2, $3) ON CONFLICT (from_paper_id, to_paper_id) DO NOTHING`,
-				[fromId, toId, ordinal],
-			);
-			edges++;
+					[fromId, toId, ordinal],
+				);
+				edges++;
+			}
+			await db.query('COMMIT');
+			return { edges };
+		} catch (error) {
+			await db
+				.query('ROLLBACK')
+				.catch((rollbackError) => console.error({ tag: 'DB', msg: 'paper graph rollback failed', error: String(rollbackError) }));
+			throw error;
 		}
-		await db.query('COMMIT');
-		return { edges };
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'paper graph rollback failed', error: String(rollbackError) }));
-		throw error;
+	} finally {
+		await db.end();
 	}
 }
 
