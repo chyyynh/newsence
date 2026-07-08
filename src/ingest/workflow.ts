@@ -145,7 +145,6 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 		let articleId: string;
 		if (target.kind === 'source') {
 			const fullArticle = sourceRecordToArticle(target.draft.article);
-			const articleForInsert = { ...target.draft.article, ogImageUrl: null };
 			const updatePayload: Record<string, unknown> = {
 				...buildProcessorUpdatePayload(
 					fullArticle,
@@ -153,12 +152,11 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 					input.embedding,
 					input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : undefined,
 				),
-				og_image_url: null,
 			};
-			const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
-			const entities = normalizeArticleEntityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
-			articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
-			if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
+			const platformMetadata = updatePayload.platform_metadata ?? target.draft.article.platformMetadata;
+			const entities = normalizeArticleEntityUpdatePayload(updatePayload, target.draft.article.source, platformMetadata);
+			articleId = await insertFinalSourceArticle(db, target.draft.article, updatePayload);
+			if (entities) await syncArticleEntities(db, articleId, entities, target.draft.article.source, platformMetadata);
 		} else {
 			const finalResult =
 				input.pdfTextArtifact?.text && input.article.content

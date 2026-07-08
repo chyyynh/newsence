@@ -60,7 +60,6 @@ async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<v
 						summary: description,
 						sourceType: 'rss',
 						content: description || null,
-						ogImageUrl: null,
 						platformMetadata: null,
 					},
 				},

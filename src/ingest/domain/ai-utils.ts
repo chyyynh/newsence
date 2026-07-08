@@ -12,7 +12,6 @@ export interface ProcessorResult {
 		summary_cn?: string;
 		content?: string;
 		content_cn?: string;
-		og_image_url?: string;
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;

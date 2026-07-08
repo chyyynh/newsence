@@ -403,7 +403,6 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 					summary: scraped.metadata.description ?? '',
 					sourceType: 'youtube',
 					content: scraped.markdown,
-					ogImageUrl: scraped.metadata.ogImageUrl,
 					platformMetadata: scraped.platformMetadata,
 				},
 				youtubeTranscript: scraped.youtubeTranscript,

@@ -414,7 +414,6 @@ async function enqueueTwitterArticle(
 		publishedDate: Date;
 		summary: string;
 		content: string | null;
-		ogImage: string | null;
 		platformMetadata: PlatformMetadata;
 		hashTags?: string[];
 	},
@@ -430,7 +429,6 @@ async function enqueueTwitterArticle(
 				summary: data.summary,
 				sourceType: 'twitter',
 				content: data.content,
-				ogImageUrl: data.ogImage,
 				platformMetadata: data.platformMetadata,
 				keywords: data.hashTags,
 			},
@@ -474,7 +472,6 @@ async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolea
 		publishedDate: new Date(scraped.metadata.publishedDate || tweet.createdAt),
 		summary: resolved.kind === 'tweet' ? resolved.eventText : scraped.metadata.description || '',
 		content: resolved.kind === 'tweet' ? resolved.eventText || null : scraped.markdown,
-		ogImage: scraped.metadata.ogImageUrl,
 		platformMetadata: scraped.platformMetadata,
 		hashTags: tweet.hashTags,
 	});
@@ -483,7 +480,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolea
 }
 
 async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<boolean> {
-	const { first, combinedText, media, platformMetadata } = buildThreadArticleParts(tweets);
+	const { first, combinedText, platformMetadata } = buildThreadArticleParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
 
@@ -504,7 +501,6 @@ async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<bo
 		publishedDate: new Date(first.createdAt),
 		summary: combinedText,
 		content: combinedText,
-		ogImage: media[0]?.url ?? null,
 		platformMetadata,
 		hashTags: first.hashTags,
 	});

@@ -44,7 +44,6 @@ interface PreparedArticleRecord {
 	summary: string;
 	sourceType: string;
 	content: string | null;
-	ogImageUrl: string | null;
 	platformMetadata: unknown | null;
 	keywords?: string[];
 	tags?: string[];
@@ -90,7 +89,6 @@ export async function insertFinalSourceArticle(
 ): Promise<string> {
 	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
 	const entities = updatePayload.entities ?? null;
-	const ogImageUrl = Object.hasOwn(updatePayload, 'og_image_url') ? updatePayload.og_image_url : base.ogImageUrl;
 	const inserted = await db.query<{ id: string }>(
 		`INSERT INTO articles (
 			url, title, title_cn, source, published_date, scraped_date, keywords, tags, tokens,
@@ -114,7 +112,7 @@ export async function insertFinalSourceArticle(
 			base.sourceType,
 			updatePayload.content ?? base.content,
 			updatePayload.content_cn ?? null,
-			ogImageUrl,
+			null,
 			platformMetadata ? JSON.stringify(platformMetadata) : null,
 			entities ? JSON.stringify(entities) : null,
 			updatePayload.embedding ?? null,
