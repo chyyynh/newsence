@@ -54,8 +54,6 @@ type CoreUrlIngestResult = {
 	summaryCn?: string;
 	tags?: string[];
 	ogImageUrl?: string | null;
-	platformType?: string;
-	alreadyExists?: boolean;
 	error?: string;
 };
 

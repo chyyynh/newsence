@@ -22,8 +22,6 @@ type IngestResult = {
 	summaryCn?: string;
 	tags?: string[];
 	ogImageUrl?: string | null;
-	platformType?: string;
-	alreadyExists?: boolean;
 	error?: string;
 };
 
@@ -62,22 +60,19 @@ function buildUserFileResult(
 		title_cn: string | null;
 		summary_cn: string | null;
 		tags: string[] | null;
-		platform_type: string | null;
 		og_image_url: string | null;
 	},
-	args: { instanceId?: string; alreadyExists: boolean },
+	instanceId?: string,
 ): IngestResult {
 	return {
 		url,
 		userFileId: row.id,
-		instanceId: args.instanceId,
+		instanceId,
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
-		alreadyExists: args.alreadyExists,
-		platformType: row.platform_type || 'web',
 	};
 }
 
@@ -86,7 +81,7 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 		row.title_cn && row.summary_cn && row.has_embedding
 			? undefined
 			: await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db });
-	return buildUserFileResult(url, row, { instanceId, alreadyExists: true });
+	return buildUserFileResult(url, row, instanceId);
 }
 
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
@@ -118,7 +113,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 				{ db },
 			)
 		: undefined;
-	return buildUserFileResult(url, row, { instanceId, alreadyExists: !row.created });
+	return buildUserFileResult(url, row, instanceId);
 }
 
 export async function ingestUrls(
