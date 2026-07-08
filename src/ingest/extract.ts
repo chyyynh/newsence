@@ -3,7 +3,7 @@ import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@cor
 import type { ExtractedContent, ScrapedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
-import { parsePdf } from './platforms/pdf';
+import { extractPdfContent } from './platforms/pdf';
 import { extractTweetId, scrapeTweet } from './platforms/twitter/scraper';
 import { scrapeHtmlFromResponse } from './platforms/web-scraper';
 import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
@@ -36,8 +36,6 @@ const EMPTY_METADATA: ExtractedContent['metadata'] = {
 	description: null,
 	ogImageUrl: null,
 };
-
-type ParsedPdf = Awaited<ReturnType<typeof parsePdf>>;
 
 const GENERIC_URL_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_URL_FETCH_HEADERS: HeadersInit = {
@@ -147,21 +145,9 @@ function normalizeHtml(scraped: ScrapedContent, sourceUrl: string | null): Extra
 	};
 }
 
-function normalizePdf(parsed: ParsedPdf, sourceUrl: string | null): ExtractedContent {
-	return {
-		sourceUrl,
-		contentType: PDF_MIME,
-		title: null,
-		markdown: parsed.text,
-		text: parsed.text,
-		metadata: { ...EMPTY_METADATA, pages: parsed.pages, chars: parsed.chars },
-		status: parsed.status,
-	};
-}
-
 export async function extractFile(bytes: Uint8Array): Promise<ExtractedContent> {
 	const type = sniffMediaType(bytes.subarray(0, MAGIC_SNIFF_BYTES)) ?? 'application/octet-stream';
-	if (type === PDF_MIME) return normalizePdf(await parsePdf(bytes), null);
+	if (type === PDF_MIME) return extractPdfContent(bytes, null);
 	return { sourceUrl: null, contentType: type, title: null, markdown: '', text: '', metadata: { ...EMPTY_METADATA }, status: 'failed' };
 }
 
@@ -172,7 +158,7 @@ export async function extractUrl(env: Env, url: string): Promise<ExtractedConten
 	if (result.contentType === PDF_MIME) {
 		const limited = streamWithByteLimit(result.body, MAX_UPLOAD_BYTES);
 		const bytes = new Uint8Array(await new Response(limited).arrayBuffer());
-		return normalizePdf(await parsePdf(bytes), result.sourceUrl);
+		return extractPdfContent(bytes, result.sourceUrl);
 	}
 	await result.body.cancel();
 	return {

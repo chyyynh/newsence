@@ -1,5 +1,6 @@
 import type { WorkflowStep } from 'cloudflare:workers';
 import { PDF_MIME } from '@core-shared/mime';
+import type { ExtractedContent } from '@core-shared/types';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 
@@ -47,6 +48,27 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	const chars = text.length;
 	const status = chars < MIN_PDF_CHARS || chars / Math.max(pages, 1) < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
 	return { text, pages, chars, status };
+}
+
+export async function extractPdfContent(bytes: Uint8Array, sourceUrl: string | null): Promise<ExtractedContent> {
+	const parsed = await parsePdf(bytes);
+	return {
+		sourceUrl,
+		contentType: PDF_MIME,
+		title: null,
+		markdown: parsed.text,
+		text: parsed.text,
+		metadata: {
+			author: null,
+			publishedDate: null,
+			siteName: null,
+			description: null,
+			ogImageUrl: null,
+			pages: parsed.pages,
+			chars: parsed.chars,
+		},
+		status: parsed.status,
+	};
 }
 
 async function extractPdfTextToTemp(
