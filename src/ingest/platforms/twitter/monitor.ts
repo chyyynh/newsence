@@ -195,6 +195,7 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 				const saved = group.length >= 2 ? await saveThread(db, group, env) : await saveTweet(db, first, env);
 				if (saved) processed++;
 			} catch (err) {
+				allCompleted = false;
 				console.error({ tag: 'TWITTER', msg: 'Save failed', url: first.url, error: String(err) });
 			}
 		}
