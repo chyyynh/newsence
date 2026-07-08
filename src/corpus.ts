@@ -32,12 +32,12 @@ export type RelatedArticleSearchInput = {
 };
 
 export interface ReadContextItem {
-	type: 'article' | 'collection' | 'url';
+	type: 'article' | 'collection' | 'user_file' | 'url';
 	id: string;
 }
 
 export interface ReadContextResult {
-	type: 'article' | 'collection' | 'url' | 'document' | 'error';
+	type: 'article' | 'collection' | 'user_file' | 'url' | 'document' | 'error';
 	id: string;
 	title?: string;
 	content?: string;
@@ -66,6 +66,25 @@ interface ArticleContentRow extends ArticleSummaryRow {
 	content: string | null;
 	content_cn: string | null;
 	source_type: string | null;
+}
+
+interface UserFileContentRow {
+	id: string;
+	file_name: string;
+	file_type: string;
+	resource_kind: string;
+	title: string | null;
+	title_cn: string | null;
+	source_url: string | null;
+	normalized_source_url: string | null;
+	site_name: string | null;
+	platform_type: string | null;
+	published_date: Date | string | null;
+	summary: string | null;
+	summary_cn: string | null;
+	extracted_text: string | null;
+	content_cn: string | null;
+	tags: string[] | null;
 }
 
 type TranscriptHighlight = { title: string; startTime: number; endTime: number; summary: string };
@@ -384,6 +403,26 @@ function formatArticleReadResult(
 	};
 }
 
+function formatUserFileReadResult(file: UserFileContentRow): ReadContextResult {
+	const title = file.title_cn || file.title || file.file_name;
+	return {
+		type: 'user_file',
+		id: file.id,
+		title,
+		content: truncate(file.content_cn || file.extracted_text || file.summary_cn || file.summary, CONTENT_MAX),
+		metadata: {
+			url: file.source_url,
+			source: file.site_name,
+			publishedDate: file.published_date,
+			tags: file.tags,
+			fileName: file.file_name,
+			fileType: file.file_type,
+			resourceKind: file.resource_kind,
+			sourceType: file.platform_type,
+		},
+	};
+}
+
 async function attachTranscripts(client: Client, articles: ArticleContentRow[]): Promise<ReadContextResult[]> {
 	const videoIds = articles
 		.filter((a) => a.source_type === 'youtube')
@@ -419,6 +458,20 @@ async function readArticles(client: Client, ids: string[]): Promise<Map<string, 
 		validIds,
 	]);
 	const formatted = await attachTranscripts(client, result.rows);
+	return new Map(formatted.map((r) => [r.id, r]));
+}
+
+async function readUserFiles(client: Client, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
+	const validIds = ids.filter(isValidUuid);
+	if (validIds.length === 0) return new Map();
+	const result = await client.query<UserFileContentRow>(
+		`SELECT id, file_name, file_type, resource_kind, title, title_cn, source_url, normalized_source_url,
+		        site_name, platform_type, published_date, summary, summary_cn, extracted_text, content_cn, tags
+		   FROM user_files
+		  WHERE id = ANY($1::uuid[]) AND user_id = $2`,
+		[validIds, userId],
+	);
+	const formatted = result.rows.map(formatUserFileReadResult);
 	return new Map(formatted.map((r) => [r.id, r]));
 }
 
@@ -498,24 +551,42 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 	);
 }
 
-async function readUrls(client: Client, urls: string[]): Promise<Map<string, ReadContextResult>> {
+async function readUrls(client: Client, urls: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
 	const candidateUrls = [...new Set(urlPairs.flat())];
 
-	const result = await client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE url = ANY($1::text[])`, [
-		candidateUrls,
+	const [articleResult, fileResult] = await Promise.all([
+		client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE url = ANY($1::text[])`, [candidateUrls]),
+		client.query<UserFileContentRow>(
+			`SELECT id, file_name, file_type, resource_kind, title, title_cn, source_url, normalized_source_url,
+			        site_name, platform_type, published_date, summary, summary_cn, extracted_text, content_cn, tags
+			   FROM user_files
+			  WHERE user_id = $2
+			    AND (source_url = ANY($1::text[]) OR normalized_source_url = ANY($1::text[]))`,
+			[candidateUrls, userId],
+		),
 	]);
-	const dbMap = new Map(result.rows.map((a) => [a.url, a] as const));
-	const matches = urlPairs
-		.map(([url, norm]) => ({ url, article: dbMap.get(url) ?? dbMap.get(norm) }))
+	const articleMap = new Map(articleResult.rows.map((a) => [a.url, a] as const));
+	const fileMap = new Map<string, UserFileContentRow>();
+	for (const file of fileResult.rows) {
+		if (file.source_url) fileMap.set(file.source_url, file);
+		if (file.normalized_source_url) fileMap.set(file.normalized_source_url, file);
+	}
+	const articleMatches = urlPairs
+		.map(([url, norm]) => ({ url, article: articleMap.get(url) ?? articleMap.get(norm) }))
 		.filter((m): m is { url: string; article: ArticleContentRow } => !!m.article);
+	const fileMatches = urlPairs
+		.filter(([url, norm]) => !articleMap.has(url) && !articleMap.has(norm))
+		.map(([url, norm]) => ({ url, file: fileMap.get(url) ?? fileMap.get(norm) }))
+		.filter((m): m is { url: string; file: UserFileContentRow } => !!m.file);
 
-	const formatted = await attachTranscripts(
+	const formattedArticles = await attachTranscripts(
 		client,
-		matches.map((m) => m.article),
+		articleMatches.map((m) => m.article),
 	);
-	const formattedById = new Map(formatted.map((r) => [r.id, r] as const));
-	return new Map(matches.map((m) => [m.url, formattedById.get(m.article.id)!] as const));
+	const formattedArticleById = new Map(formattedArticles.map((r) => [r.id, r] as const));
+	const formattedFiles = new Map(fileMatches.map((m) => [m.url, formatUserFileReadResult(m.file)] as const));
+	return new Map([...articleMatches.map((m) => [m.url, formattedArticleById.get(m.article.id)!] as const), ...formattedFiles]);
 }
 
 async function readItems(client: Client, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
@@ -534,7 +605,9 @@ async function readItems(client: Client, items: ReadContextItem[], userId: strin
 					? await readArticles(client, ids)
 					: type === 'collection'
 						? await readCollections(client, ids, userId)
-						: await readUrls(client, ids);
+						: type === 'user_file'
+							? await readUserFiles(client, ids, userId)
+							: await readUrls(client, ids, userId);
 			resultMaps.set(type, results);
 		}),
 	);
