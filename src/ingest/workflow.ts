@@ -114,16 +114,6 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-type WorkflowPersistenceInput = {
-	article: Article;
-	result: ProcessorResult;
-	embedding: number[] | null;
-	pdfTextArtifact: PdfTextArtifact | null;
-	youtubeTranscript?: YoutubeTranscript;
-	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>;
-	paperEnrichment: PaperMetadata | null;
-};
-
 async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact | null): Promise<Article> {
 	let article: Article;
 	if (target.kind === 'source') {
@@ -135,7 +125,17 @@ async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTe
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
 }
 
-async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
+async function persistWorkflowTarget(
+	env: CoreEnv,
+	target: WorkflowTarget,
+	article: Article,
+	result: ProcessorResult,
+	embedding: number[] | null,
+	pdfTextArtifact: PdfTextArtifact | null,
+	paperEnrichment: PaperMetadata | null,
+	youtubeTranscript: YoutubeTranscript | undefined,
+	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
+): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
@@ -146,9 +146,9 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 			const updatePayload: Record<string, unknown> = {
 				...buildProcessorUpdatePayload(
 					fullArticle,
-					input.result,
-					input.embedding,
-					input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : undefined,
+					result,
+					embedding,
+					paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined,
 				),
 			};
 			const platformMetadata = updatePayload.platform_metadata ?? target.draft.article.platformMetadata;
@@ -157,10 +157,8 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 			if (entities) await syncArticleEntities(db, articleId, entities, target.draft.article.source, platformMetadata);
 		} else {
 			const finalResult =
-				input.pdfTextArtifact?.text && input.article.content
-					? { ...input.result, updateData: { ...input.result.updateData, content: input.article.content } }
-					: input.result;
-			const pdf = input.pdfTextArtifact;
+				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
+			const pdf = pdfTextArtifact;
 			const extraction = pdf && {
 				status: pdf.status,
 				parser: 'liteparse',
@@ -169,26 +167,23 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 			};
 			const metadataPatch = {
 				...(extraction ? { extraction } : {}),
-				...(input.paperEnrichment ? { type: 'paper', data: input.paperEnrichment } : {}),
+				...(paperEnrichment ? { type: 'paper', data: paperEnrichment } : {}),
 			};
 			const updatePayload = buildProcessorUpdatePayload(
-				input.article,
+				article,
 				finalResult,
-				input.embedding,
+				embedding,
 				Object.keys(metadataPatch).length ? metadataPatch : undefined,
 			);
-			const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
-			const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
+			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
+			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 
 			await updateArticleAfterProcessing(db, target.table, target.rowId, updatePayload);
-			if (target.table === 'articles' && entities)
-				await syncArticleEntities(db, target.rowId, entities, input.article.source, platformMetadata);
+			if (target.table === 'articles' && entities) await syncArticleEntities(db, target.rowId, entities, article.source, platformMetadata);
 			articleId = target.rowId;
 		}
-		await persistYouTubeWorkflowData(db, {
-			transcript: input.youtubeTranscript,
-			highlights: input.youtubeHighlights,
-		});
+		if (youtubeTranscript || youtubeHighlights)
+			await persistYouTubeWorkflowData(db, { transcript: youtubeTranscript, highlights: youtubeHighlights });
 		await db.query('COMMIT');
 		return articleId;
 	} catch (error) {
@@ -271,15 +266,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () =>
-				persistWorkflowTarget(this.env, target, {
-					article: pdfTextArtifact?.text ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
-					result: processorResult,
+				persistWorkflowTarget(
+					this.env,
+					target,
+					pdfTextArtifact?.text ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
+					processorResult,
 					embedding,
 					pdfTextArtifact,
+					paperEnrichment,
 					youtubeTranscript,
 					youtubeHighlights,
-					paperEnrichment,
-				}),
+				),
 		);
 
 		await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);

@@ -57,8 +57,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Read workflow status for app-side polling. */
 	async getWorkflowStatus(instanceId: string) {
 		const instance = await this.env.MONITOR_WORKFLOW.get(instanceId);
-		const { status, error, output } = await instance.status();
-		return { error, output, status: String(status) };
+		return instance.status();
 	}
 
 	/** Read article/collection/url resources from the core corpus. */
