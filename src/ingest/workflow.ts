@@ -88,42 +88,22 @@ type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'terminated']);
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
-const WORKFLOW_ID_MAX_LENGTH = 100;
 
 export async function enqueueProcessing(
 	env: CoreEnv,
 	target: StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft },
 ): Promise<string> {
-	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
-	return enqueueStoredWorkflow(env, target);
-}
+	const workflowTarget: WorkflowTarget = target.kind === 'source' ? { kind: 'source', draft: target.draft } : target;
+	const workflowId = target.kind === 'source' ? await sourceArticleWorkflowId(target.draft.article.url) : storedWorkflowId(target);
+	const [created] = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
+	if (created) return created.id;
 
-async function enqueueStoredWorkflow(env: CoreEnv, target: StoredWorkflowTarget): Promise<string> {
-	const workflowId = storedWorkflowId(target);
-	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
-	if (created[0]) return created[0].id;
+	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
+	const { status } = await instance.status();
+	if (ACTIVE_WORKFLOW_STATUSES.has(status) || (workflowTarget.kind === 'source' && status === 'complete')) return instance.id;
 
-	const existing = await getMonitorWorkflowStatus(env, workflowId);
-	if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
-
-	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId(workflowId), params: { target } }]);
-	if (!retried[0]) throw new Error(`Failed to create stored workflow: ${workflowId}`);
-	return retried[0].id;
-}
-
-async function enqueueSourceArticleWorkflow(env: CoreEnv, draft: SourceArticleDraft): Promise<string> {
-	const workflowId = await sourceArticleWorkflowId(draft.article.url);
-	const target: WorkflowTarget = { kind: 'source', draft };
-	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
-	if (created.length) return created[0].id;
-
-	const existing = await getMonitorWorkflowStatus(env, workflowId);
-	if (existing.status === 'complete' || ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
-
-	const retryId = retryWorkflowId(workflowId);
-	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryId, params: { target } }]);
-	if (!retried.length) throw new Error(`Failed to create source workflow ${retryId}`);
-	return retried[0].id;
+	await instance.restart();
+	return instance.id;
 }
 
 function workflowIdPart(value: string): string {
@@ -134,10 +114,6 @@ function storedWorkflowId(target: StoredWorkflowTarget): string {
 	return ['article', workflowIdPart(target.table), workflowIdPart(target.rowId)].join('-');
 }
 
-function retryWorkflowId(workflowId: string): string {
-	return `${workflowId.slice(0, WORKFLOW_ID_MAX_LENGTH - 37)}-${crypto.randomUUID()}`;
-}
-
 async function sourceArticleWorkflowId(url: string): Promise<string> {
 	const bytes = new TextEncoder().encode(url);
 	const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -146,17 +122,6 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 		.map((byte) => byte.toString(16).padStart(2, '0'))
 		.join('');
 	return `source-article-${hash}`;
-}
-
-async function getMonitorWorkflowStatus(env: CoreEnv, workflowId: string): Promise<{ id: string; status: string }> {
-	try {
-		const instance = await env.MONITOR_WORKFLOW.get(workflowId);
-		const status = await instance.status();
-		return { id: instance.id, status: status.status };
-	} catch {
-		// Missing or expired instances are not live; callers may create a retry instance.
-		return { id: workflowId, status: 'unknown' };
-	}
 }
 
 export function streamWorkflowStatus(env: CoreEnv, workflowId: string): Response {
