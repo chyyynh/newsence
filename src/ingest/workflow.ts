@@ -5,11 +5,9 @@ import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import {
-	getUserFileWorkflowInstanceId,
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
 	type PreparedArticleRecord,
-	patchUserFileWorkflowMetadata,
 	preparedArticleToArticle,
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
@@ -93,7 +91,7 @@ export async function enqueueProcessing(
 ): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
 	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
-	return enqueueUserFileWorkflow(env, target.userFileId);
+	return enqueueStoredWorkflow(env, target);
 }
 
 async function enqueueStoredWorkflow(env: CoreEnv, target: StoredWorkflowTarget): Promise<string> {
@@ -180,24 +178,6 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 		.map((byte) => byte.toString(16).padStart(2, '0'))
 		.join('');
 	return `source-article-${hash}`;
-}
-
-async function enqueueUserFileWorkflow(env: CoreEnv, userFileId: string): Promise<string> {
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const storedInstanceId = await getUserFileWorkflowInstanceId(db, userFileId);
-	if (storedInstanceId) {
-		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
-		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
-	}
-
-	const instanceId = await enqueueStoredWorkflow(env, { kind: 'userFile', userFileId });
-	await patchUserFileWorkflowMetadata(db, userFileId, {
-		monitor_instance_id: instanceId,
-		monitor_status: 'running',
-		monitor_started_at: new Date().toISOString(),
-	});
-	return instanceId;
 }
 
 async function getMonitorWorkflowStatus(env: CoreEnv, workflowId: string): Promise<{ id: string; status: string }> {
@@ -325,13 +305,7 @@ async function persistStoredTarget(db: Client, target: StoredWorkflowTarget, inp
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
 	await updateArticleAfterProcessing(db, table, rowId, updatePayload);
-	if (target.kind === 'userFile')
-		await patchUserFileWorkflowMetadata(db, target.userFileId, {
-			monitor_status: 'complete',
-			monitor_completed_at: new Date().toISOString(),
-			article_id: rowId,
-		});
-	else if (entities) await syncArticleEntities(db, rowId, entities, input.article.source, platformMetadata);
+	if (target.kind === 'article' && entities) await syncArticleEntities(db, rowId, entities, input.article.source, platformMetadata);
 	return rowId;
 }
 
@@ -361,138 +335,105 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { target: WorkflowTarget }> {
 	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
 		const target = event.payload.target;
-		try {
-			const article = await step.do(
-				target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				async () => {
-					if (target.kind === 'source')
-						return { ...preparedArticleToArticle((await readSourceDraft(this.env, target)).article), content: null };
-					const { table, rowId } = storedWorkflowRecord(target);
-					return loadArticleForProcessing(this.env, table, rowId, true);
-				},
-			);
-			const sourceType = platformIdentity(article);
-			const platform = articlePlatforms[sourceType] ?? processDefaultArticle;
-			const storedRecord = target.kind === 'source' ? null : storedWorkflowRecord(target);
-			const logContext =
-				storedRecord === null ? { url: article.url, table: 'articles' } : { article_id: storedRecord.rowId, table: storedRecord.table };
+		const article = await step.do(
+			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			async () => {
+				if (target.kind === 'source')
+					return { ...preparedArticleToArticle((await readSourceDraft(this.env, target)).article), content: null };
+				const { table, rowId } = storedWorkflowRecord(target);
+				return loadArticleForProcessing(this.env, table, rowId, true);
+			},
+		);
+		const sourceType = platformIdentity(article);
+		const platform = articlePlatforms[sourceType] ?? processDefaultArticle;
+		const storedRecord = target.kind === 'source' ? null : storedWorkflowRecord(target);
+		const logContext =
+			storedRecord === null ? { url: article.url, table: 'articles' } : { article_id: storedRecord.rowId, table: storedRecord.table };
 
-			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
+		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
-			const pdfTextArtifact = await stagePdfTextExtraction(this.env, step, {
-				articleId: target.kind === 'userFile' ? target.userFileId : null,
-				hasContent: 'has_content' in article && !!article.has_content,
-				sourceStorageKey: article.storage_key,
-				fileType: article.file_type,
-				workflowRunId: workflowIdPart(event.instanceId),
-			});
+		const pdfTextArtifact = await stagePdfTextExtraction(this.env, step, {
+			articleId: target.kind === 'userFile' ? target.userFileId : null,
+			hasContent: 'has_content' in article && !!article.has_content,
+			sourceStorageKey: article.storage_key,
+			fileType: article.file_type,
+			workflowRunId: workflowIdPart(event.instanceId),
+		});
 
-			const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
-				hasStagedText: !!pdfTextArtifact?.extractedTextKey,
-				loadContent: async () => (await loadFullTargetArticle(this.env, target, pdfTextArtifact)).content,
-			});
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
+			hasStagedText: !!pdfTextArtifact?.extractedTextKey,
+			loadContent: async () => (await loadFullTargetArticle(this.env, target, pdfTextArtifact)).content,
+		});
 
-			const processorResult = await step.do(
-				'ai-analysis',
-				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
-				async () => platform(await loadFullTargetArticle(this.env, target, pdfTextArtifact), this.env),
-			);
+		const processorResult = await step.do(
+			'ai-analysis',
+			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
+			async () => platform(await loadFullTargetArticle(this.env, target, pdfTextArtifact), this.env),
+		);
 
-			const embedding = await step.do(
-				'generate-embedding',
-				{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-				async () => {
-					const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
-					const text = prepareArticleTextForEmbedding({
-						title: article.title,
-						summary: processorResult.updateData.summary ?? article.summary,
-						content: processorResult.updateData.content ?? article.content,
-						tags: processorResult.updateData.tags ?? article.tags,
-						keywords: processorResult.updateData.keywords ?? article.keywords,
-					});
-					return text && this.env.AI ? generateArticleEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
-				},
-			);
+		const embedding = await step.do(
+			'generate-embedding',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			async () => {
+				const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
+				const text = prepareArticleTextForEmbedding({
+					title: article.title,
+					summary: processorResult.updateData.summary ?? article.summary,
+					content: processorResult.updateData.content ?? article.content,
+					tags: processorResult.updateData.tags ?? article.tags,
+					keywords: processorResult.updateData.keywords ?? article.keywords,
+				});
+				return text && this.env.AI ? generateArticleEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
+			},
+		);
 
-			let youtubeTranscript: YoutubeTranscript | undefined;
-			if (sourceType === 'youtube') {
-				if (target.kind === 'source') {
-					const draft = await readSourceDraft(this.env, target);
-					youtubeTranscript = draft.youtubeTranscript;
-				}
+		let youtubeTranscript: YoutubeTranscript | undefined;
+		if (sourceType === 'youtube') {
+			if (target.kind === 'source') {
+				const draft = await readSourceDraft(this.env, target);
+				youtubeTranscript = draft.youtubeTranscript;
 			}
-			const youtubeHighlights =
-				sourceType === 'youtube'
-					? await step.do(
-							'prepare-youtube-highlights',
-							{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-							async () => prepareYouTubeHighlights(this.env, article, youtubeTranscript),
-						)
-					: null;
-			const articleId = await step.do(
-				target.kind === 'source' ? 'insert-final-article' : 'update-db',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				async () =>
-					persistWorkflowTarget(this.env, target, {
-						article: pdfTextArtifact?.extractedTextKey ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
-						result: processorResult,
-						embedding,
-						pdfTextArtifact,
-						youtubeTranscript,
-						youtubeHighlights,
-						paperEnrichment,
-					}),
-			);
-
-			await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
-
-			const scratchKeys = [pdfTextArtifact?.extractedTextKey, target.kind === 'source' ? target.sourceDraftKey : null].filter(
-				(key): key is string => !!key,
-			);
-			if (scratchKeys.length) {
-				await step.do(
-					'cleanup-workflow-scratch-objects',
-					{ retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' },
-					async () => {
-						try {
-							await this.env.R2.delete(scratchKeys);
-						} catch (error) {
-							console.warn({ tag: 'WORKFLOW', msg: 'Workflow scratch cleanup failed', keys: scratchKeys, error: String(error) });
-						}
-					},
-				);
-			}
-
-			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
-			return { success: true, article_id: articleId };
-		} catch (error) {
-			if (target.kind === 'userFile') {
-				const failedUserFileId = target.userFileId;
-				try {
-					await step.do(
-						'record-user-file-workflow-failed',
-						{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '15 seconds' },
-						async () => {
-							const db = new Client({ connectionString: this.env.HYPERDRIVE.connectionString });
-							await db.connect();
-							await patchUserFileWorkflowMetadata(db, failedUserFileId, {
-								monitor_status: 'failed',
-								monitor_failed_at: new Date().toISOString(),
-								error: String(error).slice(0, 500),
-							});
-						},
-					);
-				} catch (metadataError) {
-					console.warn({
-						tag: 'WORKFLOW',
-						msg: 'Failed to record user_file workflow failure',
-						article_id: failedUserFileId,
-						error: String(metadataError),
-					});
-				}
-			}
-			throw error;
 		}
+		const youtubeHighlights =
+			sourceType === 'youtube'
+				? await step.do(
+						'prepare-youtube-highlights',
+						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+						async () => prepareYouTubeHighlights(this.env, article, youtubeTranscript),
+					)
+				: null;
+		const articleId = await step.do(
+			target.kind === 'source' ? 'insert-final-article' : 'update-db',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			async () =>
+				persistWorkflowTarget(this.env, target, {
+					article: pdfTextArtifact?.extractedTextKey ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
+					result: processorResult,
+					embedding,
+					pdfTextArtifact,
+					youtubeTranscript,
+					youtubeHighlights,
+					paperEnrichment,
+				}),
+		);
+
+		await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
+
+		const scratchKeys = [pdfTextArtifact?.extractedTextKey, target.kind === 'source' ? target.sourceDraftKey : null].filter(
+			(key): key is string => !!key,
+		);
+		if (scratchKeys.length) {
+			await step.do('cleanup-workflow-scratch-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, async () => {
+				try {
+					await this.env.R2.delete(scratchKeys);
+				} catch (error) {
+					console.warn({ tag: 'WORKFLOW', msg: 'Workflow scratch cleanup failed', keys: scratchKeys, error: String(error) });
+				}
+			});
+		}
+
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
+		return { success: true, article_id: articleId };
 	}
 }

@@ -35,28 +35,6 @@ export async function loadArticleForProcessing(
 	return result.rows[0] as ArticleForProcessing;
 }
 
-export async function getUserFileWorkflowInstanceId(db: Client, userFileId: string): Promise<string | null> {
-	const result = await db.query(`SELECT metadata->'workflow'->>'monitor_instance_id' AS instance_id FROM user_files WHERE id = $1`, [
-		userFileId,
-	]);
-	const row = result.rows[0] as { instance_id?: string | null } | undefined;
-	return row?.instance_id ?? null;
-}
-
-export async function patchUserFileWorkflowMetadata(db: Client, userFileId: string, patch: Record<string, string>): Promise<void> {
-	await db.query(
-		`UPDATE user_files
-		 SET metadata = jsonb_set(
-		   COALESCE(metadata, '{}'::jsonb),
-		   '{workflow}',
-		   COALESCE(metadata->'workflow', '{}'::jsonb) || $1::jsonb,
-		   TRUE
-		 )
-		 WHERE id = $2`,
-		[JSON.stringify(patch), userFileId],
-	);
-}
-
 export interface PreparedArticleRecord {
 	url: string;
 	title: string;
