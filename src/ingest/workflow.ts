@@ -246,15 +246,14 @@ type WorkflowPersistenceInput = {
 };
 
 function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
-	let sourceDraftPromise: Promise<SourceArticleDraft> | null = null;
+	let sourceDraft: SourceArticleDraft | null = null;
 	const readSourceDraft = async () => {
 		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
-		sourceDraftPromise ??= (async () => {
-			const obj = await env.R2.get(target.sourceArticle.r2Key);
-			if (!obj) throw new Error(`source article draft missing: ${target.sourceArticle.r2Key}`);
-			return obj.json<SourceArticleDraft>();
-		})();
-		return sourceDraftPromise;
+		if (sourceDraft) return sourceDraft;
+		const obj = await env.R2.get(target.sourceArticle.r2Key);
+		if (!obj) throw new Error(`source article draft missing: ${target.sourceArticle.r2Key}`);
+		sourceDraft = await obj.json<SourceArticleDraft>();
+		return sourceDraft;
 	};
 	const readAttachments = async (): Promise<WorkflowAttachment[] | undefined> =>
 		target.kind === 'source' ? (await readSourceDraft()).attachments : target.kind === 'userFile' ? target.attachments : undefined;
