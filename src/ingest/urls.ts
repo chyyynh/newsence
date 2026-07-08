@@ -235,16 +235,13 @@ export async function ingestUrls(
 	const userId = args.userId;
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	try {
-		const uniqueResults: IngestResult[] = [];
-		for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {
-			const batch = uniqueUrls.slice(i, i + INGEST_URL_CONCURRENCY);
-			uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(db, url, env, userId)))));
-		}
-		const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
-		const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
-		return { ok: true, results };
-	} finally {
-		await db.end();
+
+	const uniqueResults: IngestResult[] = [];
+	for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {
+		const batch = uniqueUrls.slice(i, i + INGEST_URL_CONCURRENCY);
+		uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(db, url, env, userId)))));
 	}
+	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
+	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
+	return { ok: true, results };
 }
