@@ -95,7 +95,7 @@ const WORKFLOW_ID_MAX_LENGTH = 100;
 
 async function startStoredWorkflowBatch(env: Env, targets: StoredWorkflowTarget[]): Promise<number> {
 	if (!targets.length) return 0;
-	const descriptors = targets.map(storedWorkflowTarget);
+	const descriptors = targets.map((workflowTarget) => ({ workflowId: storedWorkflowId(workflowTarget), workflowTarget }));
 	const created = await env.MONITOR_WORKFLOW.createBatch(
 		descriptors.map(({ workflowId, workflowTarget }) => ({ id: workflowId, params: { target: workflowTarget } })),
 	);
@@ -150,21 +150,21 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function enqueueProcessing(env: Env, target: ProcessingTarget, options: { db?: Client } = {}): Promise<string> {
+export async function enqueueProcessing(env: Env, target: ProcessingTarget): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
 	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
-	return enqueueUserFileWorkflow(env, target, options.db);
+	return enqueueUserFileWorkflow(env, target);
 }
 
 async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
-	const { workflowId, workflowTarget } = storedWorkflowTarget(target);
-	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
+	const workflowId = storedWorkflowId(target);
+	const created = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
 	if (created[0]) return created[0].id;
 
 	const existing = await getMonitorWorkflowStatus(env, workflowId);
 	if (ACTIVE_WORKFLOW_STATUSES.has(existing.status)) return existing.id;
 
-	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId(workflowId), params: { target: workflowTarget } }]);
+	const retried = await env.MONITOR_WORKFLOW.createBatch([{ id: retryWorkflowId(workflowId), params: { target } }]);
 	if (!retried[0]) throw new Error(`Failed to create stored workflow: ${workflowId}`);
 	return retried[0].id;
 }
@@ -217,12 +217,9 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedWorkflowTarget(target: StoredWorkflowTarget): {
-	workflowId: string;
-	workflowTarget: WorkflowTarget;
-} {
+function storedWorkflowId(target: StoredWorkflowTarget): string {
 	const { table, rowId } = storedWorkflowRecord(target);
-	return { workflowId: ['article', workflowIdPart(table), workflowIdPart(rowId)].join('-'), workflowTarget: target };
+	return ['article', workflowIdPart(table), workflowIdPart(rowId)].join('-');
 }
 
 function storedWorkflowRecord(target: StoredWorkflowTarget) {
@@ -245,17 +242,17 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function enqueueUserFileWorkflow(env: Env, target: UserFileWorkflowTarget, db?: Client): Promise<string> {
-	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	if (!db) await client.connect();
-	const storedInstanceId = await getUserFileWorkflowInstanceId(client, target.userFileId);
+async function enqueueUserFileWorkflow(env: Env, target: UserFileWorkflowTarget): Promise<string> {
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const storedInstanceId = await getUserFileWorkflowInstanceId(db, target.userFileId);
 	if (storedInstanceId) {
 		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 	}
 
 	const instanceId = await enqueueStoredWorkflow(env, target);
-	await patchUserFileWorkflowMetadata(client, target.userFileId, {
+	await patchUserFileWorkflowMetadata(db, target.userFileId, {
 		monitor_instance_id: instanceId,
 		monitor_status: 'running',
 		monitor_started_at: new Date().toISOString(),
@@ -331,8 +328,7 @@ type WorkflowPersistenceInput = {
 	paperEnrichment: PaperMetadata | null;
 };
 
-async function readSourceDraft(env: Env, target: WorkflowTarget): Promise<SourceArticleDraft> {
-	if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
+async function readSourceDraft(env: Env, target: Extract<WorkflowTarget, { kind: 'source' }>): Promise<SourceArticleDraft> {
 	const obj = await env.R2.get(target.sourceDraftKey);
 	if (!obj) throw new Error(`source article draft missing: ${target.sourceDraftKey}`);
 	return obj.json<SourceArticleDraft>();
@@ -513,20 +509,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 
 			await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
 
-			if (pdfTextArtifact?.extractedTextKey || target.kind === 'source') {
-				const sourceDraftKey = target.kind === 'source' ? target.sourceDraftKey : null;
+			const scratchKeys = [pdfTextArtifact?.extractedTextKey, target.kind === 'source' ? target.sourceDraftKey : null].filter(
+				(key): key is string => !!key,
+			);
+			if (scratchKeys.length) {
 				await step.do(
 					'cleanup-workflow-scratch-objects',
 					{ retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' },
 					async () => {
-						const keys = [
-							...(pdfTextArtifact?.extractedTextKey ? [pdfTextArtifact.extractedTextKey] : []),
-							...(sourceDraftKey ? [sourceDraftKey] : []),
-						];
 						try {
-							await this.env.R2.delete(keys);
+							await this.env.R2.delete(scratchKeys);
 						} catch (error) {
-							console.warn({ tag: 'WORKFLOW', msg: 'Workflow scratch cleanup failed', keys, error: String(error) });
+							console.warn({ tag: 'WORKFLOW', msg: 'Workflow scratch cleanup failed', keys: scratchKeys, error: String(error) });
 						}
 					},
 				);
