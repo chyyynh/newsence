@@ -1,4 +1,4 @@
-import type { ScrapedContent } from '@core-shared/types';
+import type { ExtractedContent } from '@core-shared/types';
 import { BROWSER_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Readability } from '@mozilla/readability';
 import * as cheerio from 'cheerio';
@@ -168,7 +168,7 @@ const HTML_FETCH_HEADERS: HeadersInit = {
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
 
-export async function scrapeHtmlFromResponse(response: Response, url: string): Promise<ScrapedContent> {
+export async function scrapeHtmlFromResponse(response: Response, url: string): Promise<ExtractedContent> {
 	const contentLength = Number(response.headers.get('content-length') || '0');
 	if (contentLength > MAX_HTML_BYTES) {
 		throw new Error(`Response too large: ${contentLength} bytes`);
@@ -199,7 +199,7 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 	};
 }
 
-async function fetchAndExtract(url: string): Promise<ScrapedContent> {
+async function fetchAndExtract(url: string): Promise<ExtractedContent> {
 	const response = await fetchWithTimeout(url, { headers: HTML_FETCH_HEADERS }, FETCH_TIMEOUT_MS);
 	if (!response.ok) {
 		await response.body?.cancel();
@@ -215,7 +215,7 @@ async function fetchAndExtract(url: string): Promise<ScrapedContent> {
 	return scrapeHtmlFromResponse(response, url);
 }
 
-export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
+export async function scrapeWebPage(url: string): Promise<ExtractedContent> {
 	console.info({ tag: 'WEB', msg: 'Scraping', url });
 
 	const result = await fetchAndExtract(url);

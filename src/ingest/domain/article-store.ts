@@ -1,4 +1,4 @@
-import type { Article, ScrapedContent } from '@core-shared/types';
+import type { Article, ExtractedContent } from '@core-shared/types';
 import { detectUrlKind } from '@core-shared/web';
 import { Client } from 'pg';
 
@@ -131,11 +131,12 @@ export async function getExistingUrlUserFile(db: Client, userId: string, normali
 
 export async function insertScrapedUrlUserFile(
 	db: Client,
-	scraped: ScrapedContent,
+	scraped: ExtractedContent,
 	url: string,
 	userId: string,
 ): Promise<{ ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string }> {
 	const urlKind = detectUrlKind(url);
+	const title = scraped.title || new URL(url).hostname;
 
 	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
 	if (!skipContentCheck && (!scraped.markdown || scraped.markdown.length < 50)) {
@@ -165,7 +166,7 @@ export async function insertScrapedUrlUserFile(
 			  AND NOT EXISTS (SELECT 1 FROM inserted)
 			LIMIT 1`,
 			[
-				scraped.title,
+				title,
 				urlKind,
 				url,
 				scraped.metadata.siteName || 'External',
@@ -187,7 +188,7 @@ export async function insertScrapedUrlUserFile(
 
 		if (!userFile.created) return { ok: true, row: userFile };
 
-		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: scraped.title.slice(0, 50), userFileId: userFile.id });
+		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: title.slice(0, 50), userFileId: userFile.id });
 		return { ok: true, row: userFile };
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });

@@ -1,6 +1,6 @@
 import { generateText } from '@core-ai/embedding';
 import type { HackerNewsMetadata, PlatformEnrichments } from '@core-shared/platform-metadata';
-import type { Article, ScrapedContent } from '@core-shared/types';
+import type { Article, ExtractedContent } from '@core-shared/types';
 import { decodeHtmlEntities, fetchWithTimeout, htmlToText, readTextWithLimit } from '@core-shared/web';
 import {
 	type ArticleProcessor,
@@ -82,7 +82,7 @@ function buildHnMarkdown(item: HnItem): string {
 	return parts.join('\n');
 }
 
-export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> {
+export async function scrapeHackerNews(itemId: string): Promise<ExtractedContent> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
 	const item = await fetchHnItem(itemId);

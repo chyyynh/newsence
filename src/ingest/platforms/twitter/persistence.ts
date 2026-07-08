@@ -62,13 +62,14 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 	}
 
 	const { scraped } = resolved;
+	const title = scraped.title || buildTweetTitle(tweet);
 	const source =
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
 	const queued = await enqueueTwitterArticle(env, {
 		url: articleUrl,
-		title: scraped.title,
+		title,
 		source,
 		publishedDate: new Date(scraped.metadata.publishedDate || tweet.createdAt),
 		summary: resolved.kind === 'tweet' ? resolved.eventText : scraped.metadata.description || '',
@@ -77,7 +78,7 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 		platformMetadata: scraped.platformMetadata,
 		hashTags: tweet.hashTags,
 	});
-	if (queued) console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: scraped.title.slice(0, 50) });
+	if (queued) console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: title.slice(0, 50) });
 	return queued;
 }
 

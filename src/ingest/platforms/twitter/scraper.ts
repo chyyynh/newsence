@@ -1,5 +1,5 @@
 import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
-import type { ScrapedContent } from '@core-shared/types';
+import type { ExtractedContent } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { scrapeWebPage } from '../web-scraper';
 
@@ -254,7 +254,7 @@ interface TwitterArticle {
 async function scrapeTwitterArticle(
 	tweetId: string,
 	apiKey: string,
-): Promise<(ScrapedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
+): Promise<(ExtractedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
 
 	let data: { article?: TwitterArticle; status?: string };
@@ -320,7 +320,7 @@ async function scrapeExternalLinkTweet(
 	media: TwitterMedia[],
 	tweetText: string,
 	ogImageUrl: string | null,
-): Promise<ScrapedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }> {
+): Promise<ExtractedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }> {
 	console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
 	try {
 		const linked = await scrapeWebPage(externalUrl);
@@ -411,7 +411,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	};
 }
 
-export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ScrapedContent> {
+export async function scrapeTweet(tweetId: string, apiKey: string): Promise<ExtractedContent> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
 
 	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {

@@ -29,6 +29,7 @@ async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { v
 		});
 		const youtubeMetadata = scraped.platformMetadata.data;
 		const duration = youtubeMetadata.duration;
+		const title = scraped.title || `YouTube video ${video.videoId}`;
 		if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
 			console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
 			return false;
@@ -39,7 +40,7 @@ async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { v
 			draft: {
 				article: {
 					url: video.url,
-					title: scraped.title,
+					title,
 					source: youtubeMetadata.channelName,
 					publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
 					summary: scraped.metadata.description ?? '',
@@ -51,7 +52,7 @@ async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { v
 				attachments: scraped.attachments,
 			},
 		});
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
 		return true;
 	} catch (err) {
 		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });

@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { isRasterImage, MAGIC_SNIFF_BYTES, PDF_MIME, sniffMediaType } from '@core-shared/mime';
-import type { ExtractedContent, ScrapedContent } from '@core-shared/types';
+import type { ExtractedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, MAX_UPLOAD_BYTES, streamWithByteLimit } from '@core-shared/web';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews/scraper';
 import { extractPdfContent } from './platforms/pdf';
@@ -13,7 +13,7 @@ export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 type ExtractInput = { kind: 'url'; url: string } | { kind: 'r2'; key: string };
 
 export type ScrapeResult =
-	| { kind: 'page'; scraped: ScrapedContent }
+	| { kind: 'page'; scraped: ExtractedContent }
 	| {
 			kind: 'blob';
 			body: ReadableStream<Uint8Array>;
@@ -129,7 +129,7 @@ function stripMarkdown(md: string): string {
 		.trim();
 }
 
-function normalizeHtml(scraped: ScrapedContent, sourceUrl: string | null): ExtractedContent {
+function normalizeHtml(scraped: ExtractedContent, sourceUrl: string | null): ExtractedContent {
 	const markdown = scraped.markdown ?? '';
 	return {
 		...scraped,

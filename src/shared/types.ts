@@ -87,11 +87,6 @@ export interface ExtractedContent {
 		chars?: number;
 	};
 	status: 'ok' | 'needs_ocr' | 'failed';
-}
-
-export interface ScrapedContent extends ExtractedContent {
-	sourceUrl: string | null;
-	title: string;
 	platformMetadata?: PlatformMetadata;
 	attachments?: WorkflowAttachment[];
 }
