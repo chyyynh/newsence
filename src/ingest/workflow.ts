@@ -337,10 +337,6 @@ export function streamWorkflowStatus(env: Env, workflowId: string): Response {
 	});
 }
 
-type WorkflowRunContext = {
-	target: WorkflowTarget;
-	readSourceDraft(): Promise<SourceArticleDraft>;
-};
 type WorkflowPersistenceInput = {
 	article: Article;
 	result: ProcessorResult;
@@ -351,36 +347,26 @@ type WorkflowPersistenceInput = {
 	paperEnrichment: PaperMetadata | null;
 };
 
-function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
-	let sourceDraft: SourceArticleDraft | null = null;
-	const readSourceDraft = async () => {
-		if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
-		if (sourceDraft) return sourceDraft;
-		const obj = await env.R2.get(target.sourceDraftKey);
-		if (!obj) throw new Error(`source article draft missing: ${target.sourceDraftKey}`);
-		sourceDraft = await obj.json<SourceArticleDraft>();
-		return sourceDraft;
-	};
-	return {
-		target,
-		readSourceDraft,
-	};
+async function readSourceDraft(env: Env, target: WorkflowTarget): Promise<SourceArticleDraft> {
+	if (target.kind !== 'source') throw new Error('Source draft requested for row workflow target');
+	const obj = await env.R2.get(target.sourceDraftKey);
+	if (!obj) throw new Error(`source article draft missing: ${target.sourceDraftKey}`);
+	return obj.json<SourceArticleDraft>();
 }
 
-async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
+async function loadFullTargetArticle(env: Env, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
 	let article: Article;
-	if (context.target.kind === 'source') {
-		article = preparedArticleToArticle((await context.readSourceDraft()).article);
+	if (target.kind === 'source') {
+		article = preparedArticleToArticle((await readSourceDraft(env, target)).article);
 	} else {
-		const { table, rowId } = storedWorkflowRecord(context.target);
+		const { table, rowId } = storedWorkflowRecord(target);
 		article = await loadArticleForProcessing(env, table, rowId);
 	}
 	const extractedPdfText = await readExtractedPdfText(env, pdfTextArtifact);
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
 }
 
-async function persistSourceTarget(db: Client, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
-	const draft = await context.readSourceDraft();
+async function persistSourceTarget(db: Client, draft: SourceArticleDraft, input: WorkflowPersistenceInput): Promise<string> {
 	const fullArticle = preparedArticleToArticle(draft.article);
 	const articleForInsert = { ...draft.article, ogImageUrl: null };
 	const updatePayload: Record<string, unknown> = {
@@ -429,15 +415,15 @@ async function persistStoredTarget(db: Client, target: StoredWorkflowTarget, inp
 	return rowId;
 }
 
-async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
+async function persistWorkflowTarget(env: Env, target: WorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
 	try {
 		const articleId =
-			context.target.kind === 'source'
-				? await persistSourceTarget(db, context, input)
-				: await persistStoredTarget(db, context.target, input);
+			target.kind === 'source'
+				? await persistSourceTarget(db, await readSourceDraft(env, target), input)
+				: await persistStoredTarget(db, target, input);
 		await persistYouTubeWorkflowData(db, {
 			transcript: input.youtubeTranscript,
 			highlights: input.youtubeHighlights,
@@ -454,28 +440,28 @@ async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, inpu
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: WorkflowTarget }> {
 	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
-		const context = createWorkflowRunContext(this.env, event.payload.target);
+		const target = event.payload.target;
 		try {
 			const article = await step.do(
-				context.target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
+				target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () => {
-					if (context.target.kind === 'source')
-						return { ...preparedArticleToArticle((await context.readSourceDraft()).article), content: null };
-					const { table, rowId } = storedWorkflowRecord(context.target);
+					if (target.kind === 'source')
+						return { ...preparedArticleToArticle((await readSourceDraft(this.env, target)).article), content: null };
+					const { table, rowId } = storedWorkflowRecord(target);
 					return loadArticleForProcessing(this.env, table, rowId, true);
 				},
 			);
 			const sourceType = platformIdentity(article);
 			const platform = articlePlatforms[sourceType] ?? articlePlatforms.default;
-			const storedRecord = context.target.kind === 'source' ? null : storedWorkflowRecord(context.target);
+			const storedRecord = target.kind === 'source' ? null : storedWorkflowRecord(target);
 			const logContext =
 				storedRecord === null ? { url: article.url, table: 'articles' } : { article_id: storedRecord.rowId, table: storedRecord.table };
 
 			console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
 			const pdfTextArtifact = await stagePdfTextExtraction(this.env, step, {
-				articleId: context.target.kind === 'userFile' ? context.target.userFileId : null,
+				articleId: target.kind === 'userFile' ? target.userFileId : null,
 				hasContent: 'has_content' in article && !!article.has_content,
 				sourceStorageKey: article.storage_key,
 				fileType: article.file_type,
@@ -483,7 +469,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			});
 			let fullArticlePromise: Promise<Article> | null = null;
 			const loadArticleWithDerivedContent = () => {
-				fullArticlePromise ??= loadFullTargetArticle(this.env, context, pdfTextArtifact);
+				fullArticlePromise ??= loadFullTargetArticle(this.env, target, pdfTextArtifact);
 				return fullArticlePromise;
 			};
 
@@ -516,11 +502,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 
 			let youtubeTranscript: YoutubeTranscript | undefined;
 			if (sourceType === 'youtube') {
-				if (context.target.kind === 'source') {
-					const draft = await context.readSourceDraft();
+				if (target.kind === 'source') {
+					const draft = await readSourceDraft(this.env, target);
 					youtubeTranscript = draft.youtubeTranscript;
-				} else if (context.target.kind === 'userFile') {
-					youtubeTranscript = context.target.youtubeTranscript;
+				} else if (target.kind === 'userFile') {
+					youtubeTranscript = target.youtubeTranscript;
 				}
 			}
 			const youtubeHighlights =
@@ -532,10 +518,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						)
 					: null;
 			const articleId = await step.do(
-				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
+				target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () =>
-					persistWorkflowTarget(this.env, context, {
+					persistWorkflowTarget(this.env, target, {
 						article: pdfTextArtifact?.extractedTextKey ? await loadArticleWithDerivedContent() : article,
 						result: processorResult,
 						embedding,
@@ -548,8 +534,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 
 			await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
 
-			if (pdfTextArtifact?.extractedTextKey || context.target.kind === 'source') {
-				const sourceDraftKey = context.target.kind === 'source' ? context.target.sourceDraftKey : null;
+			if (pdfTextArtifact?.extractedTextKey || target.kind === 'source') {
+				const sourceDraftKey = target.kind === 'source' ? target.sourceDraftKey : null;
 				await step.do(
 					'cleanup-workflow-scratch-objects',
 					{ retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' },
@@ -570,8 +556,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 			return { success: true, article_id: articleId };
 		} catch (error) {
-			if (context.target.kind === 'userFile') {
-				const failedUserFileId = context.target.userFileId;
+			if (target.kind === 'userFile') {
+				const failedUserFileId = target.userFileId;
 				try {
 					await step.do(
 						'record-user-file-workflow-failed',
