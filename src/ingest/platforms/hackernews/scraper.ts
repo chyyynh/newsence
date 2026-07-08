@@ -92,15 +92,22 @@ export async function scrapeHackerNews(itemId: string): Promise<ScrapedContent> 
 	if (item.text && item.text.length > 200) summary += '...';
 
 	console.info({ tag: 'HN', msg: 'Item fetched', title });
+	const markdown = buildHnMarkdown(item);
 
 	return {
+		sourceUrl: `https://news.ycombinator.com/item?id=${item.id}`,
+		contentType: 'text/markdown',
 		title,
-		content: buildHnMarkdown(item),
-		summary,
-		ogImageUrl: null,
-		siteName: 'Hacker News',
-		author: item.author || null,
-		publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
+		markdown,
+		text: markdown,
+		metadata: {
+			author: item.author || null,
+			publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
+			siteName: 'Hacker News',
+			description: summary,
+			ogImageUrl: null,
+		},
+		status: markdown.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 	};
 }

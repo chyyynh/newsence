@@ -140,7 +140,7 @@ export async function insertScrapedUrlUserFile(
 	const urlKind = detectUrlKind(url);
 
 	const skipContentCheck = urlKind === 'youtube' || urlKind === 'twitter';
-	if (!skipContentCheck && (!scraped.content || scraped.content.length < 50)) {
+	if (!skipContentCheck && (!scraped.markdown || scraped.markdown.length < 50)) {
 		return { ok: false, error: 'Content too short' };
 	}
 
@@ -170,10 +170,10 @@ export async function insertScrapedUrlUserFile(
 				scraped.title,
 				urlKind,
 				url,
-				scraped.siteName || 'External',
-				scraped.publishedDate || new Date().toISOString(),
-				scraped.summary || '',
-				scraped.content || null,
+				scraped.metadata.siteName || 'External',
+				scraped.metadata.publishedDate || new Date().toISOString(),
+				scraped.metadata.description || '',
+				scraped.markdown || null,
 				[],
 				[],
 				scraped.platformMetadata == null ? null : JSON.stringify(scraped.platformMetadata),

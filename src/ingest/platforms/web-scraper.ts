@@ -183,13 +183,19 @@ export async function scrapeHtmlFromResponse(response: Response, url: string): P
 	const content = extractContentReadability(html, finalUrl) ?? extractContentCheerio($, metadata.title, finalUrl);
 
 	return {
+		sourceUrl: finalUrl,
+		contentType: 'text/html',
 		title: metadata.title,
-		content,
-		summary: metadata.description || undefined,
-		ogImageUrl: metadata.ogImageUrl,
-		siteName: metadata.siteName,
-		author: metadata.author,
-		publishedDate: metadata.publishedDate,
+		markdown: content,
+		text: content,
+		metadata: {
+			author: metadata.author,
+			publishedDate: metadata.publishedDate,
+			siteName: metadata.siteName,
+			description: metadata.description,
+			ogImageUrl: metadata.ogImageUrl,
+		},
+		status: content.trim().length > 0 ? 'ok' : 'failed',
 	};
 }
 
@@ -213,6 +219,6 @@ export async function scrapeWebPage(url: string): Promise<ScrapedContent> {
 	console.info({ tag: 'WEB', msg: 'Scraping', url });
 
 	const result = await fetchAndExtract(url);
-	console.info({ tag: 'WEB', msg: 'Scraped', url, chars: result.content.length });
+	console.info({ tag: 'WEB', msg: 'Scraped', url, chars: result.markdown.length });
 	return result;
 }

@@ -66,18 +66,6 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface ScrapedContent {
-	title: string;
-	content: string;
-	summary?: string;
-	ogImageUrl: string | null;
-	siteName: string | null;
-	author: string | null;
-	publishedDate: string | null;
-	platformMetadata?: PlatformMetadata;
-	youtubeTranscript?: YoutubeTranscript;
-}
-
 export interface ExtractedContent {
 	/** null for raw-bytes / R2 input with no originating URL. */
 	sourceUrl: string | null;
@@ -97,6 +85,13 @@ export interface ExtractedContent {
 		chars?: number;
 	};
 	status: 'ok' | 'needs_ocr' | 'failed';
+}
+
+export interface ScrapedContent extends ExtractedContent {
+	sourceUrl: string | null;
+	title: string;
+	platformMetadata?: PlatformMetadata;
+	youtubeTranscript?: YoutubeTranscript;
 }
 
 // Twitter related (Kaito API response shape)

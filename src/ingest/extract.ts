@@ -137,20 +137,12 @@ function stripMarkdown(md: string): string {
 }
 
 function normalizeHtml(scraped: ScrapedContent, sourceUrl: string | null): ExtractedContent {
-	const markdown = scraped.content ?? '';
+	const markdown = scraped.markdown ?? '';
 	return {
+		...scraped,
 		sourceUrl,
-		contentType: 'text/html',
-		title: scraped.title || null,
 		markdown,
 		text: stripMarkdown(markdown),
-		metadata: {
-			author: scraped.author ?? null,
-			publishedDate: scraped.publishedDate ?? null,
-			siteName: scraped.siteName ?? null,
-			description: scraped.summary ?? null,
-			ogImageUrl: scraped.ogImageUrl ?? null,
-		},
 		status: markdown.trim().length > 0 ? 'ok' : 'failed',
 	};
 }

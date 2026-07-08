@@ -206,13 +206,19 @@ export async function scrapeYouTube(
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
+		sourceUrl: `https://www.youtube.com/watch?v=${video.id}`,
+		contentType: 'text/markdown',
 		title: snippet.title,
-		content,
-		summary: snippet.description.substring(0, 500) || undefined,
-		ogImageUrl: thumbnailUrl,
-		siteName: 'YouTube',
-		author: snippet.channelTitle,
-		publishedDate: snippet.publishedAt,
+		markdown: content,
+		text: content,
+		metadata: {
+			author: snippet.channelTitle,
+			publishedDate: snippet.publishedAt,
+			siteName: 'YouTube',
+			description: snippet.description.substring(0, 500) || null,
+			ogImageUrl: thumbnailUrl,
+		},
+		status: content.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: {
 			type: 'youtube',
 			fetchedAt: new Date().toISOString(),

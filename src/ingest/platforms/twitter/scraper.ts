@@ -255,13 +255,19 @@ export async function scrapeTwitterArticle(
 	console.info({ tag: 'TWITTER', msg: 'Article fetched', title });
 
 	return {
+		sourceUrl: `https://x.com/i/status/${tweetId}`,
+		contentType: 'text/markdown',
 		title,
-		content: md,
-		summary,
-		ogImageUrl: article.cover_media_img_url || article.author?.profilePicture || null,
-		siteName: 'Twitter',
-		author: article.author?.userName || null,
-		publishedDate: article.createdAt || null,
+		markdown: md,
+		text: md,
+		metadata: {
+			author: article.author?.userName || null,
+			publishedDate: article.createdAt || null,
+			siteName: 'Twitter',
+			description: summary,
+			ogImageUrl: article.cover_media_img_url || article.author?.profilePicture || null,
+		},
+		status: md.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
 	};
 }
@@ -276,21 +282,27 @@ async function scrapeExternalLinkTweet(
 	console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
 	try {
 		const linked = await scrapeWebPage(externalUrl);
-		if (!linked.content || linked.content.length <= 100) throw new Error('Linked article content too short');
+		if (!linked.markdown || linked.markdown.length <= 100) throw new Error('Linked article content too short');
 		console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
 		return {
+			sourceUrl: externalUrl,
+			contentType: linked.contentType,
 			title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
-			content: linked.content,
-			summary: linked.summary || tweet.text,
-			ogImageUrl: linked.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
-			siteName: linked.siteName || 'Twitter',
-			author: tweet.author?.userName || linked.author || null,
-			publishedDate: tweet.createdAt,
+			markdown: linked.markdown,
+			text: linked.text,
+			metadata: {
+				author: tweet.author?.userName || linked.metadata.author || null,
+				publishedDate: tweet.createdAt,
+				siteName: linked.metadata.siteName || 'Twitter',
+				description: linked.metadata.description || tweet.text,
+				ogImageUrl: linked.metadata.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
+			},
+			status: linked.status,
 			platformMetadata: buildTweetPlatformMetadata(tweet, {
 				media,
 				tweetText,
 				externalUrl,
-				externalOgImage: linked.ogImageUrl || null,
+				externalOgImage: linked.metadata.ogImageUrl || null,
 				externalTitle: linked.title || null,
 				originalTweetUrl: tweet.url,
 			}),
@@ -338,13 +350,19 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Scra
 	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });
 
 	return {
+		sourceUrl: tweet.url,
+		contentType: 'text/markdown',
 		title,
-		content: '',
-		summary: tweet.text,
-		ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
-		siteName: 'Twitter',
-		author: tweet.author?.userName || null,
-		publishedDate: tweet.createdAt,
+		markdown: tweet.text,
+		text: tweet.text,
+		metadata: {
+			author: tweet.author?.userName || null,
+			publishedDate: tweet.createdAt,
+			siteName: 'Twitter',
+			description: tweet.text,
+			ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
+		},
+		status: tweet.text.trim().length > 0 ? 'ok' : 'failed',
 		platformMetadata: buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}),
 	};
 }

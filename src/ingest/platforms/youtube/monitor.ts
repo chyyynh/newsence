@@ -33,6 +33,45 @@ function parseFeedVideos(xml: string): YouTubeFeedVideo[] {
 	);
 }
 
+async function queueYouTubeVideo(env: Env, channel: YouTubeChannelSource, video: YouTubeFeedVideo): Promise<boolean> {
+	try {
+		const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
+			minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
+		});
+		const youtubeMetadata = scraped.platformMetadata.data;
+		const duration = youtubeMetadata.duration;
+		if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
+			console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
+			return false;
+		}
+
+		await enqueueProcessing(env, {
+			kind: 'source',
+			draft: {
+				article: {
+					url: video.url,
+					title: scraped.title,
+					source: youtubeMetadata.channelName,
+					publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
+					summary: scraped.metadata.description ?? '',
+					sourceType: 'youtube',
+					content: scraped.markdown,
+					ogImageUrl: scraped.metadata.ogImageUrl,
+					platformMetadata: scraped.platformMetadata,
+				},
+				...(scraped.youtubeTranscript
+					? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }
+					: {}),
+			},
+		});
+		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
+		return true;
+	} catch (err) {
+		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
+		return false;
+	}
+}
+
 export async function handleYouTubeCron(env: Env): Promise<void> {
 	if (!env.YOUTUBE_API_KEY) {
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipped — YOUTUBE_API_KEY not configured' });
@@ -72,41 +111,7 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 			}
 
 			for (const video of newVideos) {
-				try {
-					const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
-						minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
-					});
-					const youtubeMetadata = scraped.platformMetadata.data;
-					const duration = youtubeMetadata.duration;
-					if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
-						console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
-						continue;
-					}
-
-					await enqueueProcessing(env, {
-						kind: 'source',
-						draft: {
-							article: {
-								url: video.url,
-								title: scraped.title,
-								source: youtubeMetadata.channelName,
-								publishedDate: scraped.publishedDate as string,
-								summary: scraped.summary ?? '',
-								sourceType: 'youtube',
-								content: scraped.content,
-								ogImageUrl: scraped.ogImageUrl,
-								platformMetadata: scraped.platformMetadata,
-							},
-							...(scraped.youtubeTranscript
-								? { attachments: [{ kind: 'youtube-transcript' as const, transcript: scraped.youtubeTranscript }] }
-								: {}),
-						},
-					});
-					totalQueued++;
-					console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
-				} catch (err) {
-					console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
-				}
+				if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
 			}
 
 			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);

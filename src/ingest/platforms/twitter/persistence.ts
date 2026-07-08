@@ -99,17 +99,17 @@ async function saveTwitterArticleTweet(
 		url: tweetUrl,
 		title: scraped.title,
 		source: tweet.author?.name || 'Twitter',
-		publishedDate: new Date(scraped.publishedDate ?? tweet.createdAt),
-		summary: scraped.summary || '',
-		content: scraped.content,
-		ogImage: scraped.ogImageUrl,
+		publishedDate: new Date(scraped.metadata.publishedDate ?? tweet.createdAt),
+		summary: scraped.metadata.description || '',
+		content: scraped.markdown,
+		ogImage: scraped.metadata.ogImageUrl,
 		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, {
 			name: typeof meta?.authorName === 'string' ? meta.authorName : tweet.author?.name,
 			userName: typeof meta?.authorUserName === 'string' ? meta.authorUserName : tweet.author?.userName,
 			profilePicture: typeof meta?.authorProfilePicture === 'string' ? meta.authorProfilePicture : tweet.author?.profilePicture,
 			isBlueVerified: authorVerified,
 		}),
-		sourceEvent: { tweet, eventType: 'article', text: scraped.summary || text },
+		sourceEvent: { tweet, eventType: 'article', text: scraped.metadata.description || text },
 	});
 	if (queued) console.info({ tag: 'TWITTER', msg: 'Saved Twitter Article', title: scraped.title.slice(0, 50) });
 	return queued;
@@ -131,7 +131,7 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 		console.warn({ tag: 'TWITTER', msg: 'Failed to scrape shared link', url: articleUrl, error: String(err) });
 		return null;
 	});
-	if (!scraped?.content || scraped.content.length < 100) return false;
+	if (!scraped?.markdown || scraped.markdown.length < 100) return false;
 
 	const queued = await enqueueTwitterArticle(env, {
 		url: articleUrl,
@@ -139,12 +139,12 @@ async function saveSharedLinkTweet(db: Client, env: Env, tweet: Tweet, externalU
 		source: tweet.author?.name || 'Twitter',
 		publishedDate: new Date(tweet.createdAt),
 		summary: '',
-		content: scraped.content,
-		ogImage: scraped.ogImageUrl,
+		content: scraped.markdown,
+		ogImage: scraped.metadata.ogImageUrl,
 		platformMetadata: buildTweetPlatformMetadata(tweet, {
 			tweetText: text,
 			externalUrl: articleUrl,
-			externalOgImage: scraped.ogImageUrl,
+			externalOgImage: scraped.metadata.ogImageUrl,
 			externalTitle: scraped.title || null,
 			originalTweetUrl: tweet.url,
 		}),
