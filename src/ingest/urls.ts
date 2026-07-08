@@ -41,7 +41,6 @@ type IngestResult = {
 	tags?: string[];
 	ogImageUrl?: string | null;
 	resourceKind?: 'url' | 'blob';
-	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
 	asset?: Extract<UrlFetchResult, { kind: 'asset' }>;
@@ -144,7 +143,6 @@ function buildUserFileResult(
 		userFileId: row.id,
 		instanceId: args.instanceId,
 		resourceKind,
-		originType: 'saved_url',
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
@@ -182,7 +180,6 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 		return {
 			url,
 			resourceKind: 'blob',
-			originType: 'saved_url',
 			fileType: fetched.contentType,
 			asset: fetched,
 			alreadyExists: false,

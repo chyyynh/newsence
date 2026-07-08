@@ -63,7 +63,6 @@ type CoreUrlIngestResult = {
 	tags?: string[];
 	ogImageUrl?: string | null;
 	resourceKind?: 'url' | 'blob';
-	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
 	asset?: CoreUrlAssetCandidate;
