@@ -1,15 +1,15 @@
-// ─────────────────────────────────────────────────────────────
 // OKF (Open Knowledge Format v0.1) collection export — issue #197 Phase 1.
 // Streams a collection as a tar.gz bundle of markdown + YAML frontmatter:
 // index.md (okf_version) / articles/*.md / entities/*.md / log.md.
-// Entity quality gate reuses @shared/entities/normalize — the same rules
-// the ingest pipeline stores with, so bundles never diverge from the DB gate.
-// ─────────────────────────────────────────────────────────────
+// Entity links are read from article_entities, which the ingest pipeline already
+// normalizes before storage.
 
-import { INTERNAL_CORS_HEADERS, jsonData, jsonError, parseJsonBody, requireAuth } from '@shared/auth';
-import { type DbClient, withDbClient } from '@shared/db';
-import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@shared/entities/normalize';
-import type { Env } from '@shared/types';
+import { Client } from 'pg';
+
+export type ExportCollectionOkfInput = {
+	collectionId: string;
+	userId?: string | null;
+};
 
 type OkfFile = { path: string; content: string };
 
@@ -42,48 +42,27 @@ type ArticleRow = {
 type EntityLinkRow = {
 	article_id: string;
 	id: string;
-	canonical_name: string;
 	name: string;
 	name_cn: string | null;
 	type: string;
 	article_count: number;
 };
 
-type ExportQuality = {
-	persistedLinks: number;
-	exportedLinks: number;
-	filteredGeneric: number;
-	filteredSelfSource: number;
-	filteredTooShort: number;
-	articlesWithoutEntityLinks: number;
-	unknownTypes: Record<string, number>;
-};
-
-const OKF_EXPORT_CORS = { ...INTERNAL_CORS_HEADERS, 'Access-Control-Expose-Headers': 'Content-Disposition' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
-const OKF_ENTITY_TYPES = new Set(['person', 'organization', 'product', 'technology', 'event', 'location']);
 const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
 
-export async function handleExportCollectionOkf(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: OKF_EXPORT_CORS });
-
-	const unauth = await requireAuth(request, env, OKF_EXPORT_CORS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; collectionId?: string }>(request, OKF_EXPORT_CORS);
-	if (body instanceof Response) return body;
-	const viewerId = body.userId?.trim() || null;
-	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
-		return jsonError('BAD_REQUEST', 'Missing collectionId', 400, OKF_EXPORT_CORS);
+export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionOkfInput): Promise<Response> {
+	const collectionId = input.collectionId.trim();
+	const viewerId = input.userId?.trim() || null;
+	if (!collectionId || !UUID_RE.test(collectionId)) {
+		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400 });
 	}
 
 	try {
-		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId: body.collectionId });
+		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId });
 		return new Response(tarGzipStream(bundle.files), {
 			headers: {
-				...OKF_EXPORT_CORS,
 				'Content-Type': 'application/gzip',
 				'Content-Disposition': `attachment; filename="${bundle.slug}.okf.tar.gz"`,
 				'Cache-Control': 'no-store',
@@ -91,116 +70,41 @@ export async function handleExportCollectionOkf(request: Request, env: Env): Pro
 		});
 	} catch (error) {
 		if (error instanceof Error && error.message === 'Collection not found') {
-			return jsonError('NOT_FOUND', error.message, 404, OKF_EXPORT_CORS);
+			return Response.json({ code: 'NOT_FOUND', message: error.message }, { status: 404 });
 		}
 		console.error({ tag: 'OKF_EXPORT', msg: 'export failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'OKF export failed', 500, OKF_EXPORT_CORS);
+		return Response.json({ code: 'INTERNAL_ERROR', message: 'OKF export failed' }, { status: 500 });
 	}
-}
-
-// JSON view of the same bundle, for MCP consumers (kcmd-style list-entries / lookup-entry).
-export async function handleOkfCollectionEntries(request: Request, env: Env): Promise<Response> {
-	if (request.method === 'OPTIONS') return new Response(null, { headers: OKF_EXPORT_CORS });
-
-	const unauth = await requireAuth(request, env, OKF_EXPORT_CORS);
-	if (unauth) return unauth;
-
-	const body = await parseJsonBody<{ userId?: string; collectionId?: string; path?: string }>(request, OKF_EXPORT_CORS);
-	if (body instanceof Response) return body;
-	const viewerId = body.userId?.trim() || null;
-	if (!body.collectionId?.trim() || !UUID_RE.test(body.collectionId)) {
-		return jsonError('BAD_REQUEST', 'Missing collectionId', 400, OKF_EXPORT_CORS);
-	}
-
-	try {
-		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId: body.collectionId });
-		const files = [...bundle.files];
-		const path = body.path?.trim();
-		if (path) {
-			const file = files.find((entry) => entry.path === path);
-			if (!file) return jsonError('NOT_FOUND', 'Entry not found', 404, OKF_EXPORT_CORS);
-			return jsonData({ path: file.path, content: file.content }, OKF_EXPORT_CORS);
-		}
-		return jsonData(
-			{
-				bundle: bundle.slug,
-				count: files.length,
-				entries: files.map((file) => ({
-					path: file.path,
-					title: entryTitle(file),
-					type: entryType(file),
-					links: entryLinks(file),
-				})),
-			},
-			OKF_EXPORT_CORS,
-		);
-	} catch (error) {
-		if (error instanceof Error && error.message === 'Collection not found') {
-			return jsonError('NOT_FOUND', error.message, 404, OKF_EXPORT_CORS);
-		}
-		console.error({ tag: 'OKF_ENTRIES', msg: 'entries failed', error: error instanceof Error ? error.message : String(error) });
-		return jsonError('INTERNAL_ERROR', 'OKF entries failed', 500, OKF_EXPORT_CORS);
-	}
-}
-
-function entryTitle(file: OkfFile): string | null {
-	return frontmatterString(file.content, 'title') ?? file.content.match(/^# (.+)$/m)?.[1] ?? null;
-}
-
-function entryType(file: OkfFile): string | null {
-	return frontmatterString(file.content, 'type');
-}
-
-function frontmatterString(content: string, key: string): string | null {
-	const match = content.match(new RegExp(`^${key}: (.+)$`, 'm'));
-	if (!match) return null;
-	try {
-		const parsed = JSON.parse(match[1]);
-		return typeof parsed === 'string' ? parsed : null;
-	} catch {
-		return null;
-	}
-}
-
-/** Outbound internal links, normalized to bundle-absolute paths without the leading slash. */
-function entryLinks(file: OkfFile): string[] {
-	const links = new Set<string>();
-	for (const match of file.content.matchAll(/\]\((\/?[^)#\s]+\.md)\)/g)) {
-		const href = match[1];
-		links.add(href.startsWith('/') ? href.slice(1) : href);
-	}
-	return [...links];
 }
 
 async function buildCollectionOkfBundle(
-	env: Env,
+	env: CoreEnv,
 	input: { viewerId: string | null; collectionId: string },
 ): Promise<{ slug: string; files: Iterable<OkfFile> }> {
-	return withDbClient(env, async (db) => {
-		const collection = (
-			await db.query<CollectionRow>(
-				`SELECT id, name, description, visibility, updated_at
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const collection = (
+		await db.query<CollectionRow>(
+			`SELECT id, name, description, visibility, updated_at
 						 FROM collections
 						 WHERE id = $1
 						   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
 				 LIMIT 1`,
-				[input.collectionId, input.viewerId],
-			)
-		).rows[0];
-		if (!collection) throw new Error('Collection not found');
+			[input.collectionId, input.viewerId],
+		)
+	).rows[0];
+	if (!collection) throw new Error('Collection not found');
 
-		const articles = await readCollectionArticles(db, collection.id, input.viewerId);
-		const linkableArticles = articles.filter((article) => article.kind === 'article');
-		const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
-		const { links: exported, quality } = gateEntityLinks(links, linkableArticles);
-		return {
-			slug: uniqueSlug(collection.name, collection.id),
-			files: renderOkfFiles(collection, articles, exported, quality),
-		};
-	});
+	const articles = await readCollectionArticles(db, collection.id, input.viewerId);
+	const linkableArticles = articles.filter((article) => article.kind === 'article');
+	const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
+	return {
+		slug: uniqueSlug(collection.name, collection.id),
+		files: renderOkfFiles(collection, articles, links),
+	};
 }
 
-async function readCollectionArticles(db: DbClient, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {
+async function readCollectionArticles(db: Client, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {
 	const result = await db.query<ArticleRow>(
 		`SELECT *
 		 FROM (
@@ -245,10 +149,10 @@ async function readCollectionArticles(db: DbClient, collectionId: string, viewer
 	return result.rows;
 }
 
-async function readArticleEntityLinks(db: DbClient, articles: ArticleRow[]): Promise<EntityLinkRow[]> {
+async function readArticleEntityLinks(db: Client, articles: ArticleRow[]): Promise<EntityLinkRow[]> {
 	const result = await db.query<EntityLinkRow>(
 		`SELECT
-		   ae.article_id::text, e.id::text, e.canonical_name, e.name, e.name_cn, e.type, e.article_count
+		   ae.article_id::text, e.id::text, e.name, e.name_cn, e.type, e.article_count
 		 FROM article_entities ae
 		 JOIN entities e ON e.id = ae.entity_id
 		 WHERE ae.article_id = ANY($1::uuid[])
@@ -258,52 +162,7 @@ async function readArticleEntityLinks(db: DbClient, articles: ArticleRow[]): Pro
 	return result.rows;
 }
 
-/** Export-time second line of defense; same primitives as the storage gate. */
-function gateEntityLinks(links: EntityLinkRow[], articles: ArticleRow[]): { links: EntityLinkRow[]; quality: ExportQuality } {
-	const exclusionsByArticle = new Map(
-		articles.map((article) => [
-			article.id,
-			new Set(entityExtractionExclusionNames(article.source, article.platform_metadata).map(canonicalizeEntityName).filter(Boolean)),
-		]),
-	);
-	const quality: ExportQuality = {
-		persistedLinks: links.length,
-		exportedLinks: 0,
-		filteredGeneric: 0,
-		filteredSelfSource: 0,
-		filteredTooShort: 0,
-		articlesWithoutEntityLinks: 0,
-		unknownTypes: {},
-	};
-	const exported = links.filter((link) => {
-		const canonical = link.canonical_name;
-		if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) {
-			quality.filteredTooShort += 1;
-			return false;
-		}
-		if (GENERIC_ENTITY_CANONICALS.has(canonical) || ASCII_TICKER_ENTITY_RE.test(canonical)) {
-			quality.filteredGeneric += 1;
-			return false;
-		}
-		if (exclusionsByArticle.get(link.article_id)?.has(canonical)) {
-			quality.filteredSelfSource += 1;
-			return false;
-		}
-		quality.exportedLinks += 1;
-		if (!OKF_ENTITY_TYPES.has(link.type)) quality.unknownTypes[link.type] = (quality.unknownTypes[link.type] ?? 0) + 1;
-		return true;
-	});
-	const linkedArticleIds = new Set(exported.map((link) => link.article_id));
-	quality.articlesWithoutEntityLinks = articles.filter((article) => !linkedArticleIds.has(article.id)).length;
-	return { links: exported, quality };
-}
-
-function* renderOkfFiles(
-	collection: CollectionRow,
-	articles: ArticleRow[],
-	links: EntityLinkRow[],
-	quality: ExportQuality,
-): Iterable<OkfFile> {
+function* renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], links: EntityLinkRow[]): Iterable<OkfFile> {
 	const articlePaths = assignPaths(
 		articles.map((article) => ({ id: resourceKey(article), label: article.title || article.title_cn || article.id })),
 		'articles',
@@ -320,26 +179,22 @@ function* renderOkfFiles(
 	yield { path: 'index.md', content: renderRootIndex(collection, articles, entityById, articlePaths, entityPaths) };
 	yield {
 		path: 'articles/index.md',
-		content: renderDirectoryIndex(
-			'Resources',
-			articles.map((article) =>
-				indexEntry(
-					displayTitle(article),
-					stripDirectoryPrefix(articlePaths.get(resourceKey(article))!, 'articles'),
-					displayDescription(article),
-				),
+		content: compactMarkdown([
+			'# Resources',
+			...articles.map((article) =>
+				indexEntry(displayTitle(article), articlePaths.get(resourceKey(article))!.slice('articles/'.length), displayDescription(article)),
 			),
-		),
+		]),
 	};
 	if (entityById.size > 0) {
 		yield {
 			path: 'entities/index.md',
-			content: renderDirectoryIndex(
-				'Entities',
-				[...entityById.values()].map((entity) =>
-					indexEntry(entity.name, stripDirectoryPrefix(entityPaths.get(entity.id)!, 'entities'), entity.name_cn),
+			content: compactMarkdown([
+				'# Entities',
+				...[...entityById.values()].map((entity) =>
+					indexEntry(entity.name, entityPaths.get(entity.id)!.slice('entities/'.length), entity.name_cn),
 				),
-			),
+			]),
 		};
 	}
 	for (const article of articles) {
@@ -354,11 +209,7 @@ function* renderOkfFiles(
 			content: renderEntity(entity, linksByEntityId.get(entity.id) ?? [], articles, articlePaths),
 		};
 	}
-	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size, quality) };
-}
-
-function stripDirectoryPrefix(path: string, prefix: string): string {
-	return path.startsWith(`${prefix}/`) ? path.slice(prefix.length + 1) : path;
+	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size) };
 }
 
 function renderRootIndex(
@@ -389,10 +240,6 @@ function renderRootIndex(
 
 function resourceKey(article: ArticleRow): string {
 	return `${article.kind}:${article.id}`;
-}
-
-function renderDirectoryIndex(title: string, entries: string[]): string {
-	return compactMarkdown([`# ${title}`, ...entries]);
 }
 
 function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths: Map<string, string>): string {
@@ -462,23 +309,14 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: A
 	]);
 }
 
-function renderLog(collection: CollectionRow, resourceCount: number, entityCount: number, quality: ExportQuality): string {
+function renderLog(collection: CollectionRow, resourceCount: number, entityCount: number): string {
 	const exportedAt = new Date().toISOString();
-	const unknownTypes = Object.entries(quality.unknownTypes).map(([type, count]) => `  * ${type}: ${count}`);
 	return compactMarkdown([
 		'# Directory Update Log',
 		`## ${exportedAt.slice(0, 10)}`,
 		`* **Export**: OKF bundle for "${collection.name}" — ${resourceCount} resources, ${entityCount} entity pages.`,
 		`* **Collection id**: ${collection.id} (visibility: ${collection.visibility}). Exported at ${exportedAt}.`,
-		'* **Entity quality gate** (shared with the ingest storage gate):',
-		`  * Persisted links read: ${quality.persistedLinks}`,
-		`  * Exported links: ${quality.exportedLinks}`,
-		`  * Filtered self-source/platform-alias links: ${quality.filteredSelfSource}`,
-		`  * Filtered generic-token links: ${quality.filteredGeneric}`,
-		`  * Filtered too-short links: ${quality.filteredTooShort}`,
-		`  * Articles without exported entity links: ${quality.articlesWithoutEntityLinks}`,
-		unknownTypes.length ? '* **Non-standard entity types (OKF consumers must tolerate unknown types)**:' : '',
-		...unknownTypes,
+		'* **Entity links**: exported from stored `article_entities` links.',
 		'* **Producer notes**: bilingual fields (`title_cn`, `description_cn`, `name_cn`) and `keywords`/`category`/`source` are extension frontmatter keys. `category` prefers the stored classification, falling back to the known category tag.',
 	]);
 }
@@ -554,7 +392,7 @@ function assignPaths(items: Array<{ id: string; label: string }>, prefix: string
 	const used = new Set<string>();
 	const paths = new Map<string, string>();
 	for (const item of items) {
-		const base = slugify(item.label) || fallbackSlug(item.id);
+		const base = slugify(item.label) || slugify(item.id) || 'item';
 		let slug = base;
 		for (let i = 2; used.has(slug); i++) slug = `${base}-${i}`;
 		used.add(slug);
@@ -564,11 +402,7 @@ function assignPaths(items: Array<{ id: string; label: string }>, prefix: string
 }
 
 function uniqueSlug(label: string, id: string): string {
-	return `${slugify(label) || 'collection'}-${fallbackSlug(id)}`;
-}
-
-function fallbackSlug(id: string): string {
-	return slugify(id) || 'item';
+	return `${slugify(label) || 'collection'}-${slugify(id) || 'item'}`;
 }
 
 function slugify(value: string): string {
@@ -605,7 +439,7 @@ function uniqueBy<T, K>(items: T[], key: (item: T) => K): T[] {
 function tarGzipStream(files: Iterable<OkfFile>): ReadableStream<Uint8Array> {
 	const iterator = files[Symbol.iterator]();
 	let closed = false;
-	return new ReadableStream<Uint8Array>({
+	const tarStream = new ReadableStream<Uint8Array>({
 		pull(controller) {
 			if (closed) return;
 			const next = iterator.next();
@@ -617,7 +451,13 @@ function tarGzipStream(files: Iterable<OkfFile>): ReadableStream<Uint8Array> {
 			controller.enqueue(new Uint8Array(1024));
 			controller.close();
 		},
-	}).pipeThrough(new CompressionStream('gzip'));
+	});
+	const compression = new CompressionStream('gzip');
+	const gzip: ReadableWritablePair<Uint8Array, Uint8Array> = {
+		readable: compression.readable as ReadableStream<Uint8Array>,
+		writable: compression.writable as WritableStream<Uint8Array>,
+	};
+	return tarStream.pipeThrough(gzip);
 }
 
 function enqueueTarFile(controller: ReadableStreamDefaultController<Uint8Array>, file: OkfFile): void {

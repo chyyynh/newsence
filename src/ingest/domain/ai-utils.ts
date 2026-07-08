@@ -1,17 +1,7 @@
-// ─────────────────────────────────────────────────────────────
-// AI Utility Functions & Shared Processor Types
-// ─────────────────────────────────────────────────────────────
-
-import { AI_TASKS, generateObject, generateText } from '@shared/ai';
-import type { ProcessableTable } from '@shared/article-store';
-import { entityExtractionExclusionNames } from '@shared/entities/normalize';
-import type { ArticleCategory, PlatformEnrichments } from '@shared/platform-metadata';
-import { type AIAnalysisResult, type Article, ENTITY_TYPES, type Env } from '@shared/types';
+import { generateObject, generateText } from '@core-ai/embedding';
+import { type AIAnalysisResult, type Article, type ArticleCategory, ENTITY_TYPES, type PlatformEnrichments } from '@core-shared/types';
+import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-
-// ─────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────
 
 export interface ProcessorResult {
 	updateData: {
@@ -22,40 +12,41 @@ export interface ProcessorResult {
 		summary_cn?: string;
 		content?: string;
 		content_cn?: string;
-		og_image_url?: string;
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
 	classificationCategory?: ArticleCategory;
-	/**
-	 * Measured OG image dimensions, merged into `platform_metadata` at persist
-	 * time (creating a `default` envelope if none exists). Populated by the
-	 * workflow's measure step for articles that have an og image but no
-	 * source-provided `og:image:width/height` meta tags.
-	 */
-	ogImageDimensions?: { width: number; height: number };
 }
-
-export interface ProcessorContext {
-	env: Env;
-	table: ProcessableTable;
-}
-
-export interface ArticleProcessor {
-	process(article: Article, ctx: ProcessorContext): Promise<ProcessorResult>;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Utilities
-// ─────────────────────────────────────────────────────────────
 
 export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-// ─────────────────────────────────────────────────────────────
-// AI Analysis Functions
-// ─────────────────────────────────────────────────────────────
+export function mergeArticleAnalysis(
+	article: Article,
+	analysis: AIAnalysisResult,
+	options: {
+		updateData?: ProcessorResult['updateData'];
+		extraTags?: string[];
+		overwriteSummary?: boolean;
+		includeContent?: boolean;
+	} = {},
+): { updateData: ProcessorResult['updateData']; classificationCategory?: ArticleCategory } {
+	const updateData = options.updateData ?? {};
+	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
+	const includeContent = options.includeContent ?? true;
+
+	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
+	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
+	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+	if ((options.overwriteSummary || isEmpty(article.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
+	if ((options.overwriteSummary || isEmpty(article.summary_cn)) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
+	if (includeContent && analysis.content) updateData.content = analysis.content;
+	if (includeContent && isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
+	if (analysis.entities) updateData.entities = analysis.entities;
+
+	return { updateData, classificationCategory: analysis.category };
+}
 
 const MAX_CONTENT_LENGTH = 10000;
 const MAX_CONTENT_CLEANUP_LENGTH = 12000;
@@ -82,9 +73,6 @@ const ArticleClassificationSchema = z.object({
 	entities: z.array(ExtractedEntitySchema),
 	category: z.enum(ARTICLE_CATEGORIES),
 });
-
-type ArticleTranslationObject = z.infer<typeof ArticleTranslationSchema>;
-type ArticleClassificationObject = z.infer<typeof ArticleClassificationSchema>;
 
 const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
 
@@ -176,12 +164,6 @@ function shouldTranslateArticleContent(article: Article): boolean {
 	return cjkRatio(content) < 0.6;
 }
 
-function shouldCleanArticleContent(article: Article): boolean {
-	const content = article.content?.trim();
-	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH) return false;
-	return article.source_type !== 'youtube' && article.source_type !== 'hackernews';
-}
-
 function normalizeComparableContent(content: string): string {
 	return content.replace(/\s+/g, ' ').trim();
 }
@@ -201,56 +183,22 @@ function validateCleanedContent(original: string, cleaned: string | null): strin
 	return trimmed;
 }
 
-async function generateArticleTranslation(article: Article, env: Env): Promise<ArticleTranslationObject | null> {
-	const result = await generateObject<ArticleTranslationObject>(env.AI, buildArticleContextPrompt(article), {
-		schema: ArticleTranslationSchema,
-		schemaName: 'article translation',
-		task: AI_TASKS.articleTranslation,
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 700,
-		systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
-	});
-	return result;
-}
-
-async function generateArticleClassification(article: Article, env: Env): Promise<ArticleClassificationObject | null> {
-	const result = await generateObject<ArticleClassificationObject>(env.AI, buildArticleContextPrompt(article), {
-		schema: ArticleClassificationSchema,
-		schemaName: 'article classification',
-		task: AI_TASKS.articleClassification,
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 500,
-		systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
-	});
-	return result;
-}
-
-async function generateArticleContentCleanup(article: Article, env: Env): Promise<string | null> {
-	if (!shouldCleanArticleContent(article)) return null;
-	const content = article.content!.trim().slice(0, MAX_CONTENT_CLEANUP_LENGTH);
-	const cleaned = await generateText(env.AI, `原文 Markdown:\n${content}`, {
-		task: AI_TASKS.articleContentCleanup,
+async function generateArticleContentCleanup(article: Article, env: CoreEnv): Promise<string | null> {
+	const content = article.content?.trim();
+	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || article.source_type === 'youtube' || article.source_type === 'hackernews')
+		return null;
+	const cleanupContent = content.slice(0, MAX_CONTENT_CLEANUP_LENGTH);
+	const cleaned = await generateText(env.AI, `原文 Markdown:\n${cleanupContent}`, {
+		task: 'article-content-cleanup',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 6000,
 		temperature: 0.1,
 		systemPrompt: ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT,
 	});
-	return validateCleanedContent(content, cleaned);
+	return validateCleanedContent(cleanupContent, cleaned);
 }
 
-async function generateArticleContentTranslation(article: Article, env: Env): Promise<string | null> {
-	if (!shouldTranslateArticleContent(article)) return null;
-	const content = article.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH);
-	return generateText(env.AI, `原文 Markdown:\n${content}`, {
-		task: AI_TASKS.articleContentTranslation,
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 6000,
-		temperature: 0.2,
-		systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
-	});
-}
-
-export async function generateArticleAnalysis(article: Article, env: Env): Promise<AIAnalysisResult> {
+export async function generateArticleAnalysis(article: Article, env: CoreEnv): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {
@@ -259,19 +207,43 @@ export async function generateArticleAnalysis(article: Article, env: Env): Promi
 			return null;
 		});
 		const articleForAnalysis = cleanedContent ? { ...article, content: cleanedContent } : article;
+		const articlePrompt = buildArticleContextPrompt(articleForAnalysis);
+		const contentForTranslation = shouldTranslateArticleContent(articleForAnalysis)
+			? articleForAnalysis.content!.trim().slice(0, MAX_CONTENT_TRANSLATION_LENGTH)
+			: null;
 		const [translation, classification, contentTranslation] = await Promise.all([
-			generateArticleTranslation(articleForAnalysis, env).catch((error) => {
+			generateObject(env.AI, articlePrompt, {
+				schema: ArticleTranslationSchema,
+				task: 'article-translation',
+				gatewayId: env.AI_GATEWAY_NAME,
+				maxTokens: 700,
+				systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
+			}).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
 				return null;
 			}),
-			generateArticleClassification(articleForAnalysis, env).catch((error) => {
+			generateObject(env.AI, articlePrompt, {
+				schema: ArticleClassificationSchema,
+				task: 'article-classification',
+				gatewayId: env.AI_GATEWAY_NAME,
+				maxTokens: 500,
+				systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
+			}).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
 				return null;
 			}),
-			generateArticleContentTranslation(articleForAnalysis, env).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
-				return null;
-			}),
+			contentForTranslation
+				? generateText(env.AI, `原文 Markdown:\n${contentForTranslation}`, {
+						task: 'article-content-translation',
+						gatewayId: env.AI_GATEWAY_NAME,
+						maxTokens: 6000,
+						temperature: 0.2,
+						systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
+					}).catch((error) => {
+						console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
+						return null;
+					})
+				: Promise.resolve(null),
 		]);
 
 		const analysis: AIAnalysisResult = {};

@@ -1,31 +1,3 @@
-import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
-
-type WorkerScheduledEvent = ScheduledEvent;
-type WorkerExecutionContext = ExecutionContext;
-type WorkerQueue = Queue;
-type WorkerMessageBatch<T = unknown> = MessageBatch<T>;
-
-/**
- * Environment bindings.
- * Extends wrangler-generated Cloudflare.Env (from worker-configuration.d.ts)
- * with secrets that are not in wrangler.jsonc. Re-run `pnpm cf-typegen` after
- * editing wrangler.jsonc — bindings/vars come from the generated base.
- */
-export interface Env extends Cloudflare.Env {
-	// CORE_WORKER_INTERNAL_TOKEN, BETTER_AUTH_SECRET, and POSTHOG_HOST come from
-	// the generated Cloudflare.Env (wrangler vars / .dev.vars) — re-declaring them
-	// here would widen the type and conflict (TS2430). Don't add them back.
-	KAITO_API_KEY?: string;
-	YOUTUBE_API_KEY?: string;
-	/** HMAC secret for signing /media/external/ and /media/asset URLs. */
-	IMAGE_PROXY_SECRET?: string;
-	/** Exa client key. Optional; the `search-web` tool refuses to run without it. */
-	EXA_API_KEY?: string;
-	/** PostHog project key (server). Set via `wrangler secret put POSTHOG_API_KEY`. */
-	POSTHOG_API_KEY?: string;
-}
-
-// Article related types
 export interface Article {
 	id: string;
 	title: string;
@@ -37,23 +9,19 @@ export interface Article {
 	url: string;
 	source: string;
 	published_date: string;
-	scraped_date?: string;
 	tags: string[];
 	keywords: string[];
 	source_type?: string;
-	og_image_url?: string | null;
 	platform_metadata?: PlatformMetadata;
 	// user_files-only raw columns (undefined for articles path).
 	storage_key?: string | null;
 	file_type?: string;
-	origin_type?: string;
 }
 
-// AI Analysis result
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-export interface ExtractedEntity {
+interface ExtractedEntity {
 	name: string;
 	name_cn: string;
 	type: EntityType;
@@ -71,61 +39,165 @@ export interface AIAnalysisResult {
 	entities?: ExtractedEntity[];
 }
 
-// RSS Feed related
-export interface RSSFeed {
-	id: string;
-	name: string;
-	RSSLink: string;
-	url: string;
-	type: string;
-	scraped_at?: string;
-	avatar_url?: string;
-}
-
-// Twitter related (Kaito API response shape)
-export interface Tweet {
-	id?: string;
-	url: string;
-	createdAt: string;
-	viewCount: number;
-	author: {
-		id?: string;
-		userName: string;
-		name: string;
-		profilePicture?: string;
-		isBlueVerified?: boolean;
-	};
+export interface TranscriptSegment {
+	startTime: number;
+	endTime: number;
 	text: string;
-	likeCount?: number;
-	retweetCount?: number;
-	replyCount?: number;
-	quoteCount?: number;
-	extendedEntities?: {
-		media?: Array<{
-			media_url_https: string;
-			type: string;
-			sizes?: { large?: { w: number; h: number } };
-			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
-		}>;
-	};
-	hashTags?: string[];
-	urls?: Array<{ expanded_url?: string; url?: string }>;
-	lang?: string;
-	// Thread & reply fields
-	conversationId?: string;
-	isReply?: boolean;
-	inReplyToId?: string | null;
-	inReplyToUsername?: string | null;
-	// Quote & retweet
-	quoted_tweet?: Tweet | null;
-	retweeted_tweet?: Tweet | null;
-	retweetedBy?: RetweetedByData;
 }
 
-// Exported handlers
-export type {
-	WorkerExecutionContext as ExecutionContext,
-	WorkerMessageBatch as MessageBatch,
-	WorkerQueue as Queue,
-	WorkerScheduledEvent as ScheduledEvent,
-};
+export interface YouTubeChapter {
+	title: string;
+	startTime: number;
+	endTime: number;
+}
+
+export interface YoutubeTranscript {
+	videoId: string;
+	segments: TranscriptSegment[];
+	language: string | null;
+	chapters: YouTubeChapter[];
+	chaptersFromDescription: boolean;
+}
+
+export interface NormalizedContent {
+	title: string | null;
+	/** Platform APIs return markdown or plain text for source article drafts. */
+	markdown: string;
+	metadata: {
+		author: string | null;
+		publishedDate: string | null;
+		siteName: string | null;
+		description: string | null;
+	};
+	platformMetadata?: PlatformMetadata;
+	youtubeTranscript?: YoutubeTranscript;
+}
+
+export interface TwitterMedia {
+	url: string;
+	type: 'photo' | 'video' | 'animated_gif';
+	videoUrl?: string;
+	width?: number;
+	height?: number;
+}
+
+export interface TwitterAuthorFields {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	authorVerified?: boolean;
+}
+
+export interface QuotedTweetData {
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	text: string;
+}
+
+export interface RetweetedByData {
+	tweetId?: string;
+	tweetUrl?: string;
+	retweetedAt?: string;
+	authorName: string;
+	authorUserName: string;
+	authorProfilePicture?: string;
+	authorVerified?: boolean;
+}
+
+interface TwitterMetadata extends TwitterAuthorFields {
+	variant?: 'shared' | 'article';
+	tweetId?: string;
+	media?: TwitterMedia[];
+	createdAt?: string;
+	quotedTweet?: QuotedTweetData;
+	retweetedBy?: RetweetedByData;
+	tweetText?: string;
+	externalUrl?: string;
+	externalOgImage?: string | null;
+	externalTitle?: string | null;
+	originalTweetUrl?: string;
+}
+
+interface YouTubeMetadata {
+	videoId: string;
+	channelName: string;
+	channelId?: string;
+	channelAvatar?: string;
+	duration?: string;
+	thumbnailUrl?: string;
+	viewCount?: number;
+	likeCount?: number;
+	commentCount?: number;
+	publishedAt?: string;
+	description?: string;
+	tags?: string[];
+}
+
+export interface HackerNewsMetadata {
+	itemId: string;
+	author: string;
+	points: number;
+	commentCount: number;
+	itemType?: 'story' | 'ask' | 'show' | 'job';
+	storyUrl?: string | null;
+}
+
+interface PdfMetadata {
+	fileName: string;
+	fileSize: number;
+}
+
+export interface PaperReference {
+	openAlexId?: string;
+	doi?: string;
+	title?: string;
+	year?: number;
+	author?: string;
+}
+
+export interface PaperMetadata {
+	source: 'openalex' | 'semanticscholar';
+	/** Legacy field name; new values are source-native Semantic Scholar paperIds. */
+	openAlexId?: string;
+	doi?: string;
+	arxivId?: string;
+	title?: string;
+	authors: string[];
+	abstract?: string;
+	venue?: string;
+	year?: number;
+	citedByCount?: number;
+	referenceCount: number;
+	oaPdfUrl?: string;
+	landingPageUrl?: string;
+	references: PaperReference[];
+}
+
+export interface PlatformEnrichments {
+	hnUrl?: string;
+	externalUrl?: string | null;
+	hnText?: string | null;
+	commentCount?: number;
+	links?: string[];
+	processedAt?: string;
+}
+
+export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
+
+interface ClassificationMetadata {
+	category?: ArticleCategory;
+	classifiedAt?: string;
+}
+
+interface ClassificationEnvelope {
+	classification?: ClassificationMetadata | null;
+}
+
+export type PlatformMetadata =
+	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
+	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope);

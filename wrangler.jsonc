@@ -6,7 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "newsence-core",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-05-15",
+	"compatibility_date": "2026-07-07",
 	/**
 	 * Keep request abort signals available to fetch-heavy ingest endpoints and
 	 * propagate them into subrequests.
@@ -14,19 +14,13 @@
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
 	/**
 	 * Bundle `.wasm` files as compiled `WebAssembly.Module` imports. Used by the
-	 * PDF text-extraction step (`@llamaindex/liteparse-wasm`) — see
-	 * ingest/workflows/steps/pdf-extraction.ts. `fallthrough` keeps default rules
-	 * for any other module types.
+	 * PDF text-extraction stage (`@llamaindex/liteparse-wasm`) in
+	 * `src/ingest/platforms/pdf.ts`. `fallthrough` keeps default rules for any
+	 * other module types.
 	 */
 	"rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }],
 	"observability": {
-		"logs": {
-			"enabled": true,
-			"invocation_logs": true
-		},
-		"traces": {
-			"enabled": false
-		}
+		"enabled": true
 	},
 	/**
 	 * Schedule Triggers
@@ -36,29 +30,7 @@
 		"crons": [
 			"*/5 * * * *", // RSS monitor (every 5 minutes)
 			"0 */6 * * *", // Twitter monitor (every 6 hours)
-			"*/30 * * * *", // YouTube channel monitor (every 30 minutes)
-			"0 3 * * *" // Retry failed articles (daily 3 AM UTC)
-		]
-	},
-	/**
-	 * Queue Bindings
-	 * https://developers.cloudflare.com/queues/configuration/configure-queues/
-	 */
-	"queues": {
-		"consumers": [
-			{
-				"queue": "article-processing-queue-core",
-				"max_batch_size": 10,
-				"max_batch_timeout": 30,
-				"max_retries": 3,
-				"dead_letter_queue": "article-processing-dlq-core"
-			}
-		],
-		"producers": [
-			{
-				"binding": "ARTICLE_QUEUE",
-				"queue": "article-processing-queue-core"
-			}
+			"*/30 * * * *" // YouTube channel monitor (every 30 minutes)
 		]
 	},
 	/**
@@ -70,11 +42,6 @@
 			"binding": "MONITOR_WORKFLOW",
 			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
-		},
-		{
-			"binding": "SCRAPE_WORKFLOW",
-			"name": "newsence-scrape-workflow",
-			"class_name": "ScrapeWorkflow"
 		}
 	],
 	/**
@@ -83,18 +50,6 @@
 	 */
 	"ai": {
 		"binding": "AI"
-	},
-	"browser": {
-		"binding": "BROWSER"
-	},
-	/**
-	 * Images Binding — account-level image transformations.
-	 * Required because cf.image fetch options are silently ignored on
-	 * workers.dev domains; the binding works regardless of zone.
-	 * https://developers.cloudflare.com/images/transform-images/bindings/
-	 */
-	"images": {
-		"binding": "IMAGES"
 	},
 	/**
 	 * Hyperdrive — PlanetScale PostgreSQL connection pooling
@@ -110,21 +65,13 @@
 	 * R2 buckets.
 	 *
 	 * `R2` — user_file blob storage (PDF/image uploads + chat-generated images).
-	 *   Also written by the Next.js frontend via S3 API; the worker reads
+	 *   Also written by the app worker; the core worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
-	 *
-	 * `IMAGE_CACHE` — durable L2 cache for env.IMAGES transforms. Dedicated
-	 *   bucket (not `R2`) so its metrics, lifecycle rules, and blast radius
-	 *   stay isolated from user uploads. See proxy.ts for the L1/L2 flow.
 	 */
 	"r2_buckets": [
 		{
 			"binding": "R2",
 			"bucket_name": "newsence"
-		},
-		{
-			"binding": "IMAGE_CACHE",
-			"bucket_name": "newsence-image-cache"
 		}
 	],
 	/**
@@ -134,36 +81,18 @@
 		"mode": "smart"
 	},
 	/**
-	 * Per-user ingest throttle. Eventually consistent across the zone — fine
-	 * for abuse defense (in-memory Map was per-isolate, effectively N× the cap).
-	 * `namespace_id` is worker-local; bump only if reusing this slot for a
-	 * different limiter. Bumping it silently resets all in-flight counters, so
-	 * keep it stable in prod. Each `limit()` call counts as 1 — batch size cap
-	 * stays separate (INGEST_MAX_BATCH_SIZE in app/ingest/urls.ts).
-	 */
-	"ratelimits": [
-		{
-			"name": "USER_INGEST_LIMITER",
-			"namespace_id": "1",
-			"simple": { "limit": 20, "period": 60 }
-		}
-	],
-	/**
-	 * `APP_ORIGINS` — comma-separated CORS allowlist for `/media/asset/*` responses.
-	 *   The HMAC signature is the real access control; this just limits which
-	 *   origins can read response bytes from JS after a signed URL leaks.
-	 *   When unset, falls back to `*` (with a one-time console warning).
+	 * `AI_GATEWAY_NAME` — AI Gateway name used by Workers AI text generation.
+	 *   `default` is auto-created by Cloudflare on first use.
 	 *
-	 * `AI_GATEWAY_NAME` — AI Gateway name used by Gemini text generation via
-	 *   Unified Billing. `default` is auto-created by Cloudflare on first use.
-	 *
-	 * Secret (set via `wrangler secret put`):
-	 *   IMAGE_PROXY_SECRET — 32-byte hex HMAC key for media URL signing.
-	 *     Generate: `openssl rand -hex 32`. Frontend must use the same value.
+	 * Required secrets:
+	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
+	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
+	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
 	 */
+	"secrets": {
+		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
+	},
 	"vars": {
-		"APP_ORIGINS": "https://www.newsence.app,https://newsence.app,http://localhost:3000",
-		"AI_GATEWAY_NAME": "default",
-		"POSTHOG_HOST": "https://us.i.posthog.com"
+		"AI_GATEWAY_NAME": "default"
 	}
 }
