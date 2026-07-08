@@ -103,6 +103,32 @@ export type InsertUrlUserFileResult = {
 	og_image_url: string | null;
 };
 
+export type ExistingUrlUserFile = {
+	id: string;
+	title: string;
+	title_cn: string | null;
+	summary_cn: string | null;
+	tags: string[] | null;
+	platform_type: string | null;
+	og_image_url: string | null;
+	resource_kind: string;
+	has_embedding: boolean;
+};
+
+const EXISTING_URL_USER_FILE_FIELDS =
+	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
+
+export async function getExistingUrlUserFile(db: Client, userId: string, normalizedSourceUrl: string): Promise<ExistingUrlUserFile | null> {
+	const result = await db.query<ExistingUrlUserFile>(
+		`SELECT ${EXISTING_URL_USER_FILE_FIELDS} FROM user_files
+		 WHERE user_id = $1
+		   AND normalized_source_url = $2
+		 LIMIT 1`,
+		[userId, normalizedSourceUrl],
+	);
+	return result.rows[0] ?? null;
+}
+
 export type InsertScrapedUrlUserFileResult = { ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string };
 
 export async function insertScrapedUrlUserFile(

@@ -1,14 +1,17 @@
 import type { WorkflowAttachment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
-import { type InsertUrlUserFileResult, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
+import {
+	type ExistingUrlUserFile,
+	getExistingUrlUserFile,
+	type InsertUrlUserFileResult,
+	insertScrapedUrlUserFile,
+} from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { type ScrapeResult, scrapeUrl } from './extract';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
-const EXISTING_URL_USER_FILE_FIELDS =
-	'id, title, title_cn, summary_cn, tags, platform_type, og_image_url, resource_kind, embedding IS NOT NULL AS has_embedding';
 
 type IngestResult = {
 	url: string;
@@ -30,18 +33,6 @@ type IngestResult = {
 
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
-
-type ExistingUrlUserFile = {
-	id: string;
-	title: string;
-	title_cn: string | null;
-	summary_cn: string | null;
-	tags: string[] | null;
-	platform_type: string | null;
-	og_image_url: string | null;
-	resource_kind: string;
-	has_embedding: boolean;
-};
 
 type InsertOutcome =
 	| { kind: 'page'; row: InsertUrlUserFileResult; attachments?: WorkflowAttachment[] }
@@ -95,14 +86,7 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 }
 
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
-	const existing = await db.query<ExistingUrlUserFile>(
-		`SELECT ${EXISTING_URL_USER_FILE_FIELDS} FROM user_files
-		 WHERE user_id = $1
-		   AND normalized_source_url = $2
-		 LIMIT 1`,
-		[userId, url],
-	);
-	const existingRow = existing.rows[0] ?? null;
+	const existingRow = await getExistingUrlUserFile(db, userId, url);
 	if (existingRow) {
 		return returnExisting(db, url, existingRow, env);
 	}
