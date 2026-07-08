@@ -9,7 +9,7 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 export type ScrapeResult =
 	| { kind: 'page'; scraped: ExtractedContent }
 	| {
-			kind: 'blob';
+			kind: 'asset';
 			body: ReadableStream<Uint8Array>;
 			contentType: string;
 			sourceUrl: string;
@@ -63,7 +63,7 @@ async function fetchGenericUrl(url: string): Promise<ScrapeResult> {
 		const cdName = parseContentDisposition(res.headers.get('content-disposition'));
 		const suggestedFilename =
 			cdName ?? new URL(finalUrl).pathname.split('/').filter(Boolean).pop() ?? (ct === PDF_MIME ? 'document.pdf' : 'image');
-		return { kind: 'blob', body: res.body, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength };
+		return { kind: 'asset', body: res.body, contentType: ct, sourceUrl: finalUrl, suggestedFilename, contentLength };
 	}
 
 	await res.body?.cancel();

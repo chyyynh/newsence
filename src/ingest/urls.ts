@@ -22,7 +22,7 @@ type IngestResult = {
 	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
-	blob?: Extract<ScrapeResult, { kind: 'blob' }>;
+	asset?: Extract<ScrapeResult, { kind: 'asset' }>;
 	alreadyExists?: boolean;
 	error?: string;
 };
@@ -83,13 +83,13 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 		return { url, error: `Scrape failed: ${err}` };
 	}
 
-	if (scrapeResult.kind === 'blob') {
+	if (scrapeResult.kind === 'asset') {
 		return {
 			url,
 			resourceKind: 'blob',
 			originType: 'saved_url',
 			fileType: scrapeResult.contentType,
-			blob: scrapeResult,
+			asset: scrapeResult,
 			alreadyExists: false,
 		};
 	}

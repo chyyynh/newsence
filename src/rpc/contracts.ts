@@ -45,7 +45,7 @@ export type ExportCollectionOkfInput = {
 	userId?: string | null;
 };
 
-type CoreUrlBlobCandidate = {
+type CoreUrlAssetCandidate = {
 	body: ReadableStream<Uint8Array>;
 	contentType: string;
 	sourceUrl: string;
@@ -66,7 +66,7 @@ type CoreUrlIngestResult = {
 	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
-	blob?: CoreUrlBlobCandidate;
+	asset?: CoreUrlAssetCandidate;
 	alreadyExists?: boolean;
 	error?: string;
 };
