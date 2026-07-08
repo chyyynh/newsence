@@ -190,10 +190,7 @@ type ArticleProcessingUpdate = Record<string, unknown>;
 
 const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
 	content: 'extracted_text',
-	url: 'source_url',
-	source: 'site_name',
 	platform_metadata: 'metadata',
-	scraped_date: 'created_at',
 };
 
 export async function updateArticleAfterProcessing(
