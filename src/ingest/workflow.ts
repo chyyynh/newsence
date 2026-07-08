@@ -269,7 +269,7 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 	return pdfText === null ? article : { ...article, content: pdfText };
 }
 
-async function persistSourceTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
+async function persistSourceTarget(db: Client, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
 	const fullArticle = insertArticleDataToArticle(draft.article);
 	const articleForInsert = { ...draft.article, ogImageUrl: null };
@@ -284,27 +284,12 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	};
 	const platformMetadata = updatePayload.platform_metadata ?? articleForInsert.platformMetadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, articleForInsert.source, platformMetadata);
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	await db.query('BEGIN');
-	try {
-		const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
-		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
-		await persistYouTubeWorkflowData(db, {
-			transcript: input.youtubeTranscript,
-			highlights: input.youtubeHighlights,
-		});
-		await db.query('COMMIT');
-		return articleId;
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'source article rollback failed', error: String(rollbackError) }));
-		throw error;
-	}
+	const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
+	if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
+	return articleId;
 }
 
-async function persistStoredTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
+async function persistStoredTarget(env: Env, db: Client, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 	const extractedPdfText = await readPdfTextTemp(env, input.pdfTextTemp);
 	const finalResult: ProcessorResult = {
@@ -327,28 +312,34 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
+	await updateArticleAfterProcessing(db, context.table, context.rowId, updatePayload);
+	if (context.userFileId)
+		await patchUserFileWorkflowMetadata(db, context.userFileId, {
+			monitor_status: 'complete',
+			monitor_completed_at: new Date().toISOString(),
+			article_id: context.rowId,
+		});
+	if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
+	return context.rowId;
+}
+
+async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
 	await db.query('BEGIN');
 	try {
-		await updateArticleAfterProcessing(db, context.table, context.rowId, updatePayload);
-		if (context.userFileId)
-			await patchUserFileWorkflowMetadata(db, context.userFileId, {
-				monitor_status: 'complete',
-				monitor_completed_at: new Date().toISOString(),
-				article_id: context.rowId,
-			});
-		if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
+		const articleId =
+			context.target.kind === 'source' ? await persistSourceTarget(db, context, input) : await persistStoredTarget(env, db, context, input);
 		await persistYouTubeWorkflowData(db, {
 			transcript: input.youtubeTranscript,
 			highlights: input.youtubeHighlights,
 		});
 		await db.query('COMMIT');
-		return context.rowId;
+		return articleId;
 	} catch (error) {
 		await db
 			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'row workflow rollback failed', error: String(rollbackError) }));
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'workflow target rollback failed', error: String(rollbackError) }));
 		throw error;
 	}
 }
@@ -426,8 +417,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => {
-					const input = {
+				() =>
+					persistWorkflowTarget(this.env, context, {
 						article,
 						result: processorResult,
 						embedding,
@@ -435,11 +426,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						youtubeTranscript,
 						youtubeHighlights,
 						paperEnrichment,
-					};
-					return context.target.kind === 'source'
-						? persistSourceTarget(this.env, context, input)
-						: persistStoredTarget(this.env, context, input);
-				},
+					}),
 			);
 
 			await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
