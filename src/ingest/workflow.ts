@@ -2,8 +2,12 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
-import { syncArticleEntities } from '@entities/sync';
-import { insertFinalSourceArticle, loadArticleForProcessing, updateArticleAfterProcessing } from '@ingest/domain/article-store';
+import {
+	insertFinalSourceArticle,
+	loadArticleForProcessing,
+	syncArticleEntities,
+	updateArticleAfterProcessing,
+} from '@ingest/domain/article-store';
 import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { processHackerNewsArticle } from './platforms/hackernews';
