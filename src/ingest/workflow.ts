@@ -87,11 +87,6 @@ interface SourceArticleDraft {
 type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>> | null;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
-type WorkflowStatusSnapshot = {
-	error?: unknown;
-	output?: unknown;
-	status: string;
-};
 
 export async function enqueueProcessing(
 	env: CoreEnv,
@@ -126,12 +121,6 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 		.map((byte) => byte.toString(16).padStart(2, '0'))
 		.join('');
 	return `source-article-${hash}`;
-}
-
-export async function getWorkflowStatus(env: CoreEnv, workflowId: string): Promise<WorkflowStatusSnapshot> {
-	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
-	const { status, error, output } = await instance.status();
-	return { error, output, status: String(status) };
 }
 
 type WorkflowPersistenceInput = {
