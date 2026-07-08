@@ -35,7 +35,7 @@ export async function loadArticleForProcessing(
 	return result.rows[0] as ArticleForProcessing;
 }
 
-export interface PreparedArticleRecord {
+interface PreparedArticleRecord {
 	url: string;
 	title: string;
 	source: string;
@@ -47,25 +47,6 @@ export interface PreparedArticleRecord {
 	platformMetadata: unknown | null;
 	keywords?: string[];
 	tags?: string[];
-}
-
-export function preparedArticleToArticle(data: PreparedArticleRecord): Article {
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
 }
 
 type ArticleProcessingUpdate = Record<string, unknown>;

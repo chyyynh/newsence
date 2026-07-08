@@ -4,13 +4,7 @@ import type { PaperMetadata, PlatformMetadata } from '@core-shared/platform-meta
 import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
-import {
-	insertFinalSourceArticle,
-	loadArticleForProcessing,
-	type PreparedArticleRecord,
-	preparedArticleToArticle,
-	updateArticleAfterProcessing,
-} from '@ingest/domain/article-store';
+import { insertFinalSourceArticle, loadArticleForProcessing, updateArticleAfterProcessing } from '@ingest/domain/article-store';
 import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { processHackerNewsArticle } from './platforms/hackernews';
@@ -32,6 +26,25 @@ const articlePlatforms: Partial<Record<string, typeof processDefaultArticle>> = 
 function platformIdentity(article: Article): string {
 	const metadataType = article.platform_metadata?.type;
 	return metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
+}
+
+function sourceRecordToArticle(data: SourceArticleRecord): Article {
+	return {
+		id: data.url,
+		title: data.title,
+		title_cn: null,
+		summary: data.summary || null,
+		summary_cn: null,
+		content: data.content,
+		content_cn: null,
+		url: data.url,
+		source: data.source,
+		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
+		tags: data.tags ?? [],
+		keywords: data.keywords ?? [],
+		source_type: data.sourceType,
+		platform_metadata: data.platformMetadata as Article['platform_metadata'],
+	};
 }
 
 function buildProcessorUpdatePayload(
@@ -71,9 +84,10 @@ function buildProcessorUpdatePayload(
 type StoredWorkflowTarget = { kind: 'stored'; table: 'articles' | 'user_files'; rowId: string };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceDraftKey: string };
+type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
 
 interface SourceArticleDraft {
-	article: PreparedArticleRecord;
+	article: SourceArticleRecord;
 	youtubeTranscript?: YoutubeTranscript;
 }
 
@@ -249,7 +263,7 @@ async function readSourceDraft(env: CoreEnv, target: Extract<WorkflowTarget, { k
 async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
 	let article: Article;
 	if (target.kind === 'source') {
-		article = preparedArticleToArticle((await readSourceDraft(env, target)).article);
+		article = sourceRecordToArticle((await readSourceDraft(env, target)).article);
 	} else {
 		article = await loadArticleForProcessing(env, target.table, target.rowId);
 	}
@@ -258,7 +272,7 @@ async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTe
 }
 
 async function persistSourceTarget(db: Client, draft: SourceArticleDraft, input: WorkflowPersistenceInput): Promise<string> {
-	const fullArticle = preparedArticleToArticle(draft.article);
+	const fullArticle = sourceRecordToArticle(draft.article);
 	const articleForInsert = { ...draft.article, ogImageUrl: null };
 	const updatePayload: Record<string, unknown> = {
 		...buildProcessorUpdatePayload(
@@ -330,8 +344,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				if (target.kind === 'source')
-					return { ...preparedArticleToArticle((await readSourceDraft(this.env, target)).article), content: null };
+				if (target.kind === 'source') return { ...sourceRecordToArticle((await readSourceDraft(this.env, target)).article), content: null };
 				return loadArticleForProcessing(this.env, target.table, target.rowId, true);
 			},
 		);
