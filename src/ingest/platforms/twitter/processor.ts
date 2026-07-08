@@ -26,17 +26,21 @@ export class TwitterProcessor implements ArticleProcessor {
 		if (isEmpty(article.summary)) updateData.summary = tweetText;
 
 		const analysis = await translateTweet(tweetText, article, ctx.env);
-		if (!analysis) return { updateData: { ...updateData, ...(!article.tags?.length ? { tags: ['Twitter'] } : {}) } };
-		Object.assign(updateData, {
-			...(isEmpty(article.title_cn) ? { title_cn: analysis.summary_cn.slice(0, 80) } : {}),
-			...(isEmpty(article.summary_cn) ? { summary_cn: analysis.summary_cn } : {}),
-			...(isEmpty(article.content) ? { content: tweetText } : {}),
-			...(isEmpty(article.content_cn) ? { content_cn: analysis.summary_cn } : {}),
-			...(!article.tags?.length && analysis.tags.length ? { tags: analysis.tags } : {}),
-			...(!article.keywords?.length && analysis.keywords.length ? { keywords: analysis.keywords } : {}),
-			entities: analysis.entities,
-		});
-		return { updateData };
+		if (!analysis) return mergeArticleAnalysis(article, { tags: ['Twitter'] }, { updateData });
+		const merged = mergeArticleAnalysis(
+			article,
+			{
+				title_cn: analysis.summary_cn.slice(0, 80),
+				summary_cn: analysis.summary_cn,
+				content: isEmpty(article.content) ? tweetText : undefined,
+				content_cn: analysis.summary_cn,
+				tags: analysis.tags,
+				keywords: analysis.keywords,
+				entities: analysis.entities,
+			},
+			{ updateData },
+		);
+		return { updateData: merged.updateData, classificationCategory: merged.classificationCategory };
 	}
 }
 
