@@ -1,33 +1,13 @@
 import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Article, YoutubeTranscript } from '@core-shared/types';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from '@ingest/platforms/youtube/transcripts';
-import type { Client } from 'pg';
-import {
-	type ArticleProcessor,
-	generateArticleAnalysis,
-	mergeArticleAnalysis,
-	type ProcessorContext,
-	type ProcessorResult,
-} from './ai-utils';
+import type { Article } from '@core-shared/types';
+import { type ArticleProcessor, generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './ai-utils';
 
 export type { ProcessorResult } from './ai-utils';
 
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
-type ArticlePlatformAdapter = ArticleProcessor & {
-	prepareWorkflowData?: (
-		article: Article,
-		ctx: ProcessorContext,
-		youtubeTranscript?: YoutubeTranscript | null,
-	) => Promise<YouTubeHighlightsUpdate | null>;
-	persistWorkflowData?: (
-		db: Client,
-		input: { youtubeHighlights?: YouTubeHighlightsUpdate | null; youtubeTranscript?: YoutubeTranscript | null },
-	) => Promise<void>;
-};
-
-const defaultProcessor: ArticlePlatformAdapter = {
+const defaultProcessor: ArticleProcessor = {
 	async process(article, ctx) {
 		const analysis = await generateArticleAnalysis(article, ctx.env);
 		return mergeArticleAnalysis(article, analysis);
@@ -35,25 +15,14 @@ const defaultProcessor: ArticlePlatformAdapter = {
 };
 const twitterProcessor = new TwitterProcessor();
 
-export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
+export const articlePlatforms: Record<string, ArticleProcessor> = {
 	hackernews: new HackerNewsProcessor(),
 	rss: defaultProcessor,
 	twitter: {
 		process: (article, ctx) => twitterProcessor.process(article, ctx),
 	},
 	web: defaultProcessor,
-	youtube: {
-		process: (article, ctx) => defaultProcessor.process(article, ctx),
-		async prepareWorkflowData(article, ctx, youtubeTranscript) {
-			const highlights = await prepareYouTubeHighlights(ctx.env, article, youtubeTranscript);
-			return highlights;
-		},
-		persistWorkflowData: (db, input) =>
-			persistYouTubeWorkflowData(db, {
-				transcript: input.youtubeTranscript,
-				highlights: input.youtubeHighlights ?? null,
-			}),
-	},
+	youtube: defaultProcessor,
 	default: defaultProcessor,
 };
 

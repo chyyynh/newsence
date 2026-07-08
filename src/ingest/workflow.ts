@@ -18,7 +18,7 @@ import { Client } from 'pg';
 import { articlePlatforms, buildProcessorUpdatePayload, type ProcessorResult, platformIdentity } from './domain/processors';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
-import type { YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
 
 type StoredWorkflowTarget =
 	| { kind: 'article'; articleId: string }
@@ -232,11 +232,11 @@ type WorkflowRunContext = {
 	readYoutubeTranscript(): Promise<YoutubeTranscript | undefined>;
 };
 type WorkflowPersistenceInput = {
-	platform: (typeof articlePlatforms)[string];
 	article: Article;
 	result: ProcessorResult;
 	embedding: number[] | null;
 	pdfTextTemp: PdfTextTempResult | null;
+	youtubeTranscript: YoutubeTranscript | undefined;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 	paperEnrichment: PaperMetadata | null;
 };
@@ -301,9 +301,9 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	try {
 		const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
 		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
-		await input.platform.persistWorkflowData?.(db, {
-			youtubeHighlights: input.youtubeHighlights,
-			youtubeTranscript: draft.youtubeTranscript,
+		await persistYouTubeWorkflowData(db, {
+			transcript: input.youtubeTranscript,
+			highlights: input.youtubeHighlights,
 		});
 		await db.query('COMMIT');
 		return articleId;
@@ -350,9 +350,9 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 				article_id: context.rowId,
 			});
 		if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
-		await input.platform.persistWorkflowData?.(db, {
-			youtubeHighlights: input.youtubeHighlights,
-			youtubeTranscript: await context.readYoutubeTranscript(),
+		await persistYouTubeWorkflowData(db, {
+			transcript: input.youtubeTranscript,
+			highlights: input.youtubeHighlights,
 		});
 		await db.query('COMMIT');
 		return context.rowId;
@@ -421,26 +421,25 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			const youtubeHighlights = platform.prepareWorkflowData
-				? await step.do(
-						'prepare-platform-workflow-data',
-						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-						async () => {
-							const youtubeTranscript = await context.readYoutubeTranscript();
-							return platform.prepareWorkflowData?.(article, { env: this.env, table: context.table }, youtubeTranscript) ?? null;
-						},
-					)
-				: null;
+			const youtubeTranscript = sourceType === 'youtube' ? await context.readYoutubeTranscript() : undefined;
+			const youtubeHighlights =
+				sourceType === 'youtube'
+					? await step.do(
+							'prepare-youtube-highlights',
+							{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+							async () => prepareYouTubeHighlights(this.env, article, youtubeTranscript),
+						)
+					: null;
 			const articleId = await step.do(
 				context.target.kind === 'source' ? 'insert-final-article' : 'update-db',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() => {
 					const input = {
-						platform,
 						article,
 						result: processorResult,
 						embedding,
 						pdfTextTemp,
+						youtubeTranscript,
 						youtubeHighlights,
 						paperEnrichment,
 					};
