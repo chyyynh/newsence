@@ -11,8 +11,6 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
 
-type ExistingUrlUserFile = NonNullable<Awaited<ReturnType<typeof getExistingUrlUserFile>>>;
-
 type IngestResult = {
 	url: string;
 	userFileId?: string;
@@ -48,34 +46,14 @@ async function fetchUrlContent(url: string, env: Env): Promise<NormalizedContent
 	return scrapeWebPage(url);
 }
 
-function buildUserFileResult(
-	url: string,
-	row: {
-		id: string;
-		title: string;
-	},
-	instanceId?: string,
-): IngestResult {
-	return {
-		url,
-		userFileId: row.id,
-		instanceId,
-		title: row.title,
-	};
-}
-
-async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
-	const instanceId =
-		row.title_cn && row.summary_cn && row.has_embedding
-			? undefined
-			: await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db });
-	return buildUserFileResult(url, row, instanceId);
-}
-
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
 	const existingRow = await getExistingUrlUserFile(db, userId, url);
 	if (existingRow) {
-		return returnExisting(db, url, existingRow, env);
+		const instanceId =
+			existingRow.title_cn && existingRow.summary_cn && existingRow.has_embedding
+				? undefined
+				: await enqueueProcessing(env, { kind: 'userFile', userFileId: existingRow.id }, { db });
+		return { url, userFileId: existingRow.id, instanceId, title: existingRow.title };
 	}
 
 	let scraped: NormalizedContent;
@@ -101,7 +79,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 				{ db },
 			)
 		: undefined;
-	return buildUserFileResult(url, row, instanceId);
+	return { url, userFileId: row.id, instanceId, title: row.title };
 }
 
 export async function ingestUrls(
