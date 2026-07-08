@@ -21,6 +21,8 @@ const PDF_MIME = 'application/pdf';
 const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
+const OG_FETCH_TIMEOUT_MS = 6_000;
+const OG_MAX_BYTES = 131_072;
 
 type PdfExtractionMetadata = {
 	status: PdfTextArtifact['status'];
@@ -29,7 +31,18 @@ type PdfExtractionMetadata = {
 	pages: number;
 };
 
-type AcquiredContent = NormalizedContent & { extraction?: PdfExtractionMetadata };
+type AcquiredContent = NormalizedContent & { extraction?: PdfExtractionMetadata; ogImage?: OgImagePatch };
+type OgImagePatch = {
+	ogImageUrl: string | null;
+	ogImageWidth: number | null;
+	ogImageHeight: number | null;
+};
+
+const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
+	ogImageUrl: null,
+	ogImageWidth: null,
+	ogImageHeight: null,
+};
 
 function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	return {
@@ -155,6 +168,17 @@ function metaContentHandler(assign: (value: string) => void): HTMLRewriterElemen
 	};
 }
 
+function decodeHtmlEntities(value: string): string {
+	return value
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+		.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(Number.parseInt(code, 16)));
+}
+
 async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetadata> {
 	let titleText = '';
 	let title: string | null = null;
@@ -200,6 +224,89 @@ async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetad
 		siteName: siteName ?? urlHost(url),
 		description,
 	};
+}
+
+function parsePositiveInt(raw: string | null): number | null {
+	if (!raw) return null;
+	const parsed = Number.parseInt(raw, 10);
+	return parsed > 0 ? parsed : null;
+}
+
+function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
+	const merged = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return merged;
+}
+
+function extractMeta(html: string, property: string): string | null {
+	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
+	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+}
+
+function extractMetaName(html: string, name: string): string | null {
+	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
+	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
+	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
+	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+}
+
+function extractOgImageFromHtml(html: string, url: string): OgImagePatch {
+	let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
+	if (!ogImageUrl) return EMPTY_OG_IMAGE_PATCH;
+
+	try {
+		ogImageUrl = new URL(ogImageUrl, url).toString();
+	} catch {
+		return EMPTY_OG_IMAGE_PATCH;
+	}
+	if (ogImageUrl.startsWith('http://')) ogImageUrl = ogImageUrl.replace(/^http:/, 'https:');
+
+	return {
+		ogImageUrl,
+		ogImageWidth: parsePositiveInt(extractMeta(html, 'og:image:width')),
+		ogImageHeight: parsePositiveInt(extractMeta(html, 'og:image:height')),
+	};
+}
+
+async function fetchOgImage(url: string): Promise<OgImagePatch> {
+	try {
+		const response = await fetchWithTimeout(
+			url,
+			{
+				headers: {
+					'User-Agent': FEED_UA,
+					Accept: 'text/html,application/xhtml+xml',
+				},
+			},
+			OG_FETCH_TIMEOUT_MS,
+		);
+		if (!response.ok || !response.body) {
+			await response.body?.cancel();
+			return EMPTY_OG_IMAGE_PATCH;
+		}
+
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let totalBytes = 0;
+		while (totalBytes < OG_MAX_BYTES) {
+			const { done, value } = await reader.read();
+			if (done || !value) break;
+			chunks.push(value);
+			totalBytes += value.byteLength;
+		}
+		await reader.cancel();
+
+		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
+		return extractOgImageFromHtml(html, url);
+	} catch {
+		return EMPTY_OG_IMAGE_PATCH;
+	}
 }
 
 function titleFromMarkdown(markdown: string): string | null {
@@ -284,6 +391,7 @@ async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<AcquiredCont
 			description: metadata.description,
 		},
 		platformMetadata: { type: 'default', fetchedAt: new Date().toISOString(), data: null },
+		ogImage: extractOgImageFromHtml(html, finalUrl),
 	};
 }
 
@@ -338,6 +446,54 @@ function acquiredContentUpdatePayload(acquired: AcquiredContent | null): Record<
 	};
 }
 
+function withoutPlatformMetadata(payload: Record<string, unknown>): Record<string, unknown> {
+	const { platform_metadata: _platformMetadata, ...rest } = payload;
+	return rest;
+}
+
+function ogImageUpdatePayload(patch: OgImagePatch): Record<string, unknown> {
+	const metadataPatch =
+		patch.ogImageWidth && patch.ogImageHeight ? { ogImageWidth: patch.ogImageWidth, ogImageHeight: patch.ogImageHeight } : null;
+	return {
+		...(patch.ogImageUrl ? { og_image_url: patch.ogImageUrl } : {}),
+		...(metadataPatch ? { platform_metadata: metadataPatch } : {}),
+	};
+}
+
+function mergeMetadataPatch(...patches: Array<unknown>): Record<string, unknown> | undefined {
+	const records = patches.filter(
+		(patch): patch is Record<string, unknown> => !!patch && typeof patch === 'object' && !Array.isArray(patch),
+	);
+	if (!records.length) return undefined;
+	return Object.assign({}, ...records);
+}
+
+function paperMetadataPatch(paperEnrichment: PaperMetadata | null): Record<string, unknown> | undefined {
+	return paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined;
+}
+
+function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
+	const hasContent = 'has_content' in article && !!article.has_content;
+	if (target.kind === 'userFile') return !hasContent && !article.storage_key && !!article.url;
+	return target.kind === 'source' && (article.source_type === 'rss' || article.source_type === 'default');
+}
+
+function sourceArticleBase(article: Article, fallback: SourceArticleRecord): SourceArticleRecord {
+	return {
+		...fallback,
+		url: article.url || fallback.url,
+		title: article.title || fallback.title,
+		source: article.source || fallback.source,
+		publishedDate: article.published_date || fallback.publishedDate,
+		summary: article.summary ?? fallback.summary,
+		sourceType: article.source_type || fallback.sourceType,
+		content: article.content ?? fallback.content,
+		platformMetadata: article.platform_metadata ?? fallback.platformMetadata,
+		tags: article.tags?.length ? article.tags : fallback.tags,
+		keywords: article.keywords?.length ? article.keywords : fallback.keywords,
+	};
+}
+
 async function acquireSavedUrlContent(env: CoreEnv, article: Article): Promise<ReadableStream<Uint8Array>> {
 	const acquired = await scrapeSavedUrl(article.url, env);
 	return new Response(JSON.stringify(acquired)).body!;
@@ -350,6 +506,14 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, articl
 		() => acquireSavedUrlContent(env, article),
 	);
 	return (await new Response(artifact).json()) as AcquiredContent | null;
+}
+
+async function stageOgImagePatch(step: WorkflowStep, article: Article, acquiredContent: AcquiredContent | null): Promise<OgImagePatch> {
+	if (article.og_image_url || !article.url || article.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
+	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
+	return step.do('resolve-og-image', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
+		fetchOgImage(article.url),
+	);
 }
 
 async function loadFullTargetArticle(
@@ -381,6 +545,7 @@ async function persistWorkflowTarget(
 	pdfTextArtifact: PdfTextArtifact | null,
 	acquiredContent: AcquiredContent | null,
 	paperEnrichment: PaperMetadata | null,
+	ogImagePatch: OgImagePatch,
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
 ): Promise<string> {
@@ -389,28 +554,35 @@ async function persistWorkflowTarget(
 	await db.query('BEGIN');
 	try {
 		let articleId: string;
+		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		if (target.kind === 'source') {
+			const acquiredPayload = acquiredContentUpdatePayload(acquiredContent);
+			const acquiredMetadataPatch = acquiredPayload.platform_metadata;
+			const ogMetadataPatch = ogPayload.platform_metadata;
 			const updatePayload = buildProcessorUpdatePayload(
 				article,
 				result,
 				embedding,
-				paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined,
+				mergeMetadataPatch(acquiredMetadataPatch, ogMetadataPatch, paperMetadataPatch(paperEnrichment)),
 			);
+			Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-			articleId = await insertFinalSourceArticle(db, target.draft.article, updatePayload);
+			articleId = await insertFinalSourceArticle(db, sourceArticleBase(article, target.draft.article), updatePayload);
 			if (entities) await syncArticleEntities(db, articleId, entities, article.source, platformMetadata);
 		} else {
 			const finalResult =
 				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
 			const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
-			const metadataPatch = {
-				...(extraction ? { extraction } : {}),
-				...(paperEnrichment ? { type: 'paper', data: paperEnrichment } : {}),
-			};
+			const metadataPatch = mergeMetadataPatch(
+				extraction ? { extraction } : undefined,
+				ogPayload.platform_metadata,
+				paperMetadataPatch(paperEnrichment),
+			);
 			const updatePayload = {
-				...acquiredContentUpdatePayload(acquiredContent),
-				...buildProcessorUpdatePayload(article, finalResult, embedding, Object.keys(metadataPatch).length ? metadataPatch : undefined),
+				...withoutPlatformMetadata(acquiredContentUpdatePayload(acquiredContent)),
+				...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
+				...withoutPlatformMetadata(ogPayload),
 			};
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
@@ -443,11 +615,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				return loadArticleForProcessing(this.env, storedTargetTable(target), target.rowId, true);
 			},
 		);
-		const initialHasContent = 'has_content' in initialArticle && !!initialArticle.has_content;
-		const acquiredContent =
-			target.kind === 'userFile' && !initialHasContent && !initialArticle.storage_key && initialArticle.url
-				? await stageSavedUrlAcquisition(this.env, step, initialArticle)
-				: null;
+		const acquiredContent = shouldAcquireContent(target, initialArticle)
+			? await stageSavedUrlAcquisition(this.env, step, initialArticle)
+			: null;
 		const article = applyAcquiredContent(initialArticle, acquiredContent);
 		const metadataType = article.platform_metadata?.type;
 		const sourceType =
@@ -470,6 +640,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			loadContent: async () =>
 				(await loadFullTargetArticle(this.env, target, pdfTextArtifact, acquiredContent, acquiredContent ? article : undefined)).content,
 		});
+		const ogImagePatch = await stageOgImagePatch(step, article, acquiredContent);
 
 		const processorResult = await step.do(
 			'ai-analysis',
@@ -539,6 +710,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 					pdfTextArtifact,
 					acquiredContent,
 					paperEnrichment,
+					ogImagePatch,
 					youtubeTranscript,
 					youtubeHighlights,
 				),

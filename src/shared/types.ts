@@ -7,6 +7,7 @@ export interface Article {
 	content: string | null;
 	content_cn?: string | null;
 	url: string;
+	og_image_url?: string | null;
 	source: string;
 	published_date: string;
 	tags: string[];
@@ -194,10 +195,26 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
+interface OgImageDimensions {
+	ogImageWidth?: number | null;
+	ogImageHeight?: number | null;
+}
+
 export type PlatformMetadata =
-	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope);
+	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
+			OgImageDimensions)
+	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
+			OgImageDimensions)
+	| ({
+			type: 'hackernews';
+			fetchedAt: string;
+			data: HackerNewsMetadata;
+			enrichments?: PlatformEnrichments | null;
+	  } & ClassificationEnvelope &
+			OgImageDimensions)
+	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
+			OgImageDimensions)
+	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
+			OgImageDimensions)
+	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
+			OgImageDimensions);
