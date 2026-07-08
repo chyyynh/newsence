@@ -301,12 +301,6 @@ type WorkflowPersistenceInput = {
 	paperEnrichment: PaperMetadata | null;
 };
 
-function legacyYoutubeTranscript(value: unknown): YoutubeTranscript | undefined {
-	if (!value || typeof value !== 'object') return undefined;
-	const attachments = (value as { attachments?: Array<{ type?: string; transcript?: YoutubeTranscript }> }).attachments;
-	return attachments?.find((attachment) => attachment.type === 'youtube-transcript')?.transcript;
-}
-
 function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
 	let sourceDraft: SourceArticleDraft | null = null;
 	const readSourceDraft = async () => {
@@ -474,9 +468,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 			if (sourceType === 'youtube') {
 				if (context.target.kind === 'source') {
 					const draft = await context.readSourceDraft();
-					youtubeTranscript = draft.youtubeTranscript ?? legacyYoutubeTranscript(draft);
+					youtubeTranscript = draft.youtubeTranscript;
 				} else if (context.target.kind === 'userFile') {
-					youtubeTranscript = context.target.youtubeTranscript ?? legacyYoutubeTranscript(context.target);
+					youtubeTranscript = context.target.youtubeTranscript;
 				}
 			}
 			const youtubeHighlights =
