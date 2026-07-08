@@ -16,11 +16,11 @@ import {
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
-import { processHackerNewsArticle } from './platforms/hackernews/scraper';
-import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
+import { processHackerNewsArticle } from './platforms/hackernews';
+import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
 import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction } from './platforms/pdf';
-import { processTwitterArticle } from './platforms/twitter/monitor';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/monitor';
+import { processTwitterArticle } from './platforms/twitter';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
 async function processDefaultArticle(article: Article, env: Env): Promise<ProcessorResult> {
 	const analysis = await generateArticleAnalysis(article, env);

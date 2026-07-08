@@ -2,7 +2,7 @@ import { generateText } from '@core-ai/embedding';
 import type { PlatformEnrichments } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
 import { decodeHtmlEntities, fetchWithTimeout, htmlToText, readTextWithLimit } from '@core-shared/web';
-import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../../domain/ai-utils';
+import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 

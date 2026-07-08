@@ -7,7 +7,7 @@ import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/d
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { z } from 'zod';
-import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorResult } from '../../domain/ai-utils';
+import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
 
 // twitterapi.io tweet response shape used inside the Twitter platform only.
 interface Tweet {

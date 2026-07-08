@@ -7,9 +7,9 @@ import type {
 	ReadContextItem,
 	RelatedArticleSearchInput,
 } from '@core-rpc/contracts';
-import { handleRSSCron } from '@ingest/platforms/rss/monitor';
-import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
-import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
+import { handleRSSCron } from '@ingest/platforms/rss';
+import { handleTwitterCron } from '@ingest/platforms/twitter';
+import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { exportCollectionOkf } from './okf';
