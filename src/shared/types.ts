@@ -65,7 +65,7 @@ export interface YoutubeTranscript {
 
 export interface NormalizedContent {
 	title: string | null;
-	/** HTML -> turndown markdown; platform APIs -> markdown/plain text. */
+	/** Platform APIs return markdown or plain text for source article drafts. */
 	markdown: string;
 	metadata: {
 		author: string | null;

@@ -1,7 +1,6 @@
 import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
 import type { NormalizedContent } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
-import { scrapeWebPage } from '../web-scraper';
 
 // twitterapi.io tweet response shape used inside the Twitter platform only.
 export interface Tweet {
@@ -63,7 +62,7 @@ function isNonArticleLinkUrl(url: string): boolean {
 	return false;
 }
 
-export function extractTweetId(url: string): string | null {
+function extractTweetId(url: string): string | null {
 	let parsed: URL;
 	try {
 		parsed = new URL(url);
@@ -310,40 +309,33 @@ async function scrapeTwitterArticle(
 	};
 }
 
-async function scrapeExternalLinkTweet(
+function buildExternalLinkTweet(
 	tweet: Tweet,
 	externalUrl: string,
 	media: TwitterMedia[],
 	tweetText: string,
 	ogImageUrl: string | null,
-): Promise<NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }> {
-	console.info({ tag: 'TWITTER', msg: 'Tweet has external link, scraping', externalUrl });
-	try {
-		const linked = await scrapeWebPage(externalUrl);
-		if (!linked.markdown || linked.markdown.length <= 100) throw new Error('Linked article content too short');
-		console.info({ tag: 'TWITTER', msg: 'Scraped linked article', title: linked.title });
-		return {
-			title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
-			markdown: linked.markdown,
-			metadata: {
-				author: linked.metadata.author || tweet.author?.userName || null,
-				publishedDate: linked.metadata.publishedDate || tweet.createdAt,
-				siteName: linked.metadata.siteName || 'Twitter',
-				description: linked.metadata.description || tweet.text,
-				ogImageUrl: linked.metadata.ogImageUrl || ogImageUrl || tweet.author?.profilePicture || null,
-			},
-			platformMetadata: buildTweetPlatformMetadata(tweet, {
-				media,
-				tweetText,
-				externalUrl,
-				externalOgImage: linked.metadata.ogImageUrl || null,
-				externalTitle: linked.title || null,
-				originalTweetUrl: tweet.url,
-			}),
-		};
-	} catch (error) {
-		throw new Error(`Failed to scrape linked URL ${externalUrl}: ${String(error)}`);
-	}
+): NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> } {
+	const title = `@${tweet.author?.userName}: ${tweetText || tweet.text}`.slice(0, 120);
+	return {
+		title,
+		markdown: tweetText || tweet.text,
+		metadata: {
+			author: tweet.author?.userName || null,
+			publishedDate: tweet.createdAt,
+			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
+			description: tweetText || tweet.text,
+			ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
+		},
+		platformMetadata: buildTweetPlatformMetadata(tweet, {
+			media,
+			tweetText,
+			externalUrl,
+			externalOgImage: ogImageUrl,
+			externalTitle: null,
+			originalTweetUrl: tweet.url,
+		}),
+	};
 }
 
 export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
@@ -371,7 +363,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	}
 
 	if (linkedArticleUrl) {
-		const scraped = await scrapeExternalLinkTweet(tweet, linkedArticleUrl, media, tweetText, ogImageUrl);
+		const scraped = buildExternalLinkTweet(tweet, linkedArticleUrl, media, tweetText, ogImageUrl);
 		return { kind: 'share' as const, scraped, canonicalUrl: linkedArticleUrl, eventText: tweetText };
 	}
 
@@ -396,22 +388,4 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		canonicalUrl: tweet.url,
 		eventText: tweetText,
 	};
-}
-
-export async function scrapeTweet(tweetId: string, apiKey: string): Promise<NormalizedContent> {
-	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
-
-	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
-		headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
-	});
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-	}
-	const data = JSON.parse(await readTextWithLimit(response)) as { tweets?: Tweet[]; status: string; msg?: string };
-	if (!data.tweets?.length) {
-		throw new Error(`Kaito API: Tweet not found (status=${data.status})`);
-	}
-
-	return (await resolveTweetContent(data.tweets[0], apiKey)).scraped;
 }

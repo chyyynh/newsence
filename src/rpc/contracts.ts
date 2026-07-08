@@ -45,20 +45,7 @@ export type ExportCollectionOkfInput = {
 	userId?: string | null;
 };
 
-type CoreUrlIngestResult = {
-	url: string;
-	userFileId?: string;
-	instanceId?: string;
-	title?: string;
-	error?: string;
-};
-
-type CoreUrlIngestOutcome =
-	| { ok: true; results: CoreUrlIngestResult[] }
-	| { ok: false; code: 'BATCH_TOO_LARGE' | 'BAD_REQUEST'; message: string };
-
 export interface CoreRpc {
-	ingestUrls(input: { urls: string[]; userId: string }): Promise<CoreUrlIngestOutcome>;
 	enqueueUserFileProcessing(userFileId: string): Promise<string>;
 	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]>;
 	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;

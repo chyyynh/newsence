@@ -12,7 +12,6 @@ import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
 import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
-import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';
 
 export { NewsenceMonitorWorkflow };
@@ -37,11 +36,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 
 	// ── Service-binding RPC for engine capabilities ─────────────────────────
 	// Product-domain writes live on the app Worker's DomainRpc binding.
-
-	/** Ingest user-submitted URLs into user_files without going through public HTTP auth. */
-	ingestUrls(input: { urls: string[]; userId: string }) {
-		return ingestUrls(this.env, input);
-	}
 
 	/** Enqueue saved user_files for the enrichment workflow after app-side persistence. */
 	enqueueUserFileProcessing(userFileId: string) {

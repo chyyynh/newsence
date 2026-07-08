@@ -1,4 +1,4 @@
-import type { Article, NormalizedContent } from '@core-shared/types';
+import type { Article } from '@core-shared/types';
 import { Client } from 'pg';
 
 type ArticleStoreTable = 'articles' | 'user_files';
@@ -88,102 +88,6 @@ export function preparedArticleToArticle(data: PreparedArticleRecord): Article {
 		source_type: data.sourceType,
 		platform_metadata: data.platformMetadata as Article['platform_metadata'],
 	};
-}
-
-type InsertUrlUserFileResult = {
-	id: string;
-	created: boolean;
-	title: string;
-};
-
-type ExistingUrlUserFile = {
-	id: string;
-	title: string;
-	title_cn: string | null;
-	summary_cn: string | null;
-	has_embedding: boolean;
-};
-
-const EXISTING_URL_USER_FILE_FIELDS = 'id, title, title_cn, summary_cn, embedding IS NOT NULL AS has_embedding';
-
-export async function getExistingUrlUserFile(db: Client, userId: string, normalizedSourceUrl: string): Promise<ExistingUrlUserFile | null> {
-	const result = await db.query<ExistingUrlUserFile>(
-		`SELECT ${EXISTING_URL_USER_FILE_FIELDS} FROM user_files
-		 WHERE user_id = $1
-		   AND normalized_source_url = $2
-		   AND resource_kind = 'url'
-		 LIMIT 1`,
-		[userId, normalizedSourceUrl],
-	);
-	return result.rows[0] ?? null;
-}
-
-export async function insertScrapedUrlUserFile(
-	db: Client,
-	scraped: NormalizedContent,
-	url: string,
-	userId: string,
-): Promise<{ ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string }> {
-	const platformType =
-		scraped.platformMetadata?.type && scraped.platformMetadata.type !== 'default' ? scraped.platformMetadata.type : 'web';
-	const title = scraped.title || new URL(url).hostname;
-
-	const skipContentCheck = platformType === 'youtube' || platformType === 'twitter';
-	if (!skipContentCheck && (!scraped.markdown || scraped.markdown.length < 50)) {
-		return { ok: false, error: 'Content too short' };
-	}
-
-	try {
-		const inserted = await db.query<InsertUrlUserFileResult>(
-			`WITH inserted AS (
-				INSERT INTO user_files
-				(file_name, file_type, resource_kind, origin_type, platform_type, source_url, normalized_source_url, title, site_name, published_date,
-				 summary, extracted_text, og_image_url, keywords, tags, metadata,
-				 user_id)
-				VALUES ($1, $2, 'url', 'saved_url', $2, $3, $3, $1, $4, $5, $6, $7, NULL, $8, $9, $10, $11)
-				ON CONFLICT (user_id, normalized_source_url)
-				WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
-				DO NOTHING
-				RETURNING id, title, TRUE AS created
-			)
-			SELECT id, title, created FROM inserted
-			UNION ALL
-			SELECT id, title, FALSE AS created
-			FROM user_files
-			WHERE user_id = $11
-			  AND normalized_source_url = $3
-			  AND resource_kind = 'url'
-			  AND NOT EXISTS (SELECT 1 FROM inserted)
-			LIMIT 1`,
-			[
-				title,
-				platformType,
-				url,
-				scraped.metadata.siteName || 'External',
-				scraped.metadata.publishedDate || new Date().toISOString(),
-				scraped.metadata.description || '',
-				scraped.markdown || null,
-				[],
-				[],
-				scraped.platformMetadata == null ? null : JSON.stringify(scraped.platformMetadata),
-				userId,
-			],
-		);
-		const userFile = inserted.rows[0];
-
-		if (!userFile) {
-			console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: 'No id returned' });
-			return { ok: false, error: 'DB insert failed' };
-		}
-
-		if (!userFile.created) return { ok: true, row: userFile };
-
-		console.info({ tag: 'INGEST', msg: 'Saved user_file', title: title.slice(0, 50), userFileId: userFile.id });
-		return { ok: true, row: userFile };
-	} catch (err) {
-		console.error({ tag: 'INGEST', msg: 'DB insert failed', url, error: String(err) });
-		return { ok: false, error: 'DB insert failed' };
-	}
 }
 
 type ArticleProcessingUpdate = Record<string, unknown>;
