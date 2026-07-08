@@ -3,7 +3,6 @@
 // returns reference metadata (DOI + author) in a single call.
 
 import type { WorkflowStep } from 'cloudflare:workers';
-import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
 import { fetchWithTimeout } from '@core-shared/web';
 import type { Client } from 'pg';
@@ -14,6 +13,7 @@ const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_REFERENCES = 50;
 const MAX_EDGES = 50;
+const PDF_MIME = 'application/pdf';
 
 const PAPER_FIELDS = [
 	'title',

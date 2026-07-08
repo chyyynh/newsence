@@ -1,8 +1,9 @@
 import type { WorkflowStep } from 'cloudflare:workers';
-import { PDF_MIME } from '@core-shared/mime';
 import type { ExtractedContent } from '@core-shared/types';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
+
+const PDF_MIME = 'application/pdf';
 
 type PdfTextStatus = 'ok' | 'needs_ocr';
 

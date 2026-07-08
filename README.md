@@ -189,7 +189,6 @@ src/
 ├── entities/             # entity normalization + graph sync
 ├── media/                # OG image helpers
 ├── shared/               # small cross-subsystem primitives
-│   ├── mime.ts           # MIME sniffing and upload limits
 │   ├── platform-metadata.ts
 │   ├── types.ts          # Article, ExtractedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits

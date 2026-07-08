@@ -181,7 +181,6 @@ src/
 ├── entities/             # entity normalization + graph sync
 ├── media/                # OG image helpers
 ├── shared/               # 小型跨子系統 primitives
-│   ├── mime.ts           # MIME sniffing 與 upload limits
 │   ├── platform-metadata.ts
 │   ├── types.ts          # Article、ExtractedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits

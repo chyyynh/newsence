@@ -1,4 +1,3 @@
-import { isRasterImage, PDF_MIME } from '@core-shared/mime';
 import type { ExtractedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
@@ -12,6 +11,7 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
 const URL_FETCH_TIMEOUT_MS = 8_000;
+const PDF_MIME = 'application/pdf';
 const URL_FETCH_HEADERS: HeadersInit = {
 	'User-Agent': BROWSER_UA,
 	Accept: '*/*',
@@ -48,6 +48,11 @@ type IngestResult = {
 	alreadyExists?: boolean;
 	error?: string;
 };
+
+function isRasterImage(contentType: string): boolean {
+	const lower = contentType.toLowerCase();
+	return lower.startsWith('image/') && !lower.startsWith('image/svg');
+}
 
 function parseContentDisposition(header: string | null): string | null {
 	if (!header) return null;
