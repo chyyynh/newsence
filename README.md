@@ -35,10 +35,10 @@ Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls content
 | **Twitter/X**        | Monitor   | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media               |
 | **YouTube**          | Monitor   | Every 30 min  | Atom feed → video metadata, transcripts, chapters, AI highlights            |
 | **Hacker News**      | Processor | Via RSS       | Detects HN links → fetches comments via Algolia → generates editorial notes |
-| **Web**              | Scraper   | On demand     | Full content extraction (Readability + Cheerio), OG metadata                |
+| **Web**              | Scraper   | Saved URL     | Full content extraction (Readability + Cheerio), OG metadata                |
 | **User Files**       | Ingestion | Real-time     | App service-binding RPC — saved URL scrape + enrichment; blob lifecycle stays app-owned |
 
-All platforms output a unified `ScrapedContent` shape → same AI pipeline.
+All platforms output a unified `ExtractedContent` shape → same AI pipeline.
 
 ## How it works
 
@@ -188,18 +188,16 @@ src/
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
 ├── media/                # OG image helpers
-├── papers/               # paper enrichment helpers
 ├── shared/               # small cross-subsystem primitives
 │   ├── mime.ts           # MIME sniffing and upload limits
 │   ├── platform-metadata.ts
-│   ├── types.ts          # Article, ScrapedContent, YoutubeTranscript
+│   ├── types.ts          # Article, ExtractedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
 │   ├── extract.ts        # URL detection dispatch → platform scraper
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
 │   ├── urls.ts           # saved URL orchestration; app persists blob results
-│   ├── handlers/         # scrape HTTP handler
-│   ├── domain/           # sink, processor registry, AI merge helpers
+│   ├── domain/           # sink and AI merge helpers
 │   ├── platforms/        # each platform lives in its own folder
 │   │   ├── rss/          # feed polling
 │   │   ├── twitter/      # monitor + scraper + processor
@@ -219,8 +217,7 @@ Bindings (in `wrangler.jsonc`):
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
-| `SCRAPE_WORKFLOW`  | Non-persisting scrape workflow               |
-| `R2`               | Source drafts, scrape temp objects, and app-owned blob reads |
+| `R2`               | Source drafts, PDF text temp objects, and app-owned blob reads |
 | `AI`               | Workers AI binding (AI Gateway text calls + BGE-M3 embeddings) |
 
 Secrets (via `wrangler secret put`):
@@ -240,11 +237,11 @@ Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernew
 
 Minimum to add a new source:
 
-1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
+1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ExtractedContent`.
 2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
 3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it from `ingest/extract.ts`.
 4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts`.
-5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `ingest/domain/processors.ts`.
+5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from the default workflow processor; register it from `ingest/workflow.ts`.
 
 The new article goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
 

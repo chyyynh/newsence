@@ -6,10 +6,8 @@ import type {
 	ExportCollectionOkfInput,
 	ReadContextItem,
 	RelatedArticleSearchInput,
-	ScrapedUrlContent,
 } from '@core-rpc/contracts';
 import { routeRequest } from '@entry/http';
-import { extractUrl, ScrapeWorkflow } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
@@ -18,11 +16,11 @@ import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, sea
 import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';
 
-export { NewsenceMonitorWorkflow, ScrapeWorkflow };
+export { NewsenceMonitorWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
 	override async fetch(request: Request): Promise<Response> {
-		return routeRequest(request, this.env, this.ctx);
+		return routeRequest(request, this.env);
 	}
 
 	override scheduled(event: ScheduledController): void {
@@ -60,11 +58,6 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Related article ids for app-side recommendations. */
 	relatedArticleIds(input: RelatedArticleSearchInput) {
 		return relatedCorpusArticleIds(this.env, input);
-	}
-
-	/** Extract one URL without creating user_files/articles. Intended for future chat agent reads. */
-	scrapeUrl(url: string): Promise<ScrapedUrlContent> {
-		return extractUrl(this.env, url);
 	}
 
 	/** Stream a collection as an OKF tar.gz bundle for the app Worker. */

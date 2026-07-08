@@ -35,10 +35,10 @@
 | **Twitter/X**   | 監控   | 每 6 小時  | 透過 Kaito API 追蹤用戶 — 推文、串文、長文、媒體 |
 | **YouTube**     | 監控   | 每 30 分鐘 | Atom feed → 影片資訊、字幕、章節、AI 精華段落    |
 | **Hacker News** | 處理器 | 經由 RSS   | 偵測 HN 連結 → Algolia 取評論 → 生成編輯筆記     |
-| **網頁**        | 爬蟲   | 按需       | 全文擷取（Readability + Cheerio）、OG metadata   |
+| **網頁**        | 爬蟲   | saved URL  | 全文擷取（Readability + Cheerio）、OG metadata   |
 | **用戶檔案**    | 入口   | 即時       | App service-binding RPC — saved URL scrape + enrichment；blob 生命週期由 app 擁有 |
 
-所有平台輸出統一的 `ScrapedContent` 格式 → 進入同一個 AI 管線。
+所有平台輸出統一的 `ExtractedContent` 格式 → 進入同一個 AI 管線。
 
 ## 運作流程
 
@@ -180,18 +180,16 @@ src/
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
 ├── media/                # OG image helpers
-├── papers/               # paper enrichment helpers
 ├── shared/               # 小型跨子系統 primitives
 │   ├── mime.ts           # MIME sniffing 與 upload limits
 │   ├── platform-metadata.ts
-│   ├── types.ts          # Article、ScrapedContent、YoutubeTranscript
+│   ├── types.ts          # Article、ExtractedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
 │   ├── extract.ts        # URL 偵測 dispatch → platform scraper
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
 │   ├── urls.ts           # saved URL orchestration；blob result 由 app 持久化
-│   ├── handlers/         # scrape HTTP handler
-│   ├── domain/           # sink、processor registry、AI merge helpers
+│   ├── domain/           # sink、AI merge helpers
 │   ├── platforms/        # 每個平台一個資料夾
 │   │   ├── rss/          # feed polling
 │   │   ├── twitter/      # monitor + scraper + processor
@@ -211,8 +209,7 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | ------------------ | ------------------------------------------- |
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
-| `SCRAPE_WORKFLOW`  | 不持久化的 scrape workflow                  |
-| `R2`               | Source drafts、scrape temp objects、app-owned blob reads |
+| `R2`               | Source drafts、PDF text temp objects、app-owned blob reads |
 | `AI`               | Workers AI binding（AI Gateway 文字呼叫 + BGE-M3 向量生成） |
 
 Secrets（透過 `wrangler secret put` 設定）：
@@ -232,11 +229,11 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 新增一個來源最少要做：
 
-1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `ScrapedContent` 的函式。
+1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `ExtractedContent` 的函式。
 2. **Metadata**（`ingest/platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `shared/platform-metadata.ts` 註冊。
 3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並從 `ingest/extract.ts` 路由到 scraper。
 4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts` 裡接上。
-5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `ingest/domain/processors.ts` 註冊。
+5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於預設 workflow processor 的 AI 行為時才寫；從 `ingest/workflow.ts` 註冊。
 
 新文章一樣走 Workflow pipeline，AI 步驟你不用動。
 

@@ -43,11 +43,6 @@
 			"binding": "MONITOR_WORKFLOW",
 			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
-		},
-		{
-			"binding": "SCRAPE_WORKFLOW",
-			"name": "newsence-scrape-workflow",
-			"class_name": "ScrapeWorkflow"
 		}
 	],
 	/**
@@ -91,7 +86,7 @@
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *
 	 * Required secrets:
-	 * - CORE_WORKER_INTERNAL_TOKEN protects direct HTTP scrape/export/status endpoints.
+	 * - CORE_WORKER_INTERNAL_TOKEN protects direct HTTP status endpoints.
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
 	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
 	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.

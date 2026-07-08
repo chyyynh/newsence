@@ -1,5 +1,3 @@
-import type { ExtractedContent } from '../shared/types';
-
 export interface ArticleSummary {
 	id: string;
 	title: string;
@@ -42,8 +40,6 @@ export interface ReadContextResult {
 	error?: string;
 }
 
-export type ScrapedUrlContent = ExtractedContent;
-
 export type ExportCollectionOkfInput = {
 	collectionId: string;
 	userId?: string | null;
@@ -85,7 +81,6 @@ export interface CoreRpc {
 	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]>;
 	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;
 	relatedArticleIds(input: RelatedArticleSearchInput): Promise<string[]>;
-	scrapeUrl(url: string): Promise<ScrapedUrlContent>;
 	exportCollectionOkf(input: ExportCollectionOkfInput): Promise<Response>;
 	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]>;
 }

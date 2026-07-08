@@ -1,17 +1,6 @@
-import { handleScrape, handleScrapeJobCreate, handleScrapeJobStatus, SCRAPE_CORS_HEADERS } from '@ingest/handlers/scrape';
-
-type RouteHandler = (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
-type PostRoute = { handler: RouteHandler; cors: HeadersInit };
-
 const ENCODER = new TextEncoder();
 
-const POST_ROUTES: Record<string, PostRoute> = {
-	'/scrape': { handler: handleScrape, cors: SCRAPE_CORS_HEADERS },
-	'/scrape/jobs': { handler: handleScrapeJobCreate, cors: SCRAPE_CORS_HEADERS },
-};
-
 const WORKFLOW_STREAM_INTERVAL_MS = 3000;
-const SCRAPE_JOB_ROUTE = new URLPattern({ pathname: '/scrape/jobs/:jobId' });
 const WORKFLOW_STREAM_ROUTE = new URLPattern({ pathname: '/stream/:instanceId' });
 const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'terminated', 'timeout']);
 
@@ -21,7 +10,7 @@ type WorkflowStreamEvent = {
 	status: string;
 };
 
-async function unauthorizedInternalRequest(request: Request, env: Env, pathname: string): Promise<Response | null> {
+async function unauthorizedInternalRequest(request: Request, env: Env): Promise<Response | null> {
 	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
 	const provided = (
 		request.headers.get('x-internal-token') ??
@@ -38,21 +27,13 @@ async function unauthorizedInternalRequest(request: Request, env: Env, pathname:
 		]);
 		authorized = crypto.subtle.timingSafeEqual(providedHash, expectedHash);
 	}
-	return authorized
-		? null
-		: Response.json(
-				{ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' },
-				{ status: 401, headers: POST_ROUTES[pathname]?.cors ?? (pathname.startsWith('/scrape/jobs') ? SCRAPE_CORS_HEADERS : undefined) },
-			);
+	return authorized ? null : Response.json({ code: 'UNAUTHORIZED', message: 'Missing or invalid internal token' }, { status: 401 });
 }
 
 const HELP_TEXT =
 	'Newsence Core Worker\n\n' +
 	'HTTP endpoints:\n' +
 	'GET  /health\n' +
-	'POST /scrape                              - Sync extraction: {url} JSON or raw bytes -> ExtractedContent {markdown,text,metadata,status}\n' +
-	'POST /scrape/jobs                         - Async parse job (non-persisting): {url} or raw bytes -> {jobId}\n' +
-	'GET  /scrape/jobs/:id                     - Poll parse job -> {status, result?, error?}\n' +
 	'GET  /stream/:instanceId                  - Workflow status (SSE, internal token)\n';
 
 async function handleWorkflowStream(request: Request, instanceId: string, env: Env): Promise<Response> {
@@ -98,11 +79,9 @@ async function handleWorkflowStream(request: Request, instanceId: string, env: E
 	});
 }
 
-export async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function routeRequest(request: Request, env: Env): Promise<Response> {
 	const { pathname } = new URL(request.url);
 	const { method } = request;
-	const postRoute = POST_ROUTES[pathname];
-	const scrapeJobId = SCRAPE_JOB_ROUTE.exec({ pathname })?.pathname.groups.jobId;
 	const streamInstanceId = WORKFLOW_STREAM_ROUTE.exec({ pathname })?.pathname.groups.instanceId;
 
 	if (pathname === '/health') {
@@ -112,24 +91,11 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
 			timestamp: new Date().toISOString(),
 		});
 	}
-	if (method === 'OPTIONS') {
-		if (postRoute) return new Response(null, { headers: postRoute.cors });
 
-		if (scrapeJobId) return new Response(null, { headers: SCRAPE_CORS_HEADERS });
-	}
-
-	const needsAuth = (method === 'POST' && !!postRoute) || (method === 'GET' && (!!streamInstanceId || !!scrapeJobId));
-	if (needsAuth) {
-		const unauthorized = await unauthorizedInternalRequest(request, env, pathname);
+	if (method === 'GET' && streamInstanceId) {
+		const unauthorized = await unauthorizedInternalRequest(request, env);
 		if (unauthorized) return unauthorized;
-	}
-
-	if (method === 'POST' && postRoute) return postRoute.handler(request, env, ctx);
-
-	if (method === 'GET') {
-		if (streamInstanceId) return handleWorkflowStream(request, streamInstanceId, env);
-
-		if (scrapeJobId) return handleScrapeJobStatus(scrapeJobId, env);
+		return handleWorkflowStream(request, streamInstanceId, env);
 	}
 
 	return new Response(HELP_TEXT, { headers: { 'Content-Type': 'text/plain' } });
