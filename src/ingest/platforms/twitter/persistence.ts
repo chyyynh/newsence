@@ -170,7 +170,7 @@ async function saveStandaloneTweet(env: Env, tweet: Tweet, tweetUrl: string, tex
 	return queued;
 }
 
-async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
+export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 	const tweetUrl = normalizeUrl(tweet.url);
 	const expandedUrls = extractExpandedUrls(tweet);
 	const externalUrl = findExternalUrl(expandedUrls);
@@ -196,7 +196,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boolean> {
 	return saveStandaloneTweet(env, tweet, tweetUrl, textWithoutUrls, externalUrl);
 }
 
-async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolean> {
+export async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolean> {
 	const { first, sorted, combinedText, media, platformMetadata } = buildThreadArticleParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 
@@ -240,20 +240,4 @@ async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise<boolea
 		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: sorted.length });
 	}
 	return queued;
-}
-
-export async function saveTweetGroups(db: Client, env: Env, groups: Tweet[][]): Promise<number> {
-	let count = 0;
-	for (const group of groups) {
-		try {
-			if (group.length >= 2) {
-				if (await saveThread(db, group, env)) count++;
-			} else {
-				if (await saveTweet(db, group[0], env)) count++;
-			}
-		} catch (err) {
-			console.error({ tag: 'TWITTER', msg: 'Save failed', url: group[0]?.url, error: String(err) });
-		}
-	}
-	return count;
 }

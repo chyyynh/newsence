@@ -1,7 +1,7 @@
 import type { Tweet } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Client } from 'pg';
-import { saveTweetGroups } from './persistence';
+import { saveThread, saveTweet } from './persistence';
 
 // ─────────────────────────────────────────────────────────────
 // Twitter Monitor
@@ -181,8 +181,16 @@ export async function handleTwitterCron(env: Env): Promise<void> {
 	for (const batch of batches) {
 		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
 		if (!completed) allCompleted = false;
-		const groups = groupTweetsIntoThreads(tweets);
-		processed += await saveTweetGroups(db, env, groups);
+		for (const group of groupTweetsIntoThreads(tweets)) {
+			const first = group[0];
+			if (!first) continue;
+			try {
+				const saved = group.length >= 2 ? await saveThread(db, group, env) : await saveTweet(db, first, env);
+				if (saved) processed++;
+			} catch (err) {
+				console.error({ tag: 'TWITTER', msg: 'Save failed', url: first.url, error: String(err) });
+			}
+		}
 	}
 
 	if (allCompleted) {
