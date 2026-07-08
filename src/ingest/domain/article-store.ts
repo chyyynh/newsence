@@ -149,11 +149,6 @@ export async function getExistingArticlesByUrl(db: Client, urls: string[], batch
 	return records;
 }
 
-export async function getExistingArticleByUrl(db: Client, url: string): Promise<ExistingArticleRecord | null> {
-	const [article] = await getExistingArticlesByUrl(db, [url], 1);
-	return article ?? null;
-}
-
 export async function reopenArticleForReprocessing(
 	db: Client,
 	articleId: string,

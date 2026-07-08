@@ -11,7 +11,7 @@ import {
 } from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { entityExtractionExclusionNames } from '@entities/normalize';
-import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
+import { getExistingArticlesByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { z } from 'zod';
@@ -454,7 +454,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolea
 	}
 
 	const articleUrl = normalizeUrl(resolved.canonicalUrl);
-	const existingArticle = await getExistingArticleByUrl(db, articleUrl);
+	const [existingArticle] = await getExistingArticlesByUrl(db, [articleUrl], 1);
 	if (existingArticle) {
 		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'stored', table: 'articles', rowId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
@@ -487,7 +487,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<bo
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
 
-	const existing = await getExistingArticleByUrl(db, firstUrl);
+	const [existing] = await getExistingArticlesByUrl(db, [firstUrl], 1);
 
 	if (existing) {
 		const existingId = existing.id;
