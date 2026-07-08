@@ -25,17 +25,6 @@ interface HnItem {
 	children?: HnComment[];
 }
 
-export function extractHackerNewsId(url: string): string | null {
-	try {
-		const parsed = new URL(url);
-		const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
-		if (host !== 'news.ycombinator.com' && host !== 'ycombinator.com' && !host.endsWith('.ycombinator.com')) return null;
-		return parsed.searchParams.get('id')?.match(/^\d+$/)?.[0] ?? null;
-	} catch {
-		return null;
-	}
-}
-
 function hnItemTypeForMetadata(type: HnItem['type'] | undefined): 'story' | 'ask' | 'show' | 'job' {
 	if (type === 'ask' || type === 'show' || type === 'job') return type;
 	return 'story';
