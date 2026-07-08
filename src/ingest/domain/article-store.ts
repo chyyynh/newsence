@@ -2,7 +2,7 @@ import type { Article, ScrapedContent } from '@core-shared/types';
 import { detectUrlKind } from '@core-shared/web';
 import { Client } from 'pg';
 
-export type ArticleStoreTable = 'articles' | 'user_files';
+type ArticleStoreTable = 'articles' | 'user_files';
 
 type ArticleForProcessing = Article & { has_content?: boolean };
 
@@ -58,7 +58,7 @@ export async function patchUserFileWorkflowMetadata(db: Client, userFileId: stri
 	);
 }
 
-export interface InsertArticleData {
+interface InsertArticleData {
 	url: string;
 	title: string;
 	source: string;
@@ -103,7 +103,7 @@ type InsertUrlUserFileResult = {
 	og_image_url: string | null;
 };
 
-export type ExistingUrlUserFile = {
+type ExistingUrlUserFile = {
 	id: string;
 	title: string;
 	title_cn: string | null;

@@ -7,7 +7,6 @@ import { syncArticleEntities } from '@entities/sync';
 import {
 	getIncompleteWorkflowTargetIds,
 	getUserFileWorkflowInstanceId,
-	type InsertArticleData,
 	insertArticleDataToArticle,
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
@@ -28,7 +27,7 @@ type StoredWorkflowTarget =
 export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 interface SourceArticleDraft {
-	article: InsertArticleData;
+	article: Parameters<typeof insertArticleDataToArticle>[0];
 	youtubeTranscript?: YoutubeTranscript;
 }
 

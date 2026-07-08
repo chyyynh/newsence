@@ -1,11 +1,13 @@
 import { normalizeUrl } from '@core-shared/web';
-import { type ExistingUrlUserFile, getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
+import { getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { Client } from 'pg';
 import { type ScrapeResult, scrapeUrl } from './extract';
 
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
+
+type ExistingUrlUserFile = NonNullable<Awaited<ReturnType<typeof getExistingUrlUserFile>>>;
 
 type IngestResult = {
 	url: string;

@@ -7,7 +7,6 @@ import type { ArticleCategory, PlatformEnrichments } from '@core-shared/platform
 import { type AIAnalysisResult, type Article, ENTITY_TYPES } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import type { ArticleStoreTable } from './article-store';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -31,7 +30,7 @@ export interface ProcessorResult {
 
 export interface ProcessorContext {
 	env: Env;
-	table: ArticleStoreTable;
+	table: 'articles' | 'user_files';
 }
 
 export interface ArticleProcessor {
