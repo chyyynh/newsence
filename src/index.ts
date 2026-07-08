@@ -31,7 +31,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Enqueue saved user_files for the enrichment workflow after app-side persistence. */
 	enqueueUserFileProcessing(userFileId: string) {
-		return enqueueProcessing(this.env, { kind: 'userFile', userFileId });
+		return enqueueProcessing(this.env, { kind: 'stored', table: 'user_files', rowId: userFileId });
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */

@@ -68,9 +68,9 @@ function buildProcessorUpdatePayload(
 	return updatePayload;
 }
 
-type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
+type StoredWorkflowTarget = { kind: 'stored'; table: 'articles' | 'user_files'; rowId: string };
 
-export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceDraftKey: string };
+type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceDraftKey: string };
 
 interface SourceArticleDraft {
 	article: PreparedArticleRecord;
@@ -90,7 +90,6 @@ export async function enqueueProcessing(
 	target: StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft },
 ): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
-	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
 	return enqueueStoredWorkflow(env, target);
 }
 
@@ -156,14 +155,7 @@ function workflowIdPart(value: string): string {
 }
 
 function storedWorkflowId(target: StoredWorkflowTarget): string {
-	const { table, rowId } = storedWorkflowRecord(target);
-	return ['article', workflowIdPart(table), workflowIdPart(rowId)].join('-');
-}
-
-function storedWorkflowRecord(target: StoredWorkflowTarget) {
-	return target.kind === 'article'
-		? { table: 'articles' as const, rowId: target.articleId }
-		: { table: 'user_files' as const, rowId: target.userFileId };
+	return ['article', workflowIdPart(target.table), workflowIdPart(target.rowId)].join('-');
 }
 
 function retryWorkflowId(workflowId: string): string {
@@ -259,8 +251,7 @@ async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTe
 	if (target.kind === 'source') {
 		article = preparedArticleToArticle((await readSourceDraft(env, target)).article);
 	} else {
-		const { table, rowId } = storedWorkflowRecord(target);
-		article = await loadArticleForProcessing(env, table, rowId);
+		article = await loadArticleForProcessing(env, target.table, target.rowId);
 	}
 	const extractedPdfText = await readExtractedPdfText(env, pdfTextArtifact);
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
@@ -286,7 +277,6 @@ async function persistSourceTarget(db: Client, draft: SourceArticleDraft, input:
 }
 
 async function persistStoredTarget(db: Client, target: StoredWorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
-	const { table, rowId } = storedWorkflowRecord(target);
 	const finalResult =
 		input.pdfTextArtifact?.extractedTextKey && input.article.content
 			? { ...input.result, updateData: { ...input.result.updateData, content: input.article.content } }
@@ -304,9 +294,10 @@ async function persistStoredTarget(db: Client, target: StoredWorkflowTarget, inp
 	const platformMetadata = updatePayload.platform_metadata ?? input.article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, input.article.source, platformMetadata);
 
-	await updateArticleAfterProcessing(db, table, rowId, updatePayload);
-	if (target.kind === 'article' && entities) await syncArticleEntities(db, rowId, entities, input.article.source, platformMetadata);
-	return rowId;
+	await updateArticleAfterProcessing(db, target.table, target.rowId, updatePayload);
+	if (target.table === 'articles' && entities)
+		await syncArticleEntities(db, target.rowId, entities, input.article.source, platformMetadata);
+	return target.rowId;
 }
 
 async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input: WorkflowPersistenceInput): Promise<string> {
@@ -341,20 +332,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			async () => {
 				if (target.kind === 'source')
 					return { ...preparedArticleToArticle((await readSourceDraft(this.env, target)).article), content: null };
-				const { table, rowId } = storedWorkflowRecord(target);
-				return loadArticleForProcessing(this.env, table, rowId, true);
+				return loadArticleForProcessing(this.env, target.table, target.rowId, true);
 			},
 		);
 		const sourceType = platformIdentity(article);
 		const platform = articlePlatforms[sourceType] ?? processDefaultArticle;
-		const storedRecord = target.kind === 'source' ? null : storedWorkflowRecord(target);
 		const logContext =
-			storedRecord === null ? { url: article.url, table: 'articles' } : { article_id: storedRecord.rowId, table: storedRecord.table };
+			target.kind === 'source' ? { url: article.url, table: 'articles' } : { article_id: target.rowId, table: target.table };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
 		const pdfTextArtifact = await stagePdfTextExtraction(this.env, step, {
-			articleId: target.kind === 'userFile' ? target.userFileId : null,
+			articleId: target.kind === 'stored' && target.table === 'user_files' ? target.rowId : null,
 			hasContent: 'has_content' in article && !!article.has_content,
 			sourceStorageKey: article.storage_key,
 			fileType: article.file_type,
