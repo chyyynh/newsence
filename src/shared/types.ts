@@ -66,8 +66,6 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export type WorkflowAttachment = { type: 'youtube-transcript'; transcript: YoutubeTranscript };
-
 export interface ExtractedContent {
 	/** null for raw-bytes / R2 input with no originating URL. */
 	sourceUrl: string | null;
@@ -88,5 +86,5 @@ export interface ExtractedContent {
 	};
 	status: 'ok' | 'needs_ocr' | 'failed';
 	platformMetadata?: PlatformMetadata;
-	attachments?: WorkflowAttachment[];
+	youtubeTranscript?: YoutubeTranscript;
 }

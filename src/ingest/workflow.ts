@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { ArticleCategory, PaperMetadata, PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Article, WorkflowAttachment, YoutubeTranscript } from '@core-shared/types';
+import type { Article, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import {
@@ -84,14 +84,14 @@ function buildProcessorUpdatePayload(
 
 type StoredWorkflowTarget =
 	| { kind: 'article'; articleId: string }
-	| { kind: 'userFile'; userFileId: string; attachments?: WorkflowAttachment[] };
+	| { kind: 'userFile'; userFileId: string; youtubeTranscript?: YoutubeTranscript };
 type UserFileWorkflowTarget = Extract<StoredWorkflowTarget, { kind: 'userFile' }>;
 
 export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 interface SourceArticleDraft {
 	article: PreparedArticleRecord;
-	attachments?: WorkflowAttachment[];
+	youtubeTranscript?: YoutubeTranscript;
 }
 
 type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
@@ -296,13 +296,15 @@ type WorkflowPersistenceInput = {
 	result: ProcessorResult;
 	embedding: number[] | null;
 	pdfTextTemp: PdfTextTemp;
-	attachments: WorkflowAttachment[];
+	youtubeTranscript?: YoutubeTranscript;
 	youtubeHighlights: YouTubeHighlights;
 	paperEnrichment: PaperMetadata | null;
 };
 
-function youtubeTranscriptFromAttachments(attachments: WorkflowAttachment[]): YoutubeTranscript | undefined {
-	return attachments.find((attachment) => attachment.type === 'youtube-transcript')?.transcript;
+function legacyYoutubeTranscript(value: unknown): YoutubeTranscript | undefined {
+	if (!value || typeof value !== 'object') return undefined;
+	const attachments = (value as { attachments?: Array<{ type?: string; transcript?: YoutubeTranscript }> }).attachments;
+	return attachments?.find((attachment) => attachment.type === 'youtube-transcript')?.transcript;
 }
 
 function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
@@ -398,7 +400,7 @@ async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, inpu
 		const articleId =
 			context.target.kind === 'source' ? await persistSourceTarget(db, context, input) : await persistStoredTarget(env, db, context, input);
 		await persistYouTubeWorkflowData(db, {
-			transcript: youtubeTranscriptFromAttachments(input.attachments),
+			transcript: input.youtubeTranscript,
 			highlights: input.youtubeHighlights,
 		});
 		await db.query('COMMIT');
@@ -468,12 +470,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			let attachments: WorkflowAttachment[] = [];
+			let youtubeTranscript: YoutubeTranscript | undefined;
 			if (sourceType === 'youtube') {
-				if (context.target.kind === 'source') attachments = (await context.readSourceDraft()).attachments ?? [];
-				else if (context.target.kind === 'userFile') attachments = context.target.attachments ?? [];
+				if (context.target.kind === 'source') {
+					const draft = await context.readSourceDraft();
+					youtubeTranscript = draft.youtubeTranscript ?? legacyYoutubeTranscript(draft);
+				} else if (context.target.kind === 'userFile') {
+					youtubeTranscript = context.target.youtubeTranscript ?? legacyYoutubeTranscript(context.target);
+				}
 			}
-			const youtubeTranscript = youtubeTranscriptFromAttachments(attachments);
 			const youtubeHighlights =
 				sourceType === 'youtube'
 					? await step.do(
@@ -491,7 +496,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						result: processorResult,
 						embedding,
 						pdfTextTemp,
-						attachments,
+						youtubeTranscript,
 						youtubeHighlights,
 						paperEnrichment,
 					}),

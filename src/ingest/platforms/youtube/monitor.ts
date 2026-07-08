@@ -49,7 +49,7 @@ async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { v
 					ogImageUrl: scraped.metadata.ogImageUrl,
 					platformMetadata: scraped.platformMetadata,
 				},
-				attachments: scraped.attachments,
+				youtubeTranscript: scraped.youtubeTranscript,
 			},
 		});
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });

@@ -236,20 +236,15 @@ export async function scrapeYouTube(
 				description: snippet.description || '',
 			},
 		},
-		attachments:
+		youtubeTranscript:
 			transcript.length > 0
-				? [
-						{
-							type: 'youtube-transcript',
-							transcript: {
-								videoId: video.id,
-								segments: transcript,
-								language: transcriptLanguage,
-								chapters,
-								chaptersFromDescription: chapters.length > 0,
-							},
-						},
-					]
+				? {
+						videoId: video.id,
+						segments: transcript,
+						language: transcriptLanguage,
+						chapters,
+						chaptersFromDescription: chapters.length > 0,
+					}
 				: undefined,
 	};
 }
