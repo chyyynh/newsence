@@ -59,10 +59,12 @@ const twitterProcessor = new TwitterProcessor();
 
 export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
 	hackernews: new HackerNewsProcessor(),
+	rss: defaultProcessor,
 	twitter: {
 		process: (article, ctx) => twitterProcessor.process(article, ctx),
 		persistWorkflowData: (db, input) => upsertTwitterSourceEventAttachment(db, input.articleId, input.attachments),
 	},
+	web: defaultProcessor,
 	youtube: {
 		process: (article, ctx) => defaultProcessor.process(article, ctx),
 		async prepareWorkflowData(article, ctx, attachments) {

@@ -192,8 +192,8 @@ src/
 │   ├── scraped-content.ts    # 統一的 ScrapedContent 格式 + detectPlatformType
 │   └── …                 # fetch、web、mime、streams、log、cors、types
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
+│   ├── extract.ts        # URL 偵測 dispatch → platform scraper
 │   ├── platforms/        # 每個平台一個資料夾
-│   │   ├── registry.ts   # URL 偵測 dispatch → platform scraper
 │   │   ├── twitter/      # monitor + scraper + processor + metadata
 │   │   ├── youtube/      # monitor + scraper + highlights + metadata
 │   │   ├── hackernews/   # scraper + processor + metadata（沒有 monitor — 由 RSS 觸發）
@@ -232,14 +232,16 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 ## 新增平台
 
-平台目前是**鬆散的慣例**而不是正式的 interface — 每個平台資料夾裡會有 `monitor.ts`（定時抓取）、`scraper.ts`（URL 觸發）、`metadata.ts`（型別與 builder）的一些組合，可選 `processor.ts`（自訂 AI 分析）。不是每個平台四件都有；挑一個最接近的平台複製它的形狀。
+平台是來源 adapter。每個平台資料夾裡會有 `monitor.ts`（定時 discovery）、`scraper.ts`（URL 觸發）、metadata builder 的一些組合，可選 `processor.ts`（自訂 AI 分析）。不是每個平台四件都有；挑一個最接近的平台複製它的形狀。
+
+三個軸要分開：platform（`rss`、`web`、`youtube`、`twitter`、`hackernews`）不是 content shape（`pdf`、academic paper），也不是 origin（`upload`、`saved_url`、`generated`）。PDF 解析和 Semantic Scholar paper enrichment 是 workflow stage，根據 row 內容或 metadata 觸發，不是 platform adapter。
 
 新增一個來源最少要做：
 
 1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `ScrapedContent` 的函式。
 2. **Metadata**（`ingest/platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `shared/platform-metadata.ts` 註冊。
-3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並在 `ingest/platforms/registry.ts` 路由到 scraper。
-4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `entrypoints/scheduled.ts` 裡接上。
+3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並從 `ingest/extract.ts` 路由到 scraper。
+4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts` 裡接上。
 5. **Processor**（可選，`ingest/platforms/foo/processor.ts`）— 只有在你需要不同於 `DefaultProcessor` 的 AI 行為時才寫；在 `ingest/domain/processors.ts` 註冊。
 
 新文章一樣走 Queue → Workflow pipeline，AI 步驟你不用動。

@@ -200,8 +200,8 @@ src/
 │   ├── scraped-content.ts    # unified ScrapedContent shape + detectPlatformType
 │   └── …                 # fetch, web, mime, streams, log, cors, types
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
+│   ├── extract.ts        # URL detection dispatch → platform scraper
 │   ├── platforms/        # each platform lives in its own folder
-│   │   ├── registry.ts   # URL detection dispatch → platform scraper
 │   │   ├── twitter/      # monitor + scraper + processor + metadata
 │   │   ├── youtube/      # monitor + scraper + highlights + metadata
 │   │   ├── hackernews/   # scraper + processor + metadata (no monitor — fed by RSS)
@@ -239,14 +239,16 @@ Secrets (via `wrangler secret put`):
 
 ## Adding a Platform
 
-Platforms today follow a loose convention rather than a formal interface — each platform folder contains some combination of `monitor.ts` (cron ingestion), `scraper.ts` (URL-triggered fetch), `metadata.ts` (typed platform metadata + builders), and optionally `processor.ts` (custom AI analysis). Not every platform has all four; pick the closest existing one and copy its shape.
+Platforms are source adapters. Each platform folder contains some combination of `monitor.ts` (cron discovery), `scraper.ts` (URL-triggered fetch), metadata builders, and optionally `processor.ts` (custom AI analysis). Not every platform has all four; pick the closest existing one and copy its shape.
+
+Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernews`) is not content shape (`pdf`, academic paper) and not origin (`upload`, `saved_url`, `generated`). PDF extraction and Semantic Scholar paper enrichment are workflow stages keyed from row content/metadata, not platform adapters.
 
 Minimum to add a new source:
 
 1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ScrapedContent`.
 2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
-3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it in `ingest/platforms/registry.ts`.
-4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `entrypoints/scheduled.ts`.
+3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it from `ingest/extract.ts`.
+4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts`.
 5. **Processor** (optional, `ingest/platforms/foo/processor.ts`) — only if you need AI behavior that differs from `DefaultProcessor`; register in `ingest/domain/processors.ts`.
 
 The new article goes through the same Queue → Workflow pipeline as every other platform — you don't touch the AI steps.
