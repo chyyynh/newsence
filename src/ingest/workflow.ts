@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { Article, NormalizedContent, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
-import { extractYouTubeId } from '@core-shared/web';
+import { extractYouTubeId, FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceArticle,
@@ -13,12 +13,23 @@ import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { extractHackerNewsId, processHackerNewsArticle, scrapeHackerNews } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
-import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
+import { type PdfTextArtifact, parsePdfBytes, stagePdfTextExtraction } from './platforms/pdf';
 import { extractTweetId, processTwitterArticle, scrapeTweet } from './platforms/twitter';
-import { scrapeWebPage } from './platforms/web-scraper';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, scrapeYouTube } from './platforms/youtube';
 
 const PDF_MIME = 'application/pdf';
+const GENERIC_FETCH_TIMEOUT_MS = 8_000;
+const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
+const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
+
+type PdfExtractionMetadata = {
+	status: PdfTextArtifact['status'];
+	parser: 'liteparse';
+	chars: number;
+	pages: number;
+};
+
+type AcquiredContent = NormalizedContent & { extraction?: PdfExtractionMetadata };
 
 function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	return {
@@ -120,7 +131,163 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<NormalizedContent | null> {
+function urlHost(url: string): string {
+	return new URL(url).hostname.replace(/^www\./, '');
+}
+
+function fileNameFromUrl(url: string, fallback: string): string {
+	const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '');
+	return name || fallback;
+}
+
+function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
+	return { status: pdf.status, parser: 'liteparse', chars: pdf.chars, pages: pdf.pages };
+}
+
+type HtmlMetadata = NormalizedContent['metadata'] & { title: string | null };
+
+function metaContentHandler(assign: (value: string) => void): HTMLRewriterElementContentHandlers {
+	return {
+		element(element) {
+			const content = element.getAttribute('content')?.trim();
+			if (content) assign(content);
+		},
+	};
+}
+
+async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetadata> {
+	let titleText = '';
+	let title: string | null = null;
+	let description: string | null = null;
+	let siteName: string | null = null;
+	let author: string | null = null;
+	let publishedDate: string | null = null;
+	const setOnce = (set: (value: string) => void, current: () => string | null) => (value: string) => {
+		if (!current()) set(value);
+	};
+
+	let rewriter = new HTMLRewriter().on('title', {
+		text(text) {
+			titleText += text.text;
+		},
+	});
+	for (const [selector, assign, current] of [
+		['meta[property="og:title"]', (value: string) => (title = value), () => title],
+		['meta[name="twitter:title"]', (value: string) => (title = value), () => title],
+		['meta[property="og:description"]', (value: string) => (description = value), () => description],
+		['meta[name="description"]', (value: string) => (description = value), () => description],
+		['meta[property="og:site_name"]', (value: string) => (siteName = value), () => siteName],
+		['meta[name="author"]', (value: string) => (author = value), () => author],
+		['meta[property="article:author"]', (value: string) => (author = value), () => author],
+		['meta[property="article:published_time"]', (value: string) => (publishedDate = value), () => publishedDate],
+	] as const) {
+		rewriter = rewriter.on(selector, metaContentHandler(setOnce(assign, current)));
+	}
+
+	await rewriter
+		.on('time[datetime]', {
+			element(element) {
+				if (!publishedDate) publishedDate = element.getAttribute('datetime')?.trim() || null;
+			},
+		})
+		.transform(new Response(html))
+		.arrayBuffer();
+
+	return {
+		title: title ?? (titleText.trim() || null),
+		author,
+		publishedDate,
+		siteName: siteName ?? urlHost(url),
+		description,
+	};
+}
+
+function titleFromMarkdown(markdown: string): string | null {
+	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || null;
+}
+
+async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
+	const result = await env.AI.toMarkdown({
+		name: fileNameFromUrl(url, `${urlHost(url)}.html`),
+		blob: new Blob([html], { type: 'text/html' }),
+	});
+	if (result.format === 'error') throw new Error(`Workers AI toMarkdown failed: ${result.error}`);
+	return result.data.trim();
+}
+
+async function scrapePdfUrl(url: string, response: Response): Promise<AcquiredContent> {
+	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
+	const parsed = await parsePdfBytes(bytes);
+	const fileName = fileNameFromUrl(response.url || url, 'document.pdf');
+	const title = fileName.replace(/\.pdf$/i, '') || 'PDF document';
+	return {
+		title,
+		markdown: parsed.text,
+		metadata: {
+			author: null,
+			publishedDate: null,
+			siteName: urlHost(response.url || url),
+			description: parsed.text.slice(0, 500) || null,
+		},
+		platformMetadata: {
+			type: 'pdf',
+			fetchedAt: new Date().toISOString(),
+			data: { fileName, fileSize: bytes.byteLength },
+		},
+		extraction: pdfExtractionMetadata(parsed),
+	};
+}
+
+async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
+	const response = await fetchWithTimeout(
+		url,
+		{
+			headers: {
+				'User-Agent': FEED_UA,
+				Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.5',
+				'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+			},
+		},
+		GENERIC_FETCH_TIMEOUT_MS,
+	);
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+
+	const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+	if (contentType.includes(PDF_MIME) || new URL(response.url || url).pathname.toLowerCase().endsWith('.pdf')) {
+		return scrapePdfUrl(url, response);
+	}
+	if (
+		contentType &&
+		!contentType.includes('text/html') &&
+		!contentType.includes('text/xml') &&
+		!contentType.includes('application/xhtml') &&
+		!contentType.includes('application/xml')
+	) {
+		await response.body?.cancel();
+		throw new Error(`Unsupported response content type: ${contentType}`);
+	}
+
+	const finalUrl = response.url || url;
+	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
+	const [metadata, markdown] = await Promise.all([extractHtmlMetadata(html, finalUrl), markdownFromHtml(env, html, finalUrl)]);
+	const title = metadata.title ?? titleFromMarkdown(markdown) ?? urlHost(finalUrl);
+	return {
+		title,
+		markdown,
+		metadata: {
+			author: metadata.author,
+			publishedDate: metadata.publishedDate,
+			siteName: metadata.siteName,
+			description: metadata.description,
+		},
+		platformMetadata: { type: 'default', fetchedAt: new Date().toISOString(), data: null },
+	};
+}
+
+async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent | null> {
 	const parsed = new URL(url);
 	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http(s) URLs are allowed');
 	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
@@ -134,10 +301,10 @@ async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<NormalizedCont
 	const hackerNewsId = extractHackerNewsId(url);
 	if (hackerNewsId) return scrapeHackerNews(hackerNewsId);
 
-	return scrapeWebPage(url);
+	return scrapeGenericUrl(url, env);
 }
 
-function applyAcquiredContent(article: Article, acquired: NormalizedContent | null): Article {
+function applyAcquiredContent(article: Article, acquired: AcquiredContent | null): Article {
 	if (!acquired) return article;
 	const acquiredTitle = acquired.title?.trim();
 	return {
@@ -153,7 +320,7 @@ function applyAcquiredContent(article: Article, acquired: NormalizedContent | nu
 	};
 }
 
-function acquiredContentUpdatePayload(acquired: NormalizedContent | null): Record<string, unknown> {
+function acquiredContentUpdatePayload(acquired: AcquiredContent | null): Record<string, unknown> {
 	if (!acquired) return {};
 	const acquiredTitle = acquired.title?.trim();
 	return {
@@ -176,20 +343,20 @@ async function acquireSavedUrlContent(env: CoreEnv, article: Article): Promise<R
 	return new Response(JSON.stringify(acquired)).body!;
 }
 
-async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<NormalizedContent | null> {
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<AcquiredContent | null> {
 	const artifact = await step.do(
 		'acquire-content',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 		() => acquireSavedUrlContent(env, article),
 	);
-	return (await new Response(artifact).json()) as NormalizedContent | null;
+	return (await new Response(artifact).json()) as AcquiredContent | null;
 }
 
 async function loadFullTargetArticle(
 	env: CoreEnv,
 	target: WorkflowTarget,
 	pdfTextArtifact: PdfTextArtifact | null,
-	acquiredContent: NormalizedContent | null = null,
+	acquiredContent: AcquiredContent | null = null,
 	baseArticle?: Article,
 ): Promise<Article> {
 	let article: Article;
@@ -212,7 +379,7 @@ async function persistWorkflowTarget(
 	result: ProcessorResult,
 	embedding: number[] | null,
 	pdfTextArtifact: PdfTextArtifact | null,
-	acquiredContent: NormalizedContent | null,
+	acquiredContent: AcquiredContent | null,
 	paperEnrichment: PaperMetadata | null,
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
@@ -236,13 +403,7 @@ async function persistWorkflowTarget(
 		} else {
 			const finalResult =
 				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
-			const pdf = pdfTextArtifact;
-			const extraction = pdf && {
-				status: pdf.status,
-				parser: 'liteparse',
-				chars: pdf.chars,
-				pages: pdf.pages,
-			};
+			const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
 			const metadataPatch = {
 				...(extraction ? { extraction } : {}),
 				...(paperEnrichment ? { type: 'paper', data: paperEnrichment } : {}),

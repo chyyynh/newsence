@@ -115,6 +115,36 @@ export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_T
 	}
 }
 
+export async function readBytesWithLimit(response: Response, maxBytes: number): Promise<Uint8Array> {
+	const contentLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
+	if (contentLength > maxBytes) throw new Error(`Response too large: ${contentLength} bytes`);
+	if (!response.body) return new Uint8Array();
+
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let totalBytes = 0;
+
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) {
+			const bytes = new Uint8Array(totalBytes);
+			let offset = 0;
+			for (const chunk of chunks) {
+				bytes.set(chunk, offset);
+				offset += chunk.byteLength;
+			}
+			return bytes;
+		}
+
+		totalBytes += value.byteLength;
+		if (totalBytes > maxBytes) {
+			await reader.cancel();
+			throw new Error(`Response body exceeded ${maxBytes} bytes`);
+		}
+		chunks.push(value);
+	}
+}
+
 export function normalizeUrl(url: string): string {
 	const parsed = parseUrl(url);
 	if (!parsed) return url;
