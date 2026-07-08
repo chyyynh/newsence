@@ -85,9 +85,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 export async function ingestUrls(
 	env: Env,
 	args: { urls: string[]; userId: string },
-): Promise<
-	{ ok: true; results: IngestResult[] } | { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST'; message: string }
-> {
+): Promise<{ ok: true; results: IngestResult[] } | { ok: false; code: 'BATCH_TOO_LARGE' | 'BAD_REQUEST'; message: string }> {
 	if (args.urls.length === 0) {
 		return { ok: false, code: 'BAD_REQUEST', message: 'Missing urls field' };
 	}

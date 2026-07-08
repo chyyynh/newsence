@@ -55,7 +55,7 @@ type CoreUrlIngestResult = {
 
 type CoreUrlIngestOutcome =
 	| { ok: true; results: CoreUrlIngestResult[] }
-	| { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST'; message: string };
+	| { ok: false; code: 'BATCH_TOO_LARGE' | 'BAD_REQUEST'; message: string };
 
 export interface CoreRpc {
 	ingestUrls(input: { urls: string[]; userId: string }): Promise<CoreUrlIngestOutcome>;
