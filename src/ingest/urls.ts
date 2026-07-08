@@ -18,10 +18,6 @@ type IngestResult = {
 	userFileId?: string;
 	instanceId?: string;
 	title?: string;
-	titleCn?: string;
-	summaryCn?: string;
-	tags?: string[];
-	ogImageUrl?: string | null;
 	error?: string;
 };
 
@@ -57,10 +53,6 @@ function buildUserFileResult(
 	row: {
 		id: string;
 		title: string;
-		title_cn: string | null;
-		summary_cn: string | null;
-		tags: string[] | null;
-		og_image_url: string | null;
 	},
 	instanceId?: string,
 ): IngestResult {
@@ -69,10 +61,6 @@ function buildUserFileResult(
 		userFileId: row.id,
 		instanceId,
 		title: row.title,
-		titleCn: row.title_cn || undefined,
-		summaryCn: row.summary_cn || undefined,
-		tags: row.tags ?? undefined,
-		ogImageUrl: row.og_image_url,
 	};
 }
 

@@ -50,10 +50,6 @@ type CoreUrlIngestResult = {
 	userFileId?: string;
 	instanceId?: string;
 	title?: string;
-	titleCn?: string;
-	summaryCn?: string;
-	tags?: string[];
-	ogImageUrl?: string | null;
 	error?: string;
 };
 

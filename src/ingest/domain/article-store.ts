@@ -96,10 +96,6 @@ type InsertUrlUserFileResult = {
 	id: string;
 	created: boolean;
 	title: string;
-	title_cn: string | null;
-	summary_cn: string | null;
-	tags: string[];
-	og_image_url: string | null;
 };
 
 type ExistingUrlUserFile = {
@@ -107,12 +103,10 @@ type ExistingUrlUserFile = {
 	title: string;
 	title_cn: string | null;
 	summary_cn: string | null;
-	tags: string[] | null;
-	og_image_url: string | null;
 	has_embedding: boolean;
 };
 
-const EXISTING_URL_USER_FILE_FIELDS = 'id, title, title_cn, summary_cn, tags, og_image_url, embedding IS NOT NULL AS has_embedding';
+const EXISTING_URL_USER_FILE_FIELDS = 'id, title, title_cn, summary_cn, embedding IS NOT NULL AS has_embedding';
 
 export async function getExistingUrlUserFile(db: Client, userId: string, normalizedSourceUrl: string): Promise<ExistingUrlUserFile | null> {
 	const result = await db.query<ExistingUrlUserFile>(
@@ -151,11 +145,11 @@ export async function insertScrapedUrlUserFile(
 				ON CONFLICT (user_id, normalized_source_url)
 				WHERE resource_kind = 'url' AND normalized_source_url IS NOT NULL
 				DO NOTHING
-				RETURNING id, title, title_cn, summary_cn, tags, og_image_url, TRUE AS created
+				RETURNING id, title, TRUE AS created
 			)
-			SELECT id, title, title_cn, summary_cn, tags, og_image_url, created FROM inserted
+			SELECT id, title, created FROM inserted
 			UNION ALL
-			SELECT id, title, title_cn, summary_cn, tags, og_image_url, FALSE AS created
+			SELECT id, title, FALSE AS created
 			FROM user_files
 			WHERE user_id = $11
 			  AND normalized_source_url = $3
