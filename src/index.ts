@@ -36,7 +36,7 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	// Product-domain writes live on the app Worker's DomainRpc binding.
 
 	/** Ingest user-submitted URLs into user_files without going through public HTTP auth. */
-	ingestUrls(input: { urls: string[]; userId?: string }) {
+	ingestUrls(input: { urls: string[]; userId: string }) {
 		return ingestUrls(this.env, input);
 	}
 

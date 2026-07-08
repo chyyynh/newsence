@@ -55,10 +55,10 @@ type CoreUrlIngestResult = {
 
 type CoreUrlIngestOutcome =
 	| { ok: true; results: CoreUrlIngestResult[] }
-	| { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED'; message: string };
+	| { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST'; message: string };
 
 export interface CoreRpc {
-	ingestUrls(input: { urls: string[]; userId?: string }): Promise<CoreUrlIngestOutcome>;
+	ingestUrls(input: { urls: string[]; userId: string }): Promise<CoreUrlIngestOutcome>;
 	enqueueUserFileProcessing(userFileId: string): Promise<string>;
 	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]>;
 	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;
