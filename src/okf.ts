@@ -95,30 +95,26 @@ async function buildCollectionOkfBundle(
 ): Promise<{ slug: string; files: Iterable<OkfFile> }> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	try {
-		const collection = (
-			await db.query<CollectionRow>(
-				`SELECT id, name, description, visibility, updated_at
+	const collection = (
+		await db.query<CollectionRow>(
+			`SELECT id, name, description, visibility, updated_at
 						 FROM collections
 						 WHERE id = $1
 						   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
 				 LIMIT 1`,
-				[input.collectionId, input.viewerId],
-			)
-		).rows[0];
-		if (!collection) throw new Error('Collection not found');
+			[input.collectionId, input.viewerId],
+		)
+	).rows[0];
+	if (!collection) throw new Error('Collection not found');
 
-		const articles = await readCollectionArticles(db, collection.id, input.viewerId);
-		const linkableArticles = articles.filter((article) => article.kind === 'article');
-		const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
-		const { links: exported, quality } = gateEntityLinks(links, linkableArticles);
-		return {
-			slug: uniqueSlug(collection.name, collection.id),
-			files: renderOkfFiles(collection, articles, exported, quality),
-		};
-	} finally {
-		await db.end();
-	}
+	const articles = await readCollectionArticles(db, collection.id, input.viewerId);
+	const linkableArticles = articles.filter((article) => article.kind === 'article');
+	const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
+	const { links: exported, quality } = gateEntityLinks(links, linkableArticles);
+	return {
+		slug: uniqueSlug(collection.name, collection.id),
+		files: renderOkfFiles(collection, articles, exported, quality),
+	};
 }
 
 async function readCollectionArticles(db: Client, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {

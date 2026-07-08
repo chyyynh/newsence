@@ -83,19 +83,15 @@ export async function prepareYouTubeHighlights(
 
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	try {
-		const row = (
-			await db.query<{ transcript: TranscriptSegment[] | null; ai_highlights: unknown }>(
-				'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
-				[videoId],
-			)
-		).rows[0];
-		if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
+	const row = (
+		await db.query<{ transcript: TranscriptSegment[] | null; ai_highlights: unknown }>(
+			'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
+			[videoId],
+		)
+	).rows[0];
+	if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
-		return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
-	} finally {
-		await db.end();
-	}
+	return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
 }
 
 async function prepareYouTubeHighlightsFromTranscript(

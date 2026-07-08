@@ -68,50 +68,46 @@ export async function handleYouTubeCron(env: Env): Promise<void> {
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	try {
-		const channels = (
-			await db.query<{ id: string; name: string; RSSLink: string | null }>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, [
-				'youtube_channel',
-			])
-		).rows;
+	const channels = (
+		await db.query<{ id: string; name: string; RSSLink: string | null }>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, [
+			'youtube_channel',
+		])
+	).rows;
 
-		let totalQueued = 0;
-		for (const channel of channels) {
-			try {
-				if (!channel.RSSLink) continue;
-				const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
-				if (!res.ok) {
-					console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
-					continue;
-				}
-
-				const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
-				if (videos.length === 0) {
-					console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-					await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
-					continue;
-				}
-
-				const videoUrls = videos.map(({ url }) => url);
-				const existingRecords = await getExistingArticlesByUrl(db, videoUrls);
-				const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
-				const newVideos = videos.filter(({ url }) => !existingSet.has(url));
-
-				if (!newVideos.length) {
-					console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
-				}
-
-				for (const video of newVideos) {
-					if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
-				}
-
-				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
-			} catch (err) {
-				console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
+	let totalQueued = 0;
+	for (const channel of channels) {
+		try {
+			if (!channel.RSSLink) continue;
+			const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
+			if (!res.ok) {
+				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
+				continue;
 			}
+
+			const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
+			if (videos.length === 0) {
+				console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
+				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
+				continue;
+			}
+
+			const videoUrls = videos.map(({ url }) => url);
+			const existingRecords = await getExistingArticlesByUrl(db, videoUrls);
+			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
+			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
+
+			if (!newVideos.length) {
+				console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
+			}
+
+			for (const video of newVideos) {
+				if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
+			}
+
+			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
+		} catch (err) {
+			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
 		}
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
-	} finally {
-		await db.end();
 	}
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
 }
