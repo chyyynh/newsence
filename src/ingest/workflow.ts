@@ -22,20 +22,14 @@ import { pdfTextExtractionMetadata, readExtractedPdfText, stagePdfTextExtraction
 import { processTwitterArticle } from './platforms/twitter/processor';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube/transcripts';
 
-type ArticleProcessor = (article: Article, env: Env) => Promise<ProcessorResult>;
-
 async function processDefaultArticle(article: Article, env: Env): Promise<ProcessorResult> {
 	const analysis = await generateArticleAnalysis(article, env);
 	return mergeArticleAnalysis(article, analysis);
 }
 
-const articlePlatforms: Record<string, ArticleProcessor> = {
+const articlePlatforms: Partial<Record<string, typeof processDefaultArticle>> = {
 	hackernews: processHackerNewsArticle,
-	rss: processDefaultArticle,
 	twitter: processTwitterArticle,
-	web: processDefaultArticle,
-	youtube: processDefaultArticle,
-	default: processDefaultArticle,
 };
 
 const CONTENT_STAGE_METADATA_TYPES = new Set(['pdf', 'paper']);
@@ -99,7 +93,6 @@ interface SourceArticleDraft {
 
 type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
-type YouTubeHighlights = Awaited<ReturnType<typeof prepareYouTubeHighlights>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'terminated', 'timeout']);
@@ -343,7 +336,7 @@ type WorkflowPersistenceInput = {
 	embedding: number[] | null;
 	pdfTextArtifact: PdfTextArtifact;
 	youtubeTranscript?: YoutubeTranscript;
-	youtubeHighlights: YouTubeHighlights;
+	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>;
 	paperEnrichment: PaperMetadata | null;
 };
 
@@ -453,7 +446,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 			const sourceType = platformIdentity(article);
-			const platform = articlePlatforms[sourceType] ?? articlePlatforms.default;
+			const platform = articlePlatforms[sourceType] ?? processDefaultArticle;
 			const storedRecord = target.kind === 'source' ? null : storedWorkflowRecord(target);
 			const logContext =
 				storedRecord === null ? { url: article.url, table: 'articles' } : { article_id: storedRecord.rowId, table: storedRecord.table };
