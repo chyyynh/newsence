@@ -142,21 +142,15 @@ curl https://your-worker.workers.dev/health
 
 ```json
 {
-  "success": true,
-  "data": [
-    {
-      "url": "https://example.com/article",
-      "userFileId": "550e8400-e29b-41d4-a716-446655440000",
-      "instanceId": "workflow-id",
-      "resourceKind": "url"
-    }
-  ]
+  "status": "ok",
+  "worker": "newsence-core",
+  "timestamp": "2026-07-08T00:00:00.000Z"
 }
 ```
 
 </details>
 
-Auth: internal endpoints require `X-Internal-Token` or `Authorization: Bearer`. User ingest rate limiting now lives in the app Worker before calls reach this core Worker.
+App/chat integrations use Cloudflare service-binding RPC. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
 
 ## CLI & MCP
 
@@ -175,7 +169,6 @@ claude mcp add newsence -- npx newsence mcp   # Claude Code
 ```
 src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
-├── entrypoints/          # HTTP router, protected endpoints, health
 ├── rpc/                  # service-binding RPC contract
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync

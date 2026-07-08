@@ -134,21 +134,15 @@ curl https://your-worker.workers.dev/health
 
 ```json
 {
-  "success": true,
-  "data": [
-    {
-      "url": "https://example.com/article",
-      "userFileId": "550e8400-e29b-41d4-a716-446655440000",
-      "instanceId": "workflow-id",
-      "resourceKind": "url"
-    }
-  ]
+  "status": "ok",
+  "worker": "newsence-core",
+  "timestamp": "2026-07-08T00:00:00.000Z"
 }
 ```
 
 </details>
 
-驗證：internal endpoints 需要 `X-Internal-Token` 或 `Authorization: Bearer`。用戶 ingest 限流現在由 app Worker 在呼叫 core Worker 前處理。
+App/chat 整合走 Cloudflare service-binding RPC。用戶 ingest 的驗證與限流由 app Worker 在呼叫 core Worker 前處理。
 
 ## CLI 與 MCP 伺服器
 
@@ -167,7 +161,6 @@ claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 ```
 src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
-├── entrypoints/          # HTTP router、protected endpoints、health
 ├── rpc/                  # service-binding RPC contract
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
