@@ -1,6 +1,13 @@
 import { generateObject } from '@core-ai/embedding';
 import type { TwitterMedia } from '@core-shared/platform-metadata';
-import { type Article, ENTITY_TYPES, type Tweet, type TwitterSourceEventInputType, type WorkflowAttachment } from '@core-shared/types';
+import {
+	type Article,
+	ENTITY_TYPES,
+	type Tweet,
+	type TwitterSourceEventDraft,
+	type TwitterSourceEventInputType,
+	type WorkflowAttachment,
+} from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import type { Client } from 'pg';
 import { z } from 'zod';
@@ -24,7 +31,7 @@ function isTwitterSourceEventAttachment(
 	return attachment.kind === 'twitter-source-event';
 }
 
-export async function upsertTwitterSourceEvent(
+async function upsertTwitterSourceEvent(
 	db: Client,
 	tweet: Tweet,
 	options: {
@@ -142,11 +149,15 @@ export async function upsertTwitterSourceEvent(
 	}
 }
 
+export async function upsertTwitterSourceEventDraft(db: Client, articleId: string, event: TwitterSourceEventDraft): Promise<void> {
+	const { tweet, eventType, text, media, raw } = event;
+	await upsertTwitterSourceEvent(db, tweet, { articleId, eventType, text, media, raw });
+}
+
 export async function upsertTwitterSourceEventAttachment(db: Client, articleId: string, attachments?: WorkflowAttachment[]): Promise<void> {
 	const event = attachments?.find(isTwitterSourceEventAttachment)?.event;
 	if (!event) return;
-	const { tweet, eventType, text, media, raw } = event;
-	await upsertTwitterSourceEvent(db, tweet, { articleId, eventType, text, media, raw });
+	await upsertTwitterSourceEventDraft(db, articleId, event);
 }
 
 export class TwitterProcessor implements ArticleProcessor {

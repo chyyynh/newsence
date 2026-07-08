@@ -5,7 +5,7 @@ import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/d
 import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { scrapeWebPage } from '../web-scraper';
-import { upsertTwitterSourceEvent } from './processor';
+import { upsertTwitterSourceEventDraft } from './processor';
 import {
 	buildTweetPlatformMetadata,
 	buildTweetTitle,
@@ -43,13 +43,7 @@ async function recordExistingTwitterSourceEvent(
 	event: TwitterSourceEventDraft,
 	options: { enqueueIfIncomplete?: boolean } = {},
 ): Promise<void> {
-	await upsertTwitterSourceEvent(db, event.tweet, {
-		articleId: article.id,
-		eventType: event.eventType,
-		text: event.text,
-		media: event.media,
-		raw: event.raw,
-	});
+	await upsertTwitterSourceEventDraft(db, article.id, event);
 	if (options.enqueueIfIncomplete !== false && !article.summary_cn)
 		await enqueueProcessing(env, { kind: 'article', articleId: article.id });
 }
