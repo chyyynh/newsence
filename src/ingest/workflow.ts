@@ -71,10 +71,7 @@ function buildProcessorUpdatePayload(
 	return updatePayload;
 }
 
-type StoredWorkflowTarget =
-	| { kind: 'article'; articleId: string }
-	| { kind: 'userFile'; userFileId: string; youtubeTranscript?: YoutubeTranscript };
-type UserFileWorkflowTarget = Extract<StoredWorkflowTarget, { kind: 'userFile' }>;
+type StoredWorkflowTarget = { kind: 'article'; articleId: string } | { kind: 'userFile'; userFileId: string };
 
 export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceDraftKey: string };
 
@@ -83,7 +80,6 @@ interface SourceArticleDraft {
 	youtubeTranscript?: YoutubeTranscript;
 }
 
-type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
@@ -150,10 +146,13 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function enqueueProcessing(env: Env, target: ProcessingTarget): Promise<string> {
+export async function enqueueProcessing(
+	env: Env,
+	target: StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft },
+): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
 	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
-	return enqueueUserFileWorkflow(env, target);
+	return enqueueUserFileWorkflow(env, target.userFileId);
 }
 
 async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
@@ -242,17 +241,17 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function enqueueUserFileWorkflow(env: Env, target: UserFileWorkflowTarget): Promise<string> {
+async function enqueueUserFileWorkflow(env: Env, userFileId: string): Promise<string> {
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const storedInstanceId = await getUserFileWorkflowInstanceId(db, target.userFileId);
+	const storedInstanceId = await getUserFileWorkflowInstanceId(db, userFileId);
 	if (storedInstanceId) {
 		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 	}
 
-	const instanceId = await enqueueStoredWorkflow(env, target);
-	await patchUserFileWorkflowMetadata(db, target.userFileId, {
+	const instanceId = await enqueueStoredWorkflow(env, { kind: 'userFile', userFileId });
+	await patchUserFileWorkflowMetadata(db, userFileId, {
 		monitor_instance_id: instanceId,
 		monitor_status: 'running',
 		monitor_started_at: new Date().toISOString(),
@@ -480,8 +479,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				if (target.kind === 'source') {
 					const draft = await readSourceDraft(this.env, target);
 					youtubeTranscript = draft.youtubeTranscript;
-				} else if (target.kind === 'userFile') {
-					youtubeTranscript = target.youtubeTranscript;
 				}
 			}
 			const youtubeHighlights =
