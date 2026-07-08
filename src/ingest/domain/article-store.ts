@@ -9,14 +9,14 @@ const ARTICLE_FIELDS: Record<ArticleStoreTable, string> = {
 	articles:
 		'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, platform_metadata, entities',
 	user_files:
-		'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
+		'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type',
 };
 
 const ARTICLE_SHELL_FIELDS: Record<ArticleStoreTable, string> = {
 	articles:
 		'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, platform_metadata, entities',
 	user_files:
-		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
+		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type',
 };
 
 export async function loadArticleForProcessing(

@@ -19,7 +19,6 @@ export interface Article {
 	// user_files-only raw columns (undefined for articles path).
 	storage_key?: string | null;
 	file_type?: string;
-	origin_type?: string;
 }
 
 // AI Analysis result
