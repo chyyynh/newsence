@@ -15,12 +15,11 @@ interface PdfTextArtifact {
 	status: PdfTextStatus | 'failed';
 	chars: number;
 	pages: number;
-	extractedTextKey?: string;
+	text?: string;
 }
 
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
-const WORKFLOW_PDF_TEXT_SCRATCH_PREFIX = 'workflow/scratch/pdf-text/';
 
 let pdfParserReady = false;
 
@@ -38,38 +37,27 @@ async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	return { text, pages, chars, status };
 }
 
-async function writeExtractedPdfText(
-	env: CoreEnv,
-	input: { articleId: string; sourceStorageKey: string; workflowRunId: string },
-): Promise<PdfTextArtifact> {
+async function extractPdfText(env: CoreEnv, input: { sourceStorageKey: string }): Promise<ReadableStream<Uint8Array>> {
 	const obj = await env.R2.get(input.sourceStorageKey);
 	if (!obj) throw new Error(`PDF source object missing: ${input.sourceStorageKey}`);
 	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
-	const extractedTextKey = `${WORKFLOW_PDF_TEXT_SCRATCH_PREFIX}${input.articleId}/${input.workflowRunId}.md`;
-	await env.R2.put(extractedTextKey, text, { httpMetadata: { contentType: 'text/markdown; charset=utf-8' } });
-	return { status, chars, pages, extractedTextKey };
+	return new Response(JSON.stringify({ status, chars, pages, text } satisfies PdfTextArtifact)).body!;
 }
 
 export async function stagePdfTextExtraction(
 	env: CoreEnv,
 	step: WorkflowStep,
-	input: { articleId: string; sourceStorageKey: string; workflowRunId: string },
+	input: { articleId: string; sourceStorageKey: string },
 ): Promise<PdfTextArtifact> {
 	try {
-		return await step.do(
+		const artifact = await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => writeExtractedPdfText(env, input),
+			() => extractPdfText(env, input),
 		);
+		return (await new Response(artifact).json()) as PdfTextArtifact;
 	} catch (error) {
 		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: input.articleId, error: String(error) });
 		return { status: 'failed', chars: 0, pages: 0 };
 	}
-}
-
-export async function readExtractedPdfText(env: CoreEnv, result: PdfTextArtifact | null): Promise<string | null> {
-	if (!result?.extractedTextKey) return null;
-	const obj = await env.R2.get(result.extractedTextKey);
-	if (!obj) throw new Error(`PDF extracted text object missing: ${result.extractedTextKey}`);
-	return obj.text();
 }

@@ -12,7 +12,7 @@ import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { processHackerNewsArticle } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
-import { readExtractedPdfText, stagePdfTextExtraction } from './platforms/pdf';
+import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
@@ -140,7 +140,7 @@ async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTe
 	} else {
 		article = await loadArticleForProcessing(env, target.table, target.rowId);
 	}
-	const extractedPdfText = await readExtractedPdfText(env, pdfTextArtifact);
+	const extractedPdfText = pdfTextArtifact?.text?.trim() || null;
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
 }
 
@@ -168,7 +168,7 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 			if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
 		} else {
 			const finalResult =
-				input.pdfTextArtifact?.extractedTextKey && input.article.content
+				input.pdfTextArtifact?.text && input.article.content
 					? { ...input.result, updateData: { ...input.result.updateData, content: input.article.content } }
 					: input.result;
 			const pdf = input.pdfTextArtifact;
@@ -235,12 +235,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				? await stagePdfTextExtraction(this.env, step, {
 						articleId: target.rowId,
 						sourceStorageKey: article.storage_key,
-						workflowRunId: workflowIdPart(event.instanceId),
 					})
 				: null;
 
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
-			hasStagedText: !!pdfTextArtifact?.extractedTextKey,
+			hasStagedText: !!pdfTextArtifact?.text,
 			loadContent: async () => (await loadFullTargetArticle(this.env, target, pdfTextArtifact)).content,
 		});
 
@@ -284,7 +283,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () =>
 				persistWorkflowTarget(this.env, target, {
-					article: pdfTextArtifact?.extractedTextKey ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
+					article: pdfTextArtifact?.text ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
 					result: processorResult,
 					embedding,
 					pdfTextArtifact,
@@ -295,17 +294,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		);
 
 		await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
-
-		const scratchKeys = [pdfTextArtifact?.extractedTextKey].filter((key): key is string => !!key);
-		if (scratchKeys.length) {
-			await step.do('cleanup-workflow-scratch-objects', { retries: { limit: 1, delay: '5 seconds' }, timeout: '20 seconds' }, async () => {
-				try {
-					await this.env.R2.delete(scratchKeys);
-				} catch (error) {
-					console.warn({ tag: 'WORKFLOW', msg: 'Workflow scratch cleanup failed', keys: scratchKeys, error: String(error) });
-				}
-			});
-		}
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
 		return { success: true, article_id: articleId };
