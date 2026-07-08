@@ -88,18 +88,14 @@ type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>> | null
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
-export async function enqueueProcessing(
-	env: CoreEnv,
-	target: StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft },
-): Promise<string> {
-	const workflowTarget: WorkflowTarget = target.kind === 'source' ? { kind: 'source', draft: target.draft } : target;
+export async function enqueueProcessing(env: CoreEnv, target: WorkflowTarget): Promise<string> {
 	const workflowId = target.kind === 'source' ? await sourceArticleWorkflowId(target.draft.article.url) : storedWorkflowId(target);
-	const [created] = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target: workflowTarget } }]);
+	const [created] = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
 	if (created) return created.id;
 
 	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
 	const { status } = await instance.status();
-	if (ACTIVE_WORKFLOW_STATUSES.has(status) || (workflowTarget.kind === 'source' && status === 'complete')) return instance.id;
+	if (ACTIVE_WORKFLOW_STATUSES.has(status) || (target.kind === 'source' && status === 'complete')) return instance.id;
 
 	await instance.restart();
 	return instance.id;
