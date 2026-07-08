@@ -2,8 +2,6 @@ import type { WorkflowStep } from 'cloudflare:workers';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 
-const PDF_MIME = 'application/pdf';
-
 type PdfTextStatus = 'ok' | 'needs_ocr';
 
 interface ParsedPdf {
@@ -56,27 +54,16 @@ async function writeExtractedPdfText(
 export async function stagePdfTextExtraction(
 	env: CoreEnv,
 	step: WorkflowStep,
-	input: {
-		articleId: string | null;
-		hasContent?: boolean;
-		sourceStorageKey?: string | null;
-		fileType?: string | null;
-		workflowRunId: string;
-	},
-): Promise<PdfTextArtifact | null> {
-	if (input.hasContent || !input.articleId || !input.sourceStorageKey || input.fileType !== PDF_MIME) {
-		return null;
-	}
-	const request = { articleId: input.articleId, sourceStorageKey: input.sourceStorageKey, workflowRunId: input.workflowRunId };
-
+	input: { articleId: string; sourceStorageKey: string; workflowRunId: string },
+): Promise<PdfTextArtifact> {
 	try {
 		return await step.do(
 			'extract-pdf-text',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => writeExtractedPdfText(env, request),
+			() => writeExtractedPdfText(env, input),
 		);
 	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: request.articleId, error: String(error) });
+		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: input.articleId, error: String(error) });
 		return { status: 'failed', chars: 0, pages: 0 };
 	}
 }

@@ -19,6 +19,8 @@ const articlePlatforms: Partial<Record<string, ArticleProcessor>> = {
 	twitter: processTwitterArticle,
 };
 
+const PDF_MIME = 'application/pdf';
+
 function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	return {
 		id: data.url,
@@ -82,7 +84,7 @@ interface SourceArticleDraft {
 	youtubeTranscript?: YoutubeTranscript;
 }
 
-type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
+type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>> | null;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 type WorkflowStatusSnapshot = {
@@ -237,13 +239,15 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
-		const pdfTextArtifact = await stagePdfTextExtraction(this.env, step, {
-			articleId: target.kind === 'stored' && target.table === 'user_files' ? target.rowId : null,
-			hasContent: 'has_content' in article && !!article.has_content,
-			sourceStorageKey: article.storage_key,
-			fileType: article.file_type,
-			workflowRunId: workflowIdPart(event.instanceId),
-		});
+		const hasContent = 'has_content' in article && !!article.has_content;
+		const pdfTextArtifact =
+			target.kind === 'stored' && target.table === 'user_files' && !hasContent && article.storage_key && article.file_type === PDF_MIME
+				? await stagePdfTextExtraction(this.env, step, {
+						articleId: target.rowId,
+						sourceStorageKey: article.storage_key,
+						workflowRunId: workflowIdPart(event.instanceId),
+					})
+				: null;
 
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
 			hasStagedText: !!pdfTextArtifact?.extractedTextKey,
