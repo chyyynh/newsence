@@ -95,7 +95,6 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 		sourceUrl: `https://news.ycombinator.com/item?id=${item.id}`,
 		title,
 		markdown,
-		text: markdown,
 		metadata: {
 			author: item.author || null,
 			publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,

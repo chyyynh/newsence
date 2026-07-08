@@ -71,8 +71,6 @@ export interface NormalizedContent {
 	title: string | null;
 	/** HTML -> turndown markdown; platform APIs -> markdown/plain text. */
 	markdown: string;
-	/** Plain text or markdown-like text, depending on source API. */
-	text: string;
 	metadata: {
 		author: string | null;
 		publishedDate: string | null;

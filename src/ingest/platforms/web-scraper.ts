@@ -186,7 +186,6 @@ async function scrapeHtmlFromResponse(response: Response, url: string): Promise<
 		sourceUrl: finalUrl,
 		title: metadata.title,
 		markdown: content,
-		text: content,
 		metadata: {
 			author: metadata.author,
 			publishedDate: metadata.publishedDate,

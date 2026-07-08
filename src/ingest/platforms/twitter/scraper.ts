@@ -300,7 +300,6 @@ async function scrapeTwitterArticle(
 		sourceUrl: `https://x.com/i/status/${tweetId}`,
 		title,
 		markdown: md,
-		text: md,
 		metadata: {
 			author: article.author?.userName || null,
 			publishedDate: article.createdAt || null,
@@ -328,7 +327,6 @@ async function scrapeExternalLinkTweet(
 			sourceUrl: externalUrl,
 			title: linked.title || `@${tweet.author?.userName}: ${tweet.text.substring(0, 80)}`,
 			markdown: linked.markdown,
-			text: linked.text,
 			metadata: {
 				author: linked.metadata.author || tweet.author?.userName || null,
 				publishedDate: linked.metadata.publishedDate || tweet.createdAt,
@@ -389,7 +387,6 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 			sourceUrl: tweet.url,
 			title,
 			markdown: tweet.text,
-			text: tweet.text,
 			metadata: {
 				author: tweet.author?.userName || null,
 				publishedDate: tweet.createdAt,

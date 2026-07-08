@@ -215,7 +215,6 @@ export async function scrapeYouTube(
 		sourceUrl: `https://www.youtube.com/watch?v=${video.id}`,
 		title: snippet.title,
 		markdown: content,
-		text: content,
 		metadata: {
 			author: snippet.channelTitle,
 			publishedDate: snippet.publishedAt,
