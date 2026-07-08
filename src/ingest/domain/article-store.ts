@@ -36,6 +36,26 @@ export async function loadArticleForProcessing(
 	return result.rows[0] as ArticleForProcessing;
 }
 
+export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: string): Promise<boolean> {
+	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	const row = (
+		await db.query<{ complete: boolean }>(
+			`SELECT title_cn IS NOT NULL
+			        AND length(title_cn) > 0
+			        AND summary_cn IS NOT NULL
+			        AND length(summary_cn) > 0
+			        AND embedding IS NOT NULL AS complete
+			   FROM user_files
+			  WHERE id = $1
+			  LIMIT 1`,
+			[userFileId],
+		)
+	).rows[0];
+	if (!row) throw new Error(`Failed to fetch user_file ${userFileId}: not found`);
+	return row.complete;
+}
+
 interface PreparedArticleRecord {
 	url: string;
 	title: string;

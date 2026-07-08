@@ -5,6 +5,7 @@ import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
+import { isUserFileEnrichmentComplete } from './ingest/domain/article-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
 export { NewsenceMonitorWorkflow };
@@ -30,7 +31,8 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	// Product-domain writes live on the app Worker's DomainRpc binding.
 
 	/** Enqueue saved user_files for the enrichment workflow after app-side persistence. */
-	enqueueUserFileProcessing(userFileId: string) {
+	async enqueueUserFileProcessing(userFileId: string) {
+		if (await isUserFileEnrichmentComplete(this.env, userFileId)) return undefined;
 		return enqueueProcessing(this.env, { kind: 'userFile', rowId: userFileId });
 	}
 
