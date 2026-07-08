@@ -15,7 +15,7 @@ export type { ProcessorResult } from './ai-utils';
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
-export type ArticlePlatformAdapter = ArticleProcessor & {
+type ArticlePlatformAdapter = ArticleProcessor & {
 	prepareWorkflowData?: (
 		article: Article,
 		ctx: ProcessorContext,
@@ -57,16 +57,8 @@ export const articlePlatforms: Record<string, ArticlePlatformAdapter> = {
 	default: defaultProcessor,
 };
 
-export function getArticlePlatform(sourceType?: string | null): ArticlePlatformAdapter {
-	return articlePlatforms[sourceType ?? ''] ?? articlePlatforms.default;
-}
-
 export function platformIdentity(article: Article): string {
 	return article.platform_metadata?.type ?? article.source_type ?? 'default';
-}
-
-export function getArticlePlatformForArticle(article: Article): ArticlePlatformAdapter {
-	return getArticlePlatform(platformIdentity(article));
 }
 
 const ARTICLE_CATEGORIES = new Set<ArticleCategory>(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);

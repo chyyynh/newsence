@@ -15,7 +15,7 @@ import {
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
-import { buildProcessorUpdatePayload, getArticlePlatformForArticle, type ProcessorResult, platformIdentity } from './domain/processors';
+import { articlePlatforms, buildProcessorUpdatePayload, type ProcessorResult, platformIdentity } from './domain/processors';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
 import type { YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
@@ -232,6 +232,7 @@ type WorkflowRunContext = {
 	readYoutubeTranscript(): Promise<YoutubeTranscript | undefined>;
 };
 type WorkflowPersistenceInput = {
+	platform: (typeof articlePlatforms)[string];
 	article: Article;
 	result: ProcessorResult;
 	embedding: number[] | null;
@@ -300,7 +301,7 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 	try {
 		const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
 		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
-		await getArticlePlatformForArticle(fullArticle).persistWorkflowData?.(db, {
+		await input.platform.persistWorkflowData?.(db, {
 			youtubeHighlights: input.youtubeHighlights,
 			youtubeTranscript: draft.youtubeTranscript,
 		});
@@ -349,7 +350,7 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 				article_id: context.rowId,
 			});
 		if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
-		await getArticlePlatformForArticle(input.article).persistWorkflowData?.(db, {
+		await input.platform.persistWorkflowData?.(db, {
 			youtubeHighlights: input.youtubeHighlights,
 			youtubeTranscript: await context.readYoutubeTranscript(),
 		});
@@ -378,7 +379,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 			const sourceType = platformIdentity(article);
-			const platform = getArticlePlatformForArticle(article);
+			const platform = articlePlatforms[sourceType] ?? articlePlatforms.default;
 			const logContext =
 				context.target.kind === 'source' ? { url: article.url, table: context.table } : { article_id: context.rowId, table: context.table };
 
@@ -435,6 +436,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() => {
 					const input = {
+						platform,
 						article,
 						result: processorResult,
 						embedding,
