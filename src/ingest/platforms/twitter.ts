@@ -454,7 +454,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolea
 	}
 
 	const articleUrl = normalizeUrl(resolved.canonicalUrl);
-	const [existingArticle] = await getExistingArticlesByUrl(db, [articleUrl], 1);
+	const [existingArticle] = await getExistingArticlesByUrl(db, [articleUrl]);
 	if (existingArticle) {
 		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'stored', table: 'articles', rowId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
@@ -487,7 +487,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<bo
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
 
-	const [existing] = await getExistingArticlesByUrl(db, [firstUrl], 1);
+	const [existing] = await getExistingArticlesByUrl(db, [firstUrl]);
 
 	if (existing) {
 		const existingId = existing.id;

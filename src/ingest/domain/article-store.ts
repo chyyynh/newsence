@@ -204,20 +204,11 @@ type ExistingArticleRecord = {
 	summary_cn: string | null;
 };
 
-export async function getExistingArticlesByUrl(db: Client, urls: string[], batchSize = 50): Promise<ExistingArticleRecord[]> {
-	const records: ExistingArticleRecord[] = [];
-	if (urls.length === 0) return records;
-
-	for (let i = 0; i < urls.length; i += batchSize) {
-		const batch = urls.slice(i, i + batchSize);
-		const result = await db.query<ExistingArticleRecord>(
-			'SELECT id, url, source, source_type, summary_cn FROM articles WHERE url = ANY($1)',
-			[batch],
-		);
-		records.push(...result.rows);
-	}
-
-	return records;
+export async function getExistingArticlesByUrl(db: Client, urls: string[]): Promise<ExistingArticleRecord[]> {
+	if (urls.length === 0) return [];
+	return (
+		await db.query<ExistingArticleRecord>('SELECT id, url, source, source_type, summary_cn FROM articles WHERE url = ANY($1)', [urls])
+	).rows;
 }
 
 export async function reopenArticleForReprocessing(
