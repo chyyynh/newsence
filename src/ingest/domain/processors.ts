@@ -15,19 +15,16 @@ export type { ProcessorResult } from './ai-utils';
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
 
-type PlatformWorkflowPersistenceInput = {
-	articleId: string;
-	youtubeHighlights?: YouTubeHighlightsUpdate | null;
-	youtubeTranscript?: YoutubeTranscript | null;
-};
-
 export type ArticlePlatformAdapter = ArticleProcessor & {
 	prepareWorkflowData?: (
 		article: Article,
 		ctx: ProcessorContext,
 		youtubeTranscript?: YoutubeTranscript | null,
 	) => Promise<YouTubeHighlightsUpdate | null>;
-	persistWorkflowData?: (db: Client, input: PlatformWorkflowPersistenceInput) => Promise<void>;
+	persistWorkflowData?: (
+		db: Client,
+		input: { youtubeHighlights?: YouTubeHighlightsUpdate | null; youtubeTranscript?: YoutubeTranscript | null },
+	) => Promise<void>;
 };
 
 const defaultProcessor: ArticlePlatformAdapter = {

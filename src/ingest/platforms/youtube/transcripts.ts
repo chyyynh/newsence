@@ -37,41 +37,37 @@ const YouTubeHighlightsSchema = z.object({
 	highlights: z.array(YouTubeHighlightSchema).min(1),
 });
 
-export async function upsertYoutubeTranscript(db: Client, transcript: YoutubeTranscript): Promise<void> {
-	await db.query(
-		`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (video_id) DO UPDATE SET
-			transcript = EXCLUDED.transcript,
-			language = EXCLUDED.language,
-			chapters = EXCLUDED.chapters,
-			chapters_from_description = EXCLUDED.chapters_from_description,
-			fetched_at = EXCLUDED.fetched_at`,
-		[
-			transcript.videoId,
-			JSON.stringify(transcript.segments),
-			transcript.language,
-			transcript.chapters ? JSON.stringify(transcript.chapters) : null,
-			transcript.chaptersFromDescription ?? null,
-			new Date(),
-		],
-	);
-}
-
-async function saveYouTubeHighlights(db: Client, update: YouTubeHighlightsUpdate): Promise<void> {
-	await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
-		JSON.stringify(update.value),
-		update.value.generatedAt,
-		update.videoId,
-	]);
-}
-
 export async function persistYouTubeWorkflowData(
 	db: Client,
 	input: { transcript?: YoutubeTranscript | null; highlights?: YouTubeHighlightsUpdate | null },
 ): Promise<void> {
-	if (input.transcript) await upsertYoutubeTranscript(db, input.transcript);
-	if (input.highlights) await saveYouTubeHighlights(db, input.highlights);
+	if (input.transcript) {
+		await db.query(
+			`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (video_id) DO UPDATE SET
+				transcript = EXCLUDED.transcript,
+				language = EXCLUDED.language,
+				chapters = EXCLUDED.chapters,
+				chapters_from_description = EXCLUDED.chapters_from_description,
+				fetched_at = EXCLUDED.fetched_at`,
+			[
+				input.transcript.videoId,
+				JSON.stringify(input.transcript.segments),
+				input.transcript.language,
+				input.transcript.chapters ? JSON.stringify(input.transcript.chapters) : null,
+				input.transcript.chaptersFromDescription ?? null,
+				new Date(),
+			],
+		);
+	}
+	if (input.highlights) {
+		await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
+			JSON.stringify(input.highlights.value),
+			input.highlights.value.generatedAt,
+			input.highlights.videoId,
+		]);
+	}
 }
 
 export async function prepareYouTubeHighlights(

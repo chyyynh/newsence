@@ -301,7 +301,6 @@ async function persistSourceTarget(env: Env, context: WorkflowRunContext, input:
 		const articleId = await insertFinalSourceArticle(db, articleForInsert, updatePayload);
 		if (entities) await syncArticleEntities(db, articleId, entities, articleForInsert.source, platformMetadata);
 		await getArticlePlatformForArticle(fullArticle).persistWorkflowData?.(db, {
-			articleId,
 			youtubeHighlights: input.youtubeHighlights,
 			youtubeTranscript: draft.youtubeTranscript,
 		});
@@ -351,7 +350,6 @@ async function persistStoredTarget(env: Env, context: WorkflowRunContext, input:
 			});
 		if (!context.userFileId && entities) await syncArticleEntities(db, context.rowId, entities, input.article.source, platformMetadata);
 		await getArticlePlatformForArticle(input.article).persistWorkflowData?.(db, {
-			articleId: context.rowId,
 			youtubeHighlights: input.youtubeHighlights,
 			youtubeTranscript: await context.readYoutubeTranscript(),
 		});
