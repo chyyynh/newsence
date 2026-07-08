@@ -2,12 +2,11 @@
 // OKF (Open Knowledge Format v0.1) collection export — issue #197 Phase 1.
 // Streams a collection as a tar.gz bundle of markdown + YAML frontmatter:
 // index.md (okf_version) / articles/*.md / entities/*.md / log.md.
-// Entity quality gate reuses @entities/normalize — the same rules
-// the ingest pipeline stores with, so bundles never diverge from the DB gate.
+// Entity links are read from article_entities, which the ingest pipeline already
+// normalizes before storage.
 // ─────────────────────────────────────────────────────────────
 
 import type { ExportCollectionOkfInput } from '@core-rpc/contracts';
-import { canonicalizeEntityName, entityExtractionExclusionNames, GENERIC_ENTITY_CANONICALS } from '@entities/normalize';
 import { Client } from 'pg';
 
 type OkfFile = { path: string; content: string };
@@ -41,26 +40,13 @@ type ArticleRow = {
 type EntityLinkRow = {
 	article_id: string;
 	id: string;
-	canonical_name: string;
 	name: string;
 	name_cn: string | null;
 	type: string;
 	article_count: number;
 };
 
-type ExportQuality = {
-	persistedLinks: number;
-	exportedLinks: number;
-	filteredGeneric: number;
-	filteredSelfSource: number;
-	filteredTooShort: number;
-	articlesWithoutEntityLinks: number;
-	unknownTypes: Record<string, number>;
-};
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ASCII_TICKER_ENTITY_RE = /^\$[a-z]{1,5}$/i;
-const OKF_ENTITY_TYPES = new Set(['person', 'organization', 'product', 'technology', 'event', 'location']);
 const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
 
@@ -110,10 +96,9 @@ async function buildCollectionOkfBundle(
 	const articles = await readCollectionArticles(db, collection.id, input.viewerId);
 	const linkableArticles = articles.filter((article) => article.kind === 'article');
 	const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
-	const { links: exported, quality } = gateEntityLinks(links, linkableArticles);
 	return {
 		slug: uniqueSlug(collection.name, collection.id),
-		files: renderOkfFiles(collection, articles, exported, quality),
+		files: renderOkfFiles(collection, articles, links),
 	};
 }
 
@@ -165,7 +150,7 @@ async function readCollectionArticles(db: Client, collectionId: string, viewerId
 async function readArticleEntityLinks(db: Client, articles: ArticleRow[]): Promise<EntityLinkRow[]> {
 	const result = await db.query<EntityLinkRow>(
 		`SELECT
-		   ae.article_id::text, e.id::text, e.canonical_name, e.name, e.name_cn, e.type, e.article_count
+		   ae.article_id::text, e.id::text, e.name, e.name_cn, e.type, e.article_count
 		 FROM article_entities ae
 		 JOIN entities e ON e.id = ae.entity_id
 		 WHERE ae.article_id = ANY($1::uuid[])
@@ -175,52 +160,7 @@ async function readArticleEntityLinks(db: Client, articles: ArticleRow[]): Promi
 	return result.rows;
 }
 
-/** Export-time second line of defense; same primitives as the storage gate. */
-function gateEntityLinks(links: EntityLinkRow[], articles: ArticleRow[]): { links: EntityLinkRow[]; quality: ExportQuality } {
-	const exclusionsByArticle = new Map(
-		articles.map((article) => [
-			article.id,
-			new Set(entityExtractionExclusionNames(article.source, article.platform_metadata).map(canonicalizeEntityName).filter(Boolean)),
-		]),
-	);
-	const quality: ExportQuality = {
-		persistedLinks: links.length,
-		exportedLinks: 0,
-		filteredGeneric: 0,
-		filteredSelfSource: 0,
-		filteredTooShort: 0,
-		articlesWithoutEntityLinks: 0,
-		unknownTypes: {},
-	};
-	const exported = links.filter((link) => {
-		const canonical = link.canonical_name;
-		if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) {
-			quality.filteredTooShort += 1;
-			return false;
-		}
-		if (GENERIC_ENTITY_CANONICALS.has(canonical) || ASCII_TICKER_ENTITY_RE.test(canonical)) {
-			quality.filteredGeneric += 1;
-			return false;
-		}
-		if (exclusionsByArticle.get(link.article_id)?.has(canonical)) {
-			quality.filteredSelfSource += 1;
-			return false;
-		}
-		quality.exportedLinks += 1;
-		if (!OKF_ENTITY_TYPES.has(link.type)) quality.unknownTypes[link.type] = (quality.unknownTypes[link.type] ?? 0) + 1;
-		return true;
-	});
-	const linkedArticleIds = new Set(exported.map((link) => link.article_id));
-	quality.articlesWithoutEntityLinks = articles.filter((article) => !linkedArticleIds.has(article.id)).length;
-	return { links: exported, quality };
-}
-
-function* renderOkfFiles(
-	collection: CollectionRow,
-	articles: ArticleRow[],
-	links: EntityLinkRow[],
-	quality: ExportQuality,
-): Iterable<OkfFile> {
+function* renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], links: EntityLinkRow[]): Iterable<OkfFile> {
 	const articlePaths = assignPaths(
 		articles.map((article) => ({ id: resourceKey(article), label: article.title || article.title_cn || article.id })),
 		'articles',
@@ -267,7 +207,7 @@ function* renderOkfFiles(
 			content: renderEntity(entity, linksByEntityId.get(entity.id) ?? [], articles, articlePaths),
 		};
 	}
-	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size, quality) };
+	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size) };
 }
 
 function renderRootIndex(
@@ -367,23 +307,14 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: A
 	]);
 }
 
-function renderLog(collection: CollectionRow, resourceCount: number, entityCount: number, quality: ExportQuality): string {
+function renderLog(collection: CollectionRow, resourceCount: number, entityCount: number): string {
 	const exportedAt = new Date().toISOString();
-	const unknownTypes = Object.entries(quality.unknownTypes).map(([type, count]) => `  * ${type}: ${count}`);
 	return compactMarkdown([
 		'# Directory Update Log',
 		`## ${exportedAt.slice(0, 10)}`,
 		`* **Export**: OKF bundle for "${collection.name}" — ${resourceCount} resources, ${entityCount} entity pages.`,
 		`* **Collection id**: ${collection.id} (visibility: ${collection.visibility}). Exported at ${exportedAt}.`,
-		'* **Entity quality gate** (shared with the ingest storage gate):',
-		`  * Persisted links read: ${quality.persistedLinks}`,
-		`  * Exported links: ${quality.exportedLinks}`,
-		`  * Filtered self-source/platform-alias links: ${quality.filteredSelfSource}`,
-		`  * Filtered generic-token links: ${quality.filteredGeneric}`,
-		`  * Filtered too-short links: ${quality.filteredTooShort}`,
-		`  * Articles without exported entity links: ${quality.articlesWithoutEntityLinks}`,
-		unknownTypes.length ? '* **Non-standard entity types (OKF consumers must tolerate unknown types)**:' : '',
-		...unknownTypes,
+		'* **Entity links**: exported from stored `article_entities` links.',
 		'* **Producer notes**: bilingual fields (`title_cn`, `description_cn`, `name_cn`) and `keywords`/`category`/`source` are extension frontmatter keys. `category` prefers the stored classification, falling back to the known category tag.',
 	]);
 }
