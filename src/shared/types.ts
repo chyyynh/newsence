@@ -68,7 +68,6 @@ export interface NormalizedContent {
 		publishedDate: string | null;
 		siteName: string | null;
 		description: string | null;
-		ogImageUrl: string | null;
 	};
 	platformMetadata?: PlatformMetadata;
 	youtubeTranscript?: YoutubeTranscript;

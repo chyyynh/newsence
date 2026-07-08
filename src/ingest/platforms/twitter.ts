@@ -318,7 +318,6 @@ async function scrapeTwitterArticle(
 			publishedDate: article.createdAt || null,
 			siteName: 'Twitter',
 			description: summary,
-			ogImageUrl: article.cover_media_img_url || article.author?.profilePicture || null,
 		},
 		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
 	};
@@ -340,7 +339,6 @@ function buildExternalLinkTweet(
 			publishedDate: tweet.createdAt,
 			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
 			description: tweetText || tweet.text,
-			ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 		},
 		platformMetadata: buildTweetPlatformMetadata(tweet, {
 			media,
@@ -396,7 +394,6 @@ async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 				publishedDate: tweet.createdAt,
 				siteName: 'Twitter',
 				description: tweet.text,
-				ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 			},
 			platformMetadata: buildTweetPlatformMetadata(tweet),
 		},

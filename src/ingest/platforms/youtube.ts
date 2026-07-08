@@ -239,7 +239,6 @@ async function scrapeYouTube(
 			publishedDate: snippet.publishedAt,
 			siteName: 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
-			ogImageUrl: thumbnailUrl,
 		},
 		platformMetadata: {
 			type: 'youtube',
