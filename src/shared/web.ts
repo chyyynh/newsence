@@ -145,20 +145,3 @@ function extractYouTubeId(url: string): string | null {
 			: null;
 	return pathId?.match(YOUTUBE_VIDEO_ID_RE)?.[0] ?? null;
 }
-
-export function decodeHtmlEntities(str: string): string {
-	return str
-		.replace(/&quot;/g, '"')
-		.replace(/&#x27;|&#39;/g, "'")
-		.replace(/&#x2F;/g, '/')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&nbsp;/g, ' ')
-		.replace(/&amp;/g, '&');
-}
-
-export function htmlToText(str: string): string {
-	return decodeHtmlEntities(str.replace(/<[^>]*>/g, ' '))
-		.replace(/\s+/g, ' ')
-		.trim();
-}
