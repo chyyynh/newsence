@@ -130,7 +130,7 @@ export function normalizeUrl(url: string): string {
 	return parsed.toString();
 }
 
-function extractYouTubeId(url: string): string | null {
+export function extractYouTubeId(url: string): string | null {
 	const parsed = parseUrl(url);
 	if (!parsed) return null;
 

@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
-import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
+import type { Article, NormalizedContent, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
+import { extractYouTubeId } from '@core-shared/web';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceArticle,
@@ -10,11 +11,12 @@ import {
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
-import { processHackerNewsArticle } from './platforms/hackernews';
+import { extractHackerNewsId, processHackerNewsArticle, scrapeHackerNews } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
 import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
-import { processTwitterArticle } from './platforms/twitter';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
+import { extractTweetId, processTwitterArticle, scrapeTweet } from './platforms/twitter';
+import { scrapeWebPage } from './platforms/web-scraper';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights, scrapeYouTube } from './platforms/youtube';
 
 const PDF_MIME = 'application/pdf';
 
@@ -118,13 +120,87 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact | null): Promise<Article> {
+async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<NormalizedContent | null> {
+	const parsed = new URL(url);
+	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http(s) URLs are allowed');
+	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
+
+	const videoId = extractYouTubeId(url);
+	if (videoId) return scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
+
+	const tweetId = extractTweetId(url);
+	if (tweetId) return scrapeTweet(tweetId, env.KAITO_API_KEY);
+
+	const hackerNewsId = extractHackerNewsId(url);
+	if (hackerNewsId) return scrapeHackerNews(hackerNewsId);
+
+	return scrapeWebPage(url);
+}
+
+function applyAcquiredContent(article: Article, acquired: NormalizedContent | null): Article {
+	if (!acquired) return article;
+	const acquiredTitle = acquired.title?.trim();
+	return {
+		...article,
+		title: acquiredTitle || article.title,
+		summary: acquired.metadata.description ?? article.summary,
+		content: acquired.markdown || article.content,
+		source: acquired.metadata.siteName ?? acquired.metadata.author ?? article.source,
+		published_date: acquired.metadata.publishedDate ?? article.published_date,
+		source_type: acquired.platformMetadata?.type ?? article.source_type,
+		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
+		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
+	};
+}
+
+function acquiredContentUpdatePayload(acquired: NormalizedContent | null): Record<string, unknown> {
+	if (!acquired) return {};
+	const acquiredTitle = acquired.title?.trim();
+	return {
+		...(acquiredTitle ? { title: acquiredTitle } : {}),
+		...(acquired.metadata.siteName || acquired.metadata.author ? { source: acquired.metadata.siteName ?? acquired.metadata.author } : {}),
+		...(acquired.metadata.publishedDate ? { published_date: acquired.metadata.publishedDate } : {}),
+		...(acquired.metadata.description !== null ? { summary: acquired.metadata.description } : {}),
+		content: acquired.markdown,
+		...(acquired.platformMetadata
+			? {
+					source_type: acquired.platformMetadata.type,
+					platform_metadata: acquired.platformMetadata,
+				}
+			: {}),
+	};
+}
+
+async function acquireSavedUrlContent(env: CoreEnv, article: Article): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(article.url, env);
+	return new Response(JSON.stringify(acquired)).body!;
+}
+
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<NormalizedContent | null> {
+	const artifact = await step.do(
+		'acquire-content',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => acquireSavedUrlContent(env, article),
+	);
+	return (await new Response(artifact).json()) as NormalizedContent | null;
+}
+
+async function loadFullTargetArticle(
+	env: CoreEnv,
+	target: WorkflowTarget,
+	pdfTextArtifact: PdfTextArtifact | null,
+	acquiredContent: NormalizedContent | null = null,
+	baseArticle?: Article,
+): Promise<Article> {
 	let article: Article;
-	if (target.kind === 'source') {
+	if (baseArticle) {
+		article = baseArticle;
+	} else if (target.kind === 'source') {
 		article = sourceRecordToArticle(target.draft.article);
 	} else {
 		article = await loadArticleForProcessing(env, storedTargetTable(target), target.rowId);
 	}
+	article = applyAcquiredContent(article, acquiredContent);
 	const extractedPdfText = pdfTextArtifact?.text?.trim() || null;
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
 }
@@ -136,6 +212,7 @@ async function persistWorkflowTarget(
 	result: ProcessorResult,
 	embedding: number[] | null,
 	pdfTextArtifact: PdfTextArtifact | null,
+	acquiredContent: NormalizedContent | null,
 	paperEnrichment: PaperMetadata | null,
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
@@ -170,12 +247,10 @@ async function persistWorkflowTarget(
 				...(extraction ? { extraction } : {}),
 				...(paperEnrichment ? { type: 'paper', data: paperEnrichment } : {}),
 			};
-			const updatePayload = buildProcessorUpdatePayload(
-				article,
-				finalResult,
-				embedding,
-				Object.keys(metadataPatch).length ? metadataPatch : undefined,
-			);
+			const updatePayload = {
+				...acquiredContentUpdatePayload(acquiredContent),
+				...buildProcessorUpdatePayload(article, finalResult, embedding, Object.keys(metadataPatch).length ? metadataPatch : undefined),
+			};
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 
@@ -199,7 +274,7 @@ async function persistWorkflowTarget(
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { target: WorkflowTarget }> {
 	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
 		const target = event.payload.target;
-		const article = await step.do(
+		const initialArticle = await step.do(
 			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
@@ -207,6 +282,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				return loadArticleForProcessing(this.env, storedTargetTable(target), target.rowId, true);
 			},
 		);
+		const initialHasContent = 'has_content' in initialArticle && !!initialArticle.has_content;
+		const acquiredContent =
+			target.kind === 'userFile' && !initialHasContent && !initialArticle.storage_key && initialArticle.url
+				? await stageSavedUrlAcquisition(this.env, step, initialArticle)
+				: null;
+		const article = applyAcquiredContent(initialArticle, acquiredContent);
 		const metadataType = article.platform_metadata?.type;
 		const sourceType =
 			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
@@ -225,17 +306,24 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, article, {
 			hasStagedText: !!pdfTextArtifact?.text,
-			loadContent: async () => (await loadFullTargetArticle(this.env, target, pdfTextArtifact)).content,
+			loadContent: async () =>
+				(await loadFullTargetArticle(this.env, target, pdfTextArtifact, acquiredContent, acquiredContent ? article : undefined)).content,
 		});
 
 		const processorResult = await step.do(
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
 			async () => {
-				const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
-				if (sourceType === 'hackernews') return processHackerNewsArticle(article, this.env);
-				if (sourceType === 'twitter') return processTwitterArticle(article, this.env);
-				return mergeArticleAnalysis(article, await generateArticleAnalysis(article, this.env));
+				const fullArticle = await loadFullTargetArticle(
+					this.env,
+					target,
+					pdfTextArtifact,
+					acquiredContent,
+					acquiredContent ? article : undefined,
+				);
+				if (sourceType === 'hackernews') return processHackerNewsArticle(fullArticle, this.env);
+				if (sourceType === 'twitter') return processTwitterArticle(fullArticle, this.env);
+				return mergeArticleAnalysis(fullArticle, await generateArticleAnalysis(fullArticle, this.env));
 			},
 		);
 
@@ -243,19 +331,30 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			'generate-embedding',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
-				const article = await loadFullTargetArticle(this.env, target, pdfTextArtifact);
+				const fullArticle = await loadFullTargetArticle(
+					this.env,
+					target,
+					pdfTextArtifact,
+					acquiredContent,
+					acquiredContent ? article : undefined,
+				);
 				const text = prepareArticleTextForEmbedding({
-					title: article.title,
-					summary: processorResult.updateData.summary ?? article.summary,
-					content: processorResult.updateData.content ?? article.content,
-					tags: processorResult.updateData.tags ?? article.tags,
-					keywords: processorResult.updateData.keywords ?? article.keywords,
+					title: fullArticle.title,
+					summary: processorResult.updateData.summary ?? fullArticle.summary,
+					content: processorResult.updateData.content ?? fullArticle.content,
+					tags: processorResult.updateData.tags ?? fullArticle.tags,
+					keywords: processorResult.updateData.keywords ?? fullArticle.keywords,
 				});
 				return text && this.env.AI ? generateArticleEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
 			},
 		);
 
-		const youtubeTranscript = sourceType === 'youtube' && target.kind === 'source' ? target.draft.youtubeTranscript : undefined;
+		const youtubeTranscript =
+			sourceType === 'youtube'
+				? target.kind === 'source'
+					? target.draft.youtubeTranscript
+					: acquiredContent?.youtubeTranscript
+				: undefined;
 		const youtubeHighlights =
 			sourceType === 'youtube'
 				? await step.do(
@@ -271,10 +370,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				persistWorkflowTarget(
 					this.env,
 					target,
-					target.kind === 'source' || pdfTextArtifact?.text ? await loadFullTargetArticle(this.env, target, pdfTextArtifact) : article,
+					target.kind === 'source' || pdfTextArtifact?.text || acquiredContent
+						? await loadFullTargetArticle(this.env, target, pdfTextArtifact, acquiredContent, acquiredContent ? article : undefined)
+						: article,
 					processorResult,
 					embedding,
 					pdfTextArtifact,
+					acquiredContent,
 					paperEnrichment,
 					youtubeTranscript,
 					youtubeHighlights,

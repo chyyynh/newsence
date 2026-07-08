@@ -16,7 +16,7 @@ const MIN_PDF_CHARS_PER_PAGE = 20;
 
 let pdfParserReady = false;
 
-async function parsePdf(bytes: Uint8Array): Promise<PdfTextArtifact> {
+export async function parsePdfBytes(bytes: Uint8Array): Promise<PdfTextArtifact> {
 	if (!pdfParserReady) {
 		initSync({ module: wasmModule });
 		pdfParserReady = true;
@@ -33,7 +33,7 @@ async function parsePdf(bytes: Uint8Array): Promise<PdfTextArtifact> {
 async function extractPdfText(env: CoreEnv, input: { sourceStorageKey: string }): Promise<ReadableStream<Uint8Array>> {
 	const obj = await env.R2.get(input.sourceStorageKey);
 	if (!obj) throw new Error(`PDF source object missing: ${input.sourceStorageKey}`);
-	const { text, status, chars, pages } = await parsePdf(new Uint8Array(await obj.arrayBuffer()));
+	const { text, status, chars, pages } = await parsePdfBytes(new Uint8Array(await obj.arrayBuffer()));
 	return new Response(JSON.stringify({ status, chars, pages, text } satisfies PdfTextArtifact)).body!;
 }
 

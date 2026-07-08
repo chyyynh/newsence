@@ -177,7 +177,7 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ se
 	return { segments, language: null };
 }
 
-async function scrapeYouTube(
+export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
 	options: YouTubeScrapeOptions = {},

@@ -77,7 +77,7 @@ function isNonArticleLinkUrl(url: string): boolean {
 	return false;
 }
 
-function extractTweetId(url: string): string | null {
+export function extractTweetId(url: string): string | null {
 	let parsed: URL;
 	try {
 		parsed = new URL(url);
@@ -400,6 +400,21 @@ async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		canonicalUrl: tweet.url,
 		eventText: tweetText,
 	};
+}
+
+export async function scrapeTweet(tweetId: string, apiKey: string): Promise<NormalizedContent> {
+	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
+	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
+		headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	}
+	const data = JSON.parse(await readTextWithLimit(response)) as { tweets?: Tweet[]; status: string; msg?: string };
+	const tweet = data.tweets?.[0];
+	if (!tweet) throw new Error(`Twitter API: Tweet not found (status=${data.status})`);
+	return (await resolveTweetContent(tweet, apiKey)).scraped;
 }
 
 async function enqueueTwitterArticle(
