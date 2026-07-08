@@ -6,12 +6,14 @@ import type { WorkflowStep } from 'cloudflare:workers';
 import { PDF_MIME } from '@core-shared/mime';
 import type { PaperMetadata, PaperReference } from '@core-shared/platform-metadata';
 import { fetchWithTimeout } from '@core-shared/web';
-import { syncPaperGraph } from '@papers/sync';
+import type { Client } from 'pg';
+import { Client as PgClient } from 'pg';
 import { detectPaperId, extractPaperTitle, type PaperId } from './detect';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_REFERENCES = 50;
+const MAX_EDGES = 50;
 
 const PAPER_FIELDS = [
 	'title',
@@ -60,6 +62,18 @@ interface S2Paper {
 interface S2MatchResponse {
 	data?: S2Paper[];
 }
+type PaperRow = {
+	openAlexId: string;
+	doi: string | null;
+	articleId: string | null;
+	title: string | null;
+	authors: string[];
+	venue: string | null;
+	year: number | null;
+	abstract: string | null;
+	citedByCount: number | null;
+	oaPdfUrl: string | null;
+};
 
 async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
@@ -132,6 +146,87 @@ function normalizePaper(paper: S2Paper, arxivHint?: string): PaperMetadata {
 		landingPageUrl: doi ? `https://doi.org/${doi}` : undefined,
 		references: normalizeReferences(paper.references),
 	};
+}
+
+async function upsertIngestedPaper(db: Client, row: PaperRow): Promise<string> {
+	const result = await db.query<{ id: string }>(
+		`INSERT INTO papers (openalex_id, doi, article_id, title, authors, venue, year, abstract, cited_by_count, oa_pdf_url)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 ON CONFLICT (openalex_id) DO UPDATE SET
+		   doi = COALESCE(EXCLUDED.doi, papers.doi),
+		   article_id = COALESCE(EXCLUDED.article_id, papers.article_id),
+		   title = COALESCE(EXCLUDED.title, papers.title),
+		   authors = CASE WHEN cardinality(EXCLUDED.authors) > 0 THEN EXCLUDED.authors ELSE papers.authors END,
+		   venue = COALESCE(EXCLUDED.venue, papers.venue),
+		   year = COALESCE(EXCLUDED.year, papers.year),
+		   abstract = COALESCE(EXCLUDED.abstract, papers.abstract),
+		   cited_by_count = COALESCE(EXCLUDED.cited_by_count, papers.cited_by_count),
+		   oa_pdf_url = COALESCE(EXCLUDED.oa_pdf_url, papers.oa_pdf_url),
+		   updated_at = NOW()
+		 RETURNING id`,
+		[row.openAlexId, row.doi, row.articleId, row.title, row.authors, row.venue, row.year, row.abstract, row.citedByCount, row.oaPdfUrl],
+	);
+	const id = result.rows[0]?.id;
+	if (!id) throw new Error(`Failed to upsert paper ${row.openAlexId}`);
+	return id;
+}
+
+async function upsertReferenceNode(db: Client, ref: PaperReference): Promise<string | null> {
+	if (!ref.openAlexId) return null;
+	const result = await db.query<{ id: string }>(
+		`INSERT INTO papers (openalex_id, doi, title, authors, year)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (openalex_id) DO UPDATE SET
+		   doi = COALESCE(EXCLUDED.doi, papers.doi),
+		   title = COALESCE(papers.title, EXCLUDED.title),
+		   year = COALESCE(papers.year, EXCLUDED.year),
+		   updated_at = NOW()
+		 RETURNING id`,
+		[ref.openAlexId, ref.doi ?? null, ref.title ?? null, ref.author ? [ref.author] : [], ref.year ?? null],
+	);
+	return result.rows[0]?.id ?? null;
+}
+
+async function syncPaperGraph(env: Env, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
+	if (!paper.openAlexId) return null;
+
+	const db = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
+	await db.connect();
+	await db.query('BEGIN');
+	try {
+		const fromId = await upsertIngestedPaper(db, {
+			openAlexId: paper.openAlexId,
+			doi: paper.doi ?? null,
+			articleId,
+			title: paper.title ?? null,
+			authors: paper.authors ?? [],
+			venue: paper.venue ?? null,
+			year: paper.year ?? null,
+			abstract: paper.abstract ?? null,
+			citedByCount: paper.citedByCount ?? null,
+			oaPdfUrl: paper.oaPdfUrl ?? null,
+		});
+
+		const refs = (paper.references ?? []).filter((ref) => ref.openAlexId).slice(0, MAX_EDGES);
+		let edges = 0;
+		for (let ordinal = 0; ordinal < refs.length; ordinal++) {
+			const toId = await upsertReferenceNode(db, refs[ordinal]);
+			if (!toId || toId === fromId) continue;
+			await db.query(
+				`INSERT INTO paper_references (from_paper_id, to_paper_id, ordinal)
+				 VALUES ($1, $2, $3) ON CONFLICT (from_paper_id, to_paper_id) DO NOTHING`,
+				[fromId, toId, ordinal],
+			);
+			edges++;
+		}
+		await db.query('COMMIT');
+		return { edges };
+	} catch (error) {
+		await db
+			.query('ROLLBACK')
+			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'paper graph rollback failed', error: String(rollbackError) }));
+		throw error;
+	}
 }
 
 function idPath(id: PaperId): string {

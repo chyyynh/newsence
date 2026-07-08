@@ -21,7 +21,6 @@
 			"@core-shared/*": ["./src/shared/*"],
 			"@entities/*": ["./src/entities/*"],
 			"@ingest/*": ["./src/ingest/*"],
-			"@papers/*": ["./src/papers/*"],
 			"@chat/*": ["./src/chat/*"],
 			"@entry/*": ["./src/entrypoints/*"]
 		},
