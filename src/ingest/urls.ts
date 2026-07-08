@@ -28,26 +28,35 @@ type IngestResult = {
 type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
 export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
 
-type UserFileUrlResultRow = Pick<
-	ExistingUrlUserFile,
-	'id' | 'title' | 'title_cn' | 'summary_cn' | 'tags' | 'platform_type' | 'og_image_url'
->;
-
-function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instanceId?: string; alreadyExists: boolean }): IngestResult {
-	return {
+function buildUserFileResult(
+	url: string,
+	row: {
+		id: string;
+		title: string;
+		title_cn: string | null;
+		summary_cn: string | null;
+		tags: string[] | null;
+		platform_type: string | null;
+		og_image_url: string | null;
+	},
+	args: { instanceId?: string; alreadyExists: boolean; resourceKind?: 'url' | 'blob' },
+): IngestResult {
+	const resourceKind = args.resourceKind ?? 'url';
+	const result: IngestResult = {
 		url,
 		userFileId: row.id,
 		instanceId: args.instanceId,
-		resourceKind: 'url',
+		resourceKind,
 		originType: 'saved_url',
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
-		platformType: row.platform_type || 'web',
 		alreadyExists: args.alreadyExists,
 	};
+	if (resourceKind === 'url') result.platformType = row.platform_type || 'web';
+	return result;
 }
 
 async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
@@ -55,23 +64,7 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 		row.title_cn && row.summary_cn && row.has_embedding
 			? undefined
 			: await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db });
-	if (row.resource_kind === 'blob') {
-		return {
-			url,
-			userFileId: row.id,
-			instanceId,
-			resourceKind: 'blob',
-			originType: 'saved_url',
-			title: row.title,
-			titleCn: row.title_cn || undefined,
-			summaryCn: row.summary_cn || undefined,
-			tags: row.tags ?? undefined,
-			ogImageUrl: row.og_image_url,
-			alreadyExists: true,
-		};
-	}
-
-	return buildUrlResult(url, row, { instanceId, alreadyExists: true });
+	return buildUserFileResult(url, row, { instanceId, alreadyExists: true, resourceKind: row.resource_kind === 'blob' ? 'blob' : 'url' });
 }
 
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
@@ -117,7 +110,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 				{ db },
 			)
 		: undefined;
-	return buildUrlResult(url, row, { instanceId, alreadyExists: !row.created });
+	return buildUserFileResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 
 export async function ingestUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<IngestUrlsOutcome> {

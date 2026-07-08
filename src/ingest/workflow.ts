@@ -15,7 +15,8 @@ import {
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
-import { articlePlatforms, buildProcessorUpdatePayload, type ProcessorResult, platformIdentity } from './domain/processors';
+import type { ProcessorResult } from './domain/ai-utils';
+import { articlePlatforms, buildProcessorUpdatePayload, platformIdentity } from './domain/processors';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper/semanticscholar';
 import { type PdfTextTempResult, pdfTextExtractionMetadata, readPdfTextTemp, stagePdfTextExtraction } from './platforms/pdf';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights, type YouTubeHighlightsUpdate } from './platforms/youtube/transcripts';
@@ -26,16 +27,12 @@ type StoredWorkflowTarget =
 
 export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
-export interface SourceArticleDraft {
+interface SourceArticleDraft {
 	article: InsertArticleData;
 	youtubeTranscript?: YoutubeTranscript;
 }
 
-export type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
-
-type EnqueueProcessingOptions = {
-	db?: Client;
-};
+type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const RETRY_BATCH_SIZE = 100;
@@ -100,7 +97,7 @@ export async function handleRetryCron(env: Env): Promise<void> {
 	});
 }
 
-export async function enqueueProcessing(env: Env, target: ProcessingTarget, options: EnqueueProcessingOptions = {}): Promise<string> {
+export async function enqueueProcessing(env: Env, target: ProcessingTarget, options: { db?: Client } = {}): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
 	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
 	return enqueueUserFileWorkflow(env, target.userFileId, options.db);

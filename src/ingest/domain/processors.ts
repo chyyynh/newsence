@@ -1,11 +1,8 @@
 import type { ArticleCategory, PlatformMetadata } from '@core-shared/platform-metadata';
 import type { Article } from '@core-shared/types';
-import { type ArticleProcessor, generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './ai-utils';
-
-export type { ProcessorResult } from './ai-utils';
-
 import { HackerNewsProcessor } from '../platforms/hackernews/scraper';
 import { TwitterProcessor } from '../platforms/twitter/processor';
+import { type ArticleProcessor, generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './ai-utils';
 
 const defaultProcessor: ArticleProcessor = {
 	async process(article, ctx) {
