@@ -229,7 +229,6 @@ type WorkflowRunContext = {
 	rowId: string | null;
 	userFileId: string | null;
 	readSourceDraft(): Promise<SourceArticleDraft>;
-	readYoutubeTranscript(): Promise<YoutubeTranscript | undefined>;
 };
 type WorkflowPersistenceInput = {
 	article: Article;
@@ -251,20 +250,12 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 		sourceDraft = await obj.json<SourceArticleDraft>();
 		return sourceDraft;
 	};
-	const readYoutubeTranscript = async (): Promise<YoutubeTranscript | undefined> =>
-		target.kind === 'source'
-			? (await readSourceDraft()).youtubeTranscript
-			: target.kind === 'userFile'
-				? target.youtubeTranscript
-				: undefined;
-
 	return {
 		target,
 		table: target.kind === 'userFile' ? 'user_files' : 'articles',
 		rowId: target.kind === 'article' ? target.articleId : target.kind === 'userFile' ? target.userFileId : null,
 		userFileId: target.kind === 'userFile' ? target.userFileId : null,
 		readSourceDraft,
-		readYoutubeTranscript,
 	};
 }
 
@@ -421,7 +412,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			const youtubeTranscript = sourceType === 'youtube' ? await context.readYoutubeTranscript() : undefined;
+			let youtubeTranscript: YoutubeTranscript | undefined;
+			if (sourceType === 'youtube') {
+				if (context.target.kind === 'source') youtubeTranscript = (await context.readSourceDraft()).youtubeTranscript;
+				else if (context.target.kind === 'userFile') youtubeTranscript = context.target.youtubeTranscript;
+			}
 			const youtubeHighlights =
 				sourceType === 'youtube'
 					? await step.do(
