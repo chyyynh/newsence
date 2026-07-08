@@ -1,13 +1,5 @@
 import { generateObject } from '@core-ai/embedding';
-import type { TwitterMedia } from '@core-shared/platform-metadata';
-import {
-	type Article,
-	ENTITY_TYPES,
-	type Tweet,
-	type TwitterSourceEventDraft,
-	type TwitterSourceEventInputType,
-	type WorkflowAttachment,
-} from '@core-shared/types';
+import { type Article, ENTITY_TYPES, type Tweet, type WorkflowAttachment } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import type { Client } from 'pg';
 import { z } from 'zod';
@@ -23,6 +15,8 @@ import { extractTweetMedia, stripTweetUrls } from './scraper';
 
 type UpdateData = ProcessorResult['updateData'];
 
+type TwitterSourceEventDraft = Extract<WorkflowAttachment, { kind: 'twitter-source-event' }>['event'];
+type TwitterSourceEventInputType = TwitterSourceEventDraft['eventType'];
 type TwitterSourceEventType = TwitterSourceEventInputType | 'quote' | 'retweet';
 
 async function upsertTwitterSourceEvent(
@@ -32,7 +26,7 @@ async function upsertTwitterSourceEvent(
 		articleId: string | null;
 		eventType: TwitterSourceEventInputType;
 		text?: string | null;
-		media?: TwitterMedia[];
+		media?: TwitterSourceEventDraft['media'];
 		raw?: unknown;
 	},
 ): Promise<void> {

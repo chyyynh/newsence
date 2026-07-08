@@ -135,16 +135,6 @@ export interface Tweet {
 	retweetedBy?: RetweetedByData;
 }
 
-export type TwitterSourceEventInputType = 'tweet' | 'thread' | 'share' | 'article';
-
-export type TwitterSourceEventDraft = {
-	tweet: Tweet;
-	eventType: TwitterSourceEventInputType;
-	text?: string | null;
-	media?: TwitterMedia[];
-	raw?: unknown;
-};
-
 export type WorkflowAttachment =
 	| {
 			kind: 'youtube-transcript';
@@ -152,5 +142,11 @@ export type WorkflowAttachment =
 	  }
 	| {
 			kind: 'twitter-source-event';
-			event: TwitterSourceEventDraft;
+			event: {
+				tweet: Tweet;
+				eventType: 'tweet' | 'thread' | 'share' | 'article';
+				text?: string | null;
+				media?: TwitterMedia[];
+				raw?: unknown;
+			};
 	  };

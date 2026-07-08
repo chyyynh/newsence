@@ -1,5 +1,5 @@
 import type { PlatformMetadata, QuotedTweetData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
-import type { ScrapedContent, Tweet, TwitterSourceEventInputType } from '@core-shared/types';
+import type { ScrapedContent, Tweet } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { scrapeWebPage } from '../web-scraper';
 
@@ -195,7 +195,7 @@ function buildTwitterArticlePlatformMetadata(
 }
 
 export type ResolvedTweetContent = {
-	kind: TwitterSourceEventInputType;
+	kind: 'tweet' | 'share' | 'article';
 	scraped: ScrapedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> };
 	canonicalUrl: string;
 	eventText: string;

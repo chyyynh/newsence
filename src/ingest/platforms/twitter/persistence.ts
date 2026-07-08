@@ -1,11 +1,13 @@
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Tweet, TwitterSourceEventDraft } from '@core-shared/types';
+import type { Tweet, WorkflowAttachment } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
 import { upsertTwitterSourceEventDraft } from './processor';
 import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent } from './scraper';
+
+type TwitterSourceEventDraft = Extract<WorkflowAttachment, { kind: 'twitter-source-event' }>['event'];
 
 async function recordExistingTwitterSourceEvent(
 	db: Client,
