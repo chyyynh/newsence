@@ -1,4 +1,4 @@
-import type { Article, ExtractedContent } from '@core-shared/types';
+import type { Article, NormalizedContent } from '@core-shared/types';
 import { detectUrlKind } from '@core-shared/web';
 import { Client } from 'pg';
 
@@ -131,7 +131,7 @@ export async function getExistingUrlUserFile(db: Client, userId: string, normali
 
 export async function insertScrapedUrlUserFile(
 	db: Client,
-	scraped: ExtractedContent,
+	scraped: NormalizedContent,
 	url: string,
 	userId: string,
 ): Promise<{ ok: true; row: InsertUrlUserFileResult } | { ok: false; error: string }> {

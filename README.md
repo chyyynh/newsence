@@ -38,7 +38,7 @@ Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls content
 | **Web**              | Scraper   | Saved URL     | Full content extraction (Readability + Cheerio), OG metadata                |
 | **User Files**       | Ingestion | Real-time     | App service-binding RPC — saved URL scrape + enrichment; blob lifecycle stays app-owned |
 
-All platforms output a unified `ExtractedContent` shape → same AI pipeline.
+All platforms output a unified `NormalizedContent` shape → same AI pipeline.
 
 ## How it works
 
@@ -190,7 +190,7 @@ src/
 ├── media/                # OG image helpers
 ├── shared/               # small cross-subsystem primitives
 │   ├── platform-metadata.ts
-│   ├── types.ts          # Article, ExtractedContent, YoutubeTranscript
+│   ├── types.ts          # Article, NormalizedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
 ├── ingest/               # ── article ingestion pipeline (the open-source core) ──
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
@@ -235,7 +235,7 @@ Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernew
 
 Minimum to add a new source:
 
-1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `ExtractedContent`.
+1. **Scraper** (`ingest/platforms/foo/scraper.ts`) — export a function that returns `NormalizedContent`.
 2. **Metadata** (`ingest/platforms/foo/metadata.ts`) — define your `FooMetadata` shape and a `buildFoo(...)` constructor; register it in `shared/platform-metadata.ts`.
 3. **Detection + dispatch** — add the URL pattern to `shared/web.ts:detectUrlKind` and route it from `ingest/urls.ts`.
 4. **Monitor** (optional, `ingest/platforms/foo/monitor.ts`) — if the source is pollable, mirror one of the existing cron handlers; wire it into `src/index.ts`.

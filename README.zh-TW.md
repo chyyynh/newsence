@@ -38,7 +38,7 @@
 | **網頁**        | 爬蟲   | saved URL  | 全文擷取（Readability + Cheerio）、OG metadata   |
 | **用戶檔案**    | 入口   | 即時       | App service-binding RPC — saved URL scrape + enrichment；blob 生命週期由 app 擁有 |
 
-所有平台輸出統一的 `ExtractedContent` 格式 → 進入同一個 AI 管線。
+所有平台輸出統一的 `NormalizedContent` 格式 → 進入同一個 AI 管線。
 
 ## 運作流程
 
@@ -182,7 +182,7 @@ src/
 ├── media/                # OG image helpers
 ├── shared/               # 小型跨子系統 primitives
 │   ├── platform-metadata.ts
-│   ├── types.ts          # Article、ExtractedContent、YoutubeTranscript
+│   ├── types.ts          # Article、NormalizedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits
 ├── ingest/               # ── 文章入庫 pipeline（開源核心）──
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
@@ -227,7 +227,7 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 新增一個來源最少要做：
 
-1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `ExtractedContent` 的函式。
+1. **Scraper**（`ingest/platforms/foo/scraper.ts`）— export 一個回傳 `NormalizedContent` 的函式。
 2. **Metadata**（`ingest/platforms/foo/metadata.ts`）— 定義 `FooMetadata` 型別和 `buildFoo(...)` 建構子；在 `shared/platform-metadata.ts` 註冊。
 3. **URL 偵測與 dispatch** — 把 URL pattern 加到 `shared/web.ts:detectUrlKind`，並從 `ingest/urls.ts` 路由到 scraper。
 4. **Monitor**（可選，`ingest/platforms/foo/monitor.ts`）— 如果來源可以輪詢，照現有 cron handler 改一份；在 `src/index.ts` 裡接上。

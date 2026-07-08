@@ -66,7 +66,7 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface ExtractedContent {
+export interface NormalizedContent {
 	/** null for raw-bytes / R2 input with no originating URL. */
 	sourceUrl: string | null;
 	contentType: string;

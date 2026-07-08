@@ -1,4 +1,4 @@
-import type { ExtractedContent } from '@core-shared/types';
+import type { NormalizedContent } from '@core-shared/types';
 import { BROWSER_UA, detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { getExistingUrlUserFile, insertScrapedUrlUserFile } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
@@ -19,7 +19,7 @@ const URL_FETCH_HEADERS: HeadersInit = {
 };
 
 type UrlFetchResult =
-	| { kind: 'page'; scraped: ExtractedContent }
+	| { kind: 'page'; scraped: NormalizedContent }
 	| {
 			kind: 'asset';
 			body: ReadableStream<Uint8Array>;

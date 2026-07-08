@@ -1,6 +1,6 @@
 import { generateText } from '@core-ai/embedding';
 import type { HackerNewsMetadata, PlatformEnrichments } from '@core-shared/platform-metadata';
-import type { Article, ExtractedContent } from '@core-shared/types';
+import type { Article, NormalizedContent } from '@core-shared/types';
 import { decodeHtmlEntities, fetchWithTimeout, htmlToText, readTextWithLimit } from '@core-shared/web';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../../domain/ai-utils';
 
@@ -76,7 +76,7 @@ function buildHnMarkdown(item: HnItem): string {
 	return parts.join('\n');
 }
 
-export async function scrapeHackerNews(itemId: string): Promise<ExtractedContent> {
+export async function scrapeHackerNews(itemId: string): Promise<NormalizedContent> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 
 	const item = await fetchHnItem(itemId);

@@ -1,5 +1,5 @@
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { ExtractedContent, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
+import type { NormalizedContent, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
 interface YouTubeVideoItem {
@@ -155,7 +155,7 @@ export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
 	options: YouTubeScrapeOptions = {},
-): Promise<ExtractedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'youtube' }> }> {
+): Promise<NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'youtube' }> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
 	const videoData = await fetchYouTubeVideoData(videoId, youtubeApiKey);

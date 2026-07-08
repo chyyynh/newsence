@@ -1,5 +1,5 @@
 import type { WorkflowStep } from 'cloudflare:workers';
-import type { ExtractedContent } from '@core-shared/types';
+import type { NormalizedContent } from '@core-shared/types';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 
@@ -42,7 +42,7 @@ export async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
 	return { text, pages, chars, status };
 }
 
-export async function extractPdfContent(bytes: Uint8Array, sourceUrl: string | null): Promise<ExtractedContent> {
+export async function extractPdfContent(bytes: Uint8Array, sourceUrl: string | null): Promise<NormalizedContent> {
 	const parsed = await parsePdf(bytes);
 	return {
 		sourceUrl,
