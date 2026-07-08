@@ -171,7 +171,7 @@ curl -X POST https://your-worker.workers.dev/ingest \
 
 </details>
 
-Auth: internal endpoints require `X-Internal-Token` or `Authorization: Bearer`. User ingest is rate-limited by the `USER_INGEST_LIMITER` binding in `wrangler.jsonc`.
+Auth: internal endpoints require `X-Internal-Token` or `Authorization: Bearer`. User ingest rate limiting now lives in the app Worker before calls reach this core Worker.
 
 ## CLI & MCP
 

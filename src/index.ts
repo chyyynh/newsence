@@ -3,20 +3,17 @@ import type {
 	ArticleRankSearchInput,
 	ArticleSearchInput,
 	CoreRpc,
-	CoreUploadedFileInput,
 	ExportCollectionOkfInput,
 	ReadContextItem,
 	RelatedArticleSearchInput,
 	ScrapedUrlContent,
-	StoreGeneratedImageInput,
 } from '@core-rpc/contracts';
 import { routeRequest } from '@entry/http';
-import { ingestUploadedFile, persistGeneratedImage } from '@ingest/blob';
 import { extractUrl, ScrapeWorkflow } from '@ingest/extract';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
-import { handleRetryCron, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { createUserFileWorkflow, handleRetryCron, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';
@@ -40,19 +37,14 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	// ── Service-binding RPC for engine capabilities ─────────────────────────
 	// Product-domain writes live on the app Worker's DomainRpc binding.
 
-	/** Persist a generated image into the canonical user_file blob store. */
-	storeGeneratedImage(input: StoreGeneratedImageInput) {
-		return persistGeneratedImage(this.env, input);
-	}
-
 	/** Ingest user-submitted URLs into user_files without going through public HTTP auth. */
 	ingestUrls(input: { urls: string[]; userId?: string }) {
 		return ingestUrls(this.env, input);
 	}
 
-	/** Ingest an uploaded PDF/image without encoding it as multipart HTTP between Workers. */
-	ingestUploadedFile(input: CoreUploadedFileInput) {
-		return ingestUploadedFile(this.env, input);
+	/** Enqueue saved user_files for the enrichment workflow after app-side persistence. */
+	enqueueUserFileProcessing(userFileId: string) {
+		return createUserFileWorkflow(this.env, userFileId);
 	}
 
 	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */

@@ -1,6 +1,3 @@
-const QUOTA_EXCEEDED_CODE = 'QUOTA_EXCEEDED';
-type QuotaExceededCode = typeof QUOTA_EXCEEDED_CODE;
-
 export interface ArticleSummary {
 	id: string;
 	title: string;
@@ -66,28 +63,13 @@ export type ExportCollectionOkfInput = {
 	userId?: string | null;
 };
 
-interface StoredGeneratedImage {
-	userFileId: string;
-	storageKey: string;
-	assetUrl: string;
-	fileType: string;
-	fileSize: number;
-}
-
-export type StoreGeneratedImageInput = {
-	userId: string;
-	bytes: Uint8Array;
+type CoreUrlBlobCandidate = {
+	body: ReadableStream<Uint8Array>;
 	contentType: string;
-	title: string;
+	sourceUrl: string;
+	suggestedFilename: string;
+	contentLength: number | null;
 };
-
-type StoreGeneratedImageResult =
-	| { ok: true; result: StoredGeneratedImage }
-	| {
-			ok: false;
-			code: 'BAD_REQUEST' | 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
-			message: string;
-	  };
 
 type CoreUrlIngestResult = {
 	url: string;
@@ -102,6 +84,7 @@ type CoreUrlIngestResult = {
 	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
+	blob?: CoreUrlBlobCandidate;
 	alreadyExists?: boolean;
 	error?: string;
 };
@@ -110,37 +93,9 @@ type CoreUrlIngestOutcome =
 	| { ok: true; results: CoreUrlIngestResult[] }
 	| { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED'; message: string };
 
-export type CoreUploadedFileInput = {
-	userId: string;
-	fileName: string;
-	contentType: string;
-	bytes: Uint8Array;
-	title?: string | null;
-};
-
-type CoreMediaIngestResult = {
-	userFileId: string;
-	storageKey: string;
-	assetUrl: string;
-	fileType: string;
-	fileSize: number;
-	title: string | null;
-	originType: 'upload';
-	instanceId?: string;
-};
-
-type CoreMediaIngestOutcome =
-	| { ok: true; result: CoreMediaIngestResult }
-	| {
-			ok: false;
-			code: 'BAD_REQUEST' | 'RATE_LIMITED' | 'PAYLOAD_TOO_LARGE' | QuotaExceededCode | 'UNSUPPORTED_MEDIA_TYPE' | 'INTERNAL_ERROR';
-			message: string;
-	  };
-
 export interface CoreRpc {
-	storeGeneratedImage(input: StoreGeneratedImageInput): Promise<StoreGeneratedImageResult>;
 	ingestUrls(input: { urls: string[]; userId?: string }): Promise<CoreUrlIngestOutcome>;
-	ingestUploadedFile(input: CoreUploadedFileInput): Promise<CoreMediaIngestOutcome>;
+	enqueueUserFileProcessing(userFileId: string): Promise<string>;
 	searchArticles(input: ArticleSearchInput): Promise<ArticleSummary[]>;
 	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;
 	relatedArticleIds(input: RelatedArticleSearchInput): Promise<string[]>;

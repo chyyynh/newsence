@@ -1,10 +1,8 @@
-import { PDF_MIME } from '@core-shared/mime';
 import type { ScrapedContent } from '@core-shared/types';
 import { detectUrlKind, normalizeUrl } from '@core-shared/web';
 import { upsertYoutubeTranscript } from '@ingest/platforms/youtube/transcripts';
 import { createUserFileWorkflow } from '@ingest/workflow';
 import { Client } from 'pg';
-import { persistSavedUrlBlob } from './blob';
 import { type ScrapeResult, scrapeUrl } from './extract';
 
 const INGEST_MAX_BATCH_SIZE = 20;
@@ -25,6 +23,7 @@ type IngestResult = {
 	originType?: 'saved_url';
 	platformType?: string;
 	fileType?: string;
+	blob?: Extract<ScrapeResult, { kind: 'blob' }>;
 	alreadyExists?: boolean;
 	error?: string;
 };
@@ -57,7 +56,7 @@ type ExistingUrlUserFile = {
 
 type InsertOutcome =
 	| { kind: 'page'; row: InsertUrlUserFileResult }
-	| { kind: 'blob'; userFileId: string; fileType: string }
+	| { kind: 'blob'; blob: Extract<ScrapeResult, { kind: 'blob' }> }
 	| { error: string };
 
 type UserFileUrlResultRow = Pick<
@@ -142,32 +141,6 @@ async function insertScrapedPage(db: Client, scraped: ScrapedContent, url: strin
 	}
 }
 
-async function insertScrapedBlob(
-	blob: Extract<ScrapeResult, { kind: 'blob' }>,
-	url: string,
-	env: Env,
-	userId: string,
-): Promise<InsertOutcome> {
-	const persisted = await persistSavedUrlBlob(env, {
-		userId,
-		body: blob.body,
-		contentLength: blob.contentLength,
-		contentType: blob.contentType,
-		suggestedFilename: blob.suggestedFilename,
-		sourceUrl: blob.sourceUrl,
-		normalizedSourceUrl: url,
-	});
-	if (!persisted.ok) return { error: persisted.message };
-	console.info({
-		tag: 'INGEST',
-		msg: 'Saved blob from URL',
-		title: persisted.title.slice(0, 50),
-		userFileId: persisted.userFileId,
-		contentType: blob.contentType,
-	});
-	return { kind: 'blob', userFileId: persisted.userFileId, fileType: blob.contentType };
-}
-
 function buildUrlResult(url: string, row: UserFileUrlResultRow, args: { instanceId?: string; alreadyExists: boolean }): IngestResult {
 	return {
 		url,
@@ -226,9 +199,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 			kaitoApiKey: env.KAITO_API_KEY,
 		});
 		result =
-			scrapeResult.kind === 'page'
-				? await insertScrapedPage(db, scrapeResult.scraped, url, userId)
-				: await insertScrapedBlob(scrapeResult, url, env, userId);
+			scrapeResult.kind === 'page' ? await insertScrapedPage(db, scrapeResult.scraped, url, userId) : { kind: 'blob', blob: scrapeResult };
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
@@ -236,14 +207,12 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	if ('error' in result) return { url, error: result.error };
 
 	if (result.kind === 'blob') {
-		const instanceId = result.fileType === PDF_MIME ? await createUserFileWorkflow(env, result.userFileId, db) : undefined;
 		return {
 			url,
-			userFileId: result.userFileId,
-			instanceId,
 			resourceKind: 'blob',
 			originType: 'saved_url',
-			fileType: result.fileType,
+			fileType: result.blob.contentType,
+			blob: result.blob,
 			alreadyExists: false,
 		};
 	}
@@ -268,11 +237,6 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 		};
 	}
 
-	const { success } = await env.USER_INGEST_LIMITER.limit({ key: `user:${args.userId}` });
-	if (!success) {
-		return { ok: false, code: 'RATE_LIMITED', message: 'Too many ingest requests; retry shortly.' };
-	}
-
 	const normalizedUrls = args.urls.map(normalizeUrl);
 	const uniqueUrls = [...new Set(normalizedUrls)];
 
@@ -280,12 +244,16 @@ export async function ingestUrls(env: Env, args: { urls: string[]; userId?: stri
 	const userId = args.userId;
 	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	await db.connect();
-	const uniqueResults: IngestResult[] = [];
-	for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {
-		const batch = uniqueUrls.slice(i, i + INGEST_URL_CONCURRENCY);
-		uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(db, url, env, userId)))));
+	try {
+		const uniqueResults: IngestResult[] = [];
+		for (let i = 0; i < uniqueUrls.length; i += INGEST_URL_CONCURRENCY) {
+			const batch = uniqueUrls.slice(i, i + INGEST_URL_CONCURRENCY);
+			uniqueResults.push(...(await Promise.all(batch.map((url) => processUrl(db, url, env, userId)))));
+		}
+		const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
+		const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
+		return { ok: true, results };
+	} finally {
+		await db.end();
 	}
-	const resultByUrl = new Map(uniqueResults.map((result) => [result.url, result]));
-	const results = normalizedUrls.map((url) => resultByUrl.get(url) ?? { url, error: 'lost during fan-out' });
-	return { ok: true, results };
 }

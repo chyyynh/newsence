@@ -87,21 +87,6 @@
 		"mode": "smart"
 	},
 	/**
-	 * Per-user ingest throttle. Eventually consistent across the zone — fine
-	 * for abuse defense (in-memory Map was per-isolate, effectively N× the cap).
-	 * `namespace_id` is worker-local; bump only if reusing this slot for a
-	 * different limiter. Bumping it silently resets all in-flight counters, so
-	 * keep it stable in prod. Each `limit()` call counts as 1 — batch size cap
-	 * stays separate (INGEST_MAX_BATCH_SIZE in app/ingest/urls.ts).
-	 */
-	"ratelimits": [
-		{
-			"name": "USER_INGEST_LIMITER",
-			"namespace_id": "1",
-			"simple": { "limit": 20, "period": 60 }
-		}
-	],
-	/**
 	 * `AI_GATEWAY_NAME` — AI Gateway name used by Workers AI text generation.
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *

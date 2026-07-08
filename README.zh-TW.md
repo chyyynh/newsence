@@ -163,7 +163,7 @@ curl -X POST https://your-worker.workers.dev/ingest \
 
 </details>
 
-驗證：internal endpoints 需要 `X-Internal-Token` 或 `Authorization: Bearer`。用戶 ingest 由 `wrangler.jsonc` 的 `USER_INGEST_LIMITER` binding 限流。
+驗證：internal endpoints 需要 `X-Internal-Token` 或 `Authorization: Bearer`。用戶 ingest 限流現在由 app Worker 在呼叫 core Worker 前處理。
 
 ## CLI 與 MCP 伺服器
 
