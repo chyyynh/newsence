@@ -2,8 +2,6 @@ export const FEED_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWeb
 export const BROWSER_UA =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-
 const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
 const TRACKING_PARAMS = [
 	'utm_source',
@@ -63,13 +61,6 @@ const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
 type UrlKind = 'hackernews' | 'youtube' | 'twitter' | 'web';
 
-export class PayloadTooLargeError extends Error {
-	constructor(maxBytes: number) {
-		super(`Response body exceeded ${maxBytes} bytes`);
-		this.name = 'PayloadTooLargeError';
-	}
-}
-
 function hostMatches(hostname: string, hosts: ReadonlySet<string>): boolean {
 	if (hosts.has(hostname)) return true;
 	for (const host of hosts) {
@@ -128,22 +119,6 @@ export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_T
 		}
 		text += decoder.decode(value, { stream: true });
 	}
-}
-
-export function streamWithByteLimit(body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> {
-	let bytesSeen = 0;
-	return body.pipeThrough(
-		new TransformStream<Uint8Array, Uint8Array>({
-			transform(chunk, controller) {
-				bytesSeen += chunk.byteLength;
-				if (bytesSeen > maxBytes) {
-					controller.error(new PayloadTooLargeError(maxBytes));
-					return;
-				}
-				controller.enqueue(chunk);
-			},
-		}),
-	);
 }
 
 export function normalizeUrl(url: string): string {
