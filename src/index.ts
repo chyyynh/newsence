@@ -2,7 +2,7 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
+import { enqueueProcessing, getWorkflowStatus, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
@@ -54,9 +54,9 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return exportCollectionOkf(this.env, input);
 	}
 
-	/** Stream workflow status updates for app-side SSE endpoints. */
-	streamWorkflowStatus(instanceId: string): Promise<Response> {
-		return Promise.resolve(streamWorkflowStatus(this.env, instanceId));
+	/** Read workflow status for app-side polling. */
+	getWorkflowStatus(instanceId: string) {
+		return getWorkflowStatus(this.env, instanceId);
 	}
 
 	/** Read article/collection/url resources from the core corpus. */

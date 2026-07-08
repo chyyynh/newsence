@@ -85,8 +85,11 @@ interface SourceArticleDraft {
 type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
-const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'terminated']);
-const WORKFLOW_STREAM_INTERVAL_MS = 3000;
+type WorkflowStatusSnapshot = {
+	error?: unknown;
+	output?: unknown;
+	status: string;
+};
 
 export async function enqueueProcessing(
 	env: CoreEnv,
@@ -123,51 +126,10 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-export function streamWorkflowStatus(env: CoreEnv, workflowId: string): Response {
-	const encoder = new TextEncoder();
-	let cancelled = false;
-	const stream = new ReadableStream({
-		type: 'bytes',
-		async start(controller) {
-			const writeEvent = (data: { error?: unknown; output?: unknown; status: string }) => {
-				if (cancelled) return false;
-				controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-				return true;
-			};
-			try {
-				const instance = await env.MONITOR_WORKFLOW.get(workflowId);
-				while (!cancelled) {
-					const { status, error, output } = await instance.status();
-					const streamStatus = String(status);
-					const isTerminal = TERMINAL_WORKFLOW_STATUSES.has(streamStatus);
-
-					if (streamStatus === 'complete') {
-						writeEvent({ status: 'complete', output });
-						return;
-					}
-
-					if (!writeEvent({ status: streamStatus, error }) || isTerminal) return;
-					await scheduler.wait(WORKFLOW_STREAM_INTERVAL_MS);
-				}
-			} catch (err) {
-				if (!cancelled) writeEvent({ status: 'error', error: String(err) });
-			} finally {
-				if (!cancelled) controller.close();
-			}
-		},
-		cancel() {
-			cancelled = true;
-		},
-	});
-
-	return new Response(stream, {
-		headers: {
-			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-cache, no-transform',
-			Connection: 'keep-alive',
-			'X-Accel-Buffering': 'no',
-		},
-	});
+export async function getWorkflowStatus(env: CoreEnv, workflowId: string): Promise<WorkflowStatusSnapshot> {
+	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
+	const { status, error, output } = await instance.status();
+	return { error, output, status: String(status) };
 }
 
 type WorkflowPersistenceInput = {
