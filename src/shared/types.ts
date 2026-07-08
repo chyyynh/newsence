@@ -12,11 +12,9 @@ export interface Article {
 	url: string;
 	source: string;
 	published_date: string;
-	scraped_date?: string;
 	tags: string[];
 	keywords: string[];
 	source_type?: string;
-	og_image_url?: string | null;
 	platform_metadata?: PlatformMetadata;
 	// user_files-only raw columns (undefined for articles path).
 	storage_key?: string | null;

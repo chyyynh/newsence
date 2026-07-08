@@ -7,16 +7,16 @@ type ArticleForProcessing = Article & { has_content?: boolean };
 
 const ARTICLE_FIELDS: Record<ArticleStoreTable, string> = {
 	articles:
-		'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities',
+		'id, title, title_cn, summary, summary_cn, content, url, source, source_type, published_date, tags, keywords, platform_metadata, entities',
 	user_files:
-		'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
+		'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
 };
 
 const ARTICLE_SHELL_FIELDS: Record<ArticleStoreTable, string> = {
 	articles:
-		'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, scraped_date, og_image_url, platform_metadata, entities',
+		'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, source, source_type, published_date, tags, keywords, platform_metadata, entities',
 	user_files:
-		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, created_at AS scraped_date, og_image_url, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
+		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type, origin_type',
 };
 
 export async function loadArticleForProcessing(
@@ -86,7 +86,6 @@ export function preparedArticleToArticle(data: PreparedArticleRecord): Article {
 		tags: data.tags ?? [],
 		keywords: data.keywords ?? [],
 		source_type: data.sourceType,
-		og_image_url: null,
 		platform_metadata: data.platformMetadata as Article['platform_metadata'],
 	};
 }
