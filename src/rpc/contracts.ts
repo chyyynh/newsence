@@ -64,5 +64,6 @@ export interface CoreRpc {
 	searchArticleRanks(input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>>;
 	relatedArticleIds(input: RelatedArticleSearchInput): Promise<string[]>;
 	exportCollectionOkf(input: ExportCollectionOkfInput): Promise<Response>;
+	streamWorkflowStatus(instanceId: string): Promise<Response>;
 	readCorpusItems(items: ReadContextItem[], userId: string): Promise<ReadContextResult[]>;
 }

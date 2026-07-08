@@ -7,11 +7,10 @@ import type {
 	ReadContextItem,
 	RelatedArticleSearchInput,
 } from '@core-rpc/contracts';
-import { routeRequest } from '@entry/http';
 import { handleRSSCron } from '@ingest/platforms/rss/monitor';
 import { handleTwitterCron } from '@ingest/platforms/twitter/monitor';
 import { handleYouTubeCron } from '@ingest/platforms/youtube/monitor';
-import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { enqueueProcessing, handleRetryCron, NewsenceMonitorWorkflow, streamWorkflowStatus } from '@ingest/workflow';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
 import { ingestUrls } from './ingest/urls';
 import { exportCollectionOkf } from './okf';
@@ -19,8 +18,12 @@ import { exportCollectionOkf } from './okf';
 export { NewsenceMonitorWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc {
-	override async fetch(request: Request): Promise<Response> {
-		return routeRequest(request, this.env);
+	override async fetch(): Promise<Response> {
+		return Response.json({
+			status: 'ok',
+			worker: 'newsence-core',
+			timestamp: new Date().toISOString(),
+		});
 	}
 
 	override scheduled(event: ScheduledController): void {
@@ -63,6 +66,11 @@ export default class CoreWorker extends WorkerEntrypoint<Env> implements CoreRpc
 	/** Stream a collection as an OKF tar.gz bundle for the app Worker. */
 	exportCollectionOkf(input: ExportCollectionOkfInput): Promise<Response> {
 		return exportCollectionOkf(this.env, input);
+	}
+
+	/** Stream workflow status updates for app-side SSE endpoints. */
+	streamWorkflowStatus(instanceId: string): Promise<Response> {
+		return Promise.resolve(streamWorkflowStatus(this.env, instanceId));
 	}
 
 	/** Read article/collection/url resources from the core corpus. */

@@ -102,7 +102,9 @@ type PdfTextTemp = Awaited<ReturnType<typeof stagePdfTextExtraction>>;
 type YouTubeHighlights = Awaited<ReturnType<typeof prepareYouTubeHighlights>>;
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
+const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'errored', 'error', 'terminated', 'timeout']);
 const RETRY_BATCH_SIZE = 100;
+const WORKFLOW_STREAM_INTERVAL_MS = 3000;
 const SOURCE_ARTICLE_DRAFT_PREFIX = 'tmp/workflow/source-articles/';
 const SOURCE_ARTICLE_DRAFT_CONTENT_TYPE = 'application/json; charset=utf-8';
 const WORKFLOW_ID_MAX_LENGTH = 100;
@@ -281,6 +283,52 @@ async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{
 		// Missing or expired instances are not live; callers may create a retry instance.
 		return { id: workflowId, status: 'unknown' };
 	}
+}
+
+export function streamWorkflowStatus(env: Env, workflowId: string): Response {
+	const encoder = new TextEncoder();
+	let cancelled = false;
+	const stream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const writeEvent = (data: { error?: unknown; output?: unknown; status: string }) => {
+				if (cancelled) return false;
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+				return true;
+			};
+			try {
+				const instance = await env.MONITOR_WORKFLOW.get(workflowId);
+				while (!cancelled) {
+					const { status, error, output } = await instance.status();
+					const streamStatus = String(status);
+					const isTerminal = TERMINAL_WORKFLOW_STATUSES.has(streamStatus);
+
+					if (streamStatus === 'complete') {
+						writeEvent({ status: 'complete', output });
+						return;
+					}
+
+					if (!writeEvent({ status: streamStatus, error }) || isTerminal) return;
+					await scheduler.wait(WORKFLOW_STREAM_INTERVAL_MS);
+				}
+			} catch (err) {
+				if (!cancelled) writeEvent({ status: 'error', error: String(err) });
+			} finally {
+				if (!cancelled) controller.close();
+			}
+		},
+		cancel() {
+			cancelled = true;
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no',
+		},
+	});
 }
 
 type WorkflowRunContext = {
