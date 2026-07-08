@@ -1,10 +1,8 @@
-// ─────────────────────────────────────────────────────────────
 // OKF (Open Knowledge Format v0.1) collection export — issue #197 Phase 1.
 // Streams a collection as a tar.gz bundle of markdown + YAML frontmatter:
 // index.md (okf_version) / articles/*.md / entities/*.md / log.md.
 // Entity links are read from article_entities, which the ingest pipeline already
 // normalizes before storage.
-// ─────────────────────────────────────────────────────────────
 
 import { Client } from 'pg';
 

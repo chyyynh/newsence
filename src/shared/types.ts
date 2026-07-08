@@ -1,4 +1,3 @@
-// Article related types
 export interface Article {
 	id: string;
 	title: string;
@@ -19,7 +18,6 @@ export interface Article {
 	file_type?: string;
 }
 
-// AI Analysis result
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 

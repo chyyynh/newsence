@@ -515,9 +515,7 @@ async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<bo
 	return queued;
 }
 
-// ─────────────────────────────────────────────────────────────
 // Twitter Monitor
-// ─────────────────────────────────────────────────────────────
 
 const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/advanced_search';
 

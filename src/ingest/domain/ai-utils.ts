@@ -1,15 +1,7 @@
-// ─────────────────────────────────────────────────────────────
-// AI Utility Functions & Shared Processor Types
-// ─────────────────────────────────────────────────────────────
-
 import { generateObject, generateText } from '@core-ai/embedding';
 import { type AIAnalysisResult, type Article, type ArticleCategory, ENTITY_TYPES, type PlatformEnrichments } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-
-// ─────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────
 
 export interface ProcessorResult {
 	updateData: {
@@ -26,10 +18,6 @@ export interface ProcessorResult {
 	enrichments?: PlatformEnrichments;
 	classificationCategory?: ArticleCategory;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Utilities
-// ─────────────────────────────────────────────────────────────
 
 export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
@@ -60,10 +48,6 @@ export function mergeArticleAnalysis(
 
 	return { updateData, classificationCategory: analysis.category };
 }
-
-// ─────────────────────────────────────────────────────────────
-// AI Analysis Functions
-// ─────────────────────────────────────────────────────────────
 
 const MAX_CONTENT_LENGTH = 10000;
 const MAX_CONTENT_CLEANUP_LENGTH = 12000;

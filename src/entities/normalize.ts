@@ -1,10 +1,8 @@
-// ─────────────────────────────────────────────────────────────
 // Entity normalization & storage filtering (pure, no DB access)
 //
 // Everything that decides WHICH extracted entities are worth
 // storing and under WHAT canonical key. Consumed by the ingest
 // pipeline (persistence + prompt exclusion lists).
-// ─────────────────────────────────────────────────────────────
 
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
 

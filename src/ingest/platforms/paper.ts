@@ -38,7 +38,6 @@ const PAPER_FIELDS = [
 type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string };
 type PaperDetection = { id: PaperId | null; hasAcademicMarker: boolean };
 
-// ── S2 response shapes (only the fields we read) ─────────────────
 interface S2Author {
 	name?: string;
 }
