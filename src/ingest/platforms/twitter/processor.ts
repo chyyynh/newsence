@@ -133,7 +133,7 @@ async function upsertTwitterSourceEvent(
 	}
 }
 
-export async function upsertTwitterSourceEventDraft(db: Client, articleId: string, event: TwitterSourceEventDraft): Promise<void> {
+export async function upsertTwitterSourceEventDraft(db: Client, articleId: string | null, event: TwitterSourceEventDraft): Promise<void> {
 	const { tweet, eventType, text, media, raw } = event;
 	await upsertTwitterSourceEvent(db, tweet, { articleId, eventType, text, media, raw });
 }

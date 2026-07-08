@@ -33,7 +33,7 @@ async function enqueueTwitterArticle(
 		ogImage: string | null;
 		platformMetadata: PlatformMetadata;
 		hashTags?: string[];
-		sourceEvent?: TwitterSourceEventDraft;
+		sourceEvent: TwitterSourceEventDraft;
 	},
 ): Promise<boolean> {
 	await enqueueProcessing(env, {
@@ -51,7 +51,7 @@ async function enqueueTwitterArticle(
 				platformMetadata: data.platformMetadata,
 				keywords: data.hashTags,
 			},
-			...(data.sourceEvent ? { attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }] } : {}),
+			attachments: [{ kind: 'twitter-source-event' as const, event: data.sourceEvent }],
 		},
 	});
 	return true;
@@ -84,6 +84,8 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
+	const sourceEvent: TwitterSourceEventDraft = { tweet, eventType: resolved.kind, text: resolved.eventText };
+	await upsertTwitterSourceEventDraft(db, null, sourceEvent);
 	const queued = await enqueueTwitterArticle(env, {
 		url: articleUrl,
 		title: scraped.title,
@@ -94,7 +96,7 @@ export async function saveTweet(db: Client, tweet: Tweet, env: Env): Promise<boo
 		ogImage: scraped.metadata.ogImageUrl,
 		platformMetadata: scraped.platformMetadata,
 		hashTags: tweet.hashTags,
-		sourceEvent: { tweet, eventType: resolved.kind, text: resolved.eventText },
+		sourceEvent,
 	});
 	if (queued) console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: scraped.title.slice(0, 50) });
 	return queued;
@@ -108,25 +110,16 @@ export async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise
 
 	if (existing) {
 		const existingId = existing.id;
+		const sourceEvent: TwitterSourceEventDraft = { tweet: first, eventType: 'thread', text: combinedText, media, raw: { tweets: sorted } };
+		await recordExistingTwitterSourceEvent(db, env, existing, sourceEvent, { enqueueIfIncomplete: false });
 		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
-		await recordExistingTwitterSourceEvent(
-			db,
-			env,
-			existing,
-			{
-				tweet: first,
-				eventType: 'thread',
-				text: combinedText,
-				media,
-				raw: { tweets: sorted },
-			},
-			{ enqueueIfIncomplete: false },
-		);
 		await enqueueProcessing(env, { kind: 'article', articleId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: sorted.length });
 		return true;
 	}
 
+	const sourceEvent: TwitterSourceEventDraft = { tweet: first, eventType: 'thread', text: combinedText, media, raw: { tweets: sorted } };
+	await upsertTwitterSourceEventDraft(db, null, sourceEvent);
 	const queued = await enqueueTwitterArticle(env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
@@ -137,7 +130,7 @@ export async function saveThread(db: Client, tweets: Tweet[], env: Env): Promise
 		ogImage: media[0]?.url ?? null,
 		platformMetadata,
 		hashTags: first.hashTags,
-		sourceEvent: { tweet: first, eventType: 'thread', text: combinedText, media, raw: { tweets: sorted } },
+		sourceEvent,
 	});
 
 	if (queued) {

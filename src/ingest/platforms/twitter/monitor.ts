@@ -11,6 +11,7 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 
 /** Max usernames per query batch to stay within query length limits */
 const TWITTER_BATCH_SIZE = 20;
+const TWITTER_MAX_PAGES_PER_BATCH = 5;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
 const SOURCE_FEED_FIELDS = 'id, "RSSLink", scraped_at';
@@ -87,8 +88,10 @@ async function fetchTweetsForBatch(
 
 	const tweets: Tweet[] = [];
 	let cursor = '';
+	let pages = 0;
 
 	while (true) {
+		pages++;
 		const params = new URLSearchParams({ query, queryType: 'Latest' });
 		if (cursor) params.set('cursor', cursor);
 
@@ -118,6 +121,10 @@ async function fetchTweetsForBatch(
 		}
 
 		if (!apiRes.has_next_page) break;
+		if (pages >= TWITTER_MAX_PAGES_PER_BATCH) {
+			console.warn({ tag: 'TWITTER', msg: 'Advanced Search page cap reached', users: userNames.length, sinceTime, pages });
+			return { tweets, completed: false };
+		}
 		cursor = apiRes.next_cursor || '';
 		if (!cursor) break;
 		await scheduler.wait(1000);
