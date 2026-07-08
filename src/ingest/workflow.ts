@@ -257,23 +257,19 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 async function enqueueUserFileWorkflow(env: Env, target: UserFileWorkflowTarget, db?: Client): Promise<string> {
 	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	if (!db) await client.connect();
-	try {
-		const storedInstanceId = await getUserFileWorkflowInstanceId(client, target.userFileId);
-		if (storedInstanceId) {
-			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
-			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
-		}
-
-		const instanceId = await enqueueStoredWorkflow(env, target);
-		await patchUserFileWorkflowMetadata(client, target.userFileId, {
-			monitor_instance_id: instanceId,
-			monitor_status: 'running',
-			monitor_started_at: new Date().toISOString(),
-		});
-		return instanceId;
-	} finally {
-		if (!db) await client.end();
+	const storedInstanceId = await getUserFileWorkflowInstanceId(client, target.userFileId);
+	if (storedInstanceId) {
+		const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
+		if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 	}
+
+	const instanceId = await enqueueStoredWorkflow(env, target);
+	await patchUserFileWorkflowMetadata(client, target.userFileId, {
+		monitor_instance_id: instanceId,
+		monitor_status: 'running',
+		monitor_started_at: new Date().toISOString(),
+	});
+	return instanceId;
 }
 
 async function getMonitorWorkflowStatus(env: Env, workflowId: string): Promise<{ id: string; status: string }> {
