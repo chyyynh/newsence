@@ -339,7 +339,7 @@ async function enrichS2ByTitle(title: string, apiKey?: string): Promise<PaperMet
 	return normalizePaper(paper);
 }
 
-export async function enrichPaperMetadata(
+async function enrichPaperMetadata(
 	candidate: { url?: string | null; title: string; fileType?: string | null; content?: string | null },
 	apiKey?: string,
 ): Promise<PaperMetadata | null> {
