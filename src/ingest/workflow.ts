@@ -12,7 +12,7 @@ import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { processHackerNewsArticle } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
-import { stagePdfTextExtraction } from './platforms/pdf';
+import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
@@ -81,8 +81,6 @@ interface SourceArticleDraft {
 	youtubeTranscript?: YoutubeTranscript;
 }
 
-type PdfTextArtifact = Awaited<ReturnType<typeof stagePdfTextExtraction>> | null;
-
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
 export async function enqueueProcessing(env: CoreEnv, target: WorkflowTarget): Promise<string> {
@@ -120,13 +118,13 @@ type WorkflowPersistenceInput = {
 	article: Article;
 	result: ProcessorResult;
 	embedding: number[] | null;
-	pdfTextArtifact: PdfTextArtifact;
+	pdfTextArtifact: PdfTextArtifact | null;
 	youtubeTranscript?: YoutubeTranscript;
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>;
 	paperEnrichment: PaperMetadata | null;
 };
 
-async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact): Promise<Article> {
+async function loadFullTargetArticle(env: CoreEnv, target: WorkflowTarget, pdfTextArtifact: PdfTextArtifact | null): Promise<Article> {
 	let article: Article;
 	if (target.kind === 'source') {
 		article = sourceRecordToArticle(target.draft.article);
@@ -166,7 +164,8 @@ async function persistWorkflowTarget(env: CoreEnv, target: WorkflowTarget, input
 			const extraction = pdf && {
 				status: pdf.status,
 				parser: 'liteparse',
-				...(pdf.status === 'failed' ? {} : { chars: pdf.chars, pages: pdf.pages }),
+				chars: pdf.chars,
+				pages: pdf.pages,
 			};
 			const metadataPatch = {
 				...(extraction ? { extraction } : {}),
@@ -223,7 +222,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const pdfTextArtifact =
 			target.kind === 'stored' && target.table === 'user_files' && !hasContent && article.storage_key && article.file_type === PDF_MIME
 				? await stagePdfTextExtraction(this.env, step, {
-						articleId: target.rowId,
 						sourceStorageKey: article.storage_key,
 					})
 				: null;

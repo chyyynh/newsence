@@ -4,18 +4,11 @@ import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
 
 type PdfTextStatus = 'ok' | 'needs_ocr';
 
-interface ParsedPdf {
+export interface PdfTextArtifact {
 	text: string;
 	status: PdfTextStatus;
 	pages: number;
 	chars: number;
-}
-
-interface PdfTextArtifact {
-	status: PdfTextStatus | 'failed';
-	chars: number;
-	pages: number;
-	text?: string;
 }
 
 const MIN_PDF_CHARS = 40;
@@ -23,7 +16,7 @@ const MIN_PDF_CHARS_PER_PAGE = 20;
 
 let pdfParserReady = false;
 
-async function parsePdf(bytes: Uint8Array): Promise<ParsedPdf> {
+async function parsePdf(bytes: Uint8Array): Promise<PdfTextArtifact> {
 	if (!pdfParserReady) {
 		initSync({ module: wasmModule });
 		pdfParserReady = true;
@@ -47,17 +40,12 @@ async function extractPdfText(env: CoreEnv, input: { sourceStorageKey: string })
 export async function stagePdfTextExtraction(
 	env: CoreEnv,
 	step: WorkflowStep,
-	input: { articleId: string; sourceStorageKey: string },
+	input: { sourceStorageKey: string },
 ): Promise<PdfTextArtifact> {
-	try {
-		const artifact = await step.do(
-			'extract-pdf-text',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => extractPdfText(env, input),
-		);
-		return (await new Response(artifact).json()) as PdfTextArtifact;
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'PDF extraction failed', article_id: input.articleId, error: String(error) });
-		return { status: 'failed', chars: 0, pages: 0 };
-	}
+	const artifact = await step.do(
+		'extract-pdf-text',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => extractPdfText(env, input),
+	);
+	return (await new Response(artifact).json()) as PdfTextArtifact;
 }
