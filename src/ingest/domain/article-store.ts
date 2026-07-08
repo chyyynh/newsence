@@ -274,7 +274,7 @@ export async function insertFinalSourceArticle(
 	return articleId;
 }
 
-export type ExistingArticleRecord = {
+type ExistingArticleRecord = {
 	id: string;
 	url: string;
 	source: string;

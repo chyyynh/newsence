@@ -9,7 +9,7 @@
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
 
 export type ArticleEntityInput = { name: string; name_cn: string; type: string };
-export type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
+type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
 
 /** Canonical names that are too generic to be useful entity pages (audit 2026-07-02, issue #197). */
 export const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);

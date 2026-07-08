@@ -25,9 +25,6 @@ type IngestResult = {
 	error?: string;
 };
 
-type IngestErrorCode = 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED';
-export type IngestUrlsOutcome = { ok: true; results: IngestResult[] } | { ok: false; code: IngestErrorCode; message: string };
-
 function buildUserFileResult(
 	url: string,
 	row: {
@@ -113,7 +110,13 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 	return buildUserFileResult(url, row, { instanceId, alreadyExists: !row.created });
 }
 
-export async function ingestUrls(env: Env, args: { urls: string[]; userId?: string }): Promise<IngestUrlsOutcome> {
+export async function ingestUrls(
+	env: Env,
+	args: { urls: string[]; userId?: string },
+): Promise<
+	| { ok: true; results: IngestResult[] }
+	| { ok: false; code: 'BATCH_TOO_LARGE' | 'RATE_LIMITED' | 'BAD_REQUEST' | 'UNAUTHORIZED'; message: string }
+> {
 	if (!args.userId) {
 		return { ok: false, code: 'UNAUTHORIZED', message: 'userId is required' };
 	}

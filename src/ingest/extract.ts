@@ -10,12 +10,7 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 
 export const SCRAPE_INPUT_TEMP_PREFIX = 'tmp/scrape/';
 
-export type ExtractInput = { kind: 'url'; url: string } | { kind: 'r2'; key: string };
-
-export interface ScrapeOptions {
-	youtubeApiKey?: string;
-	kaitoApiKey?: string;
-}
+type ExtractInput = { kind: 'url'; url: string } | { kind: 'r2'; key: string };
 
 export type ScrapeResult =
 	| { kind: 'page'; scraped: ScrapedContent }
@@ -89,7 +84,7 @@ async function fetchGenericUrl(url: string): Promise<ScrapeResult> {
 	throw new Error(`Unsupported content-type: ${ct}`);
 }
 
-export async function scrapeUrl(url: string, options: ScrapeOptions): Promise<ScrapeResult> {
+export async function scrapeUrl(url: string, options: { youtubeApiKey?: string; kaitoApiKey?: string }): Promise<ScrapeResult> {
 	switch (detectUrlKind(url)) {
 		case 'youtube': {
 			const videoId = extractYouTubeId(url);

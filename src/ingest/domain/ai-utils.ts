@@ -46,17 +46,15 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export type ArticleAnalysisMergeOptions = {
-	updateData?: ProcessorResult['updateData'];
-	extraTags?: string[];
-	overwriteSummary?: boolean;
-	includeContent?: boolean;
-};
-
 export function mergeArticleAnalysis(
 	article: Article,
 	analysis: AIAnalysisResult,
-	options: ArticleAnalysisMergeOptions = {},
+	options: {
+		updateData?: ProcessorResult['updateData'];
+		extraTags?: string[];
+		overwriteSummary?: boolean;
+		includeContent?: boolean;
+	} = {},
 ): { updateData: ProcessorResult['updateData']; classificationCategory?: ArticleCategory } {
 	const updateData = options.updateData ?? {};
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
