@@ -1,7 +1,46 @@
-import type { PlatformMetadata, QuotedTweetData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
-import type { ScrapedContent, Tweet } from '@core-shared/types';
+import type { PlatformMetadata, QuotedTweetData, RetweetedByData, TwitterAuthorFields, TwitterMedia } from '@core-shared/platform-metadata';
+import type { ScrapedContent } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { scrapeWebPage } from '../web-scraper';
+
+// twitterapi.io tweet response shape used inside the Twitter platform only.
+export interface Tweet {
+	id?: string;
+	url: string;
+	createdAt: string;
+	viewCount?: number;
+	author?: {
+		id?: string;
+		userName: string;
+		name: string;
+		profilePicture?: string;
+		isBlueVerified?: boolean;
+	};
+	text: string;
+	likeCount?: number;
+	retweetCount?: number;
+	replyCount?: number;
+	quoteCount?: number;
+	extendedEntities?: {
+		media?: Array<{
+			media_url_https: string;
+			type: string;
+			sizes?: { large?: { w: number; h: number } };
+			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
+		}>;
+	};
+	hashTags?: string[];
+	urls?: Array<{ expanded_url?: string; url?: string }>;
+	entities?: { urls?: Array<{ expanded_url?: string; url?: string }> };
+	lang?: string;
+	conversationId?: string;
+	isReply?: boolean;
+	inReplyToId?: string | null;
+	inReplyToUsername?: string | null;
+	quoted_tweet?: Tweet | null;
+	retweeted_tweet?: Tweet | null;
+	retweetedBy?: RetweetedByData;
+}
 
 function isTwitterHost(hostname: string): boolean {
 	const lower = hostname.toLowerCase();

@@ -1,7 +1,7 @@
-import type { Tweet } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { Client } from 'pg';
 import { saveThread, saveTweet } from './persistence';
+import type { Tweet } from './scraper';
 
 // ─────────────────────────────────────────────────────────────
 // Twitter Monitor

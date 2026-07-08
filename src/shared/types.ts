@@ -1,4 +1,4 @@
-import type { ArticleCategory, PlatformMetadata, RetweetedByData } from './platform-metadata';
+import type { ArticleCategory, PlatformMetadata } from './platform-metadata';
 
 // Article related types
 export interface Article {
@@ -66,6 +66,8 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
+export type WorkflowAttachment = { type: 'youtube-transcript'; transcript: YoutubeTranscript };
+
 export interface ExtractedContent {
 	/** null for raw-bytes / R2 input with no originating URL. */
 	sourceUrl: string | null;
@@ -91,46 +93,5 @@ export interface ScrapedContent extends ExtractedContent {
 	sourceUrl: string | null;
 	title: string;
 	platformMetadata?: PlatformMetadata;
-	youtubeTranscript?: YoutubeTranscript;
-}
-
-// Twitter related (Kaito API response shape)
-export interface Tweet {
-	id?: string;
-	url: string;
-	createdAt: string;
-	viewCount?: number;
-	author?: {
-		id?: string;
-		userName: string;
-		name: string;
-		profilePicture?: string;
-		isBlueVerified?: boolean;
-	};
-	text: string;
-	likeCount?: number;
-	retweetCount?: number;
-	replyCount?: number;
-	quoteCount?: number;
-	extendedEntities?: {
-		media?: Array<{
-			media_url_https: string;
-			type: string;
-			sizes?: { large?: { w: number; h: number } };
-			video_info?: { variants?: Array<{ bitrate?: number; content_type?: string; url: string }> };
-		}>;
-	};
-	hashTags?: string[];
-	urls?: Array<{ expanded_url?: string; url?: string }>;
-	entities?: { urls?: Array<{ expanded_url?: string; url?: string }> };
-	lang?: string;
-	// Thread & reply fields
-	conversationId?: string;
-	isReply?: boolean;
-	inReplyToId?: string | null;
-	inReplyToUsername?: string | null;
-	// Quote & retweet
-	quoted_tweet?: Tweet | null;
-	retweeted_tweet?: Tweet | null;
-	retweetedBy?: RetweetedByData;
+	attachments?: WorkflowAttachment[];
 }

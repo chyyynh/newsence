@@ -104,7 +104,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 				{
 					kind: 'userFile',
 					userFileId: row.id,
-					...(scrapeResult.scraped.youtubeTranscript ? { youtubeTranscript: scrapeResult.scraped.youtubeTranscript } : {}),
+					attachments: scrapeResult.scraped.attachments,
 				},
 				{ db },
 			)

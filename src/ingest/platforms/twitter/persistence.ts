@@ -1,10 +1,9 @@
 import type { PlatformMetadata } from '@core-shared/platform-metadata';
-import type { Tweet } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/web';
 import { getExistingArticleByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import type { Client } from 'pg';
-import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent } from './scraper';
+import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent, type Tweet } from './scraper';
 
 async function enqueueTwitterArticle(
 	env: Env,

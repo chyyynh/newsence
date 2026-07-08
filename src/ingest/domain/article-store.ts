@@ -58,7 +58,7 @@ export async function patchUserFileWorkflowMetadata(db: Client, userFileId: stri
 	);
 }
 
-interface InsertArticleData {
+export interface PreparedArticleRecord {
 	url: string;
 	title: string;
 	source: string;
@@ -72,7 +72,7 @@ interface InsertArticleData {
 	tags?: string[];
 }
 
-export function insertArticleDataToArticle(data: InsertArticleData): Article {
+export function preparedArticleToArticle(data: PreparedArticleRecord): Article {
 	return {
 		id: data.url,
 		title: data.title,
@@ -233,7 +233,7 @@ export async function updateArticleAfterProcessing(
 
 export async function insertFinalSourceArticle(
 	db: Client,
-	base: InsertArticleData,
+	base: PreparedArticleRecord,
 	updatePayload: ArticleProcessingUpdate,
 ): Promise<string> {
 	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;

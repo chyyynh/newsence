@@ -1,16 +1,17 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { PaperMetadata } from '@core-shared/platform-metadata';
-import type { Article, YoutubeTranscript } from '@core-shared/types';
+import type { Article, WorkflowAttachment, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import { syncArticleEntities } from '@entities/sync';
 import {
 	getIncompleteWorkflowTargetIds,
 	getUserFileWorkflowInstanceId,
-	insertArticleDataToArticle,
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
+	type PreparedArticleRecord,
 	patchUserFileWorkflowMetadata,
+	preparedArticleToArticle,
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
@@ -22,13 +23,14 @@ import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platform
 
 type StoredWorkflowTarget =
 	| { kind: 'article'; articleId: string }
-	| { kind: 'userFile'; userFileId: string; youtubeTranscript?: YoutubeTranscript };
+	| { kind: 'userFile'; userFileId: string; attachments?: WorkflowAttachment[] };
+type UserFileWorkflowTarget = Extract<StoredWorkflowTarget, { kind: 'userFile' }>;
 
 export type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; sourceArticle: { url: string; r2Key: string } };
 
 interface SourceArticleDraft {
-	article: Parameters<typeof insertArticleDataToArticle>[0];
-	youtubeTranscript?: YoutubeTranscript;
+	article: PreparedArticleRecord;
+	attachments?: WorkflowAttachment[];
 }
 
 type ProcessingTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
@@ -101,7 +103,7 @@ export async function handleRetryCron(env: Env): Promise<void> {
 export async function enqueueProcessing(env: Env, target: ProcessingTarget, options: { db?: Client } = {}): Promise<string> {
 	if (target.kind === 'source') return enqueueSourceArticleWorkflow(env, target.draft);
 	if (target.kind === 'article') return enqueueStoredWorkflow(env, target);
-	return enqueueUserFileWorkflow(env, target.userFileId, options.db);
+	return enqueueUserFileWorkflow(env, target, options.db);
 }
 
 async function enqueueStoredWorkflow(env: Env, target: StoredWorkflowTarget): Promise<string> {
@@ -188,18 +190,18 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-async function enqueueUserFileWorkflow(env: Env, userFileId: string, db?: Client): Promise<string> {
+async function enqueueUserFileWorkflow(env: Env, target: UserFileWorkflowTarget, db?: Client): Promise<string> {
 	const client = db ?? new Client({ connectionString: env.HYPERDRIVE.connectionString });
 	if (!db) await client.connect();
 	try {
-		const storedInstanceId = await getUserFileWorkflowInstanceId(client, userFileId);
+		const storedInstanceId = await getUserFileWorkflowInstanceId(client, target.userFileId);
 		if (storedInstanceId) {
 			const stored = await getMonitorWorkflowStatus(env, storedInstanceId);
 			if (ACTIVE_WORKFLOW_STATUSES.has(stored.status)) return stored.id;
 		}
 
-		const instanceId = await enqueueStoredWorkflow(env, { kind: 'userFile', userFileId });
-		await patchUserFileWorkflowMetadata(client, userFileId, {
+		const instanceId = await enqueueStoredWorkflow(env, target);
+		await patchUserFileWorkflowMetadata(client, target.userFileId, {
 			monitor_instance_id: instanceId,
 			monitor_status: 'running',
 			monitor_started_at: new Date().toISOString(),
@@ -233,10 +235,14 @@ type WorkflowPersistenceInput = {
 	result: ProcessorResult;
 	embedding: number[] | null;
 	pdfTextTemp: PdfTextTemp;
-	youtubeTranscript: YoutubeTranscript | undefined;
+	attachments: WorkflowAttachment[];
 	youtubeHighlights: YouTubeHighlights;
 	paperEnrichment: PaperMetadata | null;
 };
+
+function youtubeTranscriptFromAttachments(attachments: WorkflowAttachment[]): YoutubeTranscript | undefined {
+	return attachments.find((attachment) => attachment.type === 'youtube-transcript')?.transcript;
+}
 
 function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRunContext {
 	let sourceDraft: SourceArticleDraft | null = null;
@@ -260,7 +266,7 @@ function createWorkflowRunContext(env: Env, target: WorkflowTarget): WorkflowRun
 async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfTextTemp: PdfTextTemp): Promise<Article> {
 	let article: Article;
 	if (context.target.kind === 'source') {
-		article = insertArticleDataToArticle((await context.readSourceDraft()).article);
+		article = preparedArticleToArticle((await context.readSourceDraft()).article);
 	} else {
 		if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 		article = await loadArticleForProcessing(env, context.table, context.rowId);
@@ -271,7 +277,7 @@ async function loadFullTargetArticle(env: Env, context: WorkflowRunContext, pdfT
 
 async function persistSourceTarget(db: Client, context: WorkflowRunContext, input: WorkflowPersistenceInput): Promise<string> {
 	const draft = await context.readSourceDraft();
-	const fullArticle = insertArticleDataToArticle(draft.article);
+	const fullArticle = preparedArticleToArticle(draft.article);
 	const articleForInsert = { ...draft.article, ogImageUrl: null };
 	const updatePayload: Record<string, unknown> = {
 		...buildProcessorUpdatePayload(
@@ -331,7 +337,7 @@ async function persistWorkflowTarget(env: Env, context: WorkflowRunContext, inpu
 		const articleId =
 			context.target.kind === 'source' ? await persistSourceTarget(db, context, input) : await persistStoredTarget(env, db, context, input);
 		await persistYouTubeWorkflowData(db, {
-			transcript: input.youtubeTranscript,
+			transcript: youtubeTranscriptFromAttachments(input.attachments),
 			highlights: input.youtubeHighlights,
 		});
 		await db.query('COMMIT');
@@ -353,7 +359,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				async () => {
 					if (context.target.kind === 'source')
-						return { ...insertArticleDataToArticle((await context.readSourceDraft()).article), content: null };
+						return { ...preparedArticleToArticle((await context.readSourceDraft()).article), content: null };
 					if (!context.rowId) throw new Error('Stored workflow target is missing row id');
 					return loadArticleForProcessing(this.env, context.table, context.rowId, true);
 				},
@@ -401,11 +407,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 				},
 			);
 
-			let youtubeTranscript: YoutubeTranscript | undefined;
+			let attachments: WorkflowAttachment[] = [];
 			if (sourceType === 'youtube') {
-				if (context.target.kind === 'source') youtubeTranscript = (await context.readSourceDraft()).youtubeTranscript;
-				else if (context.target.kind === 'userFile') youtubeTranscript = context.target.youtubeTranscript;
+				if (context.target.kind === 'source') attachments = (await context.readSourceDraft()).attachments ?? [];
+				else if (context.target.kind === 'userFile') attachments = context.target.attachments ?? [];
 			}
+			const youtubeTranscript = youtubeTranscriptFromAttachments(attachments);
 			const youtubeHighlights =
 				sourceType === 'youtube'
 					? await step.do(
@@ -423,7 +430,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<Env, { target: W
 						result: processorResult,
 						embedding,
 						pdfTextTemp,
-						youtubeTranscript,
+						attachments,
 						youtubeHighlights,
 						paperEnrichment,
 					}),

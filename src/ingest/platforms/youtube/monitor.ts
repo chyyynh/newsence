@@ -48,7 +48,7 @@ async function queueYouTubeVideo(env: Env, channel: { name: string }, video: { v
 					ogImageUrl: scraped.metadata.ogImageUrl,
 					platformMetadata: scraped.platformMetadata,
 				},
-				...(scraped.youtubeTranscript ? { youtubeTranscript: scraped.youtubeTranscript } : {}),
+				attachments: scraped.attachments,
 			},
 		});
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: scraped.title.slice(0, 60) });
