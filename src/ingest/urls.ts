@@ -11,23 +11,11 @@ import { extractYouTubeId, scrapeYouTube } from './platforms/youtube/scraper';
 const INGEST_MAX_BATCH_SIZE = 20;
 const INGEST_URL_CONCURRENCY = 4;
 const URL_FETCH_TIMEOUT_MS = 8_000;
-const PDF_MIME = 'application/pdf';
 const URL_FETCH_HEADERS: HeadersInit = {
 	'User-Agent': BROWSER_UA,
 	Accept: '*/*',
 	'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 };
-
-type UrlFetchResult =
-	| { kind: 'page'; scraped: NormalizedContent }
-	| {
-			kind: 'asset';
-			body: ReadableStream<Uint8Array>;
-			contentType: string;
-			sourceUrl: string;
-			suggestedFilename: string;
-			contentLength: number | null;
-	  };
 
 type ExistingUrlUserFile = NonNullable<Awaited<ReturnType<typeof getExistingUrlUserFile>>>;
 
@@ -40,32 +28,12 @@ type IngestResult = {
 	summaryCn?: string;
 	tags?: string[];
 	ogImageUrl?: string | null;
-	resourceKind?: 'url' | 'blob';
 	platformType?: string;
-	fileType?: string;
-	asset?: Extract<UrlFetchResult, { kind: 'asset' }>;
 	alreadyExists?: boolean;
 	error?: string;
 };
 
-function isRasterImage(contentType: string): boolean {
-	const lower = contentType.toLowerCase();
-	return lower.startsWith('image/') && !lower.startsWith('image/svg');
-}
-
-function parseContentDisposition(header: string | null): string | null {
-	if (!header) return null;
-	const match = header.match(/filename\*=UTF-8''([^;]+)|filename=("([^"]+)"|([^;]+))/i);
-	const raw = match?.[1] ?? match?.[3] ?? match?.[4];
-	if (!raw) return null;
-	try {
-		return decodeURIComponent(raw.trim());
-	} catch {
-		return raw.trim();
-	}
-}
-
-async function fetchGenericUrlContent(url: string): Promise<UrlFetchResult> {
+async function fetchGenericUrlContent(url: string): Promise<NormalizedContent> {
 	const res = await fetch(url, {
 		redirect: 'follow',
 		signal: AbortSignal.timeout(URL_FETCH_TIMEOUT_MS),
@@ -79,40 +47,29 @@ async function fetchGenericUrlContent(url: string): Promise<UrlFetchResult> {
 	const contentType = res.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? 'application/octet-stream';
 
 	if (contentType.includes('text/html') || contentType.includes('text/xml') || contentType.includes('application/xhtml')) {
-		return { kind: 'page', scraped: await scrapeHtmlFromResponse(res, url) };
-	}
-
-	if (contentType === PDF_MIME || isRasterImage(contentType)) {
-		if (!res.body) throw new Error('Response body is empty');
-		const lenRaw = res.headers.get('content-length');
-		const contentLength = lenRaw ? Number.parseInt(lenRaw, 10) || null : null;
-		const finalUrl = res.url || url;
-		const cdName = parseContentDisposition(res.headers.get('content-disposition'));
-		const suggestedFilename =
-			cdName ?? new URL(finalUrl).pathname.split('/').filter(Boolean).pop() ?? (contentType === PDF_MIME ? 'document.pdf' : 'image');
-		return { kind: 'asset', body: res.body, contentType, sourceUrl: finalUrl, suggestedFilename, contentLength };
+		return await scrapeHtmlFromResponse(res, url);
 	}
 
 	await res.body?.cancel();
 	throw new Error(`Unsupported content-type: ${contentType}`);
 }
 
-async function fetchUrlContent(url: string, env: Env): Promise<UrlFetchResult> {
+async function fetchUrlContent(url: string, env: Env): Promise<NormalizedContent> {
 	switch (detectUrlKind(url)) {
 		case 'youtube': {
 			const videoId = extractYouTubeId(url);
 			if (!videoId) throw new Error('Invalid YouTube URL');
-			return { kind: 'page', scraped: await scrapeYouTube(videoId, env.YOUTUBE_API_KEY) };
+			return await scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
 		}
 		case 'twitter': {
 			const tweetId = extractTweetId(url);
 			if (!tweetId) throw new Error('Invalid Twitter URL');
-			return { kind: 'page', scraped: await scrapeTweet(tweetId, env.KAITO_API_KEY) };
+			return await scrapeTweet(tweetId, env.KAITO_API_KEY);
 		}
 		case 'hackernews': {
 			const itemId = extractHackerNewsId(url);
 			if (!itemId) throw new Error('Invalid HackerNews URL');
-			return { kind: 'page', scraped: await scrapeHackerNews(itemId) };
+			return await scrapeHackerNews(itemId);
 		}
 		case 'web':
 			break;
@@ -135,23 +92,20 @@ function buildUserFileResult(
 		platform_type: string | null;
 		og_image_url: string | null;
 	},
-	args: { instanceId?: string; alreadyExists: boolean; resourceKind?: 'url' | 'blob' },
+	args: { instanceId?: string; alreadyExists: boolean },
 ): IngestResult {
-	const resourceKind = args.resourceKind ?? 'url';
-	const result: IngestResult = {
+	return {
 		url,
 		userFileId: row.id,
 		instanceId: args.instanceId,
-		resourceKind,
 		title: row.title,
 		titleCn: row.title_cn || undefined,
 		summaryCn: row.summary_cn || undefined,
 		tags: row.tags ?? undefined,
 		ogImageUrl: row.og_image_url,
 		alreadyExists: args.alreadyExists,
+		platformType: row.platform_type || 'web',
 	};
-	if (resourceKind === 'url') result.platformType = row.platform_type || 'web';
-	return result;
 }
 
 async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile, env: Env): Promise<IngestResult> {
@@ -159,7 +113,7 @@ async function returnExisting(db: Client, url: string, row: ExistingUrlUserFile,
 		row.title_cn && row.summary_cn && row.has_embedding
 			? undefined
 			: await enqueueProcessing(env, { kind: 'userFile', userFileId: row.id }, { db });
-	return buildUserFileResult(url, row, { instanceId, alreadyExists: true, resourceKind: row.resource_kind === 'blob' ? 'blob' : 'url' });
+	return buildUserFileResult(url, row, { instanceId, alreadyExists: true });
 }
 
 async function processUrl(db: Client, url: string, env: Env, userId: string): Promise<IngestResult> {
@@ -168,25 +122,15 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 		return returnExisting(db, url, existingRow, env);
 	}
 
-	let fetched: UrlFetchResult;
+	let scraped: NormalizedContent;
 	try {
-		fetched = await fetchUrlContent(url, env);
+		scraped = await fetchUrlContent(url, env);
 	} catch (err) {
 		console.error({ tag: 'INGEST', msg: 'Scrape failed', url, error: String(err) });
 		return { url, error: `Scrape failed: ${err}` };
 	}
 
-	if (fetched.kind === 'asset') {
-		return {
-			url,
-			resourceKind: 'blob',
-			fileType: fetched.contentType,
-			asset: fetched,
-			alreadyExists: false,
-		};
-	}
-
-	const inserted = await insertScrapedUrlUserFile(db, fetched.scraped, url, userId);
+	const inserted = await insertScrapedUrlUserFile(db, scraped, url, userId);
 	if (!inserted.ok) return { url, error: inserted.error };
 
 	const { row } = inserted;
@@ -196,7 +140,7 @@ async function processUrl(db: Client, url: string, env: Env, userId: string): Pr
 				{
 					kind: 'userFile',
 					userFileId: row.id,
-					youtubeTranscript: fetched.scraped.youtubeTranscript,
+					youtubeTranscript: scraped.youtubeTranscript,
 				},
 				{ db },
 			)

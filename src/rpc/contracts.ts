@@ -45,14 +45,6 @@ export type ExportCollectionOkfInput = {
 	userId?: string | null;
 };
 
-type CoreUrlAssetCandidate = {
-	body: ReadableStream<Uint8Array>;
-	contentType: string;
-	sourceUrl: string;
-	suggestedFilename: string;
-	contentLength: number | null;
-};
-
 type CoreUrlIngestResult = {
 	url: string;
 	userFileId?: string;
@@ -62,10 +54,7 @@ type CoreUrlIngestResult = {
 	summaryCn?: string;
 	tags?: string[];
 	ogImageUrl?: string | null;
-	resourceKind?: 'url' | 'blob';
 	platformType?: string;
-	fileType?: string;
-	asset?: CoreUrlAssetCandidate;
 	alreadyExists?: boolean;
 	error?: string;
 };
