@@ -8,9 +8,9 @@ function isTwitterHost(hostname: string): boolean {
 	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
 }
 
-const SOCIAL_MEDIA_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
+const NON_ARTICLE_LINK_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
 
-function isSocialMediaUrl(url: string): boolean {
+function isNonArticleLinkUrl(url: string): boolean {
 	let hostname: string;
 	try {
 		hostname = new URL(url).hostname.toLowerCase();
@@ -18,7 +18,7 @@ function isSocialMediaUrl(url: string): boolean {
 		return false;
 	}
 	if (hostname.startsWith('www.')) hostname = hostname.slice(4);
-	for (const host of SOCIAL_MEDIA_HOSTS) {
+	for (const host of NON_ARTICLE_LINK_HOSTS) {
 		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
 	}
 	return false;
@@ -88,8 +88,8 @@ function findTwitterArticleUrl(urls: string[], tweetUrl?: string): string | unde
 	return [tweetUrl, ...urls].find((u) => u && /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
 }
 
-function findExternalUrl(urls: string[]): string | undefined {
-	return urls.find((u) => !/(?:t\.co)/.test(u) && !isSocialMediaUrl(u));
+function findLinkedArticleUrl(urls: string[]): string | undefined {
+	return urls.find((u) => !/(?:t\.co)/.test(u) && !isNonArticleLinkUrl(u));
 }
 
 export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
@@ -328,9 +328,9 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise
 	const tweetText = stripTweetUrls(tweet.text);
 
 	const articleUrl = findTwitterArticleUrl(expandedUrls, tweet.url);
-	const externalUrl = findExternalUrl(expandedUrls);
+	const linkedArticleUrl = findLinkedArticleUrl(expandedUrls);
 
-	if (articleUrl || !externalUrl) {
+	if (articleUrl || expandedUrls.length === 0) {
 		if (articleUrl) console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', articleUrl });
 		const tweetId = tweet.id ?? extractTweetId(tweet.url);
 		const articleContent = tweetId ? await scrapeTwitterArticle(tweetId, apiKey) : null;
@@ -345,9 +345,9 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise
 		if (articleUrl) throw new Error('Twitter Article API failed');
 	}
 
-	if (externalUrl) {
-		const scraped = await scrapeExternalLinkTweet(tweet, externalUrl, media, tweetText, ogImageUrl);
-		return { kind: 'share', scraped, canonicalUrl: externalUrl, eventText: tweetText };
+	if (linkedArticleUrl) {
+		const scraped = await scrapeExternalLinkTweet(tweet, linkedArticleUrl, media, tweetText, ogImageUrl);
+		return { kind: 'share', scraped, canonicalUrl: linkedArticleUrl, eventText: tweetText };
 	}
 
 	const title = buildTweetTitle(tweet, 80);
@@ -370,7 +370,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string): Promise
 				ogImageUrl: ogImageUrl || tweet.author?.profilePicture || null,
 			},
 			status: tweet.text.trim().length > 0 ? 'ok' : 'failed',
-			platformMetadata: buildTweetPlatformMetadata(tweet, externalUrl ? { externalUrl, tweetText } : {}),
+			platformMetadata: buildTweetPlatformMetadata(tweet),
 		},
 		canonicalUrl: tweet.url,
 		eventText: tweetText,
