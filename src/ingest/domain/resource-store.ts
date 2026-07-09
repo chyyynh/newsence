@@ -5,8 +5,10 @@ import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type Resou
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
 	RESOURCE_CATEGORIES,
+	RESOURCE_SCOPES,
 	RESOURCE_TYPES,
 	type ResourceCategory,
+	type ResourceScope,
 	type ResourceTranslationSource,
 	type ResourceType,
 } from '../../resources/types';
@@ -24,6 +26,7 @@ interface ResourceStoreRow {
 	og_image_url: string | null;
 	source: string | null;
 	type: string | null;
+	scope: string | null;
 	published_date: Date | string | null;
 	tags: string[];
 	keywords: string[];
@@ -33,7 +36,6 @@ interface ResourceStoreRow {
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;
-	resource_kind?: string;
 	origin_type?: string;
 }
 
@@ -76,6 +78,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			r.og_image_url AS og_image_url,
 			COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 			r.type AS type,
+			r.scope AS scope,
 			r.published_date AS published_date,
 			r.tags AS tags,
 			COALESCE(original.keywords, '{}'::text[]) AS keywords,
@@ -83,8 +86,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			r.enrichment_status AS enrichment_status,
 			r.storage_key AS storage_key,
 			r.file_type AS file_type,
-			r.normalized_url AS normalized_source_url,
-			CASE WHEN r.storage_key IS NULL THEN 'url' ELSE 'blob' END AS resource_kind
+			r.normalized_url AS normalized_source_url
 		FROM resources r
 		LEFT JOIN resource_translations original
 		  ON original.resource_id = r.id AND original.lang = r.original_lang
@@ -112,13 +114,13 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		tags: row.tags,
 		keywords: row.keywords,
 		type: parseResourceType(row.type),
+		scope: parseResourceScope(row.scope),
 		platform_metadata: (row.platform_metadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
 	if (typeof row.has_content === 'boolean') article.has_content = row.has_content;
 	if ('storage_key' in row) article.storage_key = row.storage_key ?? null;
 	if (row.file_type) article.file_type = row.file_type;
 	if ('normalized_source_url' in row) article.normalized_source_url = row.normalized_source_url ?? null;
-	if (row.resource_kind) article.resource_kind = row.resource_kind;
 	if (row.origin_type) article.origin_type = row.origin_type;
 	return article;
 }
@@ -150,7 +152,7 @@ const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
 interface ResourceMirrorRecord {
 	id: string;
 	type: ResourceType;
-	scope: 'corpus' | 'private';
+	scope: ResourceScope;
 	url: string | null;
 	normalizedUrl: string | null;
 	storageKey: string | null;
@@ -248,6 +250,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 	return {
 		id: base.url,
 		title: base.title,
+		scope: 'corpus',
 		title_cn: null,
 		summary: base.summary,
 		summary_cn: null,
@@ -296,7 +299,7 @@ function resourceMirrorRecord(
 	return {
 		id: resourceId,
 		type: parseResourceType(updatePayload.type ?? article.type),
-		scope: origin === 'source' || article.resource_kind === 'url' ? 'corpus' : 'private',
+		scope: origin === 'source' ? 'corpus' : article.scope,
 		url,
 		normalizedUrl,
 		storageKey: cleanString(article.storage_key),
@@ -518,6 +521,15 @@ function isResourceType(value: unknown): value is ResourceType {
 
 function parseResourceType(value: unknown): ResourceType {
 	if (!isResourceType(value)) throw new Error(`Invalid resource type: ${String(value)}`);
+	return value;
+}
+
+function isResourceScope(value: unknown): value is ResourceScope {
+	return typeof value === 'string' && (RESOURCE_SCOPES as readonly string[]).includes(value);
+}
+
+function parseResourceScope(value: unknown): ResourceScope {
+	if (!isResourceScope(value)) throw new Error(`Invalid resource scope: ${String(value)}`);
 	return value;
 }
 

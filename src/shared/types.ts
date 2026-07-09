@@ -1,8 +1,9 @@
-import type { ResourceCategory, ResourceType } from '../resources/types';
+import type { ResourceCategory, ResourceScope, ResourceType } from '../resources/types';
 
 export interface ResourceForProcessing {
 	id: string;
 	type: ResourceType;
+	scope: ResourceScope;
 	title: string;
 	title_cn?: string | null;
 	summary: string | null;
@@ -20,7 +21,6 @@ export interface ResourceForProcessing {
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;
-	resource_kind?: string;
 	origin_type?: string;
 }
 

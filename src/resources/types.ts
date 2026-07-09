@@ -2,6 +2,10 @@ export const RESOURCE_TYPES = ['web', 'rss', 'twitter', 'youtube', 'hackernews',
 
 export type ResourceType = (typeof RESOURCE_TYPES)[number];
 
+export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
+
+export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
+
 export const RESOURCE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];

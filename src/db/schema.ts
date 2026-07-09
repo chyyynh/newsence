@@ -14,7 +14,7 @@ import {
 	uuid,
 	varchar,
 } from 'drizzle-orm/pg-core';
-import { RESOURCE_CATEGORIES, RESOURCE_TRANSLATION_SOURCES, RESOURCE_TYPES } from '../resources/types';
+import { RESOURCE_CATEGORIES, RESOURCE_SCOPES, RESOURCE_TRANSLATION_SOURCES, RESOURCE_TYPES } from '../resources/types';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
 	dataType() {
@@ -33,9 +33,7 @@ export const resources = pgTable(
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
 		type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
-		scope: text('scope', { enum: ['corpus', 'private'] })
-			.default('private')
-			.notNull(),
+		scope: text('scope', { enum: RESOURCE_SCOPES }).default('private').notNull(),
 		url: text('url'),
 		normalizedUrl: text('normalized_url'),
 		storageKey: text('storage_key').unique(),
