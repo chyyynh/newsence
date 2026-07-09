@@ -12,11 +12,7 @@ export { NewsenceMonitorWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override async fetch(): Promise<Response> {
-		return Response.json({
-			status: 'ok',
-			worker: 'newsence-core',
-			timestamp: new Date().toISOString(),
-		});
+		return new Response('Not found', { status: 404 });
 	}
 
 	override scheduled(event: ScheduledController): void {

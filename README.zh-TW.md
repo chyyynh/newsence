@@ -122,27 +122,9 @@ pnpm run deploy
 
 或本地跑 `pnpm dev`（用 `wrangler dev --test-scheduled`，可以 curl `/__scheduled?cron=*/5+*+*+*+*` 手動觸發 RSS cron）。
 
-## API
+## API Surface
 
-```bash
-# 健康檢查
-curl https://your-worker.workers.dev/health
-```
-
-<details>
-<summary>回應範例</summary>
-
-```json
-{
-  "status": "ok",
-  "worker": "newsence-core",
-  "timestamp": "2026-07-08T00:00:00.000Z"
-}
-```
-
-</details>
-
-App/chat 整合走 Cloudflare service-binding RPC。用戶 ingest 的驗證與限流由 app Worker 在呼叫 core Worker 前處理。
+這個 Worker 不提供公開 HTTP API。App/chat 整合走 Cloudflare service-binding RPC，cron 監控則走 scheduled triggers。用戶 ingest 的驗證與限流由 app Worker 在呼叫 core Worker 前處理。
 
 ## CLI 與 MCP 伺服器
 

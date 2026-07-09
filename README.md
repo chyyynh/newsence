@@ -130,27 +130,9 @@ pnpm run deploy
 
 Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can curl `/__scheduled?cron=*/5+*+*+*+*` to trigger RSS manually).
 
-## API
+## API surface
 
-```bash
-# Health check
-curl https://your-worker.workers.dev/health
-```
-
-<details>
-<summary>Response example</summary>
-
-```json
-{
-  "status": "ok",
-  "worker": "newsence-core",
-  "timestamp": "2026-07-08T00:00:00.000Z"
-}
-```
-
-</details>
-
-App/chat integrations use Cloudflare service-binding RPC. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
+This Worker does not expose a public HTTP API. App/chat integrations use Cloudflare service-binding RPC, while cron monitors run through scheduled triggers. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
 
 ## CLI & MCP
 
