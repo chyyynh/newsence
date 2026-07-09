@@ -95,10 +95,10 @@ async function fetchRssDraft(): Promise<SourceDraft> {
 	const feed = extractFromXml(await readTextWithLimit(response, 3 * 1024 * 1024), {
 		descriptionMaxLen: 0,
 	});
-	const entry = ((feed.entries ?? []) as FeedEntry[]).find((item) => item.link && item.title && (item.description || item.content));
+	const entry = ((feed.entries ?? []) as FeedEntry[]).find((item) => item.link && item.title);
 	if (!entry?.link || !entry.title) throw new Error('RSS smoke feed did not include a usable entry');
 
-	const summary = (entry.description || entry.content || '').trim();
+	const summary = (entry.description || '').trim();
 	return {
 		article: {
 			url: normalizeUrl(entry.link),
@@ -107,7 +107,7 @@ async function fetchRssDraft(): Promise<SourceDraft> {
 			publishedDate: entry.published ? new Date(entry.published).toISOString() : FIXED_DATE,
 			summary,
 			sourceType: 'rss',
-			content: summary || null,
+			content: null,
 			platformMetadata: null,
 		},
 	};

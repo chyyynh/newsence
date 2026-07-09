@@ -48,7 +48,7 @@ async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<v
 	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {
-			const description = item.description ?? '';
+			const description = item.description?.trim() ?? '';
 			await enqueueProcessing(env, {
 				kind: 'source',
 				draft: {
@@ -59,7 +59,7 @@ async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<v
 						publishedDate: item.published ? new Date(item.published) : new Date(),
 						summary: description,
 						sourceType: 'rss',
-						content: description || null,
+						content: null,
 						platformMetadata: null,
 					},
 				},
