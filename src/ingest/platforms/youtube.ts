@@ -4,7 +4,7 @@ import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@cor
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList, youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -224,7 +224,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			}
 
 			const videoUrls = videos.map(({ url }) => url);
-			const existingRecords = await withCoreDb(env, (db) => getExistingArticlesByUrl(db, videoUrls));
+			const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
 			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 

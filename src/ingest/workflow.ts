@@ -4,7 +4,7 @@ import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from
 import { type CoreDb, withCoreTx } from '@db/client';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
-	insertFinalSourceArticle,
+	insertFinalSourceResource,
 	loadArticleForProcessing,
 	syncArticleEntities,
 	syncResourceAfterProcessing,
@@ -52,7 +52,7 @@ type StoredWorkflowTarget = { kind: 'article' | 'userFile' | 'resource'; rowId: 
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceWorkflowTarget = Extract<WorkflowTarget, { kind: 'source' }>;
-type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
+type SourceArticleRecord = Parameters<typeof insertFinalSourceResource>[1];
 type PersistedTargetIds = { legacyId: string; resourceId: string };
 type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 	Partial<{
@@ -302,13 +302,11 @@ async function persistSourceWorkflowTarget(
 
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-	const legacyId = await insertFinalSourceArticle(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
-	const resourceId = await syncResourceAfterProcessing(coreDb, 'articles', legacyId, article, updatePayload);
+	const resourceId = await insertFinalSourceResource(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
 	if (entities) {
-		await syncArticleEntities(coreDb, legacyId, entities, article.source, platformMetadata);
 		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
 	}
-	return { legacyId, resourceId };
+	return { legacyId: resourceId, resourceId };
 }
 
 async function persistStoredWorkflowTarget(
@@ -404,7 +402,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const sourceType =
 			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
 		const logContext =
-			target.kind === 'source' ? { url: article.url, table: 'articles' } : { article_id: target.rowId, table: storedTargetTable(target) };
+			target.kind === 'source' ? { url: article.url, table: 'resources' } : { article_id: target.rowId, table: storedTargetTable(target) };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
@@ -477,7 +475,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 					)
 				: null;
 		const persisted = await step.do(
-			target.kind === 'source' ? 'insert-final-article' : 'update-db',
+			target.kind === 'source' ? 'insert-final-resource' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () =>
 				persistWorkflowTarget(

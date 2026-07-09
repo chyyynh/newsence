@@ -2,7 +2,7 @@ import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@cor
 import { withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { and, eq } from 'drizzle-orm';
 
@@ -43,7 +43,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 	const itemUrls = items.flatMap((item) => (item.link ? [{ item, url: normalizeUrl(item.link) }] : []));
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await withCoreDb(env, (db) => getExistingArticlesByUrl(db, urls));
+	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 

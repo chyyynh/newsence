@@ -460,12 +460,11 @@ function nullableVector(value: unknown, field: string): string | null {
 
 /**
  * Core sink dedup policy:
- * - Source articles are globally unique by URL. Discovery may pre-query with
- *   getExistingArticlesByUrl, but insertFinalSourceArticle is the authoritative
- *   ON CONFLICT guard.
- * - user_files rows are created by the app worker. Saved URLs dedup per user on
- *   (user_id, normalized_source_url); blob uploads intentionally keep one row
- *   per upload. Core only updates enrichment fields here.
+ * - Source resources are globally unique by normalized URL. Discovery may
+ *   pre-query with getExistingResourcesByUrl, but insertFinalSourceResource is
+ *   the authoritative ON CONFLICT guard.
+ * - Legacy articles/user_files rows are still readable for in-flight old
+ *   workflows, but new source/upload writes go directly to resources.
  */
 export async function updateArticleAfterProcessing(
 	db: CoreDb,
@@ -540,6 +539,39 @@ export async function syncResourceAfterProcessing(
 	const result = await db.execute(resourceUpsertStatement(record));
 	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
 	if (!resourceId) throw new Error(`Failed to sync resource mirror for ${table}:${legacyId}`);
+	await syncResourceTranslations(db, resourceId, record);
+	return resourceId;
+}
+
+function preparedRecordToArticle(base: PreparedArticleRecord): Article {
+	return {
+		id: base.url,
+		title: base.title,
+		title_cn: null,
+		summary: base.summary,
+		summary_cn: null,
+		content: base.content,
+		content_cn: null,
+		url: base.url,
+		og_image_url: null,
+		source: base.source,
+		published_date: formatPublishedDate(base.publishedDate),
+		tags: base.tags ?? [],
+		keywords: base.keywords ?? [],
+		source_type: base.sourceType,
+		platform_metadata: (base.platformMetadata ?? undefined) as Article['platform_metadata'],
+	};
+}
+
+export async function insertFinalSourceResource(
+	db: CoreDb,
+	base: PreparedArticleRecord,
+	updatePayload: Record<string, unknown>,
+): Promise<string> {
+	const record = resourceMirrorRecord('articles', crypto.randomUUID(), preparedRecordToArticle(base), updatePayload);
+	const result = await db.execute(resourceUpsertStatement(record));
+	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
+	if (!resourceId) throw new Error(`Failed to insert finalized resource for ${base.url}`);
 	await syncResourceTranslations(db, resourceId, record);
 	return resourceId;
 }
@@ -793,43 +825,6 @@ function isResourceCategory(value: unknown): value is ResourceCategory {
 	return typeof value === 'string' && (RESOURCE_CATEGORIES as readonly string[]).includes(value);
 }
 
-export async function insertFinalSourceArticle(
-	db: CoreDb,
-	base: PreparedArticleRecord,
-	updatePayload: Record<string, unknown>,
-): Promise<string> {
-	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
-	const entities = updatePayload.entities ?? null;
-	const inserted = await db
-		.insert(articles)
-		.values({
-			url: base.url,
-			title: base.title,
-			titleCn: nullableString(updatePayload.title_cn, 'title_cn'),
-			source: base.source,
-			publishedDate: dateValue(base.publishedDate, 'publishedDate'),
-			scrapedDate: new Date(),
-			keywords: stringArrayValue(updatePayload.keywords ?? base.keywords ?? [], 'keywords'),
-			tags: stringArrayValue(updatePayload.tags ?? base.tags ?? [], 'tags'),
-			tokens: [],
-			summary: nullableString(updatePayload.summary ?? base.summary, 'summary'),
-			summaryCn: nullableString(updatePayload.summary_cn, 'summary_cn'),
-			sourceType: base.sourceType,
-			content: nullableString(updatePayload.content ?? base.content, 'content'),
-			contentCn: nullableString(updatePayload.content_cn, 'content_cn'),
-			ogImageUrl: nullableString(updatePayload.og_image_url, 'og_image_url'),
-			platformMetadata,
-			entities,
-			embedding: nullableVector(updatePayload.embedding, 'embedding'),
-		})
-		.onConflictDoNothing({ target: articles.url })
-		.returning({ id: articles.id });
-	const articleId =
-		inserted[0]?.id ?? (await db.select({ id: articles.id }).from(articles).where(eq(articles.url, base.url)).limit(1))[0]?.id;
-	if (!articleId) throw new Error(`Failed to insert finalized article for ${base.url}`);
-	return articleId;
-}
-
 export async function syncArticleEntities(
 	db: CoreDb,
 	articleId: string,
@@ -988,35 +983,60 @@ type ExistingArticleRecord = {
 	summary_cn: string | null;
 };
 
-export async function getExistingArticlesByUrl(db: CoreDb, urls: string[]): Promise<ExistingArticleRecord[]> {
+export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingArticleRecord[]> {
 	if (urls.length === 0) return [];
-	return db
-		.select({
-			id: articles.id,
-			url: articles.url,
-			source: articles.source,
-			source_type: articles.sourceType,
-			summary_cn: articles.summaryCn,
-		})
-		.from(articles)
-		.where(inArray(articles.url, urls));
+	const result = await db.execute(sql`
+		SELECT
+			r.id::text AS id,
+			COALESCE(r.normalized_url, r.url) AS url,
+			r.type AS source,
+			r.type AS source_type,
+			zh.summary AS summary_cn
+		FROM resources r
+		LEFT JOIN resource_translations zh
+		  ON zh.resource_id = r.id AND zh.lang = 'zh-Hant'
+		WHERE r.normalized_url = ANY(${urls}::text[])
+		   OR r.url = ANY(${urls}::text[])
+	`);
+	return result.rows as unknown as ExistingArticleRecord[];
 }
 
-export async function reopenArticleForReprocessing(
+export async function reopenResourceForReprocessing(
 	db: CoreDb,
-	articleId: string,
+	resourceId: string,
 	update: { summary: string; content: string; platformMetadata: unknown },
 ): Promise<void> {
+	const [resource] = await db.select({ originalLang: resources.originalLang }).from(resources).where(eq(resources.id, resourceId)).limit(1);
+	if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
 	await db
-		.update(articles)
+		.update(resources)
 		.set({
+			platformMetadata: update.platformMetadata,
+			enrichmentStatus: 'pending',
+			embedding: null,
+			updatedAt: sql`NOW()`,
+		})
+		.where(eq(resources.id, resourceId));
+	await db
+		.insert(resourceTranslations)
+		.values({
+			resourceId,
+			lang: resource.originalLang,
 			summary: update.summary,
 			content: update.content,
-			platformMetadata: update.platformMetadata,
-			summaryCn: null,
-			contentCn: null,
-			titleCn: null,
-			embedding: null,
+			keywords: [],
+			source: 'original',
 		})
-		.where(eq(articles.id, articleId));
+		.onConflictDoUpdate({
+			target: [resourceTranslations.resourceId, resourceTranslations.lang],
+			set: {
+				summary: update.summary,
+				content: update.content,
+				source: 'original',
+				updatedAt: sql`NOW()`,
+			},
+		});
+	await db
+		.delete(resourceTranslations)
+		.where(and(eq(resourceTranslations.resourceId, resourceId), not(eq(resourceTranslations.lang, resource.originalLang))));
 }

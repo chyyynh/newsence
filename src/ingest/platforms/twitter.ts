@@ -4,7 +4,7 @@ import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { entityExtractionExclusionNames } from '@entities/normalize';
-import { getExistingArticlesByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, reopenResourceForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
@@ -58,9 +58,9 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 	}
 
 	const articleUrl = normalizeUrl(resolved.canonicalUrl);
-	const [existingArticle] = await getExistingArticlesByUrl(db, [articleUrl]);
+	const [existingArticle] = await getExistingResourcesByUrl(db, [articleUrl]);
 	if (existingArticle) {
-		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'article', rowId: existingArticle.id });
+		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'resource', rowId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
 		return true;
 	}
@@ -90,12 +90,12 @@ async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<bo
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
 
-	const [existing] = await getExistingArticlesByUrl(db, [firstUrl]);
+	const [existing] = await getExistingResourcesByUrl(db, [firstUrl]);
 
 	if (existing) {
 		const existingId = existing.id;
-		await reopenArticleForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
-		await enqueueProcessing(env, { kind: 'article', rowId: existingId });
+		await reopenResourceForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
+		await enqueueProcessing(env, { kind: 'resource', rowId: existingId });
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: tweetCount });
 		return true;
 	}
