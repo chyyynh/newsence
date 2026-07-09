@@ -91,7 +91,9 @@ export const resources = pgTable('resources', {
 });
 
 export const resourceTranslations = pgTable('resource_translations', {
-	resourceId: uuid('resource_id').notNull(),
+	resourceId: uuid('resource_id')
+		.notNull()
+		.references(() => resources.id, { onDelete: 'cascade' }),
 	lang: varchar('lang', { length: 35 }).notNull(),
 	title: text('title'),
 	summary: text('summary'),
@@ -105,7 +107,9 @@ export const resourceTranslations = pgTable('resource_translations', {
 export const library = pgTable('library', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	userId: text('user_id').notNull(),
-	resourceId: uuid('resource_id').notNull(),
+	resourceId: uuid('resource_id')
+		.notNull()
+		.references(() => resources.id, { onDelete: 'cascade' }),
 	originType: text('origin_type', { enum: ['saved_url', 'upload', 'generated'] }).notNull(),
 	savedAt: timestamp('saved_at', { mode: 'date' }).defaultNow().notNull(),
 	visibility: text('visibility', { enum: ['public', 'private'] })
@@ -150,7 +154,9 @@ export const entities = pgTable('entities', {
 });
 
 export const entityTranslations = pgTable('entity_translations', {
-	entityId: uuid('entity_id').notNull(),
+	entityId: uuid('entity_id')
+		.notNull()
+		.references(() => entities.id, { onDelete: 'cascade' }),
 	lang: varchar('lang', { length: 35 }).notNull(),
 	name: varchar('name', { length: 255 }).notNull(),
 	source: varchar('source', { length: 16, enum: RESOURCE_TRANSLATION_SOURCES }).default('original').notNull(),
@@ -166,15 +172,19 @@ export const articleEntities = pgTable('article_entities', {
 
 export const resourceEntities = pgTable('resource_entities', {
 	id: uuid('id').defaultRandom().primaryKey(),
-	resourceId: uuid('resource_id').notNull(),
-	entityId: uuid('entity_id').notNull(),
+	resourceId: uuid('resource_id')
+		.notNull()
+		.references(() => resources.id, { onDelete: 'cascade' }),
+	entityId: uuid('entity_id')
+		.notNull()
+		.references(() => entities.id, { onDelete: 'cascade' }),
 });
 
 export const papers = pgTable('papers', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	openAlexId: varchar('openalex_id', { length: 32 }).notNull().unique(),
 	doi: text('doi').unique(),
-	resourceId: uuid('resource_id'),
+	resourceId: uuid('resource_id').references(() => resources.id, { onDelete: 'set null' }),
 	title: text('title'),
 	authors: text('authors').array().notNull(),
 	venue: text('venue'),
