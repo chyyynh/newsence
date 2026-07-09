@@ -393,7 +393,7 @@ function resourceConflictSetSql(): SQL {
 		url = COALESCE(excluded.url, resources.url),
 		storage_key = COALESCE(excluded.storage_key, resources.storage_key),
 		file_type = COALESCE(excluded.file_type, resources.file_type),
-		original_lang = COALESCE(NULLIF(resources.original_lang, ''), excluded.original_lang),
+		original_lang = excluded.original_lang,
 		published_date = COALESCE(excluded.published_date, resources.published_date),
 		scraped_date = COALESCE(excluded.scraped_date, resources.scraped_date),
 		tags = CASE WHEN cardinality(excluded.tags) > 0 THEN excluded.tags ELSE resources.tags END,
@@ -424,6 +424,16 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 				},
 			});
 	}
+	await db
+		.update(resourceTranslations)
+		.set({ source: 'machine', updatedAt: sql`now()` })
+		.where(
+			and(
+				eq(resourceTranslations.resourceId, resourceId),
+				not(eq(resourceTranslations.lang, record.originalLang)),
+				eq(resourceTranslations.source, 'original'),
+			),
+		);
 }
 
 function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationRecord[] {
