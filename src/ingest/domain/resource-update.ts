@@ -27,11 +27,14 @@ export function applyAcquiredContent(article: Article, acquired: AcquiredContent
 		content: acquired.markdown || article.content,
 		source: acquired.metadata.siteName ?? acquired.metadata.author ?? article.source,
 		published_date: acquired.metadata.publishedDate ?? article.published_date,
-		source_type:
-			article.source_type === 'rss' && acquiredSourceType === 'default' ? article.source_type : (acquiredSourceType ?? article.source_type),
+		source_type: resourceTypeAfterAcquisition(article.source_type, acquiredSourceType),
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
 	};
+}
+
+function resourceTypeAfterAcquisition(currentType: string | undefined, acquiredType: string | undefined): string | undefined {
+	return currentType === 'rss' && acquiredType === 'default' ? currentType : (acquiredType ?? currentType);
 }
 
 export class ResourceUpdateBuilder {
@@ -67,7 +70,8 @@ export class ResourceUpdateBuilder {
 		if (acquired.metadata.publishedDate) this.update.published_date = acquired.metadata.publishedDate;
 		if (acquired.metadata.description !== null) this.update.summary = acquired.metadata.description;
 		this.update.content = acquired.markdown;
-		if (acquired.platformMetadata) this.update.source_type = acquired.platformMetadata.type;
+		if (acquired.platformMetadata)
+			this.update.source_type = resourceTypeAfterAcquisition(this.article.source_type, acquired.platformMetadata.type);
 		return this;
 	}
 
