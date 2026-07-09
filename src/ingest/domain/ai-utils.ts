@@ -42,7 +42,7 @@ export function mergeArticleAnalysis(
 	if ((options.overwriteSummary || isEmpty(article.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
 	if ((options.overwriteSummary || isEmpty(article.summary_cn)) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
 	if (includeContent && analysis.content) updateData.content = analysis.content;
-	if (includeContent && isEmpty(article.content_cn) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
+	if (includeContent && shouldWriteContentTranslation(article) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
 	if (analysis.entities) updateData.entities = analysis.entities;
 
 	return { updateData, classificationCategory: analysis.category };
@@ -56,6 +56,7 @@ const CONTENT_TRANSLATION_MAX_CHUNKS = 24;
 const MAX_CONTENT_TRANSLATION_LENGTH = CONTENT_TRANSLATION_CHUNK_LENGTH * CONTENT_TRANSLATION_MAX_CHUNKS;
 const CONTENT_TRANSLATION_CONCURRENCY = 3;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
+const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
 const MIN_CONTENT_TRANSLATION_LENGTH = 120;
 const ARTICLE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
@@ -165,8 +166,16 @@ function cjkRatio(text: string): number {
 function shouldTranslateArticleContent(article: Article): boolean {
 	const content = article.content?.trim();
 	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
-	if (!isEmpty(article.content_cn)) return false;
+	if (!shouldWriteContentTranslation(article)) return false;
 	return true;
+}
+
+function shouldWriteContentTranslation(article: Article): boolean {
+	if (isEmpty(article.content_cn)) return true;
+	const content = article.content?.trim();
+	const translated = article.content_cn?.trim();
+	if (!content || !translated || content.length < 1000) return false;
+	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
 
 function normalizeComparableContent(content: string): string {
