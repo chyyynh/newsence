@@ -1,5 +1,8 @@
 import type { Article } from '@core-shared/types';
+import { withCoreDb } from '@db/client';
+import { userFiles } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
+import { eq, sql } from 'drizzle-orm';
 import { Client } from 'pg';
 
 type ArticleStoreTable = 'articles' | 'user_files';
@@ -41,27 +44,23 @@ export async function loadArticleForProcessing(
 }
 
 export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: string): Promise<boolean> {
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await db.connect();
+	return withCoreDb(env, async (db) => {
 		const row = (
-			await db.query<{ complete: boolean }>(
-				`SELECT title_cn IS NOT NULL
-			        AND length(title_cn) > 0
-			        AND summary_cn IS NOT NULL
-			        AND length(summary_cn) > 0
-			        AND embedding IS NOT NULL AS complete
-			   FROM user_files
-			  WHERE id = $1
-			  LIMIT 1`,
-				[userFileId],
-			)
-		).rows[0];
+			await db
+				.select({
+					complete: sql<boolean>`${userFiles.titleCn} IS NOT NULL
+						AND length(${userFiles.titleCn}) > 0
+						AND ${userFiles.summaryCn} IS NOT NULL
+						AND length(${userFiles.summaryCn}) > 0
+						AND ${userFiles.embedding} IS NOT NULL`,
+				})
+				.from(userFiles)
+				.where(eq(userFiles.id, userFileId))
+				.limit(1)
+		)[0];
 		if (!row) throw new Error(`Failed to fetch user_file ${userFileId}: not found`);
 		return row.complete;
-	} finally {
-		await closeArticleStoreClient(db);
-	}
+	});
 }
 
 async function closeArticleStoreClient(db: Client): Promise<void> {

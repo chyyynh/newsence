@@ -19,6 +19,7 @@
 		"@bufbuild/protobuf": "^1.10.0",
 		"@extractus/feed-extractor": "^7.2.1",
 		"@llamaindex/liteparse-wasm": "^2.1.1",
+		"drizzle-orm": "^0.45.2",
 		"hpack": "^1.0.0",
 		"node-forge": "^1.4.0",
 		"pg": "^8.20.0",
