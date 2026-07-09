@@ -613,10 +613,6 @@ export async function syncResourceEntities(
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<void> {
-	const existingLinks = await db
-		.select({ entityId: resourceEntities.entityId })
-		.from(resourceEntities)
-		.where(eq(resourceEntities.resourceId, resourceId));
 	const { normalizedEntities, entityIds } = await upsertEntityIds(db, inputEntities, resourceType, source, platformMetadata);
 
 	if (entityIds.length) {
@@ -630,8 +626,6 @@ export async function syncResourceEntities(
 	for (const entityId of entityIds) {
 		await db.insert(resourceEntities).values({ resourceId, entityId }).onConflictDoNothing();
 	}
-
-	await refreshEntityResourceCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
 
 	console.info({
 		tag: 'ENTITIES',
@@ -698,22 +692,6 @@ async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity:
 				},
 			});
 	}
-}
-
-async function refreshEntityResourceCounts(db: CoreDb, entityIds: string[]): Promise<void> {
-	const uniqueIds = [...new Set(entityIds)];
-	if (!uniqueIds.length) return;
-	await db.execute(sql`
-		UPDATE entities e
-		    SET resource_count = counts.resource_count
-		   FROM (
-		     SELECT ids.id, COUNT(DISTINCT links.resource_id)::int AS resource_count
-		       FROM unnest(${uniqueIds}::uuid[]) AS ids(id)
-		       LEFT JOIN resource_entities links ON links.entity_id = ids.id
-		      GROUP BY ids.id
-		   ) counts
-		  WHERE e.id = counts.id
-	`);
 }
 
 type ExistingResourceRecord = {
