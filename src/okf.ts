@@ -10,6 +10,7 @@ import type { ResourceCategory, ResourceType } from './resources/types';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;
+	primaryLocale?: string | null;
 	userId?: string | null;
 };
 
@@ -63,17 +64,22 @@ type EntityLinkRow = {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BCP47_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 const encoder = new TextEncoder();
 
 export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionOkfInput): Promise<Response> {
 	const collectionId = input.collectionId.trim();
+	const primaryLocale = normalizePrimaryLocale(input.primaryLocale);
 	const viewerId = input.userId?.trim() || null;
 	if (!collectionId || !UUID_RE.test(collectionId)) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400 });
 	}
+	if (primaryLocale === false) {
+		return Response.json({ code: 'BAD_REQUEST', message: 'Invalid primaryLocale' }, { status: 400 });
+	}
 
 	try {
-		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId });
+		const bundle = await buildCollectionOkfBundle(env, { viewerId, collectionId, primaryLocale });
 		return new Response(tarGzipStream(bundle.files), {
 			headers: {
 				'Content-Type': 'application/gzip',
@@ -92,7 +98,7 @@ export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionO
 
 async function buildCollectionOkfBundle(
 	env: CoreEnv,
-	input: { viewerId: string | null; collectionId: string },
+	input: { viewerId: string | null; collectionId: string; primaryLocale: string | null },
 ): Promise<{ slug: string; files: Iterable<OkfFile> }> {
 	return withCoreDb(env, async (db) => {
 		const collection = (
@@ -107,7 +113,7 @@ async function buildCollectionOkfBundle(
 		)[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const resources = await readCollectionResources(db, collection.id, input.viewerId);
+		const resources = await readCollectionResources(db, collection.id, input.viewerId, input.primaryLocale);
 		const links = resources.length ? await readResourceEntityLinks(db, resources) : [];
 		return {
 			slug: uniqueSlug(collection.name, collection.id),
@@ -120,7 +126,18 @@ async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
 	return (await db.execute(statement)).rows as T[];
 }
 
-async function readCollectionResources(db: CoreDb, collectionId: string, viewerId: string | null): Promise<ResourceRow[]> {
+function normalizePrimaryLocale(value: string | null | undefined): string | null | false {
+	const locale = value?.trim();
+	if (!locale) return null;
+	return BCP47_RE.test(locale) ? locale : false;
+}
+
+async function readCollectionResources(
+	db: CoreDb,
+	collectionId: string,
+	viewerId: string | null,
+	primaryLocale: string | null,
+): Promise<ResourceRow[]> {
 	const rows = await queryRows<ResourceQueryRow>(
 		db,
 		sql`SELECT
@@ -154,7 +171,11 @@ async function readCollectionResources(db: CoreDb, collectionId: string, viewerI
 		     SELECT rt.lang, rt.title, rt.summary, rt.content, rt.keywords, rt.source
 		     FROM resource_translations rt
 		     WHERE rt.resource_id = r.id
-		     ORDER BY (rt.lang = r.original_lang) DESC, (rt.source = 'original') DESC, rt.lang ASC
+		     ORDER BY
+		       (${primaryLocale}::text IS NOT NULL AND rt.lang = ${primaryLocale}) DESC,
+		       (rt.lang = r.original_lang) DESC,
+		       (rt.source = 'original') DESC,
+		       rt.lang ASC
 		     LIMIT 1
 		   ) primary_translation ON TRUE
 		   LEFT JOIN LATERAL (
