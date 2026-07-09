@@ -1,6 +1,6 @@
 import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { articleEntities, articles, entities, resourceEntities, resourceTranslations, userFiles } from '@db/schema';
+import { articleEntities, articles, entities, entityTranslations, resourceEntities, resourceTranslations, userFiles } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
@@ -852,9 +852,31 @@ async function upsertEntityIds(
 		const entityId = row?.id;
 		if (!entityId) throw new Error(`Failed to sync entity ${canonical}: no entity id returned`);
 		entityIds.push(entityId);
+		await upsertEntityTranslationRows(db, entityId, entity);
 	}
 
 	return { normalizedEntities, entityIds };
+}
+
+async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity: ArticleEntityInput): Promise<void> {
+	const labels: Array<{ lang: string; name: string; source: ResourceTranslationSource }> = [
+		{ lang: 'en', name: entity.name, source: 'original' },
+	];
+	if (entity.name_cn.trim()) labels.push({ lang: 'zh-Hant', name: entity.name_cn, source: 'machine' });
+
+	for (const label of labels) {
+		await db
+			.insert(entityTranslations)
+			.values({ entityId, lang: label.lang, name: label.name, source: label.source })
+			.onConflictDoUpdate({
+				target: [entityTranslations.entityId, entityTranslations.lang],
+				set: {
+					name: sql`COALESCE(NULLIF(excluded.name, ''), ${entityTranslations.name})`,
+					source: sql`CASE WHEN ${entityTranslations.source} = 'original' THEN ${entityTranslations.source} ELSE excluded.source END`,
+					updatedAt: sql`NOW()`,
+				},
+			});
+	}
 }
 
 async function refreshEntityResourceCounts(db: CoreDb, entityIds: string[]): Promise<void> {

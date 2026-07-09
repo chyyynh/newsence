@@ -61,6 +61,15 @@ type EntityLinkRow = {
 	name_cn: string | null;
 	type: string;
 	resource_count: number;
+	translations: EntityTranslationRow[];
+};
+
+type EntityLinkQueryRow = Omit<EntityLinkRow, 'translations'> & { translations: unknown };
+
+type EntityTranslationRow = {
+	lang: string;
+	name: string;
+	source: 'original' | 'machine' | 'human';
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -214,15 +223,36 @@ async function readCollectionResources(
 }
 
 async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Promise<EntityLinkRow[]> {
-	return queryRows<EntityLinkRow>(
+	const rows = await queryRows<EntityLinkQueryRow>(
 		db,
 		sql`SELECT
-		   re.resource_id::text, e.id::text, e.name, e.name_cn, e.type, e.resource_count
+		   re.resource_id::text,
+		   e.id::text,
+		   COALESCE(en_label.name, e.name) AS name,
+		   COALESCE(zh_label.name, e.name_cn) AS name_cn,
+		   e.type,
+		   e.resource_count,
+		   COALESCE(
+		     jsonb_agg(
+		       jsonb_build_object(
+		         'lang', et.lang,
+		         'name', et.name,
+		         'source', et.source
+		       )
+		       ORDER BY et.lang
+		     ) FILTER (WHERE et.entity_id IS NOT NULL),
+		     '[]'::jsonb
+		   )::text AS translations
 		 FROM resource_entities re
 		 JOIN entities e ON e.id = re.entity_id
+		 LEFT JOIN entity_translations en_label ON en_label.entity_id = e.id AND en_label.lang = 'en'
+		 LEFT JOIN entity_translations zh_label ON zh_label.entity_id = e.id AND zh_label.lang = 'zh-Hant'
+		 LEFT JOIN entity_translations et ON et.entity_id = e.id
 		 WHERE re.resource_id = ANY(${resources.map((resource) => resource.id)}::uuid[])
-		 ORDER BY e.resource_count DESC, e.name ASC`,
+		 GROUP BY re.resource_id, e.id, en_label.name, zh_label.name
+		 ORDER BY e.resource_count DESC, COALESCE(en_label.name, e.name) ASC`,
 	);
+	return rows.map((row) => ({ ...row, translations: normalizeEntityTranslations(row.translations) }));
 }
 
 function* renderOkfFiles(collection: CollectionRow, resources: ResourceRow[], links: EntityLinkRow[]): Iterable<OkfFile> {
@@ -360,6 +390,7 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], resources: 
 			title: entity.name,
 			// extension keys
 			name_cn: entity.name_cn,
+			...entityTranslationExtensionFields(entity),
 			newsence_entity_id: entity.id,
 			newsence_global_resource_count: entity.resource_count,
 			newsence_bundle_resource_count: linkedResources.length,
@@ -369,6 +400,15 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], resources: 
 		'## Mentioned in',
 		...resourceLinks,
 	]);
+}
+
+function entityTranslationExtensionFields(entity: EntityLinkRow): Record<string, unknown> {
+	const fields: Record<string, unknown> = {};
+	for (const translation of entity.translations) {
+		if (translation.name === entity.name) continue;
+		fields[`title_${translation.lang}`] = translation.name;
+	}
+	return fields;
 }
 
 function normalizeTranslations(value: unknown): ResourceTranslationRow[] {
@@ -390,6 +430,19 @@ function normalizeTranslations(value: unknown): ResourceTranslationRow[] {
 				source,
 			},
 		];
+	});
+}
+
+function normalizeEntityTranslations(value: unknown): EntityTranslationRow[] {
+	const raw = typeof value === 'string' ? safeJsonParse(value) : value;
+	if (!Array.isArray(raw)) return [];
+	return raw.flatMap((item) => {
+		if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+		const row = item as Record<string, unknown>;
+		const lang = typeof row.lang === 'string' && row.lang.trim() ? row.lang.trim() : null;
+		const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : null;
+		const source = row.source === 'machine' || row.source === 'human' ? row.source : 'original';
+		return lang && name && BCP47_RE.test(lang) ? [{ lang, name, source }] : [];
 	});
 }
 

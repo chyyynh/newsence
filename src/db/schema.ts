@@ -149,6 +149,15 @@ export const entities = pgTable('entities', {
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });
 
+export const entityTranslations = pgTable('entity_translations', {
+	entityId: uuid('entity_id').notNull(),
+	lang: varchar('lang', { length: 35 }).notNull(),
+	name: varchar('name', { length: 255 }).notNull(),
+	source: varchar('source', { length: 16, enum: RESOURCE_TRANSLATION_SOURCES }).default('original').notNull(),
+	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+});
+
 export const articleEntities = pgTable('article_entities', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	articleId: uuid('article_id').notNull(),
