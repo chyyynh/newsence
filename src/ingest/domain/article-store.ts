@@ -1,7 +1,7 @@
 import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { entities, entityTranslations, resourceEntities, resources, resourceTranslations } from '@db/schema';
-import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
+import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
 	RESOURCE_CATEGORIES,
@@ -551,7 +551,7 @@ function isResourceCategory(value: unknown): value is ResourceCategory {
 export async function syncResourceEntities(
 	db: CoreDb,
 	resourceId: string,
-	inputEntities: ArticleEntityInput[],
+	inputEntities: ResourceEntityInput[],
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<void> {
@@ -587,11 +587,11 @@ export async function syncResourceEntities(
 
 async function upsertEntityIds(
 	db: CoreDb,
-	inputEntities: ArticleEntityInput[],
+	inputEntities: ResourceEntityInput[],
 	source?: string | null,
 	platformMetadata?: unknown,
-): Promise<{ normalizedEntities: ArticleEntityInput[]; entityIds: string[] }> {
-	const normalizedEntities = normalizeArticleEntitiesForStorage(inputEntities, source, platformMetadata);
+): Promise<{ normalizedEntities: ResourceEntityInput[]; entityIds: string[] }> {
+	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, source, platformMetadata);
 	const entityIds: string[] = [];
 
 	for (const entity of normalizedEntities) {
@@ -620,7 +620,7 @@ async function upsertEntityIds(
 	return { normalizedEntities, entityIds };
 }
 
-async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity: ArticleEntityInput): Promise<void> {
+async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity: ResourceEntityInput): Promise<void> {
 	const labels: Array<{ lang: string; name: string; source: ResourceTranslationSource }> = [
 		{ lang: 'en', name: entity.name, source: 'original' },
 	];

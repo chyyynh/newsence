@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { Article, PaperMetadata, YoutubeTranscript } from '@core-shared/types';
 import { type CoreDb, withCoreTx } from '@db/client';
-import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
+import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { loadResourceForProcessing, syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/article-store';
 import {
 	type AcquiredContent,
@@ -111,7 +111,7 @@ async function persistStoredWorkflowTarget(
 		.applyOgFields(ogImagePatch)
 		.build();
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
-	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
+	const entities = normalizeResourceEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 	const resourceId = await updateResourceAfterProcessing(coreDb, target.rowId, article, updatePayload);
 	if (entities) {
 		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);

@@ -6,8 +6,8 @@
 
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
 
-export type ArticleEntityInput = { name: string; name_cn: string; type: string };
-type NormalizedArticleEntity = { name: string; name_cn: string; type: EntityType };
+export type ResourceEntityInput = { name: string; name_cn: string; type: string };
+type NormalizedResourceEntity = { name: string; name_cn: string; type: EntityType };
 
 /** Canonical names that are too generic to be useful entity pages (audit 2026-07-02, issue #197). */
 const GENERIC_ENTITY_CANONICALS = new Set(['ai', 'x', 'go', 'us', 'c', 'v4', 'rl', 'pi']);
@@ -31,7 +31,7 @@ const SOURCE_FEED_SUFFIX_CANONICALS = new Set([
 ]);
 const ENTITY_NAME_MAX_LENGTH = 255;
 const ENTITY_TYPE_MAX_LENGTH = 20;
-const MAX_ENTITIES_PER_ARTICLE = 10;
+const MAX_ENTITIES_PER_RESOURCE = 10;
 const MAX_EXCLUSION_NAMES = 10;
 
 // Trailing side strips quotes only: `.`/`)`/`}`/`!` can be part of legit
@@ -45,7 +45,7 @@ export function canonicalizeEntityName(name: string): string {
 		.trim();
 }
 
-function shouldStoreArticleEntity(entity: NormalizedArticleEntity, excludedCanonicalNames: ReadonlySet<string>): boolean {
+function shouldStoreResourceEntity(entity: NormalizedResourceEntity, excludedCanonicalNames: ReadonlySet<string>): boolean {
 	const canonical = canonicalizeEntityName(entity.name);
 	if (!canonical || /^[a-z0-9]{1,2}$/i.test(canonical)) return false;
 	if (canonical.length > ENTITY_NAME_MAX_LENGTH || entity.name.length > ENTITY_NAME_MAX_LENGTH) return false;
@@ -60,7 +60,7 @@ function normalizeEntityType(value: string): EntityType | null {
 	return ENTITY_TYPE_SET.has(type) ? (type as EntityType) : null;
 }
 
-function normalizeArticleEntity(entity: ArticleEntityInput): NormalizedArticleEntity | null {
+function normalizeResourceEntity(entity: ResourceEntityInput): NormalizedResourceEntity | null {
 	const name = entity.name.trim();
 	const nameCn = entity.name_cn.trim();
 	const type = normalizeEntityType(entity.type);
@@ -158,36 +158,36 @@ export function entityExtractionExclusionNames(source?: string | null, platformM
 	return names;
 }
 
-export function normalizeArticleEntitiesForStorage(
-	entities: ArticleEntityInput[],
+export function normalizeResourceEntitiesForStorage(
+	entities: ResourceEntityInput[],
 	source?: string | null,
 	platformMetadata?: unknown,
-): NormalizedArticleEntity[] {
-	const byCanonical = new Map<string, NormalizedArticleEntity>();
+): NormalizedResourceEntity[] {
+	const byCanonical = new Map<string, NormalizedResourceEntity>();
 	const excludedCanonicals = excludedEntityCanonicalNames(source, platformMetadata);
 	for (const entity of entities) {
-		const normalized = normalizeArticleEntity(entity);
+		const normalized = normalizeResourceEntity(entity);
 		if (!normalized) continue;
 		const canonical = canonicalizeEntityName(normalized.name);
-		if (!canonical || byCanonical.has(canonical) || !shouldStoreArticleEntity(normalized, excludedCanonicals)) continue;
+		if (!canonical || byCanonical.has(canonical) || !shouldStoreResourceEntity(normalized, excludedCanonicals)) continue;
 		byCanonical.set(canonical, normalized);
-		if (byCanonical.size >= MAX_ENTITIES_PER_ARTICLE) break;
+		if (byCanonical.size >= MAX_ENTITIES_PER_RESOURCE) break;
 	}
 	return [...byCanonical.values()];
 }
 
-export function normalizeArticleEntityUpdatePayload(
+export function normalizeResourceEntityUpdatePayload(
 	updatePayload: Record<string, unknown>,
 	source?: string | null,
 	platformMetadata?: unknown,
-): NormalizedArticleEntity[] | null {
+): NormalizedResourceEntity[] | null {
 	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeArticleEntitiesForStorage(updatePayload.entities.filter(isArticleEntityInput), source, platformMetadata);
+	const entities = normalizeResourceEntitiesForStorage(updatePayload.entities.filter(isResourceEntityInput), source, platformMetadata);
 	updatePayload.entities = entities;
 	return entities;
 }
 
-function isArticleEntityInput(value: unknown): value is ArticleEntityInput {
+function isResourceEntityInput(value: unknown): value is ResourceEntityInput {
 	if (!value || typeof value !== 'object') return false;
 	const record = value as Record<string, unknown>;
 	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';
