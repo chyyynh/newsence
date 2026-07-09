@@ -1,27 +1,33 @@
 import type { Article } from '@core-shared/types';
-import { withCoreDb } from '@db/client';
-import { userFiles } from '@db/schema';
+import { type CoreDb, withCoreDb } from '@db/client';
+import { articles, userFiles } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { eq, sql } from 'drizzle-orm';
-import { Client } from 'pg';
+import type { Client } from 'pg';
 
 type ArticleStoreTable = 'articles' | 'user_files';
 
 type ArticleForProcessing = Article & { has_content?: boolean };
 
-const ARTICLE_FIELDS: Record<ArticleStoreTable, string> = {
-	articles:
-		'id, title, title_cn, summary, summary_cn, content, url, og_image_url, source, source_type, published_date, tags, keywords, platform_metadata, entities',
-	user_files:
-		'id, title, title_cn, summary, summary_cn, extracted_text AS content, source_url AS url, og_image_url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type',
-};
-
-const ARTICLE_SHELL_FIELDS: Record<ArticleStoreTable, string> = {
-	articles:
-		'id, title, title_cn, summary, summary_cn, NULL::text AS content, content IS NOT NULL AND length(content) > 0 AS has_content, url, og_image_url, source, source_type, published_date, tags, keywords, platform_metadata, entities',
-	user_files:
-		'id, title, title_cn, summary, summary_cn, NULL::text AS content, extracted_text IS NOT NULL AND length(extracted_text) > 0 AS has_content, source_url AS url, og_image_url, site_name AS source, platform_type AS source_type, published_date, tags, keywords, metadata AS platform_metadata, entities, storage_key, file_type',
-};
+interface ArticleStoreRow {
+	id: string;
+	title: string | null;
+	title_cn: string | null;
+	summary: string | null;
+	summary_cn: string | null;
+	content: string | null;
+	url: string | null;
+	og_image_url: string | null;
+	source: string | null;
+	source_type: string | null;
+	published_date: Date | string | null;
+	tags: string[];
+	keywords: string[];
+	platform_metadata: unknown;
+	has_content?: boolean;
+	storage_key?: string | null;
+	file_type?: string;
+}
 
 export async function loadArticleForProcessing(
 	env: CoreEnv,
@@ -30,17 +36,11 @@ export async function loadArticleForProcessing(
 	shell = false,
 ): Promise<ArticleForProcessing> {
 	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await db.connect();
-		const result = await db.query(`SELECT ${shell ? ARTICLE_SHELL_FIELDS[table] : ARTICLE_FIELDS[table]} FROM ${table} WHERE id = $1`, [
-			articleId,
-		]);
-		if (result.rows.length === 0) throw new Error(`Failed to fetch article ${articleId}: not found`);
-		return result.rows[0] as ArticleForProcessing;
-	} finally {
-		await closeArticleStoreClient(db);
-	}
+	return withCoreDb(env, async (db) => {
+		const row = table === 'articles' ? await loadStoredArticleRow(db, articleId, shell) : await loadStoredUserFileRow(db, articleId, shell);
+		if (!row) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		return row;
+	});
 }
 
 export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: string): Promise<boolean> {
@@ -63,14 +63,134 @@ export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: str
 	});
 }
 
-async function closeArticleStoreClient(db: Client): Promise<void> {
-	await db.end().catch((error) =>
-		console.warn({
-			tag: 'ARTICLE_STORE',
-			msg: 'client close failed',
-			error: String(error),
-		}),
-	);
+async function loadStoredArticleRow(db: CoreDb, articleId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
+	if (shell) {
+		const [row] = await db
+			.select({
+				id: articles.id,
+				title: articles.title,
+				title_cn: articles.titleCn,
+				summary: articles.summary,
+				summary_cn: articles.summaryCn,
+				content: sql<string | null>`NULL::text`,
+				has_content: sql<boolean>`${articles.content} IS NOT NULL AND length(${articles.content}) > 0`,
+				url: articles.url,
+				og_image_url: articles.ogImageUrl,
+				source: articles.source,
+				source_type: articles.sourceType,
+				published_date: articles.publishedDate,
+				tags: articles.tags,
+				keywords: articles.keywords,
+				platform_metadata: articles.platformMetadata,
+			})
+			.from(articles)
+			.where(eq(articles.id, articleId))
+			.limit(1);
+		return row ? articleStoreRowToProcessing(row) : undefined;
+	}
+
+	const [row] = await db
+		.select({
+			id: articles.id,
+			title: articles.title,
+			title_cn: articles.titleCn,
+			summary: articles.summary,
+			summary_cn: articles.summaryCn,
+			content: articles.content,
+			url: articles.url,
+			og_image_url: articles.ogImageUrl,
+			source: articles.source,
+			source_type: articles.sourceType,
+			published_date: articles.publishedDate,
+			tags: articles.tags,
+			keywords: articles.keywords,
+			platform_metadata: articles.platformMetadata,
+		})
+		.from(articles)
+		.where(eq(articles.id, articleId))
+		.limit(1);
+	return row ? articleStoreRowToProcessing(row) : undefined;
+}
+
+async function loadStoredUserFileRow(db: CoreDb, articleId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
+	if (shell) {
+		const [row] = await db
+			.select({
+				id: userFiles.id,
+				title: userFiles.title,
+				title_cn: userFiles.titleCn,
+				summary: userFiles.summary,
+				summary_cn: userFiles.summaryCn,
+				content: sql<string | null>`NULL::text`,
+				has_content: sql<boolean>`${userFiles.extractedText} IS NOT NULL AND length(${userFiles.extractedText}) > 0`,
+				url: userFiles.sourceUrl,
+				og_image_url: userFiles.ogImageUrl,
+				source: userFiles.siteName,
+				source_type: userFiles.platformType,
+				published_date: userFiles.publishedDate,
+				tags: userFiles.tags,
+				keywords: userFiles.keywords,
+				platform_metadata: userFiles.metadata,
+				storage_key: userFiles.storageKey,
+				file_type: userFiles.fileType,
+			})
+			.from(userFiles)
+			.where(eq(userFiles.id, articleId))
+			.limit(1);
+		return row ? articleStoreRowToProcessing(row) : undefined;
+	}
+
+	const [row] = await db
+		.select({
+			id: userFiles.id,
+			title: userFiles.title,
+			title_cn: userFiles.titleCn,
+			summary: userFiles.summary,
+			summary_cn: userFiles.summaryCn,
+			content: userFiles.extractedText,
+			url: userFiles.sourceUrl,
+			og_image_url: userFiles.ogImageUrl,
+			source: userFiles.siteName,
+			source_type: userFiles.platformType,
+			published_date: userFiles.publishedDate,
+			tags: userFiles.tags,
+			keywords: userFiles.keywords,
+			platform_metadata: userFiles.metadata,
+			storage_key: userFiles.storageKey,
+			file_type: userFiles.fileType,
+		})
+		.from(userFiles)
+		.where(eq(userFiles.id, articleId))
+		.limit(1);
+	return row ? articleStoreRowToProcessing(row) : undefined;
+}
+
+function articleStoreRowToProcessing(row: ArticleStoreRow): ArticleForProcessing {
+	const article: ArticleForProcessing = {
+		id: row.id,
+		title: row.title ?? '',
+		title_cn: row.title_cn,
+		summary: row.summary,
+		summary_cn: row.summary_cn,
+		content: row.content,
+		url: row.url ?? '',
+		og_image_url: row.og_image_url,
+		source: row.source ?? '',
+		published_date: formatPublishedDate(row.published_date),
+		tags: row.tags,
+		keywords: row.keywords,
+		source_type: row.source_type ?? undefined,
+		platform_metadata: (row.platform_metadata ?? undefined) as Article['platform_metadata'],
+	};
+	if (typeof row.has_content === 'boolean') article.has_content = row.has_content;
+	if ('storage_key' in row) article.storage_key = row.storage_key ?? null;
+	if (row.file_type) article.file_type = row.file_type;
+	return article;
+}
+
+function formatPublishedDate(value: Date | string | null): string {
+	if (value instanceof Date) return value.toISOString();
+	return value ?? '';
 }
 
 interface PreparedArticleRecord {
