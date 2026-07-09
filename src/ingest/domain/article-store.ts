@@ -1,15 +1,6 @@
 import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import {
-	articleEntities,
-	articles,
-	entities,
-	entityTranslations,
-	resourceEntities,
-	resources,
-	resourceTranslations,
-	userFiles,
-} from '@db/schema';
+import { entities, entityTranslations, resourceEntities, resources, resourceTranslations } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
@@ -19,8 +10,6 @@ import {
 	type ResourceTranslationSource,
 	type ResourceType,
 } from '../../resources/types';
-
-type ArticleStoreTable = 'articles' | 'user_files' | 'resources';
 
 type ArticleForProcessing = Article & { has_content?: boolean };
 
@@ -48,21 +37,10 @@ interface ArticleStoreRow {
 	origin_type?: string;
 }
 
-export async function loadArticleForProcessing(
-	env: CoreEnv,
-	table: ArticleStoreTable,
-	articleId: string,
-	shell = false,
-): Promise<ArticleForProcessing> {
-	if (table !== 'articles' && table !== 'user_files' && table !== 'resources') throw new Error(`Unsupported article store table: ${table}`);
+export async function loadResourceForProcessing(env: CoreEnv, resourceId: string, shell = false): Promise<ArticleForProcessing> {
 	return withCoreDb(env, async (db) => {
-		const row =
-			table === 'articles'
-				? await loadStoredArticleRow(db, articleId, shell)
-				: table === 'user_files'
-					? await loadStoredUserFileRow(db, articleId, shell)
-					: await loadStoredResourceRow(db, articleId, shell);
-		if (!row) throw new Error(`Failed to fetch article ${articleId}: not found`);
+		const row = await loadStoredResourceRow(db, resourceId, shell);
+		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
 		return row;
 	});
 }
@@ -82,114 +60,6 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
 		return row.complete;
 	});
-}
-
-async function loadStoredArticleRow(db: CoreDb, articleId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
-	if (shell) {
-		const [row] = await db
-			.select({
-				id: articles.id,
-				title: articles.title,
-				title_cn: articles.titleCn,
-				summary: articles.summary,
-				summary_cn: articles.summaryCn,
-				content: sql<string | null>`NULL::text`,
-				has_content: sql<boolean>`${articles.content} IS NOT NULL AND length(${articles.content}) > 0`,
-				url: articles.url,
-				og_image_url: articles.ogImageUrl,
-				source: articles.source,
-				source_type: articles.sourceType,
-				published_date: articles.publishedDate,
-				tags: articles.tags,
-				keywords: articles.keywords,
-				platform_metadata: articles.platformMetadata,
-			})
-			.from(articles)
-			.where(eq(articles.id, articleId))
-			.limit(1);
-		return row ? articleStoreRowToProcessing(row) : undefined;
-	}
-
-	const [row] = await db
-		.select({
-			id: articles.id,
-			title: articles.title,
-			title_cn: articles.titleCn,
-			summary: articles.summary,
-			summary_cn: articles.summaryCn,
-			content: articles.content,
-			url: articles.url,
-			og_image_url: articles.ogImageUrl,
-			source: articles.source,
-			source_type: articles.sourceType,
-			published_date: articles.publishedDate,
-			tags: articles.tags,
-			keywords: articles.keywords,
-			platform_metadata: articles.platformMetadata,
-		})
-		.from(articles)
-		.where(eq(articles.id, articleId))
-		.limit(1);
-	return row ? articleStoreRowToProcessing(row) : undefined;
-}
-
-async function loadStoredUserFileRow(db: CoreDb, articleId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
-	if (shell) {
-		const [row] = await db
-			.select({
-				id: userFiles.id,
-				title: userFiles.title,
-				title_cn: userFiles.titleCn,
-				summary: userFiles.summary,
-				summary_cn: userFiles.summaryCn,
-				content: sql<string | null>`NULL::text`,
-				has_content: sql<boolean>`${userFiles.extractedText} IS NOT NULL AND length(${userFiles.extractedText}) > 0`,
-				url: userFiles.sourceUrl,
-				og_image_url: userFiles.ogImageUrl,
-				source: userFiles.siteName,
-				source_type: userFiles.platformType,
-				published_date: userFiles.publishedDate,
-				tags: userFiles.tags,
-				keywords: userFiles.keywords,
-				platform_metadata: userFiles.metadata,
-				storage_key: userFiles.storageKey,
-				file_type: userFiles.fileType,
-				normalized_source_url: userFiles.normalizedSourceUrl,
-				resource_kind: userFiles.resourceKind,
-				origin_type: userFiles.originType,
-			})
-			.from(userFiles)
-			.where(eq(userFiles.id, articleId))
-			.limit(1);
-		return row ? articleStoreRowToProcessing(row) : undefined;
-	}
-
-	const [row] = await db
-		.select({
-			id: userFiles.id,
-			title: userFiles.title,
-			title_cn: userFiles.titleCn,
-			summary: userFiles.summary,
-			summary_cn: userFiles.summaryCn,
-			content: userFiles.extractedText,
-			url: userFiles.sourceUrl,
-			og_image_url: userFiles.ogImageUrl,
-			source: userFiles.siteName,
-			source_type: userFiles.platformType,
-			published_date: userFiles.publishedDate,
-			tags: userFiles.tags,
-			keywords: userFiles.keywords,
-			platform_metadata: userFiles.metadata,
-			storage_key: userFiles.storageKey,
-			file_type: userFiles.fileType,
-			normalized_source_url: userFiles.normalizedSourceUrl,
-			resource_kind: userFiles.resourceKind,
-			origin_type: userFiles.originType,
-		})
-		.from(userFiles)
-		.where(eq(userFiles.id, articleId))
-		.limit(1);
-	return row ? articleStoreRowToProcessing(row) : undefined;
 }
 
 async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
@@ -271,9 +141,7 @@ interface PreparedArticleRecord {
 	tags?: string[];
 }
 
-type ArticleUpdateValues = Partial<typeof articles.$inferInsert>;
-type UserFileUpdateValues = Partial<typeof userFiles.$inferInsert>;
-type ArticleStoreResourceTable = 'articles' | 'user_files';
+type ResourceMirrorOrigin = 'source' | 'resource';
 
 const DEFAULT_RESOURCE_LANG = 'en';
 const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
@@ -314,131 +182,6 @@ interface ResourceTranslationRecord {
 	source: ResourceTranslationSource;
 }
 
-function articleUpdateValues(updatePayload: Record<string, unknown>): ArticleUpdateValues {
-	const update: ArticleUpdateValues = {};
-	for (const [key, value] of Object.entries(updatePayload)) {
-		if (value === undefined) continue;
-		switch (key) {
-			case 'title':
-				update.title = requiredString(value, key);
-				break;
-			case 'title_cn':
-				update.titleCn = nullableString(value, key);
-				break;
-			case 'summary':
-				update.summary = nullableString(value, key);
-				break;
-			case 'summary_cn':
-				update.summaryCn = nullableString(value, key);
-				break;
-			case 'content':
-				update.content = nullableString(value, key);
-				break;
-			case 'content_cn':
-				update.contentCn = nullableString(value, key);
-				break;
-			case 'og_image_url':
-				update.ogImageUrl = nullableString(value, key);
-				break;
-			case 'source':
-				update.source = requiredString(value, key);
-				break;
-			case 'source_type':
-				update.sourceType = requiredString(value, key);
-				break;
-			case 'published_date':
-				update.publishedDate = dateValue(value, key);
-				break;
-			case 'tags':
-				update.tags = stringArrayValue(value, key);
-				break;
-			case 'keywords':
-				update.keywords = stringArrayValue(value, key);
-				break;
-			case 'platform_metadata':
-				update.platformMetadata = value;
-				break;
-			case 'entities':
-				update.entities = value;
-				break;
-			case 'embedding':
-				update.embedding = nullableVector(value, key);
-				break;
-			default:
-				throw new Error(`Unsupported articles update column: ${key}`);
-		}
-	}
-	return update;
-}
-
-function userFileUpdateValues(updatePayload: Record<string, unknown>): UserFileUpdateValues {
-	const update: UserFileUpdateValues = {};
-	for (const [key, value] of Object.entries(updatePayload)) {
-		if (value === undefined) continue;
-		switch (key) {
-			case 'title':
-				update.title = nullableString(value, key);
-				break;
-			case 'title_cn':
-				update.titleCn = nullableString(value, key);
-				break;
-			case 'summary':
-				update.summary = nullableString(value, key);
-				break;
-			case 'summary_cn':
-				update.summaryCn = nullableString(value, key);
-				break;
-			case 'content':
-				update.extractedText = nullableString(value, key);
-				break;
-			case 'content_cn':
-				update.contentCn = nullableString(value, key);
-				break;
-			case 'og_image_url':
-				update.ogImageUrl = nullableString(value, key);
-				break;
-			case 'source':
-				update.siteName = nullableString(value, key);
-				break;
-			case 'source_type':
-				update.platformType = nullableString(value, key);
-				break;
-			case 'published_date':
-				update.publishedDate = value === null ? null : dateValue(value, key);
-				break;
-			case 'tags':
-				update.tags = stringArrayValue(value, key);
-				break;
-			case 'keywords':
-				update.keywords = stringArrayValue(value, key);
-				break;
-			case 'platform_metadata':
-				update.metadata = value;
-				break;
-			case 'entities':
-				update.entities = value;
-				break;
-			case 'embedding':
-				update.embedding = nullableVector(value, key);
-				break;
-			default:
-				throw new Error(`Unsupported user_files update column: ${key}`);
-		}
-	}
-	return update;
-}
-
-function requiredString(value: unknown, field: string): string {
-	if (typeof value !== 'string') throw new Error(`Invalid ${field}: expected string`);
-	return value;
-}
-
-function nullableString(value: unknown, field: string): string | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value !== 'string') throw new Error(`Invalid ${field}: expected string`);
-	return value;
-}
-
 function stringArrayValue(value: unknown, field: string): string[] {
 	if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
 		throw new Error(`Invalid ${field}: expected string[]`);
@@ -463,32 +206,15 @@ function nullableVector(value: unknown, field: string): string | null {
  * - Source resources are globally unique by normalized URL. Discovery may
  *   pre-query with getExistingResourcesByUrl, but insertFinalSourceResource is
  *   the authoritative ON CONFLICT guard.
- * - Legacy articles/user_files rows are still readable for in-flight old
- *   workflows, but new source/upload writes go directly to resources.
+ * - Stored enrichment targets are canonical resources only.
  */
-export async function updateArticleAfterProcessing(
-	db: CoreDb,
-	table: ArticleStoreTable,
-	articleId: string,
-	updatePayload: Record<string, unknown>,
-): Promise<void> {
-	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
-	const updated =
-		table === 'articles'
-			? await updateStoredArticle(db, articleId, updatePayload)
-			: await updateStoredUserFile(db, articleId, updatePayload);
-	if (updated.length === 0) {
-		throw new Error(`Failed to update article ${articleId}: no rows matched`);
-	}
-}
-
 export async function updateResourceAfterProcessing(
 	db: CoreDb,
 	resourceId: string,
 	article: Article,
 	updatePayload: Record<string, unknown>,
 ): Promise<string> {
-	const record = resourceMirrorRecord('user_files', resourceId, article, updatePayload);
+	const record = resourceMirrorRecord('resource', resourceId, article, updatePayload);
 	const result = await db.execute(sql`
 		UPDATE resources
 		   SET type = ${record.type},
@@ -516,33 +242,6 @@ export async function updateResourceAfterProcessing(
 	return updatedId;
 }
 
-async function updateStoredArticle(db: CoreDb, articleId: string, updatePayload: Record<string, unknown>): Promise<Array<{ id: string }>> {
-	const values = articleUpdateValues(updatePayload);
-	if (Object.keys(values).length === 0) return [{ id: articleId }];
-	return db.update(articles).set(values).where(eq(articles.id, articleId)).returning({ id: articles.id });
-}
-
-async function updateStoredUserFile(db: CoreDb, articleId: string, updatePayload: Record<string, unknown>): Promise<Array<{ id: string }>> {
-	const values = userFileUpdateValues(updatePayload);
-	if (Object.keys(values).length === 0) return [{ id: articleId }];
-	return db.update(userFiles).set(values).where(eq(userFiles.id, articleId)).returning({ id: userFiles.id });
-}
-
-export async function syncResourceAfterProcessing(
-	db: CoreDb,
-	table: ArticleStoreResourceTable,
-	legacyId: string,
-	article: Article,
-	updatePayload: Record<string, unknown>,
-): Promise<string> {
-	const record = resourceMirrorRecord(table, legacyId, article, updatePayload);
-	const result = await db.execute(resourceUpsertStatement(record));
-	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
-	if (!resourceId) throw new Error(`Failed to sync resource mirror for ${table}:${legacyId}`);
-	await syncResourceTranslations(db, resourceId, record);
-	return resourceId;
-}
-
 function preparedRecordToArticle(base: PreparedArticleRecord): Article {
 	return {
 		id: base.url,
@@ -568,7 +267,7 @@ export async function insertFinalSourceResource(
 	base: PreparedArticleRecord,
 	updatePayload: Record<string, unknown>,
 ): Promise<string> {
-	const record = resourceMirrorRecord('articles', crypto.randomUUID(), preparedRecordToArticle(base), updatePayload);
+	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToArticle(base), updatePayload);
 	const result = await db.execute(resourceUpsertStatement(record));
 	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
 	if (!resourceId) throw new Error(`Failed to insert finalized resource for ${base.url}`);
@@ -577,8 +276,8 @@ export async function insertFinalSourceResource(
 }
 
 function resourceMirrorRecord(
-	table: ArticleStoreResourceTable,
-	legacyId: string,
+	origin: ResourceMirrorOrigin,
+	resourceId: string,
 	article: Article,
 	updatePayload: Record<string, unknown>,
 ): ResourceMirrorRecord {
@@ -586,7 +285,7 @@ function resourceMirrorRecord(
 	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, article.source);
 	const fileType = stringOrNull(article.file_type);
 	const url = cleanString(updatePayload.url ?? article.url);
-	const normalizedUrl = table === 'user_files' ? cleanString(article.normalized_source_url ?? article.url) : url;
+	const normalizedUrl = origin === 'resource' ? cleanString(article.normalized_source_url ?? article.url) : url;
 	const tags = stringArrayValue(updatePayload.tags ?? article.tags ?? [], 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords ?? article.keywords ?? [], 'keywords');
 	const title = cleanString(updatePayload.title ?? article.title);
@@ -596,15 +295,15 @@ function resourceMirrorRecord(
 	const content = cleanString(updatePayload.content ?? article.content);
 	const contentCn = cleanString(updatePayload.content_cn ?? article.content_cn);
 	return {
-		id: legacyId,
+		id: resourceId,
 		type: deriveResourceType({
-			table,
+			origin,
 			platformMetadata,
 			sourceType: stringOrNull(updatePayload.source_type ?? article.source_type),
 			fileType,
 			resourceKind: article.resource_kind ?? null,
 		}),
-		scope: table === 'articles' || article.resource_kind === 'url' ? 'corpus' : 'private',
+		scope: origin === 'source' || article.resource_kind === 'url' ? 'corpus' : 'private',
 		url,
 		normalizedUrl,
 		storageKey: cleanString(article.storage_key),
@@ -798,7 +497,7 @@ function jsonbParam(value: unknown): string | null {
 }
 
 function deriveResourceType(input: {
-	table: ArticleStoreResourceTable;
+	origin: ResourceMirrorOrigin;
 	platformMetadata: unknown;
 	sourceType: string | null;
 	fileType: string | null;
@@ -809,8 +508,8 @@ function deriveResourceType(input: {
 	if (isResourceType(input.sourceType)) return input.sourceType;
 	if (input.fileType === 'application/pdf') return 'pdf';
 	if (input.fileType?.startsWith('image/')) return 'image';
-	if (input.table === 'user_files' && input.resourceKind === 'url') return 'web';
-	return input.table === 'user_files' ? 'file' : 'web';
+	if (input.origin === 'resource' && input.resourceKind === 'url') return 'web';
+	return input.origin === 'resource' ? 'file' : 'web';
 }
 
 function platformMetadataType(value: unknown): ResourceType | null {
@@ -833,43 +532,6 @@ function isResourceType(value: unknown): value is ResourceType {
 
 function isResourceCategory(value: unknown): value is ResourceCategory {
 	return typeof value === 'string' && (RESOURCE_CATEGORIES as readonly string[]).includes(value);
-}
-
-export async function syncArticleEntities(
-	db: CoreDb,
-	articleId: string,
-	inputEntities: ArticleEntityInput[],
-	source?: string | null,
-	platformMetadata?: unknown,
-): Promise<void> {
-	const existingLinks = await db
-		.select({ entityId: articleEntities.entityId })
-		.from(articleEntities)
-		.where(eq(articleEntities.articleId, articleId));
-	const { normalizedEntities, entityIds } = await upsertEntityIds(db, inputEntities, source, platformMetadata);
-
-	if (entityIds.length) {
-		await db
-			.delete(articleEntities)
-			.where(and(eq(articleEntities.articleId, articleId), not(inArray(articleEntities.entityId, entityIds))));
-	} else {
-		await db.delete(articleEntities).where(eq(articleEntities.articleId, articleId));
-	}
-
-	for (const entityId of entityIds) {
-		await db.insert(articleEntities).values({ articleId, entityId }).onConflictDoNothing();
-	}
-
-	await refreshEntityResourceCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
-
-	console.info({
-		tag: 'ENTITIES',
-		msg: 'Synced',
-		articleId,
-		inputCount: inputEntities.length,
-		count: normalizedEntities.length,
-		filteredCount: inputEntities.length - normalizedEntities.length,
-	});
 }
 
 export async function syncResourceEntities(
@@ -974,11 +636,7 @@ async function refreshEntityResourceCounts(db: CoreDb, entityIds: string[]): Pro
 		   FROM (
 		     SELECT ids.id, COUNT(DISTINCT links.resource_id)::int AS resource_count
 		       FROM unnest(${uniqueIds}::uuid[]) AS ids(id)
-		       LEFT JOIN (
-		         SELECT article_id AS resource_id, entity_id FROM article_entities
-		         UNION
-		         SELECT resource_id, entity_id FROM resource_entities
-		       ) links ON links.entity_id = ids.id
+		       LEFT JOIN resource_entities links ON links.entity_id = ids.id
 		      GROUP BY ids.id
 		   ) counts
 		  WHERE e.id = counts.id

@@ -5,11 +5,8 @@ import { type CoreDb, withCoreTx } from '@db/client';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceResource,
-	loadArticleForProcessing,
-	syncArticleEntities,
-	syncResourceAfterProcessing,
+	loadResourceForProcessing,
 	syncResourceEntities,
-	updateArticleAfterProcessing,
 	updateResourceAfterProcessing,
 } from '@ingest/domain/article-store';
 import {
@@ -48,12 +45,12 @@ function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	};
 }
 
-type StoredWorkflowTarget = { kind: 'article' | 'userFile' | 'resource'; rowId: string; reacquire?: boolean };
+type StoredWorkflowTarget = { kind: 'resource'; rowId: string };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceWorkflowTarget = Extract<WorkflowTarget, { kind: 'source' }>;
 type SourceArticleRecord = Parameters<typeof insertFinalSourceResource>[1];
-type PersistedTargetIds = { legacyId: string; resourceId: string };
+type PersistedTargetIds = { resourceId: string };
 type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 	Partial<{
 		title: string;
@@ -91,15 +88,8 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedTargetTable(target: StoredWorkflowTarget): 'articles' | 'user_files' | 'resources' {
-	if (target.kind === 'article') return 'articles';
-	if (target.kind === 'userFile') return 'user_files';
-	return 'resources';
-}
-
 function storedWorkflowId(target: StoredWorkflowTarget): string {
-	const prefix = target.kind === 'resource' ? 'resource' : target.reacquire ? 'article-reacquire' : 'article';
-	return [prefix, workflowIdPart(storedTargetTable(target)), workflowIdPart(target.rowId)].join('-');
+	return ['resource', workflowIdPart(target.rowId)].join('-');
 }
 
 async function sourceArticleWorkflowId(url: string): Promise<string> {
@@ -219,12 +209,7 @@ class ResourceUpdateBuilder {
 
 function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
 	const hasContent = 'has_content' in article && !!article.has_content;
-	if (target.kind === 'userFile' || target.kind === 'resource') return !hasContent && !article.storage_key && !!article.url;
-	if (target.kind === 'article' && target.reacquire) {
-		return (
-			!!article.url && !article.storage_key && (!article.source_type || article.source_type === 'rss' || article.source_type === 'default')
-		);
-	}
+	if (target.kind === 'resource') return !hasContent && !article.storage_key && !!article.url;
 	return target.kind === 'source' && (article.source_type === 'rss' || article.source_type === 'default');
 }
 
@@ -274,7 +259,7 @@ async function loadFullTargetArticle(
 	} else if (target.kind === 'source') {
 		article = sourceRecordToArticle(target.draft.article);
 	} else {
-		article = await loadArticleForProcessing(env, storedTargetTable(target), target.rowId);
+		article = await loadResourceForProcessing(env, target.rowId);
 	}
 	article = applyAcquiredContent(article, acquiredContent);
 	const extractedPdfText = pdfTextArtifact?.text?.trim() || null;
@@ -306,7 +291,7 @@ async function persistSourceWorkflowTarget(
 	if (entities) {
 		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
 	}
-	return { legacyId: resourceId, resourceId };
+	return { resourceId };
 }
 
 async function persistStoredWorkflowTarget(
@@ -327,26 +312,17 @@ async function persistStoredWorkflowTarget(
 		.addExtractionMetadata(extraction)
 		.addOgMetadata(ogImagePatch)
 		.addPaperMetadata(paperEnrichment)
-		.applyAcquiredFields(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire })
+		.applyAcquiredFields(acquiredContent)
 		.applyProcessorResult(finalResult, embedding)
 		.applyOgFields(ogImagePatch)
 		.build();
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-	const table = storedTargetTable(target);
-
-	let resourceId: string;
-	if (table === 'resources') {
-		resourceId = await updateResourceAfterProcessing(coreDb, target.rowId, article, updatePayload);
-	} else {
-		await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
-		resourceId = await syncResourceAfterProcessing(coreDb, table, target.rowId, article, updatePayload);
-	}
+	const resourceId = await updateResourceAfterProcessing(coreDb, target.rowId, article, updatePayload);
 	if (entities) {
-		if (table === 'articles') await syncArticleEntities(coreDb, target.rowId, entities, article.source, platformMetadata);
 		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
 	}
-	return { legacyId: target.rowId, resourceId };
+	return { resourceId };
 }
 
 async function persistWorkflowTarget(
@@ -391,7 +367,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				if (target.kind === 'source') return { ...sourceRecordToArticle(target.draft.article), content: null };
-				return loadArticleForProcessing(this.env, storedTargetTable(target), target.rowId, true);
+				return loadResourceForProcessing(this.env, target.rowId, true);
 			},
 		);
 		const acquiredContent = shouldAcquireContent(target, initialArticle)
@@ -402,7 +378,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const sourceType =
 			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
 		const logContext =
-			target.kind === 'source' ? { url: article.url, table: 'resources' } : { article_id: target.rowId, table: storedTargetTable(target) };
+			target.kind === 'source' ? { url: article.url, table: 'resources' } : { resource_id: target.rowId, table: 'resources' };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
@@ -497,7 +473,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		await syncPaperGraphForEnrichment(this.env, step, persisted.resourceId, paperEnrichment);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: persisted.legacyId, resource_id: persisted.resourceId, ...logContext });
-		return { success: true, article_id: persisted.legacyId, resource_id: persisted.resourceId };
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persisted.resourceId, ...logContext });
+		return { success: true, resource_id: persisted.resourceId };
 	}
 }
