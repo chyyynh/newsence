@@ -10,8 +10,8 @@ import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
-import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
-import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
+import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
+import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
@@ -116,19 +116,19 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return readAcquisitionJobStatus(this.env, instanceId);
 	}
 
-	/** Hybrid article search (embeddings + keywords) for the chat search-news tool. */
-	searchArticles(input: ArticleSearchInput) {
-		return searchCorpusArticles(this.env, input);
+	/** Hybrid resource search (embeddings + keywords) for the chat search-news tool. */
+	searchResources(input: ResourceSearchInput) {
+		return searchCorpusResources(this.env, input);
 	}
 
 	/** Hybrid rank search for app-side feed/context lookup. */
-	searchArticleRanks(input: ArticleRankSearchInput) {
-		return searchCorpusArticleRanks(this.env, input);
+	searchResourceRanks(input: ResourceRankSearchInput) {
+		return searchCorpusResourceRanks(this.env, input);
 	}
 
-	/** Related article ids for app-side recommendations. */
-	relatedArticleIds(input: RelatedArticleSearchInput) {
-		return relatedCorpusArticleIds(this.env, input);
+	/** Related resource ids for app-side recommendations. */
+	relatedResourceIds(input: RelatedResourceSearchInput) {
+		return relatedCorpusResourceIds(this.env, input);
 	}
 
 	/** Stream a collection as an OKF tar.gz bundle for the app Worker. */
@@ -142,7 +142,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return instance.status();
 	}
 
-	/** Read article/collection/url resources from the core corpus. */
+	/** Read collection/resource/url entries from the core corpus. */
 	readCorpusItems(items: ReadContextItem[], userId: string) {
 		return readCorpusItems(this.env, items, userId);
 	}

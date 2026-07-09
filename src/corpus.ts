@@ -3,7 +3,7 @@ import { normalizeUrl } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
 
-export interface ArticleSummary {
+export interface ResourceSummary {
 	id: string;
 	title: string;
 	url: string;
@@ -13,18 +13,18 @@ export interface ArticleSummary {
 	tags?: string[] | null;
 }
 
-export type ArticleSearchInput = {
+export type ResourceSearchInput = {
 	query: string;
 	daysAgo?: number;
 	limit?: number;
 };
 
-export type ArticleRankSearchInput = {
+export type ResourceRankSearchInput = {
 	query: string;
 	limit?: number;
 };
 
-export type RelatedArticleSearchInput = {
+export type RelatedResourceSearchInput = {
 	seed: { id: string; type: 'resource' };
 	limit?: number;
 	offset?: number;
@@ -47,7 +47,7 @@ export interface ReadContextResult {
 
 type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
-type RankArticleOptions = { fromDate?: Date | null };
+type RankResourceOptions = { fromDate?: Date | null };
 
 interface ResourceContentRow {
 	id: string;
@@ -99,34 +99,37 @@ const OVERFETCH_MULTIPLIER = 5;
 const OVERFETCH_CAP = 200;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function searchCorpusArticleRanks(env: CoreEnv, input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>> {
+export async function searchCorpusResourceRanks(
+	env: CoreEnv,
+	input: ResourceRankSearchInput,
+): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
 	return withCoreDb(env, async (db) => {
-		const ranks = await rankArticles(db, env, query, limit);
+		const ranks = await rankResources(db, env, query, limit);
 		return [...ranks].map(([id, score]) => ({ id, score }));
 	});
 }
 
-export async function relatedCorpusArticleIds(env: CoreEnv, input: RelatedArticleSearchInput): Promise<string[]> {
+export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
 	const seed = { id: input.seed.id.trim(), type: input.seed.type };
 	if (!seed.id) return [];
 	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
 	return withCoreDb(env, async (db) => {
-		const ids = await relatedArticles(db, seed, limit, offset);
+		const ids = await relatedResources(db, seed, limit, offset);
 		return [...new Set(ids)].filter((id) => id !== seed.id);
 	});
 }
 
-export async function searchCorpusArticles(env: CoreEnv, input: ArticleSearchInput): Promise<ArticleSummary[]> {
+export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	return withCoreDb(env, async (db) => {
 		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
 		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = query ? await rankArticles(db, env, query, rankLimit, { fromDate }) : null;
+		const ranks = query ? await rankResources(db, env, query, rankLimit, { fromDate }) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
@@ -187,7 +190,7 @@ function toIsoString(value: Date | string | null): string | undefined {
 	return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function formatSummary(resource: ResourceSearchRow): ArticleSummary {
+function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const summary = resource.summary ?? undefined;
 	return {
 		id: resource.id,
@@ -200,7 +203,7 @@ function formatSummary(resource: ResourceSearchRow): ArticleSummary {
 	};
 }
 
-async function relatedArticles(db: CoreDb, seed: { id: string; type: 'resource' }, limit: number, offset: number): Promise<string[]> {
+async function relatedResources(db: CoreDb, seed: { id: string; type: 'resource' }, limit: number, offset: number): Promise<string[]> {
 	if (!isValidUuid(seed.id)) return [];
 	const rows = await queryRows<{ id: string }>(
 		db,
@@ -221,7 +224,13 @@ async function relatedArticles(db: CoreDb, seed: { id: string; type: 'resource' 
 	return rows.map((r) => r.id);
 }
 
-async function rankArticles(db: CoreDb, env: CoreEnv, query: string, limit = 100, options: RankArticleOptions = {}): Promise<SearchRanks> {
+async function rankResources(
+	db: CoreDb,
+	env: CoreEnv,
+	query: string,
+	limit = 100,
+	options: RankResourceOptions = {},
+): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 
@@ -294,7 +303,7 @@ async function rankArticles(db: CoreDb, env: CoreEnv, query: string, limit = 100
 	}
 }
 
-async function keywordOnly(db: CoreDb, patterns: string[], limit: number, options: RankArticleOptions = {}): Promise<SearchRanks> {
+async function keywordOnly(db: CoreDb, patterns: string[], limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
 	const dateFilter = () =>
 		options.fromDate ? sql` AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${options.fromDate}` : sql``;
 	try {
