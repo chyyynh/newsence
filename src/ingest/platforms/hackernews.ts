@@ -250,7 +250,14 @@ async function generateHnEditorial(
 		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: 'hn-editorial-cn', gatewayId: env.AI_GATEWAY_NAME }),
 		generateText(env.AI, enPrompt.user, { systemPrompt: enPrompt.system, task: 'hn-editorial-en', gatewayId: env.AI_GATEWAY_NAME }),
 	]);
-	if (!cn || !en) throw new Error('Hacker News editorial generation did not return both locales');
+	if (!cn || !en) {
+		console.warn({
+			tag: 'HN',
+			msg: 'Editorial generation incomplete; continuing with available locales',
+			hasChinese: !!cn,
+			hasEnglish: !!en,
+		});
+	}
 
 	return { en, cn };
 }
