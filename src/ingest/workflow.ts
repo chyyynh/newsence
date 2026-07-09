@@ -270,7 +270,7 @@ async function persistWorkflowTarget(
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
 ): Promise<string> {
-	return withCoreTx(env, async (coreDb, db) => {
+	return withCoreTx(env, async (coreDb, _db) => {
 		let articleId: string;
 		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		if (target.kind === 'source') {
@@ -287,7 +287,7 @@ async function persistWorkflowTarget(
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 			articleId = await insertFinalSourceArticle(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
-			if (entities) await syncArticleEntities(db, articleId, entities, article.source, platformMetadata);
+			if (entities) await syncArticleEntities(coreDb, articleId, entities, article.source, platformMetadata);
 		} else {
 			const finalResult =
 				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
@@ -309,7 +309,7 @@ async function persistWorkflowTarget(
 
 			const table = storedTargetTable(target);
 			await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
-			if (table === 'articles' && entities) await syncArticleEntities(db, target.rowId, entities, article.source, platformMetadata);
+			if (table === 'articles' && entities) await syncArticleEntities(coreDb, target.rowId, entities, article.source, platformMetadata);
 			articleId = target.rowId;
 		}
 		if (youtubeTranscript || youtubeHighlights)

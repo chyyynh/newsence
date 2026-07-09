@@ -1,9 +1,8 @@
 import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { articles, userFiles } from '@db/schema';
+import { articleEntities, articles, entities, userFiles } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
-import { eq, inArray, sql } from 'drizzle-orm';
-import type { Client } from 'pg';
+import { and, eq, inArray, not, sql } from 'drizzle-orm';
 
 type ArticleStoreTable = 'articles' | 'user_files';
 
@@ -428,73 +427,79 @@ export async function insertFinalSourceArticle(
 }
 
 export async function syncArticleEntities(
-	db: Client,
+	db: CoreDb,
 	articleId: string,
-	entities: ArticleEntityInput[],
+	inputEntities: ArticleEntityInput[],
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<void> {
-	const normalizedEntities = normalizeArticleEntitiesForStorage(entities, source, platformMetadata);
+	const normalizedEntities = normalizeArticleEntitiesForStorage(inputEntities, source, platformMetadata);
 	const entityIds: string[] = [];
-	const existingLinks = await db.query<{ entity_id: string }>(`SELECT entity_id FROM article_entities WHERE article_id = $1`, [articleId]);
+	const existingLinks = await db
+		.select({ entityId: articleEntities.entityId })
+		.from(articleEntities)
+		.where(eq(articleEntities.articleId, articleId));
 
 	for (const entity of normalizedEntities) {
 		const canonical = canonicalizeEntityName(entity.name);
 		if (!canonical) continue;
 
-		const result = await db.query(
-			`INSERT INTO entities (canonical_name, name, name_cn, type)
-			 VALUES ($1, $2, $3, $4)
-			 ON CONFLICT (canonical_name) DO UPDATE SET
-			   name = EXCLUDED.name,
-			   name_cn = EXCLUDED.name_cn,
-			   type = EXCLUDED.type,
-			   updated_at = NOW()
-			 RETURNING id`,
-			[canonical, entity.name, entity.name_cn, entity.type],
-		);
-		const entityId = result.rows[0]?.id;
+		const [row] = await db
+			.insert(entities)
+			.values({ canonicalName: canonical, name: entity.name, nameCn: entity.name_cn, type: entity.type })
+			.onConflictDoUpdate({
+				target: entities.canonicalName,
+				set: {
+					name: entity.name,
+					nameCn: entity.name_cn,
+					type: entity.type,
+					updatedAt: sql`NOW()`,
+				},
+			})
+			.returning({ id: entities.id });
+		const entityId = row?.id;
 		if (!entityId) throw new Error(`Failed to sync entity ${canonical}: no entity id returned`);
 		entityIds.push(entityId);
 	}
 
 	if (entityIds.length) {
-		await db.query(`DELETE FROM article_entities WHERE article_id = $1 AND NOT (entity_id = ANY($2::uuid[]))`, [articleId, entityIds]);
+		await db
+			.delete(articleEntities)
+			.where(and(eq(articleEntities.articleId, articleId), not(inArray(articleEntities.entityId, entityIds))));
 	} else {
-		await db.query(`DELETE FROM article_entities WHERE article_id = $1`, [articleId]);
+		await db.delete(articleEntities).where(eq(articleEntities.articleId, articleId));
 	}
 
 	for (const entityId of entityIds) {
-		await db.query(`INSERT INTO article_entities (article_id, entity_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [articleId, entityId]);
+		await db.insert(articleEntities).values({ articleId, entityId }).onConflictDoNothing();
 	}
 
-	await refreshEntityArticleCounts(db, [...existingLinks.rows.map((row) => row.entity_id), ...entityIds]);
+	await refreshEntityArticleCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
 
 	console.info({
 		tag: 'ENTITIES',
 		msg: 'Synced',
 		articleId,
-		inputCount: entities.length,
+		inputCount: inputEntities.length,
 		count: normalizedEntities.length,
-		filteredCount: entities.length - normalizedEntities.length,
+		filteredCount: inputEntities.length - normalizedEntities.length,
 	});
 }
 
-async function refreshEntityArticleCounts(db: Client, entityIds: string[]): Promise<void> {
+async function refreshEntityArticleCounts(db: CoreDb, entityIds: string[]): Promise<void> {
 	const uniqueIds = [...new Set(entityIds)];
 	if (!uniqueIds.length) return;
-	await db.query(
-		`UPDATE entities e
+	await db.execute(sql`
+		UPDATE entities e
 		    SET article_count = counts.article_count
 		   FROM (
 		     SELECT ids.id, COUNT(ae.article_id)::int AS article_count
-		       FROM unnest($1::uuid[]) AS ids(id)
+		       FROM unnest(${uniqueIds}::uuid[]) AS ids(id)
 		       LEFT JOIN article_entities ae ON ae.entity_id = ids.id
 		      GROUP BY ids.id
 		   ) counts
-		  WHERE e.id = counts.id`,
-		[uniqueIds],
-	);
+		  WHERE e.id = counts.id
+	`);
 }
 
 type ExistingArticleRecord = {

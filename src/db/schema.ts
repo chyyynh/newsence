@@ -1,5 +1,5 @@
 import type { TranscriptSegment } from '@core-shared/types';
-import { bigint, boolean, customType, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
 	dataType() {
@@ -75,4 +75,21 @@ export const youtubeTranscripts = pgTable('youtube_transcripts', {
 	fetchedAt: timestamp('fetched_at', { mode: 'date' }).notNull(),
 	aiHighlights: jsonb('ai_highlights').$type<unknown>(),
 	highlightsGeneratedAt: timestamp('highlights_generated_at', { mode: 'date' }),
+});
+
+export const entities = pgTable('entities', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	canonicalName: varchar('canonical_name', { length: 255 }).notNull().unique(),
+	name: varchar('name', { length: 255 }).notNull(),
+	nameCn: varchar('name_cn', { length: 255 }),
+	type: varchar('type', { length: 20 }).notNull(),
+	articleCount: integer('article_count').default(0).notNull(),
+	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+});
+
+export const articleEntities = pgTable('article_entities', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	articleId: uuid('article_id').notNull(),
+	entityId: uuid('entity_id').notNull(),
 });
