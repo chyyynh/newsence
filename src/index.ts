@@ -1,6 +1,12 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { readTextWithLimit } from '@core-shared/web';
-import { type AcquiredContent, scrapeSavedUrl, validateAcquisitionUrl } from '@ingest/acquisition';
+import {
+	type AcquiredContent,
+	type BlobAcquisitionInput,
+	scrapeBlob as scrapeBlobContent,
+	scrapeSavedUrl,
+	validateAcquisitionUrl,
+} from '@ingest/acquisition';
 import {
 	AcquisitionWorkflow,
 	createAcquisitionJob as createAcquisitionWorkflowJob,
@@ -104,6 +110,11 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Synchronously acquire one URL without DB persistence. */
 	scrapeUrl(url: string): Promise<AcquiredContent | null> {
 		return scrapeSavedUrl(url, this.env);
+	}
+
+	/** Synchronously acquire one uploaded blob without DB persistence. */
+	scrapeBlob(input: BlobAcquisitionInput): Promise<AcquiredContent> {
+		return scrapeBlobContent(input, this.env);
 	}
 
 	/** Start a durable acquisition job for external pollers. */

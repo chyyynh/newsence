@@ -29,6 +29,13 @@ export type WebAcquiredContent = NormalizedContent & {
 	ogImage?: OgImagePatch;
 };
 
+export type BlobAcquisitionInput = {
+	bytes: ArrayBuffer | Uint8Array;
+	fileName?: string | null;
+	mimeType?: string | null;
+	sourceUrl?: string | null;
+};
+
 export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
 	ogImageUrl: null,
 	ogImageWidth: null,
@@ -44,6 +51,38 @@ function urlHost(url: string): string {
 function fileNameFromUrl(url: string, fallback: string): string {
 	const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '');
 	return name || fallback;
+}
+
+function titleFromFileName(fileName: string): string {
+	return fileName.replace(/\.[a-z0-9]+$/i, '').trim() || fileName;
+}
+
+function fallbackBlobUrl(fileName: string): string {
+	return `https://blob.newsence.local/${encodeURIComponent(fileName)}`;
+}
+
+function normalizeBlobSourceUrl(raw: string | null | undefined, fileName: string): string {
+	if (raw) {
+		try {
+			const parsed = new URL(raw);
+			if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.toString();
+		} catch {
+			// Fall through to a deterministic synthetic URL.
+		}
+	}
+	return fallbackBlobUrl(fileName);
+}
+
+function normalizeBlobBytes(bytes: ArrayBuffer | Uint8Array): Uint8Array {
+	return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+}
+
+function isPdfBytes(bytes: Uint8Array): boolean {
+	return bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+}
+
+function isHtmlLike(text: string): boolean {
+	return /<!doctype\s+html|<html[\s>]|<article[\s>]|<body[\s>]/i.test(text.slice(0, 2048));
 }
 
 export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
@@ -218,18 +257,16 @@ async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promis
 	return result.data.trim();
 }
 
-async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquiredContent> {
-	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
+async function scrapePdfBytes(bytes: Uint8Array, url: string, fileName: string): Promise<WebAcquiredContent> {
 	const parsed = await parsePdfBytes(bytes);
-	const fileName = fileNameFromUrl(response.url || url, 'document.pdf');
-	const title = fileName.replace(/\.pdf$/i, '') || 'PDF document';
+	const title = titleFromFileName(fileName) || 'PDF document';
 	return {
 		title,
 		markdown: parsed.text,
 		metadata: {
 			author: null,
 			publishedDate: null,
-			siteName: urlHost(response.url || url),
+			siteName: urlHost(url),
 			description: parsed.text.slice(0, 500) || null,
 		},
 		platformMetadata: {
@@ -239,6 +276,71 @@ async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquire
 		},
 		extraction: pdfExtractionMetadata(parsed),
 	};
+}
+
+async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquiredContent> {
+	const finalUrl = response.url || url;
+	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
+	return scrapePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
+}
+
+async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<WebAcquiredContent> {
+	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableArticleHtml(html)]);
+	const markdown = await markdownFromHtml(env, readable?.html ?? html, url);
+	const content = preferReadableArticleText(markdown, readable);
+	const title = metadata.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
+	return {
+		title,
+		markdown: content,
+		metadata: {
+			author: metadata.author,
+			publishedDate: metadata.publishedDate,
+			siteName: metadata.siteName,
+			description: metadata.description,
+		},
+		platformMetadata: { type: 'default', fetchedAt: new Date().toISOString(), data: null },
+		ogImage: extractOgImageFromHtml(html, url),
+	};
+}
+
+function scrapeTextBlob(text: string, fileName: string): WebAcquiredContent {
+	const title = titleFromMarkdown(text) ?? titleFromFileName(fileName);
+	return {
+		title,
+		markdown: text.trim(),
+		metadata: {
+			author: null,
+			publishedDate: null,
+			siteName: null,
+			description: text.trim().slice(0, 500) || null,
+		},
+		platformMetadata: {
+			type: 'default',
+			fetchedAt: new Date().toISOString(),
+			data: null,
+		},
+	};
+}
+
+export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<WebAcquiredContent> {
+	const bytes = normalizeBlobBytes(input.bytes);
+	const mimeType = input.mimeType?.toLowerCase().split(';')[0]?.trim() || null;
+	const fileName = input.fileName?.trim() || (mimeType === PDF_MIME || isPdfBytes(bytes) ? 'document.pdf' : 'document.html');
+	const sourceUrl = normalizeBlobSourceUrl(input.sourceUrl?.trim(), fileName);
+
+	if (mimeType === PDF_MIME || /\.pdf$/i.test(fileName) || isPdfBytes(bytes)) {
+		return scrapePdfBytes(bytes, sourceUrl, fileName);
+	}
+
+	const text = new TextDecoder().decode(bytes);
+	if (mimeType?.includes('html') || /\.html?$/i.test(fileName) || isHtmlLike(text)) {
+		return scrapeHtmlContent(env, text, sourceUrl, fileName);
+	}
+	if (mimeType?.startsWith('text/') || /\.(md|markdown|txt)$/i.test(fileName)) {
+		return scrapeTextBlob(text, fileName);
+	}
+
+	throw new Error(`Unsupported blob content type: ${mimeType ?? 'unknown'}`);
 }
 
 export async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
@@ -275,20 +377,5 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAc
 
 	const finalUrl = response.url || url;
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, finalUrl), extractReadableArticleHtml(html)]);
-	const markdown = await markdownFromHtml(env, readable?.html ?? html, finalUrl);
-	const content = preferReadableArticleText(markdown, readable);
-	const title = metadata.title ?? titleFromMarkdown(markdown) ?? urlHost(finalUrl);
-	return {
-		title,
-		markdown: content,
-		metadata: {
-			author: metadata.author,
-			publishedDate: metadata.publishedDate,
-			siteName: metadata.siteName,
-			description: metadata.description,
-		},
-		platformMetadata: { type: 'default', fetchedAt: new Date().toISOString(), data: null },
-		ogImage: extractOgImageFromHtml(html, finalUrl),
-	};
+	return scrapeHtmlContent(env, html, finalUrl, fileNameFromUrl(finalUrl, `${urlHost(finalUrl)}.html`));
 }
