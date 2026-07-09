@@ -3,6 +3,7 @@ import { type ZodType, z } from 'zod';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const CORE_TEXT_MODEL = 'google/gemini-3.1-flash-lite';
+const CORE_TEXT_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 const MAX_TEXT_LENGTH = 8000;
 const DEFAULT_AI_GATEWAY_ID = 'default';
@@ -49,32 +50,42 @@ export function prepareResourceTextForEmbedding(resource: EmbeddingInput): strin
 
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
+	const inputs = {
+		contents: [{ role: 'user', parts: [{ text: prompt }] }],
+		...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
+		generationConfig: {
+			...(options.maxTokens != null && { maxOutputTokens: options.maxTokens }),
+			temperature: options.temperature ?? 0.3,
+		},
+	};
+	const aiOptions = {
+		gateway: {
+			id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
+			collectLog: true,
+			...(task && { metadata: { app: 'newsence', task } }),
+		},
+	};
 
-	try {
-		const response = await (ai as GatewayAi).run<GeminiTextResponse>(
-			CORE_TEXT_MODEL,
-			{
-				contents: [{ role: 'user', parts: [{ text: prompt }] }],
-				...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
-				generationConfig: {
-					...(options.maxTokens != null && { maxOutputTokens: options.maxTokens }),
-					temperature: options.temperature ?? 0.3,
-				},
-			},
-			{
-				gateway: {
-					id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
-					collectLog: true,
-					...(task && { metadata: { app: 'newsence', task } }),
-				},
-			},
-		);
-		const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
-		return text?.trim() || null;
-	} catch (error) {
-		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
-		return null;
+	for (const model of [CORE_TEXT_MODEL, CORE_TEXT_FALLBACK_MODEL]) {
+		try {
+			const response = await (ai as GatewayAi).run<GeminiTextResponse>(model, inputs, aiOptions);
+			const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
+			if (text?.trim()) return text.trim();
+			throw new Error('No text content found in model response');
+		} catch (error) {
+			const isFallback = model === CORE_TEXT_FALLBACK_MODEL;
+			const log = {
+				tag: 'AI',
+				msg: isFallback ? 'AI Gateway text generation failed' : 'AI Gateway text generation failed; trying fallback',
+				model,
+				task,
+				error: String(error),
+			};
+			if (isFallback) console.error(log);
+			else console.warn(log);
+		}
 	}
+	return null;
 }
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
