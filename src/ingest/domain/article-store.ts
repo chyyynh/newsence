@@ -23,7 +23,7 @@ interface ArticleStoreRow {
 	url: string | null;
 	og_image_url: string | null;
 	source: string | null;
-	source_type: string | null;
+	resource_type: string | null;
 	published_date: Date | string | null;
 	tags: string[];
 	keywords: string[];
@@ -75,7 +75,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			r.url AS url,
 			r.og_image_url AS og_image_url,
 			COALESCE(r.type, '') AS source,
-			r.type AS source_type,
+			r.type AS resource_type,
 			r.published_date AS published_date,
 			r.tags AS tags,
 			COALESCE(original.keywords, '{}'::text[]) AS keywords,
@@ -111,7 +111,7 @@ function articleStoreRowToProcessing(row: ArticleStoreRow): ArticleForProcessing
 		published_date: formatPublishedDate(row.published_date),
 		tags: row.tags,
 		keywords: row.keywords,
-		source_type: row.source_type ?? undefined,
+		resource_type: row.resource_type ?? undefined,
 		platform_metadata: (row.platform_metadata ?? undefined) as Article['platform_metadata'],
 	};
 	if (typeof row.has_content === 'boolean') article.has_content = row.has_content;
@@ -134,7 +134,7 @@ export interface SourceResourceDraft {
 	source: string;
 	publishedDate: Date | string;
 	summary: string;
-	sourceType: string;
+	resourceType: string;
 	content: string | null;
 	platformMetadata: unknown | null;
 	keywords?: string[];
@@ -259,7 +259,7 @@ function preparedRecordToArticle(base: SourceResourceDraft): Article {
 		published_date: formatPublishedDate(base.publishedDate),
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
-		source_type: base.sourceType,
+		resource_type: base.resourceType,
 		platform_metadata: (base.platformMetadata ?? undefined) as Article['platform_metadata'],
 	};
 }
@@ -298,7 +298,7 @@ function resourceMirrorRecord(
 		type: deriveResourceType({
 			origin,
 			platformMetadata,
-			sourceType: stringOrNull(updatePayload.source_type ?? article.source_type),
+			resourceType: stringOrNull(updatePayload.resource_type ?? article.resource_type),
 			fileType,
 			resourceKind: article.resource_kind ?? null,
 		}),
@@ -513,13 +513,13 @@ function jsonbParam(value: unknown): string | null {
 function deriveResourceType(input: {
 	origin: ResourceMirrorOrigin;
 	platformMetadata: unknown;
-	sourceType: string | null;
+	resourceType: string | null;
 	fileType: string | null;
 	resourceKind: string | null;
 }): ResourceType {
 	const metadataType = platformMetadataType(input.platformMetadata);
 	if (metadataType) return metadataType;
-	if (isResourceType(input.sourceType)) return input.sourceType;
+	if (isResourceType(input.resourceType)) return input.resourceType;
 	if (input.fileType === 'application/pdf') return 'pdf';
 	if (input.fileType?.startsWith('image/')) return 'image';
 	if (input.origin === 'resource' && input.resourceKind === 'url') return 'web';
@@ -661,7 +661,7 @@ type ExistingArticleRecord = {
 	id: string;
 	url: string;
 	source: string;
-	source_type: string;
+	resource_type: string;
 	summary_cn: string | null;
 };
 
@@ -672,7 +672,7 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			r.id::text AS id,
 			COALESCE(r.normalized_url, r.url) AS url,
 			r.type AS source,
-			r.type AS source_type,
+			r.type AS resource_type,
 			zh.summary AS summary_cn
 		FROM resources r
 		LEFT JOIN resource_translations zh

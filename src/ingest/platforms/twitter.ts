@@ -31,7 +31,7 @@ async function enqueueTwitterArticle(
 		source: data.source,
 		publishedDate: data.publishedDate,
 		summary: data.summary,
-		sourceType: 'twitter',
+		resourceType: 'twitter',
 		content: data.content,
 		platformMetadata: data.platformMetadata,
 		keywords: data.hashTags,

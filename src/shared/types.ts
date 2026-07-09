@@ -12,7 +12,7 @@ export interface Article {
 	published_date: string;
 	tags: string[];
 	keywords: string[];
-	source_type?: string;
+	resource_type?: string;
 	platform_metadata?: PlatformMetadata;
 	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;

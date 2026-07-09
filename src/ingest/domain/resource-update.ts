@@ -7,7 +7,7 @@ type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 		title: string;
 		source: string;
 		published_date: string;
-		source_type: string;
+		resource_type: string;
 		content: string;
 		og_image_url: string;
 		platform_metadata: PlatformMetadata | Record<string, unknown>;
@@ -27,7 +27,7 @@ export function applyAcquiredContent(article: Article, acquired: AcquiredContent
 		content: acquired.markdown || article.content,
 		source: acquired.metadata.siteName ?? acquired.metadata.author ?? article.source,
 		published_date: acquired.metadata.publishedDate ?? article.published_date,
-		source_type: resourceTypeAfterAcquisition(article.source_type, acquiredSourceType),
+		resource_type: resourceTypeAfterAcquisition(article.resource_type, acquiredSourceType),
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
 	};
@@ -71,7 +71,7 @@ export class ResourceUpdateBuilder {
 		if (acquired.metadata.description !== null) this.update.summary = acquired.metadata.description;
 		this.update.content = acquired.markdown;
 		if (acquired.platformMetadata)
-			this.update.source_type = resourceTypeAfterAcquisition(this.article.source_type, acquired.platformMetadata.type);
+			this.update.resource_type = resourceTypeAfterAcquisition(this.article.resource_type, acquired.platformMetadata.type);
 		return this;
 	}
 

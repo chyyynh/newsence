@@ -161,11 +161,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const acquiredContent = shouldAcquireContent(initialArticle) ? await stageSavedUrlAcquisition(this.env, step, initialArticle) : null;
 		const article = applyAcquiredContent(initialArticle, acquiredContent);
 		const metadataType = article.platform_metadata?.type;
-		const sourceType =
-			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
+		const resourceType =
+			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.resource_type ?? 'default');
 		const logContext = { resource_id: target.rowId, table: 'resources' };
 
-		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
+		console.info({ tag: 'WORKFLOW', msg: 'Starting', resourceType, ...logContext });
 
 		const hasContent = 'has_content' in article && !!article.has_content;
 		const pdfTextArtifact =
@@ -193,8 +193,8 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 					acquiredContent,
 					acquiredContent ? article : undefined,
 				);
-				if (sourceType === 'hackernews') return processHackerNewsArticle(fullArticle, this.env);
-				if (sourceType === 'twitter') return processTwitterArticle(fullArticle, this.env);
+				if (resourceType === 'hackernews') return processHackerNewsArticle(fullArticle, this.env);
+				if (resourceType === 'twitter') return processTwitterArticle(fullArticle, this.env);
 				return mergeArticleAnalysis(fullArticle, await generateArticleAnalysis(fullArticle, this.env));
 			},
 		);
@@ -221,9 +221,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			},
 		);
 
-		const youtubeTranscript = sourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
+		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
-			sourceType === 'youtube'
+			resourceType === 'youtube'
 				? await step.do(
 						'prepare-youtube-highlights',
 						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
