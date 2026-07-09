@@ -5,10 +5,10 @@ import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type Resou
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
 	DEFAULT_RESOURCE_LANG,
+	isResourceType,
 	RESOURCE_CATEGORIES,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
-	RESOURCE_TYPES,
 	type ResourceCategory,
 	type ResourceScope,
 	type ResourceTranslationSource,
@@ -585,10 +585,6 @@ function deriveResourceCategory(platformMetadata: unknown, tags: string[]): Reso
 		if (isResourceCategory(category)) return category;
 	}
 	return tags.find(isResourceCategory) ?? null;
-}
-
-function isResourceType(value: unknown): value is ResourceType {
-	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
 
 function parseResourceType(value: unknown): ResourceType {

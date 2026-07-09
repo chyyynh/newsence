@@ -1,5 +1,5 @@
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import { RESOURCE_TYPES, type ResourceType } from '../../resources/types';
+import { isResourceType, type ResourceType } from '../../resources/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
@@ -36,10 +36,6 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired: 
 
 function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: string | undefined): ResourceType {
 	return isResourceType(acquiredType) ? acquiredType : currentType;
-}
-
-function isResourceType(value: unknown): value is ResourceType {
-	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
 
 export class ResourceUpdateBuilder {
