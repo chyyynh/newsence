@@ -357,7 +357,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		const articleContent = tweetId ? await scrapeTwitterArticle(tweetId, apiKey) : null;
 		if (articleContent) {
 			return {
-				kind: 'article' as const,
+				kind: 'longform' as const,
 				scraped: articleContent,
 				canonicalUrl: tweet.url || `https://x.com/i/status/${tweetId}`,
 				eventText: articleContent.metadata.description || tweetText,
