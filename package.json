@@ -6,11 +6,12 @@
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"deploy:dry-run": "pnpm run typecheck && wrangler deploy --dry-run",
+		"check:db-schema": "node scripts/check-drizzle-prisma-drift.mjs",
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
 		"start": "wrangler dev --test-scheduled",
 		"cf-typegen": "wrangler types --env-interface CoreEnv",
-		"typecheck": "pnpm cf-typegen && tsc --noEmit",
+		"typecheck": "pnpm cf-typegen && pnpm check:db-schema && tsc --noEmit",
 		"typecheck:types": "wrangler types --check --env-interface CoreEnv",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write ."
