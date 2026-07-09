@@ -47,46 +47,24 @@ function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	};
 }
 
-function buildProcessorUpdatePayload(
-	article: Article,
-	result: ProcessorResult,
-	embedding?: number[] | null,
-	metadataPatch?: Record<string, unknown>,
-): Record<string, unknown> {
-	const updatePayload: Record<string, unknown> = { ...result.updateData };
-	const category = result.classificationCategory;
-	const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-	let mergedMetadata: PlatformMetadata | null = article.platform_metadata ?? null;
-	if (hasEnrichments && mergedMetadata) {
-		mergedMetadata = {
-			...mergedMetadata,
-			enrichments: { ...(mergedMetadata.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
-		};
-	}
-	if (category) {
-		const base = mergedMetadata ??
-			article.platform_metadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null };
-		mergedMetadata = {
-			...base,
-			classification: {
-				...(base.classification ?? {}),
-				category,
-				classifiedAt: new Date().toISOString(),
-			},
-		};
-	}
-	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
-	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
-	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
-	return updatePayload;
-}
-
 type StoredWorkflowTarget = { kind: 'article' | 'userFile'; rowId: string; reacquire?: boolean };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceWorkflowTarget = Extract<WorkflowTarget, { kind: 'source' }>;
 type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
 type PersistedTargetIds = { legacyId: string; resourceId: string };
+type ResourceUpdate = Partial<ProcessorResult['updateData']> &
+	Partial<{
+		title: string;
+		source: string;
+		published_date: string;
+		source_type: string;
+		content: string;
+		og_image_url: string;
+		platform_metadata: PlatformMetadata | Record<string, unknown>;
+		embedding: string;
+	}>;
+type ResourceMetadataPatch = Record<string, unknown>;
 
 interface SourceArticleDraft {
 	article: SourceArticleRecord;
@@ -150,51 +128,91 @@ function applyAcquiredContent(article: Article, acquired: AcquiredContent | null
 	};
 }
 
-function acquiredContentUpdatePayload(
-	acquired: AcquiredContent | null,
-	options?: { preserveSourceType?: boolean },
-): Record<string, unknown> {
-	if (!acquired) return {};
-	const acquiredTitle = acquired.title?.trim();
-	return {
-		...(acquiredTitle ? { title: acquiredTitle } : {}),
-		...(acquired.metadata.siteName || acquired.metadata.author ? { source: acquired.metadata.siteName ?? acquired.metadata.author } : {}),
-		...(acquired.metadata.publishedDate ? { published_date: acquired.metadata.publishedDate } : {}),
-		...(acquired.metadata.description !== null ? { summary: acquired.metadata.description } : {}),
-		content: acquired.markdown,
-		...(acquired.platformMetadata
-			? {
-					...(options?.preserveSourceType ? {} : { source_type: acquired.platformMetadata.type }),
-					platform_metadata: acquired.platformMetadata,
-				}
-			: {}),
-	};
-}
+class ResourceUpdateBuilder {
+	private readonly update: ResourceUpdate = {};
+	private readonly metadataPatches: ResourceMetadataPatch[] = [];
 
-function withoutPlatformMetadata(payload: Record<string, unknown>): Record<string, unknown> {
-	const { platform_metadata: _platformMetadata, ...rest } = payload;
-	return rest;
-}
+	constructor(private readonly article: Article) {}
 
-function ogImageUpdatePayload(patch: OgImagePatch): Record<string, unknown> {
-	const metadataPatch =
-		patch.ogImageWidth && patch.ogImageHeight ? { ogImageWidth: patch.ogImageWidth, ogImageHeight: patch.ogImageHeight } : null;
-	return {
-		...(patch.ogImageUrl ? { og_image_url: patch.ogImageUrl } : {}),
-		...(metadataPatch ? { platform_metadata: metadataPatch } : {}),
-	};
-}
+	addAcquiredMetadata(acquired: AcquiredContent | null): this {
+		return this.addMetadataPatch(acquired?.platformMetadata);
+	}
 
-function mergeMetadataPatch(...patches: Array<unknown>): Record<string, unknown> | undefined {
-	const records = patches.filter(
-		(patch): patch is Record<string, unknown> => !!patch && typeof patch === 'object' && !Array.isArray(patch),
-	);
-	if (!records.length) return undefined;
-	return Object.assign({}, ...records);
-}
+	addExtractionMetadata(extraction: AcquiredContent['extraction'] | undefined): this {
+		return extraction ? this.addMetadataPatch({ extraction }) : this;
+	}
 
-function paperMetadataPatch(paperEnrichment: PaperMetadata | null): Record<string, unknown> | undefined {
-	return paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined;
+	addOgMetadata(patch: OgImagePatch): this {
+		return patch.ogImageWidth && patch.ogImageHeight
+			? this.addMetadataPatch({ ogImageWidth: patch.ogImageWidth, ogImageHeight: patch.ogImageHeight })
+			: this;
+	}
+
+	addPaperMetadata(paperEnrichment: PaperMetadata | null): this {
+		return paperEnrichment ? this.addMetadataPatch({ type: 'paper', data: paperEnrichment }) : this;
+	}
+
+	applyAcquiredFields(acquired: AcquiredContent | null, options?: { preserveSourceType?: boolean }): this {
+		if (!acquired) return this;
+		const acquiredTitle = acquired.title?.trim();
+		if (acquiredTitle) this.update.title = acquiredTitle;
+		if (acquired.metadata.siteName || acquired.metadata.author)
+			this.update.source = acquired.metadata.siteName ?? acquired.metadata.author ?? '';
+		if (acquired.metadata.publishedDate) this.update.published_date = acquired.metadata.publishedDate;
+		if (acquired.metadata.description !== null) this.update.summary = acquired.metadata.description;
+		this.update.content = acquired.markdown;
+		if (acquired.platformMetadata && !options?.preserveSourceType) this.update.source_type = acquired.platformMetadata.type;
+		return this;
+	}
+
+	applyProcessorResult(result: ProcessorResult, embedding?: number[] | null): this {
+		Object.assign(this.update, result.updateData);
+		const category = result.classificationCategory;
+		const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
+		let mergedMetadata: PlatformMetadata | null = this.article.platform_metadata ?? null;
+		if (hasEnrichments && mergedMetadata) {
+			mergedMetadata = {
+				...mergedMetadata,
+				enrichments: { ...(mergedMetadata.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
+			};
+		}
+		if (category) {
+			const base = mergedMetadata ??
+				this.article.platform_metadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null };
+			mergedMetadata = {
+				...base,
+				classification: {
+					...(base.classification ?? {}),
+					category,
+					classifiedAt: new Date().toISOString(),
+				},
+			};
+		}
+
+		const metadataPatch = this.mergedMetadataPatch();
+		if (metadataPatch) this.update.platform_metadata = { ...(mergedMetadata ?? this.article.platform_metadata ?? {}), ...metadataPatch };
+		else if (mergedMetadata) this.update.platform_metadata = mergedMetadata;
+		if (embedding?.length) this.update.embedding = `[${embedding.join(',')}]`;
+		return this;
+	}
+
+	applyOgFields(patch: OgImagePatch): this {
+		if (patch.ogImageUrl) this.update.og_image_url = patch.ogImageUrl;
+		return this;
+	}
+
+	build(): Record<string, unknown> {
+		return { ...this.update };
+	}
+
+	private addMetadataPatch(patch: unknown): this {
+		if (patch && typeof patch === 'object' && !Array.isArray(patch)) this.metadataPatches.push(patch as ResourceMetadataPatch);
+		return this;
+	}
+
+	private mergedMetadataPatch(): ResourceMetadataPatch | undefined {
+		return this.metadataPatches.length ? Object.assign({}, ...this.metadataPatches) : undefined;
+	}
 }
 
 function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
@@ -269,16 +287,16 @@ async function persistSourceWorkflowTarget(
 	embedding: number[] | null,
 	acquiredContent: AcquiredContent | null,
 	paperEnrichment: PaperMetadata | null,
-	ogPayload: Record<string, unknown>,
+	ogImagePatch: OgImagePatch,
 ): Promise<PersistedTargetIds> {
-	const acquiredPayload = acquiredContentUpdatePayload(acquiredContent);
-	const updatePayload = buildProcessorUpdatePayload(
-		article,
-		result,
-		embedding,
-		mergeMetadataPatch(acquiredPayload.platform_metadata, ogPayload.platform_metadata, paperMetadataPatch(paperEnrichment)),
-	);
-	Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
+	const updatePayload = new ResourceUpdateBuilder(article)
+		.addAcquiredMetadata(acquiredContent)
+		.addOgMetadata(ogImagePatch)
+		.addPaperMetadata(paperEnrichment)
+		.applyProcessorResult(result, embedding)
+		.applyAcquiredFields(acquiredContent)
+		.applyOgFields(ogImagePatch)
+		.build();
 
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
@@ -300,23 +318,19 @@ async function persistStoredWorkflowTarget(
 	pdfTextArtifact: PdfTextArtifact | null,
 	acquiredContent: AcquiredContent | null,
 	paperEnrichment: PaperMetadata | null,
-	ogPayload: Record<string, unknown>,
+	ogImagePatch: OgImagePatch,
 ): Promise<PersistedTargetIds> {
 	const finalResult =
 		pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
 	const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
-	const metadataPatch = mergeMetadataPatch(
-		extraction ? { extraction } : undefined,
-		ogPayload.platform_metadata,
-		paperMetadataPatch(paperEnrichment),
-	);
-	const updatePayload = {
-		...withoutPlatformMetadata(
-			acquiredContentUpdatePayload(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire }),
-		),
-		...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
-		...withoutPlatformMetadata(ogPayload),
-	};
+	const updatePayload = new ResourceUpdateBuilder(article)
+		.addExtractionMetadata(extraction)
+		.addOgMetadata(ogImagePatch)
+		.addPaperMetadata(paperEnrichment)
+		.applyAcquiredFields(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire })
+		.applyProcessorResult(finalResult, embedding)
+		.applyOgFields(ogImagePatch)
+		.build();
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 	const table = storedTargetTable(target);
@@ -344,10 +358,9 @@ async function persistWorkflowTarget(
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
 ): Promise<PersistedTargetIds> {
 	return withCoreTx(env, async (coreDb, _db) => {
-		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		const persisted =
 			target.kind === 'source'
-				? await persistSourceWorkflowTarget(coreDb, target, article, result, embedding, acquiredContent, paperEnrichment, ogPayload)
+				? await persistSourceWorkflowTarget(coreDb, target, article, result, embedding, acquiredContent, paperEnrichment, ogImagePatch)
 				: await persistStoredWorkflowTarget(
 						coreDb,
 						target,
@@ -357,7 +370,7 @@ async function persistWorkflowTarget(
 						pdfTextArtifact,
 						acquiredContent,
 						paperEnrichment,
-						ogPayload,
+						ogImagePatch,
 					);
 		if (youtubeTranscript || youtubeHighlights)
 			await persistYouTubeWorkflowData(coreDb, { transcript: youtubeTranscript, highlights: youtubeHighlights });
