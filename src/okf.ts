@@ -1,11 +1,12 @@
 // OKF (Open Knowledge Format v0.1) collection export — issue #197 Phase 1.
 // Streams a collection as a tar.gz bundle of markdown + YAML frontmatter:
-// index.md (okf_version) / articles/*.md / entities/*.md / log.md.
-// Entity links are read from article_entities, which the ingest pipeline already
-// normalizes before storage.
+// index.md (okf_version) / resources/*.md / entities/*.md / log.md.
+// Entity links are read from resource_entities, which the ingest pipeline and
+// #219 backfill normalize before storage.
 
 import { type CoreDb, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
+import type { ResourceCategory, ResourceType } from './resources/types';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;
@@ -22,14 +23,13 @@ type CollectionRow = {
 	updated_at: Date | string;
 };
 
-type ArticleRow = {
+type ResourceRow = {
 	id: string;
-	kind: 'article' | 'user_file';
-	title: string;
+	type: ResourceType;
+	title: string | null;
 	title_cn: string | null;
-	url: string;
+	url: string | null;
 	source: string | null;
-	source_type: string | null;
 	summary: string | null;
 	summary_cn: string | null;
 	content: string | null;
@@ -37,11 +37,14 @@ type ArticleRow = {
 	published_date: Date | string | null;
 	tags: string[] | null;
 	keywords: string[] | null;
-	platform_metadata: unknown;
+	category: ResourceCategory | null;
+	scope: 'corpus' | 'private';
+	file_type: string | null;
+	enrichment_status: 'pending' | 'enriched' | 'failed';
 };
 
 type EntityLinkRow = {
-	article_id: string;
+	resource_id: string;
 	id: string;
 	name: string;
 	name_cn: string | null;
@@ -50,7 +53,6 @@ type EntityLinkRow = {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ARTICLE_CATEGORY_TAGS = new Set(['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other']);
 const encoder = new TextEncoder();
 
 export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionOkfInput): Promise<Response> {
@@ -95,12 +97,11 @@ async function buildCollectionOkfBundle(
 		)[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const articles = await readCollectionArticles(db, collection.id, input.viewerId);
-		const linkableArticles = articles.filter((article) => article.kind === 'article');
-		const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
+		const resources = await readCollectionResources(db, collection.id, input.viewerId);
+		const links = resources.length ? await readResourceEntityLinks(db, resources) : [];
 		return {
 			slug: uniqueSlug(collection.name, collection.id),
-			files: renderOkfFiles(collection, articles, links),
+			files: renderOkfFiles(collection, resources, links),
 		};
 	});
 }
@@ -109,66 +110,71 @@ async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
 	return (await db.execute(statement)).rows as T[];
 }
 
-async function readCollectionArticles(db: CoreDb, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {
-	return queryRows<ArticleRow>(
+async function readCollectionResources(db: CoreDb, collectionId: string, viewerId: string | null): Promise<ResourceRow[]> {
+	return queryRows<ResourceRow>(
 		db,
-		sql`SELECT *
-		 FROM (
-		   SELECT
-		     c.created_at,
-		     'article'::text AS kind,
-		     a.id::text, a.title, a.title_cn, a.url, a.source, a.source_type,
-		     a.summary, a.summary_cn, a.content, a.content_cn, a.published_date,
-		     a.tags, a.keywords, a.platform_metadata
+		sql`SELECT
+		     r.id::text,
+		     r.type,
+		     r.title,
+		     r.title_cn,
+		     r.url,
+		     r.source,
+		     r.summary,
+		     r.summary_cn,
+		     CASE
+		       WHEN ${viewerId}::text IS NOT NULL
+		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
+		         THEN r.content
+		       ELSE NULL
+		     END AS content,
+		     CASE
+		       WHEN ${viewerId}::text IS NOT NULL
+		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
+		         THEN r.content_cn
+		       ELSE NULL
+		     END AS content_cn,
+		     r.published_date,
+		     r.tags,
+		     r.keywords,
+		     r.category,
+		     r.scope,
+		     r.file_type,
+		     r.enrichment_status
 		   FROM citations c
-		   JOIN articles a ON c.to_type = 'article' AND a.id = c.to_id
+		   JOIN resources r ON c.to_type = 'resource' AND r.id = c.to_id
+		   LEFT JOIN library viewer_library
+		     ON viewer_library.resource_id = r.id
+		    AND viewer_library.user_id = ${viewerId}
 		   WHERE c.from_type = 'collection'
 		     AND c.from_id = ${collectionId}::text
-		   UNION ALL
-		   SELECT
-		     c.created_at,
-		     'user_file'::text AS kind,
-		     uf.id::text,
-		     COALESCE(uf.title, uf.file_name) AS title,
-		     uf.title_cn,
-		     COALESCE(uf.source_url, '') AS url,
-		     COALESCE(uf.site_name, uf.source_url, uf.file_type) AS source,
-		     COALESCE(uf.platform_type, uf.origin_type) AS source_type,
-		     uf.summary,
-		     uf.summary_cn,
-		     uf.extracted_text AS content,
-		     uf.content_cn,
-		     COALESCE(uf.published_date, uf.created_at) AS published_date,
-		     uf.tags,
-		     uf.keywords,
-		     uf.metadata AS platform_metadata
-		   FROM citations c
-		   JOIN user_files uf ON c.to_type = 'user_file'
-		     AND uf.id = c.to_id
-		     AND uf.user_id = ${viewerId}
-		   WHERE c.from_type = 'collection'
-		     AND c.from_id = ${collectionId}::text
-		 ) resources
-		 ORDER BY created_at ASC`,
+		     AND (
+		       r.scope = 'corpus'
+		       OR (
+		         ${viewerId}::text IS NOT NULL
+		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
+		       )
+		     )
+		   ORDER BY c.created_at ASC`,
 	);
 }
 
-async function readArticleEntityLinks(db: CoreDb, articles: ArticleRow[]): Promise<EntityLinkRow[]> {
+async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Promise<EntityLinkRow[]> {
 	return queryRows<EntityLinkRow>(
 		db,
 		sql`SELECT
-		   ae.article_id::text, e.id::text, e.name, e.name_cn, e.type, e.article_count
-		 FROM article_entities ae
-		 JOIN entities e ON e.id = ae.entity_id
-		 WHERE ae.article_id = ANY(${articles.map((article) => article.id)}::uuid[])
+		   re.resource_id::text, e.id::text, e.name, e.name_cn, e.type, e.article_count
+		 FROM resource_entities re
+		 JOIN entities e ON e.id = re.entity_id
+		 WHERE re.resource_id = ANY(${resources.map((resource) => resource.id)}::uuid[])
 		 ORDER BY e.article_count DESC, e.name ASC`,
 	);
 }
 
-function* renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], links: EntityLinkRow[]): Iterable<OkfFile> {
-	const articlePaths = assignPaths(
-		articles.map((article) => ({ id: resourceKey(article), label: article.title || article.title_cn || article.id })),
-		'articles',
+function* renderOkfFiles(collection: CollectionRow, resources: ResourceRow[], links: EntityLinkRow[]): Iterable<OkfFile> {
+	const resourcePaths = assignPaths(
+		resources.map((resource) => ({ id: resource.id, label: resourceLabel(resource) })),
+		'resources',
 	);
 	const entityById = new Map<string, EntityLinkRow>();
 	for (const link of links) if (!entityById.has(link.id)) entityById.set(link.id, link);
@@ -176,16 +182,16 @@ function* renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], link
 		[...entityById.values()].map((entity) => ({ id: entity.id, label: entity.name })),
 		'entities',
 	);
-	const linksByArticleId = groupBy(links, (link) => link.article_id);
+	const linksByResourceId = groupBy(links, (link) => link.resource_id);
 	const linksByEntityId = groupBy(links, (link) => link.id);
 
-	yield { path: 'index.md', content: renderRootIndex(collection, articles, entityById, articlePaths, entityPaths) };
+	yield { path: 'index.md', content: renderRootIndex(collection, resources, entityById, resourcePaths, entityPaths) };
 	yield {
-		path: 'articles/index.md',
+		path: 'resources/index.md',
 		content: compactMarkdown([
 			'# Resources',
-			...articles.map((article) =>
-				indexEntry(displayTitle(article), articlePaths.get(resourceKey(article))!.slice('articles/'.length), displayDescription(article)),
+			...resources.map((resource) =>
+				indexEntry(resourceLabel(resource), resourcePaths.get(resource.id)!.slice('resources/'.length), resource.summary),
 			),
 		]),
 	};
@@ -200,26 +206,26 @@ function* renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], link
 			]),
 		};
 	}
-	for (const article of articles) {
+	for (const resource of resources) {
 		yield {
-			path: articlePaths.get(resourceKey(article))!,
-			content: renderArticle(article, linksByArticleId.get(article.id) ?? [], entityPaths),
+			path: resourcePaths.get(resource.id)!,
+			content: renderResource(resource, linksByResourceId.get(resource.id) ?? [], entityPaths),
 		};
 	}
 	for (const entity of entityById.values()) {
 		yield {
 			path: entityPaths.get(entity.id)!,
-			content: renderEntity(entity, linksByEntityId.get(entity.id) ?? [], articles, articlePaths),
+			content: renderEntity(entity, linksByEntityId.get(entity.id) ?? [], resources, resourcePaths),
 		};
 	}
-	yield { path: 'log.md', content: renderLog(collection, articles.length, entityById.size) };
+	yield { path: 'log.md', content: renderLog(collection, resources.length, entityById.size) };
 }
 
 function renderRootIndex(
 	collection: CollectionRow,
-	articles: ArticleRow[],
+	resources: ResourceRow[],
 	entityById: Map<string, EntityLinkRow>,
-	articlePaths: Map<string, string>,
+	resourcePaths: Map<string, string>,
 	entityPaths: Map<string, string>,
 ): string {
 	// Bundle-absolute links throughout, matching article/entity pages.
@@ -228,9 +234,7 @@ function renderRootIndex(
 		`# ${collection.name}`,
 		collection.description ?? '',
 		'## Resources',
-		...articles.map((article) =>
-			indexEntry(displayTitle(article), `/${articlePaths.get(resourceKey(article))!}`, displayDescription(article)),
-		),
+		...resources.map((resource) => indexEntry(resourceLabel(resource), `/${resourcePaths.get(resource.id)!}`, resource.summary)),
 	];
 	if (entityById.size > 0) {
 		lines.push(
@@ -241,37 +245,36 @@ function renderRootIndex(
 	return compactMarkdown(lines);
 }
 
-function resourceKey(article: ArticleRow): string {
-	return `${article.kind}:${article.id}`;
+function resourceLabel(resource: ResourceRow): string {
+	return resource.title || resource.title_cn || resource.url || resource.id;
 }
 
-function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths: Map<string, string>): string {
-	const title = displayTitle(article);
-	const summary = displayDescription(article);
-	const content = article.content || article.content_cn || summary || '';
+function renderResource(resource: ResourceRow, links: EntityLinkRow[], entityPaths: Map<string, string>): string {
+	const content = resource.content ?? resource.content_cn ?? '';
 	const entityLinks = uniqueBy(links, (link) => link.id).map((link) => `- ${markdownLink(link.name, `/${entityPaths.get(link.id)}`)}`);
-	const citation = article.url ? [`# Citations`, `[1] ${markdownLink(article.source || article.url, article.url)}`] : [];
+	const citation = resource.url ? ['# Citations', `[1] ${markdownLink(resource.source || resource.url, resource.url)}`] : [];
 	return compactMarkdown([
 		frontmatter({
-			type: article.kind === 'user_file' ? 'UserFile' : 'Article',
-			title,
-			description: summary,
-			resource: article.url || undefined,
-			tags: article.tags?.length ? article.tags : undefined,
-			timestamp: toIso(article.published_date),
+			type: resource.type,
+			title: resource.title,
+			description: resource.summary,
+			resource: resource.url,
+			tags: resource.tags?.length ? resource.tags : undefined,
+			timestamp: toIso(resource.published_date),
 			// extension keys (spec §frontmatter: consumers must tolerate unknown keys)
-			keywords: article.keywords?.length ? article.keywords : undefined,
-			category: articleCategory(article),
-			source: article.source,
-			source_type: article.source_type,
-			title_cn: article.title_cn,
-			description_cn: article.summary_cn,
-			newsence_resource_id: article.id,
-			newsence_resource_type: article.kind,
-			newsence_article_id: article.kind === 'article' ? article.id : undefined,
+			keywords: resource.keywords?.length ? resource.keywords : undefined,
+			category: resource.category,
+			source: resource.source,
+			title_cn: resource.title_cn,
+			description_cn: resource.summary_cn,
+			content_cn: resource.content_cn,
+			scope: resource.scope,
+			file_type: resource.file_type,
+			enrichment_status: resource.enrichment_status,
+			newsence_resource_id: resource.id,
 		}),
-		`# ${title}`,
-		summary ?? '',
+		`# ${resourceLabel(resource)}`,
+		resource.summary ?? '',
 		entityLinks.length ? '## Linked entities' : '',
 		...entityLinks,
 		content,
@@ -279,21 +282,13 @@ function renderArticle(article: ArticleRow, links: EntityLinkRow[], entityPaths:
 	]);
 }
 
-function displayTitle(article: ArticleRow): string {
-	return article.title || article.title_cn || 'Untitled article';
-}
-
-function displayDescription(article: ArticleRow): string | null {
-	return article.summary || article.summary_cn;
-}
-
-function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: ArticleRow[], articlePaths: Map<string, string>): string {
-	const articleById = new Map(articles.map((article) => [article.id, article]));
-	const linkedArticles = uniqueBy(links, (link) => link.article_id)
-		.map((link) => articleById.get(link.article_id))
-		.filter((article): article is ArticleRow => !!article);
-	const articleLinks = linkedArticles.map(
-		(article) => `- ${markdownLink(displayTitle(article), `/${articlePaths.get(resourceKey(article))}`)}`,
+function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], resources: ResourceRow[], resourcePaths: Map<string, string>): string {
+	const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
+	const linkedResources = uniqueBy(links, (link) => link.resource_id)
+		.map((link) => resourceById.get(link.resource_id))
+		.filter((resource): resource is ResourceRow => !!resource);
+	const resourceLinks = linkedResources.map(
+		(resource) => `- ${markdownLink(resourceLabel(resource), `/${resourcePaths.get(resource.id)}`)}`,
 	);
 	return compactMarkdown([
 		frontmatter({
@@ -303,12 +298,12 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], articles: A
 			name_cn: entity.name_cn,
 			newsence_entity_id: entity.id,
 			newsence_global_article_count: entity.article_count,
-			newsence_bundle_article_count: linkedArticles.length,
+			newsence_bundle_resource_count: linkedResources.length,
 		}),
 		`# ${entity.name}`,
 		entity.name_cn && entity.name_cn !== entity.name ? `Chinese name: ${entity.name_cn}` : '',
 		'## Mentioned in',
-		...articleLinks,
+		...resourceLinks,
 	]);
 }
 
@@ -319,16 +314,9 @@ function renderLog(collection: CollectionRow, resourceCount: number, entityCount
 		`## ${exportedAt.slice(0, 10)}`,
 		`* **Export**: OKF bundle for "${collection.name}" — ${resourceCount} resources, ${entityCount} entity pages.`,
 		`* **Collection id**: ${collection.id} (visibility: ${collection.visibility}). Exported at ${exportedAt}.`,
-		'* **Entity links**: exported from stored `article_entities` links.',
-		'* **Producer notes**: bilingual fields (`title_cn`, `description_cn`, `name_cn`) and `keywords`/`category`/`source` are extension frontmatter keys. `category` prefers the stored classification, falling back to the known category tag.',
+		'* **Entity links**: exported from stored `resource_entities` links.',
+		'* **Producer notes**: bilingual fields (`title_cn`, `description_cn`, `content_cn`, `name_cn`) and `keywords`/`category`/`source` are extension frontmatter keys.',
 	]);
-}
-
-function articleCategory(article: ArticleRow): string | null {
-	const metadata = article.platform_metadata as { classification?: { category?: string } } | null;
-	const classified = metadata?.classification?.category;
-	if (classified && ARTICLE_CATEGORY_TAGS.has(classified)) return classified;
-	return article.tags?.find((tag) => ARTICLE_CATEGORY_TAGS.has(tag)) ?? null;
 }
 
 const INDEX_DESCRIPTION_MAX = 240;

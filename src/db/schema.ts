@@ -1,5 +1,6 @@
 import type { TranscriptSegment } from '@core-shared/types';
 import { bigint, boolean, customType, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { RESOURCE_CATEGORIES, RESOURCE_TYPES } from '../resources/types';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
 	dataType() {
@@ -64,7 +65,7 @@ export const userFiles = pgTable('user_files', {
 
 export const resources = pgTable('resources', {
 	id: uuid('id').defaultRandom().primaryKey(),
-	type: text('type').default('web').notNull(),
+	type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
 	scope: text('scope', { enum: ['corpus', 'private'] })
 		.default('private')
 		.notNull(),
@@ -83,6 +84,7 @@ export const resources = pgTable('resources', {
 	scrapedDate: timestamp('scraped_date', { mode: 'date' }),
 	keywords: text('keywords').array().default([]).notNull(),
 	tags: text('tags').array().default([]).notNull(),
+	category: text('category', { enum: RESOURCE_CATEGORIES }),
 	entities: jsonb('entities').$type<unknown>(),
 	ogImageUrl: text('og_image_url'),
 	platformMetadata: jsonb('platform_metadata').$type<unknown>(),
