@@ -570,11 +570,28 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 			.onConflictDoUpdate({
 				target: [resourceTranslations.resourceId, resourceTranslations.lang],
 				set: {
-					title: sql`COALESCE(NULLIF(excluded.title, ''), ${resourceTranslations.title})`,
-					summary: sql`COALESCE(NULLIF(excluded.summary, ''), ${resourceTranslations.summary})`,
-					content: sql`COALESCE(NULLIF(excluded.content, ''), ${resourceTranslations.content})`,
-					keywords: sql`CASE WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords ELSE ${resourceTranslations.keywords} END`,
-					source: sql`CASE WHEN ${resourceTranslations.source} = 'original' THEN ${resourceTranslations.source} ELSE excluded.source END`,
+					title: sql`CASE
+							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.title}
+							ELSE COALESCE(NULLIF(excluded.title, ''), ${resourceTranslations.title})
+						END`,
+					summary: sql`CASE
+							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.summary}
+							ELSE COALESCE(NULLIF(excluded.summary, ''), ${resourceTranslations.summary})
+						END`,
+					content: sql`CASE
+							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.content}
+							ELSE COALESCE(NULLIF(excluded.content, ''), ${resourceTranslations.content})
+						END`,
+					keywords: sql`CASE
+							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.keywords}
+							WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords
+							ELSE ${resourceTranslations.keywords}
+						END`,
+					source: sql`CASE
+							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.source}
+							WHEN ${resourceTranslations.source} = 'original' THEN ${resourceTranslations.source}
+							ELSE excluded.source
+						END`,
 					updatedAt: sql`now()`,
 				},
 			});
@@ -764,8 +781,15 @@ async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity:
 			.onConflictDoUpdate({
 				target: [entityTranslations.entityId, entityTranslations.lang],
 				set: {
-					name: sql`COALESCE(NULLIF(excluded.name, ''), ${entityTranslations.name})`,
-					source: sql`CASE WHEN ${entityTranslations.source} = 'original' THEN ${entityTranslations.source} ELSE excluded.source END`,
+					name: sql`CASE
+						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.name}
+						ELSE COALESCE(NULLIF(excluded.name, ''), ${entityTranslations.name})
+					END`,
+					source: sql`CASE
+						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.source}
+						WHEN ${entityTranslations.source} = 'original' THEN ${entityTranslations.source}
+						ELSE excluded.source
+					END`,
 					updatedAt: sql`NOW()`,
 				},
 			});
