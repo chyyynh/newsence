@@ -14,7 +14,7 @@ export interface Article {
 	keywords: string[];
 	source_type?: string;
 	platform_metadata?: PlatformMetadata;
-	// user_files-only raw columns (undefined for articles path).
+	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;

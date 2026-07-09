@@ -14,55 +14,6 @@ const tsvector = customType<{ data: string; driverData: string }>({
 	},
 });
 
-export const articles = pgTable('articles', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	url: text('url').notNull().unique(),
-	title: text('title').notNull(),
-	titleCn: text('title_cn'),
-	summary: text('summary'),
-	summaryCn: text('summary_cn'),
-	content: text('content'),
-	contentCn: text('content_cn'),
-	ogImageUrl: text('og_image_url'),
-	source: text('source').notNull(),
-	sourceType: text('source_type').notNull(),
-	publishedDate: timestamp('published_date', { mode: 'date' }).notNull(),
-	scrapedDate: timestamp('scraped_date', { mode: 'date' }).notNull(),
-	tags: text('tags').array().notNull(),
-	keywords: text('keywords').array().notNull(),
-	tokens: text('tokens').array().notNull(),
-	platformMetadata: jsonb('platform_metadata').$type<unknown>(),
-	entities: jsonb('entities').$type<unknown>(),
-	embedding: vector1024('embedding'),
-});
-
-export const userFiles = pgTable('user_files', {
-	id: uuid('id').primaryKey(),
-	userId: text('user_id'),
-	fileName: text('file_name').notNull(),
-	fileType: text('file_type').notNull(),
-	storageKey: text('storage_key'),
-	title: text('title'),
-	titleCn: text('title_cn'),
-	summary: text('summary'),
-	summaryCn: text('summary_cn'),
-	extractedText: text('extracted_text'),
-	contentCn: text('content_cn'),
-	ogImageUrl: text('og_image_url'),
-	sourceUrl: text('source_url'),
-	normalizedSourceUrl: text('normalized_source_url'),
-	siteName: text('site_name'),
-	platformType: text('platform_type'),
-	resourceKind: text('resource_kind').notNull(),
-	originType: text('origin_type').notNull(),
-	publishedDate: timestamp('published_date', { mode: 'date' }),
-	tags: text('tags').array().notNull(),
-	keywords: text('keywords').array().notNull(),
-	metadata: jsonb('metadata').$type<unknown>(),
-	entities: jsonb('entities').$type<unknown>(),
-	embedding: vector1024('embedding'),
-});
-
 export const resources = pgTable('resources', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
@@ -162,12 +113,6 @@ export const entityTranslations = pgTable('entity_translations', {
 	source: varchar('source', { length: 16, enum: RESOURCE_TRANSLATION_SOURCES }).default('original').notNull(),
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-});
-
-export const articleEntities = pgTable('article_entities', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	articleId: uuid('article_id').notNull(),
-	entityId: uuid('entity_id').notNull(),
 });
 
 export const resourceEntities = pgTable('resource_entities', {
