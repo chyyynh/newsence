@@ -224,6 +224,10 @@ async function readCollectionResources(
 }
 
 async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Promise<EntityLinkRow[]> {
+	const resourceIdArray = sql`ARRAY[${sql.join(
+		resources.map((resource) => sql`${resource.id}`),
+		sql`, `,
+	)}]::uuid[]`;
 	const rows = await queryRows<EntityLinkQueryRow>(
 		db,
 		sql`SELECT
@@ -244,7 +248,7 @@ async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Pr
 		 FROM resource_entities re
 		 JOIN entities e ON e.id = re.entity_id
 		 LEFT JOIN entity_translations et ON et.entity_id = e.id
-		 WHERE re.resource_id = ANY(${resources.map((resource) => resource.id)}::uuid[])
+			 WHERE re.resource_id = ANY(${resourceIdArray})
 		 GROUP BY re.resource_id, e.id
 		 ORDER BY e.resource_count DESC, e.name ASC`,
 	);
