@@ -12,7 +12,7 @@ import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
-import { isUserFileEnrichmentComplete } from './ingest/domain/article-store';
+import { isResourceEnrichmentComplete } from './ingest/domain/article-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
 export { AcquisitionWorkflow, NewsenceMonitorWorkflow };
@@ -95,10 +95,10 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	// Service-binding RPC for engine capabilities. Product-domain writes live on
 	// the app Worker's DomainRpc binding.
 
-	/** Enqueue saved user_files for the enrichment workflow after app-side persistence. */
-	async enqueueUserFileProcessing(userFileId: string) {
-		if (await isUserFileEnrichmentComplete(this.env, userFileId)) return undefined;
-		return enqueueProcessing(this.env, { kind: 'userFile', rowId: userFileId });
+	/** Enqueue canonical resources for the enrichment workflow after app-side persistence. */
+	async enqueueResourceProcessing(resourceId: string) {
+		if (await isResourceEnrichmentComplete(this.env, resourceId)) return undefined;
+		return enqueueProcessing(this.env, { kind: 'resource', rowId: resourceId });
 	}
 
 	/** Synchronously acquire one URL without DB persistence. */

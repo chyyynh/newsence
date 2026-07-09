@@ -10,6 +10,7 @@ import {
 	syncResourceAfterProcessing,
 	syncResourceEntities,
 	updateArticleAfterProcessing,
+	updateResourceAfterProcessing,
 } from '@ingest/domain/article-store';
 import {
 	type AcquiredContent,
@@ -47,7 +48,7 @@ function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	};
 }
 
-type StoredWorkflowTarget = { kind: 'article' | 'userFile'; rowId: string; reacquire?: boolean };
+type StoredWorkflowTarget = { kind: 'article' | 'userFile' | 'resource'; rowId: string; reacquire?: boolean };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceWorkflowTarget = Extract<WorkflowTarget, { kind: 'source' }>;
@@ -90,14 +91,15 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedTargetTable(target: StoredWorkflowTarget): 'articles' | 'user_files' {
-	return target.kind === 'article' ? 'articles' : 'user_files';
+function storedTargetTable(target: StoredWorkflowTarget): 'articles' | 'user_files' | 'resources' {
+	if (target.kind === 'article') return 'articles';
+	if (target.kind === 'userFile') return 'user_files';
+	return 'resources';
 }
 
 function storedWorkflowId(target: StoredWorkflowTarget): string {
-	return [target.reacquire ? 'article-reacquire' : 'article', workflowIdPart(storedTargetTable(target)), workflowIdPart(target.rowId)].join(
-		'-',
-	);
+	const prefix = target.kind === 'resource' ? 'resource' : target.reacquire ? 'article-reacquire' : 'article';
+	return [prefix, workflowIdPart(storedTargetTable(target)), workflowIdPart(target.rowId)].join('-');
 }
 
 async function sourceArticleWorkflowId(url: string): Promise<string> {
@@ -217,7 +219,7 @@ class ResourceUpdateBuilder {
 
 function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
 	const hasContent = 'has_content' in article && !!article.has_content;
-	if (target.kind === 'userFile') return !hasContent && !article.storage_key && !!article.url;
+	if (target.kind === 'userFile' || target.kind === 'resource') return !hasContent && !article.storage_key && !!article.url;
 	if (target.kind === 'article' && target.reacquire) {
 		return (
 			!!article.url && !article.storage_key && (!article.source_type || article.source_type === 'rss' || article.source_type === 'default')
@@ -335,8 +337,13 @@ async function persistStoredWorkflowTarget(
 	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 	const table = storedTargetTable(target);
 
-	await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
-	const resourceId = await syncResourceAfterProcessing(coreDb, table, target.rowId, article, updatePayload);
+	let resourceId: string;
+	if (table === 'resources') {
+		resourceId = await updateResourceAfterProcessing(coreDb, target.rowId, article, updatePayload);
+	} else {
+		await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
+		resourceId = await syncResourceAfterProcessing(coreDb, table, target.rowId, article, updatePayload);
+	}
 	if (entities) {
 		if (table === 'articles') await syncArticleEntities(coreDb, target.rowId, entities, article.source, platformMetadata);
 		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
@@ -403,7 +410,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		const hasContent = 'has_content' in article && !!article.has_content;
 		const pdfTextArtifact =
-			target.kind === 'userFile' && !hasContent && article.storage_key && article.file_type === PDF_MIME
+			target.kind !== 'source' && !hasContent && article.storage_key && article.file_type === PDF_MIME
 				? await stagePdfTextExtraction(this.env, step, {
 						sourceStorageKey: article.storage_key,
 					})

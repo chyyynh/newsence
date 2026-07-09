@@ -1,6 +1,15 @@
 import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { articleEntities, articles, entities, entityTranslations, resourceEntities, resourceTranslations, userFiles } from '@db/schema';
+import {
+	articleEntities,
+	articles,
+	entities,
+	entityTranslations,
+	resourceEntities,
+	resources,
+	resourceTranslations,
+	userFiles,
+} from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
@@ -11,7 +20,7 @@ import {
 	type ResourceType,
 } from '../../resources/types';
 
-type ArticleStoreTable = 'articles' | 'user_files';
+type ArticleStoreTable = 'articles' | 'user_files' | 'resources';
 
 type ArticleForProcessing = Article & { has_content?: boolean };
 
@@ -30,6 +39,7 @@ interface ArticleStoreRow {
 	tags: string[];
 	keywords: string[];
 	platform_metadata: unknown;
+	enrichment_status?: string;
 	has_content?: boolean;
 	storage_key?: string | null;
 	file_type?: string;
@@ -44,30 +54,32 @@ export async function loadArticleForProcessing(
 	articleId: string,
 	shell = false,
 ): Promise<ArticleForProcessing> {
-	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
+	if (table !== 'articles' && table !== 'user_files' && table !== 'resources') throw new Error(`Unsupported article store table: ${table}`);
 	return withCoreDb(env, async (db) => {
-		const row = table === 'articles' ? await loadStoredArticleRow(db, articleId, shell) : await loadStoredUserFileRow(db, articleId, shell);
+		const row =
+			table === 'articles'
+				? await loadStoredArticleRow(db, articleId, shell)
+				: table === 'user_files'
+					? await loadStoredUserFileRow(db, articleId, shell)
+					: await loadStoredResourceRow(db, articleId, shell);
 		if (!row) throw new Error(`Failed to fetch article ${articleId}: not found`);
 		return row;
 	});
 }
 
-export async function isUserFileEnrichmentComplete(env: CoreEnv, userFileId: string): Promise<boolean> {
+export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: string): Promise<boolean> {
 	return withCoreDb(env, async (db) => {
 		const row = (
 			await db
 				.select({
-					complete: sql<boolean>`${userFiles.titleCn} IS NOT NULL
-						AND length(${userFiles.titleCn}) > 0
-						AND ${userFiles.summaryCn} IS NOT NULL
-						AND length(${userFiles.summaryCn}) > 0
-						AND ${userFiles.embedding} IS NOT NULL`,
+					complete: sql<boolean>`${resources.enrichmentStatus} = 'enriched'
+						AND ${resources.embedding} IS NOT NULL`,
 				})
-				.from(userFiles)
-				.where(eq(userFiles.id, userFileId))
+				.from(resources)
+				.where(eq(resources.id, resourceId))
 				.limit(1)
 		)[0];
-		if (!row) throw new Error(`Failed to fetch user_file ${userFileId}: not found`);
+		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
 		return row.complete;
 	});
 }
@@ -177,6 +189,41 @@ async function loadStoredUserFileRow(db: CoreDb, articleId: string, shell: boole
 		.from(userFiles)
 		.where(eq(userFiles.id, articleId))
 		.limit(1);
+	return row ? articleStoreRowToProcessing(row) : undefined;
+}
+
+async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
+	const result = await db.execute(sql`
+		SELECT
+			r.id::text AS id,
+			original.title AS title,
+			zh.title AS title_cn,
+			original.summary AS summary,
+			zh.summary AS summary_cn,
+			${shell ? sql`NULL::text` : sql`original.content`} AS content,
+			${shell ? sql`original.content IS NOT NULL AND length(original.content) > 0` : sql`NULL::boolean`} AS has_content,
+			r.url AS url,
+			r.og_image_url AS og_image_url,
+			COALESCE(r.type, '') AS source,
+			r.type AS source_type,
+			r.published_date AS published_date,
+			r.tags AS tags,
+			COALESCE(original.keywords, '{}'::text[]) AS keywords,
+			r.platform_metadata AS platform_metadata,
+			r.enrichment_status AS enrichment_status,
+			r.storage_key AS storage_key,
+			r.file_type AS file_type,
+			r.normalized_url AS normalized_source_url,
+			CASE WHEN r.storage_key IS NULL THEN 'url' ELSE 'blob' END AS resource_kind
+		FROM resources r
+		LEFT JOIN resource_translations original
+		  ON original.resource_id = r.id AND original.lang = r.original_lang
+		LEFT JOIN resource_translations zh
+		  ON zh.resource_id = r.id AND zh.lang = 'zh-Hant'
+		WHERE r.id = ${resourceId}::uuid
+		LIMIT 1
+	`);
+	const row = (result.rows as unknown as ArticleStoreRow[])[0];
 	return row ? articleStoreRowToProcessing(row) : undefined;
 }
 
@@ -434,6 +481,40 @@ export async function updateArticleAfterProcessing(
 	if (updated.length === 0) {
 		throw new Error(`Failed to update article ${articleId}: no rows matched`);
 	}
+}
+
+export async function updateResourceAfterProcessing(
+	db: CoreDb,
+	resourceId: string,
+	article: Article,
+	updatePayload: Record<string, unknown>,
+): Promise<string> {
+	const record = resourceMirrorRecord('user_files', resourceId, article, updatePayload);
+	const result = await db.execute(sql`
+		UPDATE resources
+		   SET type = ${record.type},
+		       url = COALESCE(${record.url}, resources.url),
+		       normalized_url = COALESCE(${record.normalizedUrl}, resources.normalized_url),
+		       storage_key = COALESCE(${record.storageKey}, resources.storage_key),
+		       file_type = COALESCE(${record.fileType}, resources.file_type),
+		       original_lang = ${record.originalLang},
+		       published_date = COALESCE(${record.publishedDate}, resources.published_date),
+		       scraped_date = ${record.scrapedDate},
+		       tags = CASE WHEN cardinality(${record.tags}::text[]) > 0 THEN ${record.tags}::text[] ELSE resources.tags END,
+		       category = COALESCE(${record.category}, resources.category),
+		       entities = COALESCE(${record.entitiesJson}::jsonb, resources.entities),
+		       og_image_url = COALESCE(NULLIF(${record.ogImageUrl}, ''), resources.og_image_url),
+		       platform_metadata = COALESCE(${record.platformMetadataJson}::jsonb, resources.platform_metadata),
+		       embedding = COALESCE(${record.embedding}::vector, resources.embedding),
+		       enrichment_status = 'enriched',
+		       updated_at = now()
+		 WHERE id = ${resourceId}::uuid
+		 RETURNING id::text AS id
+	`);
+	const updatedId = (result.rows as Array<{ id?: string }>)[0]?.id;
+	if (!updatedId) throw new Error(`Failed to update resource ${resourceId}: no rows matched`);
+	await syncResourceTranslations(db, updatedId, record);
+	return updatedId;
 }
 
 async function updateStoredArticle(db: CoreDb, articleId: string, updatePayload: Record<string, unknown>): Promise<Array<{ id: string }>> {
