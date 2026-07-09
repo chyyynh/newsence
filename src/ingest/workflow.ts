@@ -1,9 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
-import type { Article, PaperMetadata, YoutubeTranscript } from '@core-shared/types';
+import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
 import { type CoreDb, withCoreTx } from '@db/client';
 import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
-import { loadResourceForProcessing, syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/article-store';
+import { loadResourceForProcessing, syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
 	EMPTY_OG_IMAGE_PATCH,
@@ -48,12 +48,12 @@ function storedWorkflowId(target: WorkflowTarget): string {
 	return ['resource', workflowIdPart(target.rowId)].join('-');
 }
 
-function shouldAcquireContent(article: Article): boolean {
+function shouldAcquireContent(article: ResourceForProcessing): boolean {
 	const hasContent = 'has_content' in article && !!article.has_content;
 	return !hasContent && !article.storage_key && !!article.url;
 }
 
-async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<AcquiredContent | null> {
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: ResourceForProcessing): Promise<AcquiredContent | null> {
 	const artifact = await step.do(
 		'acquire-content',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
@@ -62,7 +62,11 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, articl
 	return readAcquiredContentArtifact(artifact);
 }
 
-async function stageOgImagePatch(step: WorkflowStep, article: Article, acquiredContent: AcquiredContent | null): Promise<OgImagePatch> {
+async function stageOgImagePatch(
+	step: WorkflowStep,
+	article: ResourceForProcessing,
+	acquiredContent: AcquiredContent | null,
+): Promise<OgImagePatch> {
 	if (article.og_image_url || !article.url || article.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
 	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
 	return step.do('resolve-og-image', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
@@ -75,9 +79,9 @@ async function loadFullTargetArticle(
 	target: WorkflowTarget,
 	pdfTextArtifact: PdfTextArtifact | null,
 	acquiredContent: AcquiredContent | null = null,
-	baseArticle?: Article,
-): Promise<Article> {
-	let article: Article;
+	baseArticle?: ResourceForProcessing,
+): Promise<ResourceForProcessing> {
+	let article: ResourceForProcessing;
 	if (baseArticle) {
 		article = baseArticle;
 	} else {
@@ -91,7 +95,7 @@ async function loadFullTargetArticle(
 async function persistStoredWorkflowTarget(
 	coreDb: CoreDb,
 	target: WorkflowTarget,
-	article: Article,
+	article: ResourceForProcessing,
 	result: ProcessorResult,
 	embedding: number[] | null,
 	pdfTextArtifact: PdfTextArtifact | null,
@@ -122,7 +126,7 @@ async function persistStoredWorkflowTarget(
 async function persistWorkflowTarget(
 	env: CoreEnv,
 	target: WorkflowTarget,
-	article: Article,
+	article: ResourceForProcessing,
 	result: ProcessorResult,
 	embedding: number[] | null,
 	pdfTextArtifact: PdfTextArtifact | null,

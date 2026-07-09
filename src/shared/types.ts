@@ -1,4 +1,4 @@
-export interface Article {
+export interface ResourceForProcessing {
 	id: string;
 	title: string;
 	title_cn?: string | null;

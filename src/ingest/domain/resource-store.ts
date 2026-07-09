@@ -1,4 +1,4 @@
-import type { Article } from '@core-shared/types';
+import type { ResourceForProcessing } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { entities, entityTranslations, resourceEntities, resources, resourceTranslations } from '@db/schema';
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
@@ -11,9 +11,9 @@ import {
 	type ResourceType,
 } from '../../resources/types';
 
-type ArticleForProcessing = Article & { has_content?: boolean };
+type StoredResourceForProcessing = ResourceForProcessing & { has_content?: boolean };
 
-interface ArticleStoreRow {
+interface ResourceStoreRow {
 	id: string;
 	title: string | null;
 	title_cn: string | null;
@@ -37,7 +37,7 @@ interface ArticleStoreRow {
 	origin_type?: string;
 }
 
-export async function loadResourceForProcessing(env: CoreEnv, resourceId: string, shell = false): Promise<ArticleForProcessing> {
+export async function loadResourceForProcessing(env: CoreEnv, resourceId: string, shell = false): Promise<StoredResourceForProcessing> {
 	return withCoreDb(env, async (db) => {
 		const row = await loadStoredResourceRow(db, resourceId, shell);
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
@@ -62,7 +62,7 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 	});
 }
 
-async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<ArticleForProcessing | undefined> {
+async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing | undefined> {
 	const result = await db.execute(sql`
 		SELECT
 			r.id::text AS id,
@@ -93,12 +93,12 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 		WHERE r.id = ${resourceId}::uuid
 		LIMIT 1
 	`);
-	const row = (result.rows as unknown as ArticleStoreRow[])[0];
-	return row ? articleStoreRowToProcessing(row) : undefined;
+	const row = (result.rows as unknown as ResourceStoreRow[])[0];
+	return row ? resourceStoreRowToProcessing(row) : undefined;
 }
 
-function articleStoreRowToProcessing(row: ArticleStoreRow): ArticleForProcessing {
-	const article: ArticleForProcessing = {
+function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
+	const article: StoredResourceForProcessing = {
 		id: row.id,
 		title: row.title ?? '',
 		title_cn: row.title_cn,
@@ -112,7 +112,7 @@ function articleStoreRowToProcessing(row: ArticleStoreRow): ArticleForProcessing
 		tags: row.tags,
 		keywords: row.keywords,
 		resource_type: row.resource_type ?? undefined,
-		platform_metadata: (row.platform_metadata ?? undefined) as Article['platform_metadata'],
+		platform_metadata: (row.platform_metadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
 	if (typeof row.has_content === 'boolean') article.has_content = row.has_content;
 	if ('storage_key' in row) article.storage_key = row.storage_key ?? null;
@@ -213,7 +213,7 @@ function nullableVector(value: unknown, field: string): string | null {
 export async function updateResourceAfterProcessing(
 	db: CoreDb,
 	resourceId: string,
-	article: Article,
+	article: ResourceForProcessing,
 	updatePayload: Record<string, unknown>,
 ): Promise<string> {
 	const record = resourceMirrorRecord('resource', resourceId, article, updatePayload);
@@ -244,7 +244,7 @@ export async function updateResourceAfterProcessing(
 	return updatedId;
 }
 
-function preparedRecordToArticle(base: SourceResourceDraft): Article {
+function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {
 	return {
 		id: base.url,
 		title: base.title,
@@ -260,12 +260,12 @@ function preparedRecordToArticle(base: SourceResourceDraft): Article {
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
 		resource_type: base.resourceType,
-		platform_metadata: (base.platformMetadata ?? undefined) as Article['platform_metadata'],
+		platform_metadata: (base.platformMetadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
 }
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
-	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToArticle(base), {}, 'pending');
+	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToResource(base), {}, 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
 	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
 	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
@@ -276,7 +276,7 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 function resourceMirrorRecord(
 	origin: ResourceMirrorOrigin,
 	resourceId: string,
-	article: Article,
+	article: ResourceForProcessing,
 	updatePayload: Record<string, unknown>,
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
@@ -657,7 +657,7 @@ async function refreshEntityResourceCounts(db: CoreDb, entityIds: string[]): Pro
 	`);
 }
 
-type ExistingArticleRecord = {
+type ExistingResourceRecord = {
 	id: string;
 	url: string;
 	source: string;
@@ -665,7 +665,7 @@ type ExistingArticleRecord = {
 	summary_cn: string | null;
 };
 
-export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingArticleRecord[]> {
+export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
 	if (urls.length === 0) return [];
 	const result = await db.execute(sql`
 		SELECT
@@ -680,7 +680,7 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 		WHERE r.normalized_url = ANY(${urls}::text[])
 		   OR r.url = ANY(${urls}::text[])
 	`);
-	return result.rows as unknown as ExistingArticleRecord[];
+	return result.rows as unknown as ExistingResourceRecord[];
 }
 
 export async function reopenResourceForReprocessing(

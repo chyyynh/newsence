@@ -1,10 +1,10 @@
 import { generateObject } from '@core-ai/embedding';
-import { type Article, ENTITY_TYPES, type PlatformMetadata } from '@core-shared/types';
+import { ENTITY_TYPES, type PlatformMetadata, type ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { entityExtractionExclusionNames } from '@entities/normalize';
-import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
@@ -370,7 +370,7 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	});
 }
 
-export async function processTwitterArticle(article: Article, env: CoreEnv): Promise<ProcessorResult> {
+export async function processTwitterArticle(article: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
 	const updateData: ProcessorResult['updateData'] = {};
 	const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
 
@@ -439,7 +439,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, article: Article, env: CoreEnv): Promise<TweetAnalysis | null> {
+async function translateTweet(tweetText: string, article: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';

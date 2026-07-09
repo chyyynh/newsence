@@ -1,5 +1,5 @@
 import { generateText } from '@core-ai/embedding';
-import type { Article, HackerNewsMetadata, NormalizedContent, PlatformEnrichments } from '@core-shared/types';
+import type { HackerNewsMetadata, NormalizedContent, PlatformEnrichments, ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
 
@@ -244,7 +244,7 @@ async function generateHnEditorial(
 	return { en, cn };
 }
 
-export async function processHackerNewsArticle(article: Article, env: CoreEnv): Promise<ProcessorResult> {
+export async function processHackerNewsArticle(article: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
 	const metadata = article.platform_metadata;
 	const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
 

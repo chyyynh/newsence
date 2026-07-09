@@ -12,7 +12,7 @@ import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import type { ArticleRankSearchInput, ArticleSearchInput, ReadContextItem, RelatedArticleSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusArticleIds, searchCorpusArticleRanks, searchCorpusArticles } from './corpus';
-import { isResourceEnrichmentComplete } from './ingest/domain/article-store';
+import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
 export { AcquisitionWorkflow, NewsenceMonitorWorkflow };

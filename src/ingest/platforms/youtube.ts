@@ -1,10 +1,10 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import type { Article, TranscriptSegment, YoutubeTranscript } from '@core-shared/types';
+import type { ResourceForProcessing, TranscriptSegment, YoutubeTranscript } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList, youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -83,7 +83,7 @@ export async function persistYouTubeWorkflowData(
 
 export async function prepareYouTubeHighlights(
 	env: CoreEnv,
-	article: Article,
+	article: ResourceForProcessing,
 	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
 	if (article.platform_metadata?.type !== 'youtube') return null;

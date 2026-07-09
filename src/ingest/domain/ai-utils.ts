@@ -1,5 +1,11 @@
 import { generateObject, generateText } from '@core-ai/embedding';
-import { type AIAnalysisResult, type Article, type ArticleCategory, ENTITY_TYPES, type PlatformEnrichments } from '@core-shared/types';
+import {
+	type AIAnalysisResult,
+	type ArticleCategory,
+	ENTITY_TYPES,
+	type PlatformEnrichments,
+	type ResourceForProcessing,
+} from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 
@@ -23,7 +29,7 @@ export function isEmpty(value: string | null | undefined): boolean {
 }
 
 export function mergeArticleAnalysis(
-	article: Article,
+	article: ResourceForProcessing,
 	analysis: AIAnalysisResult,
 	options: {
 		updateData?: ProcessorResult['updateData'];
@@ -143,7 +149,7 @@ const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實�
 
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
-function buildArticleContextPrompt(article: Article): string {
+function buildArticleContextPrompt(article: ResourceForProcessing): string {
 	const content = article.content || article.summary || article.title;
 	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
@@ -163,14 +169,14 @@ function cjkRatio(text: string): number {
 	return cjk / letters;
 }
 
-function shouldTranslateArticleContent(article: Article): boolean {
+function shouldTranslateArticleContent(article: ResourceForProcessing): boolean {
 	const content = article.content?.trim();
 	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
 	if (!shouldWriteContentTranslation(article)) return false;
 	return true;
 }
 
-function shouldWriteContentTranslation(article: Article): boolean {
+function shouldWriteContentTranslation(article: ResourceForProcessing): boolean {
 	if (isEmpty(article.content_cn)) return true;
 	const content = article.content?.trim();
 	const translated = article.content_cn?.trim();
@@ -266,7 +272,7 @@ function contentTranslationPrompt(chunk: string, index: number, total: number): 
 	return `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`;
 }
 
-async function generateArticleContentTranslation(article: Article, env: CoreEnv): Promise<string | null> {
+async function generateArticleContentTranslation(article: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
 	const content = article.content?.trim();
 	if (!content || !shouldTranslateArticleContent(article)) return null;
 
@@ -307,7 +313,7 @@ async function generateArticleContentTranslation(article: Article, env: CoreEnv)
 	return translated;
 }
 
-async function generateArticleContentCleanup(article: Article, env: CoreEnv): Promise<string | null> {
+async function generateArticleContentCleanup(article: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
 	const content = article.content?.trim();
 	if (
 		!content ||
@@ -327,7 +333,7 @@ async function generateArticleContentCleanup(article: Article, env: CoreEnv): Pr
 	return validateCleanedContent(cleanupContent, cleaned);
 }
 
-export async function generateArticleAnalysis(article: Article, env: CoreEnv): Promise<AIAnalysisResult> {
+export async function generateArticleAnalysis(article: ResourceForProcessing, env: CoreEnv): Promise<AIAnalysisResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
 
 	try {

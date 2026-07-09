@@ -1,4 +1,4 @@
-import type { Article, PaperMetadata, PlatformMetadata } from '@core-shared/types';
+import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
@@ -16,7 +16,7 @@ type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 
 type ResourceMetadataPatch = Record<string, unknown>;
 
-export function applyAcquiredContent(article: Article, acquired: AcquiredContent | null): Article {
+export function applyAcquiredContent(article: ResourceForProcessing, acquired: AcquiredContent | null): ResourceForProcessing {
 	if (!acquired) return article;
 	const acquiredTitle = acquired.title?.trim();
 	const acquiredSourceType = acquired.platformMetadata?.type;
@@ -41,7 +41,7 @@ export class ResourceUpdateBuilder {
 	private readonly update: ResourceUpdate = {};
 	private readonly metadataPatches: ResourceMetadataPatch[] = [];
 
-	constructor(private readonly article: Article) {}
+	constructor(private readonly article: ResourceForProcessing) {}
 
 	addAcquiredMetadata(acquired: AcquiredContent | null): this {
 		return this.addMetadataPatch(acquired?.platformMetadata);

@@ -1,4 +1,4 @@
-import type { Article } from '@core-shared/types';
+import type { ResourceForProcessing } from '@core-shared/types';
 import { type ZodType, z } from 'zod';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
@@ -29,7 +29,7 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 
 // Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
 // translations dilutes the budget without adding recall.
-type EmbeddingInput = Pick<Article, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
+type EmbeddingInput = Pick<ResourceForProcessing, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
 
 export function prepareArticleTextForEmbedding(article: EmbeddingInput): string {
 	const headerParts = [article.title];

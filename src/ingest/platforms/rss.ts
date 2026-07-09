@@ -2,7 +2,7 @@ import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@cor
 import { withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { and, eq } from 'drizzle-orm';
 
