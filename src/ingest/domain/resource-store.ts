@@ -4,6 +4,7 @@ import { entities, entityTranslations, resourceEntities, resources, resourceTran
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
+	canonicalizeOptionalResourceLang,
 	canonicalizeResourceLang,
 	DEFAULT_RESOURCE_LANG,
 	isResourceType,
@@ -295,7 +296,7 @@ export async function updateResourceAfterProcessing(
 function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {
 	return {
 		id: base.url,
-		original_lang: canonicalizeResourceLang(base.originalLang ?? DEFAULT_RESOURCE_LANG),
+		original_lang: canonicalizeOptionalResourceLang(base.originalLang) ?? DEFAULT_RESOURCE_LANG,
 		title: base.title,
 		scope: 'corpus',
 		summary: base.summary,

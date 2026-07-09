@@ -13,6 +13,8 @@ interface YouTubeVideoItem {
 		description: string;
 		channelId: string;
 		channelTitle: string;
+		defaultAudioLanguage?: string;
+		defaultLanguage?: string;
 		publishedAt: string;
 		thumbnails: {
 			default?: { url: string };
@@ -187,6 +189,7 @@ export async function scrapeYouTube(
 		markdown: content,
 		metadata: {
 			author: snippet.channelTitle,
+			language: transcriptLanguage ?? snippet.defaultAudioLanguage ?? snippet.defaultLanguage ?? null,
 			publishedDate: snippet.publishedAt,
 			siteName: 'YouTube',
 			description: snippet.description.substring(0, 500) || null,

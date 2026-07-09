@@ -75,6 +75,7 @@ function isAcquiredContent(value: unknown): value is AcquiredContent {
 	const metadata = content.metadata as Record<string, unknown>;
 	return (
 		isNullableString(metadata.author) &&
+		isNullableString(metadata.language) &&
 		isNullableString(metadata.publishedDate) &&
 		isNullableString(metadata.siteName) &&
 		isNullableString(metadata.description)

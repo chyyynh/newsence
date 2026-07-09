@@ -21,6 +21,7 @@ async function enqueueTwitterResource(
 		source: string;
 		publishedDate: Date;
 		summary: string;
+		originalLang?: string;
 		content: string | null;
 		platformMetadata: PlatformMetadata;
 		hashTags?: string[];
@@ -33,6 +34,7 @@ async function enqueueTwitterResource(
 		publishedDate: data.publishedDate,
 		summary: data.summary,
 		type: 'twitter',
+		originalLang: data.originalLang,
 		content: data.content,
 		platformMetadata: data.platformMetadata,
 		keywords: data.hashTags,
@@ -75,6 +77,7 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 		source,
 		publishedDate: new Date(scraped.metadata.publishedDate || tweet.createdAt),
 		summary: resolved.kind === 'tweet' ? resolved.eventText : scraped.metadata.description || '',
+		originalLang: scraped.metadata.language ?? undefined,
 		content: resolved.kind === 'tweet' ? resolved.eventText || null : scraped.markdown,
 		platformMetadata: scraped.platformMetadata,
 		hashTags: tweet.hashTags,
@@ -104,6 +107,7 @@ async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<bo
 		source: first.author?.name || 'Twitter',
 		publishedDate: new Date(first.createdAt),
 		summary: combinedText,
+		originalLang: first.lang,
 		content: combinedText,
 		platformMetadata,
 		hashTags: first.hashTags,

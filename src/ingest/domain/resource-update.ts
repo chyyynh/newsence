@@ -1,5 +1,5 @@
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import type { ResourceType } from '../../resources/types';
+import { canonicalizeOptionalResourceLang, type ResourceType } from '../../resources/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
@@ -22,6 +22,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		summary: acquired.metadata.description ?? resource.summary,
 		content: acquired.markdown || resource.content,
 		source: acquired.metadata.siteName ?? acquired.metadata.author ?? resource.source,
+		original_lang: canonicalizeOptionalResourceLang(acquired.metadata.language) ?? resource.original_lang,
 		published_date: acquired.metadata.publishedDate ?? resource.published_date,
 		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
 		platform_metadata: acquired.platformMetadata ?? resource.platform_metadata,

@@ -253,6 +253,7 @@ interface TwitterLongform {
 async function scrapeTwitterLongform(
 	tweetId: string,
 	apiKey: string,
+	language?: string,
 ): Promise<(NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching longform for tweet', tweetId });
 
@@ -301,6 +302,7 @@ async function scrapeTwitterLongform(
 		markdown: md,
 		metadata: {
 			author: longform.author?.userName || null,
+			language: language ?? null,
 			publishedDate: longform.createdAt || null,
 			siteName: 'Twitter',
 			description: summary,
@@ -323,6 +325,7 @@ function buildExternalLinkTweet(
 		markdown: tweetText || tweet.text,
 		metadata: {
 			author: tweet.author?.userName || null,
+			language: tweet.lang ?? null,
 			publishedDate: tweet.createdAt,
 			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
 			description: tweetText || tweet.text,
@@ -350,7 +353,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	if (longformUrl || expandedUrls.length === 0) {
 		if (longformUrl) console.info({ tag: 'TWITTER', msg: 'Detected Twitter longform', longformUrl });
 		const tweetId = tweet.id ?? extractTweetId(tweet.url);
-		const longformContent = tweetId ? await scrapeTwitterLongform(tweetId, apiKey) : null;
+		const longformContent = tweetId ? await scrapeTwitterLongform(tweetId, apiKey, tweet.lang) : null;
 		if (longformContent) {
 			return {
 				kind: 'longform' as const,
@@ -379,6 +382,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 			markdown: tweet.text,
 			metadata: {
 				author: tweet.author?.userName || null,
+				language: tweet.lang ?? null,
 				publishedDate: tweet.createdAt,
 				siteName: 'Twitter',
 				description: tweet.text,

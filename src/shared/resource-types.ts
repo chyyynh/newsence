@@ -30,6 +30,17 @@ export function canonicalizeResourceLang(value: unknown): string {
 	}
 }
 
+export function canonicalizeOptionalResourceLang(value: unknown): string | null {
+	if (typeof value !== 'string') return null;
+	const lang = value.trim().replaceAll('_', '-');
+	if (!lang || lang.toLowerCase() === 'und') return null;
+	try {
+		return canonicalizeResourceLang(lang);
+	} catch {
+		return null;
+	}
+}
+
 export const RESOURCE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];

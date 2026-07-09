@@ -1,6 +1,7 @@
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
+import { canonicalizeOptionalResourceLang } from '../../resources/types';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -108,22 +109,30 @@ async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetad
 	let description: string | null = null;
 	let siteName: string | null = null;
 	let author: string | null = null;
+	let language: string | null = null;
 	let publishedDate: string | null = null;
 	const setOnce = (set: (value: string) => void, current: () => string | null) => (value: string) => {
 		if (!current()) set(value);
 	};
 
-	let rewriter = new HTMLRewriter().on('title', {
-		text(text) {
-			titleText += text.text;
-		},
-	});
+	let rewriter = new HTMLRewriter()
+		.on('html[lang]', {
+			element(element) {
+				if (!language) language = canonicalizeOptionalResourceLang(element.getAttribute('lang'));
+			},
+		})
+		.on('title', {
+			text(text) {
+				titleText += text.text;
+			},
+		});
 	for (const [selector, assign, current] of [
 		['meta[property="og:title"]', (value: string) => (title = value), () => title],
 		['meta[name="twitter:title"]', (value: string) => (title = value), () => title],
 		['meta[property="og:description"]', (value: string) => (description = value), () => description],
 		['meta[name="description"]', (value: string) => (description = value), () => description],
 		['meta[property="og:site_name"]', (value: string) => (siteName = value), () => siteName],
+		['meta[property="og:locale"]', (value: string) => (language = canonicalizeOptionalResourceLang(value)), () => language],
 		['meta[name="author"]', (value: string) => (author = value), () => author],
 		['meta[property="article:author"]', (value: string) => (author = value), () => author],
 		['meta[property="article:published_time"]', (value: string) => (publishedDate = value), () => publishedDate],
@@ -148,6 +157,7 @@ async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetad
 	return {
 		title: clean(title) ?? clean(titleText),
 		author: clean(author),
+		language,
 		publishedDate: clean(publishedDate),
 		siteName: clean(siteName) ?? urlHost(url),
 		description: clean(description),
@@ -259,6 +269,7 @@ async function scrapePdfBytes(bytes: Uint8Array, url: string, fileName: string):
 		markdown: parsed.text,
 		metadata: {
 			author: null,
+			language: null,
 			publishedDate: null,
 			siteName: urlHost(url),
 			description: parsed.text.slice(0, 500) || null,
@@ -288,6 +299,7 @@ async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileNa
 		markdown: content,
 		metadata: {
 			author: metadata.author,
+			language: metadata.language,
 			publishedDate: metadata.publishedDate,
 			siteName: metadata.siteName,
 			description: metadata.description,
@@ -305,6 +317,7 @@ function scrapeTextBlob(text: string, fileName: string): WebAcquiredContent {
 		markdown: text.trim(),
 		metadata: {
 			author: null,
+			language: null,
 			publishedDate: null,
 			siteName: null,
 			description: text.trim().slice(0, 500) || null,

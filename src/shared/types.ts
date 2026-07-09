@@ -79,6 +79,7 @@ export interface NormalizedContent<T extends ResourceType = ResourceType> {
 	markdown: string;
 	metadata: {
 		author: string | null;
+		language: string | null;
 		publishedDate: string | null;
 		siteName: string | null;
 		description: string | null;

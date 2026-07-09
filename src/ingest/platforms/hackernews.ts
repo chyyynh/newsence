@@ -115,6 +115,7 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 		markdown: buildHnMarkdown(item),
 		metadata: {
 			author: item.author || null,
+			language: null,
 			publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
 			siteName: 'Hacker News',
 			description: summary,

@@ -182,6 +182,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 				publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
 				summary: scraped.metadata.description ?? '',
 				type: 'youtube',
+				originalLang: scraped.metadata.language ?? undefined,
 				content: scraped.markdown,
 				platformMetadata: scraped.platformMetadata,
 			});

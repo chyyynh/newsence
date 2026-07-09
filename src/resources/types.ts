@@ -1,4 +1,5 @@
 export {
+	canonicalizeOptionalResourceLang,
 	canonicalizeResourceLang,
 	DEFAULT_RESOURCE_LANG,
 	isResourceType,
