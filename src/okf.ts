@@ -4,7 +4,8 @@
 // Entity links are read from article_entities, which the ingest pipeline already
 // normalizes before storage.
 
-import { Client } from 'pg';
+import { type CoreDb, withCoreDb } from '@db/client';
+import { type SQL, sql } from 'drizzle-orm';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;
@@ -81,32 +82,37 @@ async function buildCollectionOkfBundle(
 	env: CoreEnv,
 	input: { viewerId: string | null; collectionId: string },
 ): Promise<{ slug: string; files: Iterable<OkfFile> }> {
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const collection = (
-		await db.query<CollectionRow>(
-			`SELECT id, name, description, visibility, updated_at
-						 FROM collections
-						 WHERE id = $1
-						   AND (visibility = 'public' OR ($2::text IS NOT NULL AND user_id = $2))
+	return withCoreDb(env, async (db) => {
+		const collection = (
+			await queryRows<CollectionRow>(
+				db,
+				sql`SELECT id, name, description, visibility, updated_at
+					 FROM collections
+					 WHERE id = ${input.collectionId}
+					   AND (visibility = 'public' OR (${input.viewerId}::text IS NOT NULL AND user_id = ${input.viewerId}))
 				 LIMIT 1`,
-			[input.collectionId, input.viewerId],
-		)
-	).rows[0];
-	if (!collection) throw new Error('Collection not found');
+			)
+		)[0];
+		if (!collection) throw new Error('Collection not found');
 
-	const articles = await readCollectionArticles(db, collection.id, input.viewerId);
-	const linkableArticles = articles.filter((article) => article.kind === 'article');
-	const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
-	return {
-		slug: uniqueSlug(collection.name, collection.id),
-		files: renderOkfFiles(collection, articles, links),
-	};
+		const articles = await readCollectionArticles(db, collection.id, input.viewerId);
+		const linkableArticles = articles.filter((article) => article.kind === 'article');
+		const links = linkableArticles.length ? await readArticleEntityLinks(db, linkableArticles) : [];
+		return {
+			slug: uniqueSlug(collection.name, collection.id),
+			files: renderOkfFiles(collection, articles, links),
+		};
+	});
 }
 
-async function readCollectionArticles(db: Client, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {
-	const result = await db.query<ArticleRow>(
-		`SELECT *
+async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
+	return (await db.execute(statement)).rows as T[];
+}
+
+async function readCollectionArticles(db: CoreDb, collectionId: string, viewerId: string | null): Promise<ArticleRow[]> {
+	return queryRows<ArticleRow>(
+		db,
+		sql`SELECT *
 		 FROM (
 		   SELECT
 		     c.created_at,
@@ -117,7 +123,7 @@ async function readCollectionArticles(db: Client, collectionId: string, viewerId
 		   FROM citations c
 		   JOIN articles a ON c.to_type = 'article' AND a.id = c.to_id
 		   WHERE c.from_type = 'collection'
-		     AND c.from_id = $1::text
+		     AND c.from_id = ${collectionId}::text
 		   UNION ALL
 		   SELECT
 		     c.created_at,
@@ -139,27 +145,24 @@ async function readCollectionArticles(db: Client, collectionId: string, viewerId
 		   FROM citations c
 		   JOIN user_files uf ON c.to_type = 'user_file'
 		     AND uf.id = c.to_id
-		     AND uf.user_id = $2
+		     AND uf.user_id = ${viewerId}
 		   WHERE c.from_type = 'collection'
-		     AND c.from_id = $1::text
+		     AND c.from_id = ${collectionId}::text
 		 ) resources
 		 ORDER BY created_at ASC`,
-		[collectionId, viewerId],
 	);
-	return result.rows;
 }
 
-async function readArticleEntityLinks(db: Client, articles: ArticleRow[]): Promise<EntityLinkRow[]> {
-	const result = await db.query<EntityLinkRow>(
-		`SELECT
+async function readArticleEntityLinks(db: CoreDb, articles: ArticleRow[]): Promise<EntityLinkRow[]> {
+	return queryRows<EntityLinkRow>(
+		db,
+		sql`SELECT
 		   ae.article_id::text, e.id::text, e.name, e.name_cn, e.type, e.article_count
 		 FROM article_entities ae
 		 JOIN entities e ON e.id = ae.entity_id
-		 WHERE ae.article_id = ANY($1::uuid[])
+		 WHERE ae.article_id = ANY(${articles.map((article) => article.id)}::uuid[])
 		 ORDER BY e.article_count DESC, e.name ASC`,
-		[articles.map((article) => article.id)],
 	);
-	return result.rows;
 }
 
 function* renderOkfFiles(collection: CollectionRow, articles: ArticleRow[], links: EntityLinkRow[]): Iterable<OkfFile> {
