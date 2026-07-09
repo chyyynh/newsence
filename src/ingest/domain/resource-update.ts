@@ -1,15 +1,11 @@
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { isResourceType, type ResourceType } from '../../resources/types';
-import { type AcquiredContent, type OgImagePatch, PDF_MIME } from '../acquisition';
+import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
-type ResourceUpdate = Partial<ProcessorResult['updateData']> &
+export type ResourceUpdate = ProcessorResult['updateData'] &
 	Partial<{
-		title: string;
-		source: string;
-		published_date: string;
 		type: ResourceType;
-		content: string;
 		og_image_url: string;
 		platform_metadata: PlatformMetadata | Record<string, unknown>;
 		embedding: string;
@@ -44,7 +40,7 @@ export class ResourceUpdateBuilder {
 
 	constructor(private readonly resource: ResourceForProcessing) {}
 
-	addExtractionMetadata(extraction: AcquiredContent['extraction'] | undefined): this {
+	addExtractionMetadata(extraction: PdfExtractionMetadata | undefined): this {
 		return extraction ? this.addMetadataPatch({ extraction }) : this;
 	}
 
@@ -58,19 +54,6 @@ export class ResourceUpdateBuilder {
 		if (!paperEnrichment) return this;
 		this.update.type = 'paper';
 		return this.addMetadataPatch({ type: 'paper', data: paperEnrichment });
-	}
-
-	applyAcquiredFields(acquired?: AcquiredContent): this {
-		if (!acquired) return this;
-		const acquiredTitle = acquired.title?.trim();
-		if (acquiredTitle) this.update.title = acquiredTitle;
-		if (acquired.metadata.siteName || acquired.metadata.author)
-			this.update.source = acquired.metadata.siteName ?? acquired.metadata.author ?? '';
-		if (acquired.metadata.publishedDate) this.update.published_date = acquired.metadata.publishedDate;
-		if (acquired.metadata.description !== null) this.update.summary = acquired.metadata.description;
-		this.update.content = acquired.markdown;
-		if (acquired.platformMetadata) this.update.type = resourceTypeAfterAcquisition(this.resource.type, acquired.platformMetadata.type);
-		return this;
 	}
 
 	applyProcessorResult(result: ProcessorResult, embedding?: number[] | null): this {
@@ -109,7 +92,7 @@ export class ResourceUpdateBuilder {
 		return this;
 	}
 
-	build(): Record<string, unknown> {
+	build(): ResourceUpdate {
 		return { ...this.update };
 	}
 

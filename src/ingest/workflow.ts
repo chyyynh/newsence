@@ -183,7 +183,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					processorResult,
 					embedding,
 					pdfTextArtifact,
-					acquiredContent,
+					acquisitionExtraction: acquiredContent?.extraction,
 					paperEnrichment,
 					ogImagePatch,
 					youtubeTranscript,

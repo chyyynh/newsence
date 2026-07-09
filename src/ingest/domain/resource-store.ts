@@ -16,6 +16,7 @@ import {
 	type ResourceType,
 	ZH_HANT_RESOURCE_LANG,
 } from '../../resources/types';
+import type { ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & { has_content?: boolean };
 
@@ -261,7 +262,7 @@ export async function updateResourceAfterProcessing(
 	db: CoreDb,
 	resourceId: string,
 	resource: ResourceForProcessing,
-	updatePayload: Record<string, unknown>,
+	updatePayload: ResourceUpdate,
 ): Promise<string> {
 	const record = resourceMirrorRecord('resource', resourceId, resource, updatePayload);
 	const result = await db.execute(sql`
@@ -324,17 +325,17 @@ function resourceMirrorRecord(
 	origin: ResourceMirrorOrigin,
 	resourceId: string,
 	resource: ResourceForProcessing,
-	updatePayload: Record<string, unknown>,
+	updatePayload: ResourceUpdate,
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
 	const platformMetadata = updatePayload.platform_metadata ?? resource.platform_metadata ?? null;
 	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, resource.source);
 	const fileType = stringOrNull(resource.file_type);
-	const url = cleanString(updatePayload.url ?? resource.url);
+	const url = cleanString(resource.url);
 	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url ?? resource.url) : url;
 	const tags = stringArrayValue(updatePayload.tags ?? resource.tags ?? [], 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords ?? resource.keywords ?? [], 'keywords');
-	const title = cleanString(updatePayload.title ?? resource.title);
+	const title = cleanString(resource.title);
 	const summary = cleanString(updatePayload.summary ?? resource.summary);
 	const content = cleanString(updatePayload.content ?? resource.content);
 	const translations = mergeResourceTranslations(resource.translations, updatePayload.translations);
@@ -351,7 +352,7 @@ function resourceMirrorRecord(
 		summary,
 		content,
 		translations,
-		publishedDate: optionalDateValue(updatePayload.published_date ?? resource.published_date, 'published_date'),
+		publishedDate: optionalDateValue(resource.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
 		tags,

@@ -177,7 +177,7 @@ export function normalizeResourceEntitiesForStorage(
 }
 
 export function normalizeResourceEntityUpdatePayload(
-	updatePayload: Record<string, unknown>,
+	updatePayload: { entities?: unknown },
 	source?: string | null,
 	platformMetadata?: unknown,
 ): NormalizedResourceEntity[] | null {

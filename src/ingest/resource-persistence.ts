@@ -2,7 +2,7 @@ import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@c
 import { withCoreTx } from '@db/client';
 import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/resource-store';
-import { type AcquiredContent, type OgImagePatch, pdfExtractionMetadata } from './acquisition';
+import { type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { ResourceUpdateBuilder } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -14,7 +14,7 @@ export type PersistProcessedResourceInput = {
 	processorResult: ProcessorResult;
 	embedding: number[] | null;
 	pdfTextArtifact: PdfTextArtifact | null;
-	acquiredContent?: AcquiredContent;
+	acquisitionExtraction?: PdfExtractionMetadata;
 	paperEnrichment: PaperMetadata | null;
 	ogImagePatch: OgImagePatch;
 	youtubeTranscript?: YoutubeTranscript;
@@ -30,12 +30,11 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 						updateData: { ...input.processorResult.updateData, content: input.resource.content },
 					}
 				: input.processorResult;
-		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquiredContent?.extraction;
+		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;
 		const updatePayload = new ResourceUpdateBuilder(input.resource)
 			.addExtractionMetadata(extraction)
 			.addOgMetadata(input.ogImagePatch)
 			.addPaperMetadata(input.paperEnrichment)
-			.applyAcquiredFields(input.acquiredContent)
 			.applyProcessorResult(finalResult, input.embedding)
 			.applyOgFields(input.ogImagePatch)
 			.build();
