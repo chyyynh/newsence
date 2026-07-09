@@ -5,8 +5,9 @@
 import type { WorkflowStep } from 'cloudflare:workers';
 import type { PaperMetadata, PaperReference } from '@core-shared/types';
 import { fetchWithTimeout } from '@core-shared/web';
-import { withCoreTx } from '@db/client';
-import type { Client } from 'pg';
+import { type CoreDb, withCoreTx } from '@db/client';
+import { paperReferences, papers } from '@db/schema';
+import { sql } from 'drizzle-orm';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -222,50 +223,71 @@ function normalizePaper(paper: S2Paper, arxivHint?: string): PaperMetadata {
 	};
 }
 
-async function upsertIngestedPaper(db: Client, row: PaperRow): Promise<string> {
-	const result = await db.query<{ id: string }>(
-		`INSERT INTO papers (openalex_id, doi, article_id, title, authors, venue, year, abstract, cited_by_count, oa_pdf_url)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 ON CONFLICT (openalex_id) DO UPDATE SET
-		   doi = COALESCE(EXCLUDED.doi, papers.doi),
-		   article_id = COALESCE(EXCLUDED.article_id, papers.article_id),
-		   title = COALESCE(EXCLUDED.title, papers.title),
-		   authors = CASE WHEN cardinality(EXCLUDED.authors) > 0 THEN EXCLUDED.authors ELSE papers.authors END,
-		   venue = COALESCE(EXCLUDED.venue, papers.venue),
-		   year = COALESCE(EXCLUDED.year, papers.year),
-		   abstract = COALESCE(EXCLUDED.abstract, papers.abstract),
-		   cited_by_count = COALESCE(EXCLUDED.cited_by_count, papers.cited_by_count),
-		   oa_pdf_url = COALESCE(EXCLUDED.oa_pdf_url, papers.oa_pdf_url),
-		   updated_at = NOW()
-		 RETURNING id`,
-		[row.openAlexId, row.doi, row.articleId, row.title, row.authors, row.venue, row.year, row.abstract, row.citedByCount, row.oaPdfUrl],
-	);
-	const id = result.rows[0]?.id;
+async function upsertIngestedPaper(db: CoreDb, row: PaperRow): Promise<string> {
+	const [result] = await db
+		.insert(papers)
+		.values({
+			openAlexId: row.openAlexId,
+			doi: row.doi,
+			articleId: row.articleId,
+			title: row.title,
+			authors: row.authors,
+			venue: row.venue,
+			year: row.year,
+			abstract: row.abstract,
+			citedByCount: row.citedByCount,
+			oaPdfUrl: row.oaPdfUrl,
+		})
+		.onConflictDoUpdate({
+			target: papers.openAlexId,
+			set: {
+				doi: sql`COALESCE(excluded.doi, ${papers.doi})`,
+				articleId: sql`COALESCE(excluded.article_id, ${papers.articleId})`,
+				title: sql`COALESCE(excluded.title, ${papers.title})`,
+				authors: sql`CASE WHEN cardinality(excluded.authors) > 0 THEN excluded.authors ELSE ${papers.authors} END`,
+				venue: sql`COALESCE(excluded.venue, ${papers.venue})`,
+				year: sql`COALESCE(excluded.year, ${papers.year})`,
+				abstract: sql`COALESCE(excluded.abstract, ${papers.abstract})`,
+				citedByCount: sql`COALESCE(excluded.cited_by_count, ${papers.citedByCount})`,
+				oaPdfUrl: sql`COALESCE(excluded.oa_pdf_url, ${papers.oaPdfUrl})`,
+				updatedAt: sql`NOW()`,
+			},
+		})
+		.returning({ id: papers.id });
+	const id = result?.id;
 	if (!id) throw new Error(`Failed to upsert paper ${row.openAlexId}`);
 	return id;
 }
 
-async function upsertReferenceNode(db: Client, ref: PaperReference): Promise<string | null> {
+async function upsertReferenceNode(db: CoreDb, ref: PaperReference): Promise<string | null> {
 	if (!ref.openAlexId) return null;
-	const result = await db.query<{ id: string }>(
-		`INSERT INTO papers (openalex_id, doi, title, authors, year)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (openalex_id) DO UPDATE SET
-		   doi = COALESCE(EXCLUDED.doi, papers.doi),
-		   title = COALESCE(papers.title, EXCLUDED.title),
-		   year = COALESCE(papers.year, EXCLUDED.year),
-		   updated_at = NOW()
-		 RETURNING id`,
-		[ref.openAlexId, ref.doi ?? null, ref.title ?? null, ref.author ? [ref.author] : [], ref.year ?? null],
-	);
-	return result.rows[0]?.id ?? null;
+	const [result] = await db
+		.insert(papers)
+		.values({
+			openAlexId: ref.openAlexId,
+			doi: ref.doi ?? null,
+			title: ref.title ?? null,
+			authors: ref.author ? [ref.author] : [],
+			year: ref.year ?? null,
+		})
+		.onConflictDoUpdate({
+			target: papers.openAlexId,
+			set: {
+				doi: sql`COALESCE(excluded.doi, ${papers.doi})`,
+				title: sql`COALESCE(${papers.title}, excluded.title)`,
+				year: sql`COALESCE(${papers.year}, excluded.year)`,
+				updatedAt: sql`NOW()`,
+			},
+		})
+		.returning({ id: papers.id });
+	return result?.id ?? null;
 }
 
 async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
 	const openAlexId = paper.openAlexId;
 	if (!openAlexId) return null;
 
-	return withCoreTx(env, async (_drizzle, db) => {
+	return withCoreTx(env, async (db) => {
 		const fromId = await upsertIngestedPaper(db, {
 			openAlexId,
 			doi: paper.doi ?? null,
@@ -284,11 +306,7 @@ async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetad
 		for (let ordinal = 0; ordinal < refs.length; ordinal++) {
 			const toId = await upsertReferenceNode(db, refs[ordinal]);
 			if (!toId || toId === fromId) continue;
-			await db.query(
-				`INSERT INTO paper_references (from_paper_id, to_paper_id, ordinal)
-				 VALUES ($1, $2, $3) ON CONFLICT (from_paper_id, to_paper_id) DO NOTHING`,
-				[fromId, toId, ordinal],
-			);
+			await db.insert(paperReferences).values({ fromPaperId: fromId, toPaperId: toId, ordinal }).onConflictDoNothing();
 			edges++;
 		}
 		return { edges };

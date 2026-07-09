@@ -93,3 +93,26 @@ export const articleEntities = pgTable('article_entities', {
 	articleId: uuid('article_id').notNull(),
 	entityId: uuid('entity_id').notNull(),
 });
+
+export const papers = pgTable('papers', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	openAlexId: varchar('openalex_id', { length: 32 }).notNull().unique(),
+	doi: text('doi').unique(),
+	articleId: uuid('article_id'),
+	title: text('title'),
+	authors: text('authors').array().notNull(),
+	venue: text('venue'),
+	year: integer('year'),
+	abstract: text('abstract'),
+	citedByCount: integer('cited_by_count'),
+	oaPdfUrl: text('oa_pdf_url'),
+	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+});
+
+export const paperReferences = pgTable('paper_references', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	fromPaperId: uuid('from_paper_id').notNull(),
+	toPaperId: uuid('to_paper_id').notNull(),
+	ordinal: integer('ordinal'),
+});
