@@ -1,7 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
-import type { Article, NormalizedContent, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
-import { extractYouTubeId, FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
+import type { Article, PaperMetadata, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceArticle,
@@ -10,40 +9,21 @@ import {
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
+import {
+	type AcquiredContent,
+	EMPTY_OG_IMAGE_PATCH,
+	fetchOgImage,
+	type OgImagePatch,
+	PDF_MIME,
+	pdfExtractionMetadata,
+	scrapeSavedUrl,
+} from './acquisition';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
-import { extractReadableArticleHtml, preferReadableArticleText } from './html-content';
-import { extractHackerNewsId, processHackerNewsArticle, scrapeHackerNews } from './platforms/hackernews';
+import { processHackerNewsArticle } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
-import { type PdfTextArtifact, parsePdfBytes, stagePdfTextExtraction } from './platforms/pdf';
-import { extractTweetId, processTwitterArticle, scrapeTweet } from './platforms/twitter';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights, scrapeYouTube } from './platforms/youtube';
-
-const PDF_MIME = 'application/pdf';
-const GENERIC_FETCH_TIMEOUT_MS = 8_000;
-const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
-const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
-const OG_FETCH_TIMEOUT_MS = 6_000;
-const OG_MAX_BYTES = 131_072;
-
-type PdfExtractionMetadata = {
-	status: PdfTextArtifact['status'];
-	parser: 'liteparse';
-	chars: number;
-	pages: number;
-};
-
-type AcquiredContent = NormalizedContent & { extraction?: PdfExtractionMetadata; ogImage?: OgImagePatch };
-type OgImagePatch = {
-	ogImageUrl: string | null;
-	ogImageWidth: number | null;
-	ogImageHeight: number | null;
-};
-
-const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
-	ogImageUrl: null,
-	ogImageWidth: null,
-	ogImageHeight: null,
-};
+import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
+import { processTwitterArticle } from './platforms/twitter';
+import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
 function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	return {
@@ -64,20 +44,38 @@ function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	};
 }
 
-function buildProcessorUpdatePayload(
+type ResourceUpdate = Record<string, unknown> & {
+	title?: string;
+	summary?: string | null;
+	content?: string | null;
+	source?: string;
+	published_date?: string;
+	source_type?: string;
+	og_image_url?: string;
+	platform_metadata?: Record<string, unknown>;
+	embedding?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildResourcePlatformMetadata(
 	article: Article,
 	result: ProcessorResult,
-	embedding?: number[] | null,
-	metadataPatch?: Record<string, unknown>,
-): Record<string, unknown> {
-	const updatePayload: Record<string, unknown> = { ...result.updateData };
+	metadataPatches: Record<string, unknown>[],
+): Record<string, unknown> | undefined {
 	const category = result.classificationCategory;
 	const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-	let mergedMetadata: PlatformMetadata | null = article.platform_metadata ?? null;
+	let mergedMetadata: Record<string, unknown> | null = article.platform_metadata ? { ...article.platform_metadata } : null;
 	if (hasEnrichments && mergedMetadata) {
 		mergedMetadata = {
 			...mergedMetadata,
-			enrichments: { ...(mergedMetadata.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
+			enrichments: {
+				...(isRecord(mergedMetadata.enrichments) ? mergedMetadata.enrichments : {}),
+				...result.enrichments,
+				processedAt: new Date().toISOString(),
+			},
 		};
 	}
 	if (category) {
@@ -86,14 +84,55 @@ function buildProcessorUpdatePayload(
 		mergedMetadata = {
 			...base,
 			classification: {
-				...(base.classification ?? {}),
+				...(isRecord(base.classification) ? base.classification : {}),
 				category,
 				classifiedAt: new Date().toISOString(),
 			},
 		};
 	}
-	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
-	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
+	for (const patch of metadataPatches) mergedMetadata = { ...(mergedMetadata ?? {}), ...patch };
+	return mergedMetadata ?? undefined;
+}
+
+function buildResourceUpdatePayload(input: {
+	article: Article;
+	result: ProcessorResult;
+	embedding: number[] | null;
+	acquiredContent: AcquiredContent | null;
+	preserveAcquiredSourceType?: boolean;
+	extraction?: Record<string, unknown>;
+	ogImagePatch: OgImagePatch;
+	paperEnrichment: PaperMetadata | null;
+}): ResourceUpdate {
+	const { article, result, embedding, acquiredContent, extraction, ogImagePatch, paperEnrichment } = input;
+	const updatePayload: ResourceUpdate = {};
+	const metadataPatches: Record<string, unknown>[] = [];
+
+	if (acquiredContent) {
+		const acquiredTitle = acquiredContent.title?.trim();
+		if (acquiredTitle) updatePayload.title = acquiredTitle;
+		if (acquiredContent.metadata.siteName || acquiredContent.metadata.author) {
+			updatePayload.source = acquiredContent.metadata.siteName ?? acquiredContent.metadata.author ?? undefined;
+		}
+		if (acquiredContent.metadata.publishedDate) updatePayload.published_date = acquiredContent.metadata.publishedDate;
+		if (acquiredContent.metadata.description !== null) updatePayload.summary = acquiredContent.metadata.description;
+		updatePayload.content = acquiredContent.markdown;
+		if (acquiredContent.platformMetadata) {
+			if (!input.preserveAcquiredSourceType) updatePayload.source_type = acquiredContent.platformMetadata.type;
+			metadataPatches.push({ ...acquiredContent.platformMetadata });
+		}
+	}
+
+	if (extraction) metadataPatches.push({ extraction });
+	if (ogImagePatch.ogImageUrl) updatePayload.og_image_url = ogImagePatch.ogImageUrl;
+	if (ogImagePatch.ogImageWidth && ogImagePatch.ogImageHeight) {
+		metadataPatches.push({ ogImageWidth: ogImagePatch.ogImageWidth, ogImageHeight: ogImagePatch.ogImageHeight });
+	}
+	if (paperEnrichment) metadataPatches.push({ type: 'paper', data: paperEnrichment });
+
+	Object.assign(updatePayload, result.updateData);
+	const platformMetadata = buildResourcePlatformMetadata(article, result, metadataPatches);
+	if (platformMetadata) updatePayload.platform_metadata = platformMetadata;
 	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
 	return updatePayload;
 }
@@ -147,281 +186,6 @@ async function sourceArticleWorkflowId(url: string): Promise<string> {
 	return `source-article-${hash}`;
 }
 
-function urlHost(url: string): string {
-	return new URL(url).hostname.replace(/^www\./, '');
-}
-
-function fileNameFromUrl(url: string, fallback: string): string {
-	const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '');
-	return name || fallback;
-}
-
-function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
-	return { status: pdf.status, parser: 'liteparse', chars: pdf.chars, pages: pdf.pages };
-}
-
-type HtmlMetadata = NormalizedContent['metadata'] & { title: string | null };
-
-function metaContentHandler(assign: (value: string) => void): HTMLRewriterElementContentHandlers {
-	return {
-		element(element) {
-			const content = element.getAttribute('content')?.trim();
-			if (content) assign(content);
-		},
-	};
-}
-
-function decodeHtmlEntities(value: string): string {
-	return value
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-		.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(Number.parseInt(code, 16)));
-}
-
-async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetadata> {
-	let titleText = '';
-	let title: string | null = null;
-	let description: string | null = null;
-	let siteName: string | null = null;
-	let author: string | null = null;
-	let publishedDate: string | null = null;
-	const setOnce = (set: (value: string) => void, current: () => string | null) => (value: string) => {
-		if (!current()) set(value);
-	};
-
-	let rewriter = new HTMLRewriter().on('title', {
-		text(text) {
-			titleText += text.text;
-		},
-	});
-	for (const [selector, assign, current] of [
-		['meta[property="og:title"]', (value: string) => (title = value), () => title],
-		['meta[name="twitter:title"]', (value: string) => (title = value), () => title],
-		['meta[property="og:description"]', (value: string) => (description = value), () => description],
-		['meta[name="description"]', (value: string) => (description = value), () => description],
-		['meta[property="og:site_name"]', (value: string) => (siteName = value), () => siteName],
-		['meta[name="author"]', (value: string) => (author = value), () => author],
-		['meta[property="article:author"]', (value: string) => (author = value), () => author],
-		['meta[property="article:published_time"]', (value: string) => (publishedDate = value), () => publishedDate],
-	] as const) {
-		rewriter = rewriter.on(selector, metaContentHandler(setOnce(assign, current)));
-	}
-
-	await rewriter
-		.on('time[datetime]', {
-			element(element) {
-				if (!publishedDate) publishedDate = element.getAttribute('datetime')?.trim() || null;
-			},
-		})
-		.transform(new Response(html))
-		.arrayBuffer();
-
-	const clean = (value: string | null): string | null => {
-		const decoded = value ? decodeHtmlEntities(value).trim() : '';
-		return decoded || null;
-	};
-
-	return {
-		title: clean(title) ?? clean(titleText),
-		author: clean(author),
-		publishedDate: clean(publishedDate),
-		siteName: clean(siteName) ?? urlHost(url),
-		description: clean(description),
-	};
-}
-
-function parsePositiveInt(raw: string | null): number | null {
-	if (!raw) return null;
-	const parsed = Number.parseInt(raw, 10);
-	return parsed > 0 ? parsed : null;
-}
-
-function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
-	const merged = new Uint8Array(total);
-	let offset = 0;
-	for (const chunk of chunks) {
-		merged.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return merged;
-}
-
-function extractMeta(html: string, property: string): string | null {
-	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
-	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
-	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw).trim() || null : null;
-}
-
-function extractMetaName(html: string, name: string): string | null {
-	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
-	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
-	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw).trim() || null : null;
-}
-
-function extractOgImageFromHtml(html: string, url: string): OgImagePatch {
-	let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
-	if (!ogImageUrl) return EMPTY_OG_IMAGE_PATCH;
-
-	try {
-		ogImageUrl = new URL(ogImageUrl, url).toString();
-	} catch {
-		return EMPTY_OG_IMAGE_PATCH;
-	}
-	if (ogImageUrl.startsWith('http://')) ogImageUrl = ogImageUrl.replace(/^http:/, 'https:');
-
-	return {
-		ogImageUrl,
-		ogImageWidth: parsePositiveInt(extractMeta(html, 'og:image:width')),
-		ogImageHeight: parsePositiveInt(extractMeta(html, 'og:image:height')),
-	};
-}
-
-async function fetchOgImage(url: string): Promise<OgImagePatch> {
-	try {
-		const response = await fetchWithTimeout(
-			url,
-			{
-				headers: {
-					'User-Agent': FEED_UA,
-					Accept: 'text/html,application/xhtml+xml',
-				},
-			},
-			OG_FETCH_TIMEOUT_MS,
-		);
-		if (!response.ok || !response.body) {
-			await response.body?.cancel();
-			return EMPTY_OG_IMAGE_PATCH;
-		}
-
-		const reader = response.body.getReader();
-		const chunks: Uint8Array[] = [];
-		let totalBytes = 0;
-		while (totalBytes < OG_MAX_BYTES) {
-			const { done, value } = await reader.read();
-			if (done || !value) break;
-			chunks.push(value);
-			totalBytes += value.byteLength;
-		}
-		await reader.cancel();
-
-		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
-		return extractOgImageFromHtml(html, url);
-	} catch {
-		return EMPTY_OG_IMAGE_PATCH;
-	}
-}
-
-function titleFromMarkdown(markdown: string): string | null {
-	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || null;
-}
-
-async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
-	const result = await env.AI.toMarkdown({
-		name: fileNameFromUrl(url, `${urlHost(url)}.html`),
-		blob: new Blob([html], { type: 'text/html' }),
-	});
-	if (result.format === 'error') throw new Error(`Workers AI toMarkdown failed: ${result.error}`);
-	return result.data.trim();
-}
-
-async function scrapePdfUrl(url: string, response: Response): Promise<AcquiredContent> {
-	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
-	const parsed = await parsePdfBytes(bytes);
-	const fileName = fileNameFromUrl(response.url || url, 'document.pdf');
-	const title = fileName.replace(/\.pdf$/i, '') || 'PDF document';
-	return {
-		title,
-		markdown: parsed.text,
-		metadata: {
-			author: null,
-			publishedDate: null,
-			siteName: urlHost(response.url || url),
-			description: parsed.text.slice(0, 500) || null,
-		},
-		platformMetadata: {
-			type: 'pdf',
-			fetchedAt: new Date().toISOString(),
-			data: { fileName, fileSize: bytes.byteLength },
-		},
-		extraction: pdfExtractionMetadata(parsed),
-	};
-}
-
-async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
-	const response = await fetchWithTimeout(
-		url,
-		{
-			headers: {
-				'User-Agent': FEED_UA,
-				Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.5',
-				'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-			},
-		},
-		GENERIC_FETCH_TIMEOUT_MS,
-	);
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-	}
-
-	const contentType = response.headers.get('content-type')?.toLowerCase() || '';
-	if (contentType.includes(PDF_MIME) || new URL(response.url || url).pathname.toLowerCase().endsWith('.pdf')) {
-		return scrapePdfUrl(url, response);
-	}
-	if (
-		contentType &&
-		!contentType.includes('text/html') &&
-		!contentType.includes('text/xml') &&
-		!contentType.includes('application/xhtml') &&
-		!contentType.includes('application/xml')
-	) {
-		await response.body?.cancel();
-		throw new Error(`Unsupported response content type: ${contentType}`);
-	}
-
-	const finalUrl = response.url || url;
-	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, finalUrl), extractReadableArticleHtml(html)]);
-	const markdown = await markdownFromHtml(env, readable?.html ?? html, finalUrl);
-	const content = preferReadableArticleText(markdown, readable);
-	const title = metadata.title ?? titleFromMarkdown(markdown) ?? urlHost(finalUrl);
-	return {
-		title,
-		markdown: content,
-		metadata: {
-			author: metadata.author,
-			publishedDate: metadata.publishedDate,
-			siteName: metadata.siteName,
-			description: metadata.description,
-		},
-		platformMetadata: { type: 'default', fetchedAt: new Date().toISOString(), data: null },
-		ogImage: extractOgImageFromHtml(html, finalUrl),
-	};
-}
-
-async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent | null> {
-	const parsed = new URL(url);
-	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http(s) URLs are allowed');
-	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
-
-	const videoId = extractYouTubeId(url);
-	if (videoId) return scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
-
-	const tweetId = extractTweetId(url);
-	if (tweetId) return scrapeTweet(tweetId, env.KAITO_API_KEY);
-
-	const hackerNewsId = extractHackerNewsId(url);
-	if (hackerNewsId) return scrapeHackerNews(hackerNewsId);
-
-	return scrapeGenericUrl(url, env);
-}
-
 function applyAcquiredContent(article: Article, acquired: AcquiredContent | null): Article {
 	if (!acquired) return article;
 	const acquiredTitle = acquired.title?.trim();
@@ -438,53 +202,6 @@ function applyAcquiredContent(article: Article, acquired: AcquiredContent | null
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
 	};
-}
-
-function acquiredContentUpdatePayload(
-	acquired: AcquiredContent | null,
-	options?: { preserveSourceType?: boolean },
-): Record<string, unknown> {
-	if (!acquired) return {};
-	const acquiredTitle = acquired.title?.trim();
-	return {
-		...(acquiredTitle ? { title: acquiredTitle } : {}),
-		...(acquired.metadata.siteName || acquired.metadata.author ? { source: acquired.metadata.siteName ?? acquired.metadata.author } : {}),
-		...(acquired.metadata.publishedDate ? { published_date: acquired.metadata.publishedDate } : {}),
-		...(acquired.metadata.description !== null ? { summary: acquired.metadata.description } : {}),
-		content: acquired.markdown,
-		...(acquired.platformMetadata
-			? {
-					...(options?.preserveSourceType ? {} : { source_type: acquired.platformMetadata.type }),
-					platform_metadata: acquired.platformMetadata,
-				}
-			: {}),
-	};
-}
-
-function withoutPlatformMetadata(payload: Record<string, unknown>): Record<string, unknown> {
-	const { platform_metadata: _platformMetadata, ...rest } = payload;
-	return rest;
-}
-
-function ogImageUpdatePayload(patch: OgImagePatch): Record<string, unknown> {
-	const metadataPatch =
-		patch.ogImageWidth && patch.ogImageHeight ? { ogImageWidth: patch.ogImageWidth, ogImageHeight: patch.ogImageHeight } : null;
-	return {
-		...(patch.ogImageUrl ? { og_image_url: patch.ogImageUrl } : {}),
-		...(metadataPatch ? { platform_metadata: metadataPatch } : {}),
-	};
-}
-
-function mergeMetadataPatch(...patches: Array<unknown>): Record<string, unknown> | undefined {
-	const records = patches.filter(
-		(patch): patch is Record<string, unknown> => !!patch && typeof patch === 'object' && !Array.isArray(patch),
-	);
-	if (!records.length) return undefined;
-	return Object.assign({}, ...records);
-}
-
-function paperMetadataPatch(paperEnrichment: PaperMetadata | null): Record<string, unknown> | undefined {
-	return paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined;
 }
 
 function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
@@ -514,18 +231,10 @@ function sourceArticleBase(article: Article, fallback: SourceArticleRecord): Sou
 	};
 }
 
-async function acquireSavedUrlContent(env: CoreEnv, article: Article): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(article.url, env);
-	return new Response(JSON.stringify(acquired)).body!;
-}
-
 async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<AcquiredContent | null> {
-	const artifact = await step.do(
-		'acquire-content',
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		() => acquireSavedUrlContent(env, article),
+	return step.do('acquire-content', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+		scrapeSavedUrl(article.url, env),
 	);
-	return (await new Response(artifact).json()) as AcquiredContent | null;
 }
 
 async function stageOgImagePatch(step: WorkflowStep, article: Article, acquiredContent: AcquiredContent | null): Promise<OgImagePatch> {
@@ -574,18 +283,15 @@ async function persistWorkflowTarget(
 	await db.query('BEGIN');
 	try {
 		let articleId: string;
-		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		if (target.kind === 'source') {
-			const acquiredPayload = acquiredContentUpdatePayload(acquiredContent);
-			const acquiredMetadataPatch = acquiredPayload.platform_metadata;
-			const ogMetadataPatch = ogPayload.platform_metadata;
-			const updatePayload = buildProcessorUpdatePayload(
+			const updatePayload = buildResourceUpdatePayload({
 				article,
 				result,
 				embedding,
-				mergeMetadataPatch(acquiredMetadataPatch, ogMetadataPatch, paperMetadataPatch(paperEnrichment)),
-			);
-			Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
+				acquiredContent,
+				ogImagePatch,
+				paperEnrichment,
+			});
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 			articleId = await insertFinalSourceArticle(db, sourceArticleBase(article, target.draft.article), updatePayload);
@@ -594,18 +300,16 @@ async function persistWorkflowTarget(
 			const finalResult =
 				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
 			const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
-			const metadataPatch = mergeMetadataPatch(
-				extraction ? { extraction } : undefined,
-				ogPayload.platform_metadata,
-				paperMetadataPatch(paperEnrichment),
-			);
-			const updatePayload = {
-				...withoutPlatformMetadata(
-					acquiredContentUpdatePayload(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire }),
-				),
-				...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
-				...withoutPlatformMetadata(ogPayload),
-			};
+			const updatePayload = buildResourceUpdatePayload({
+				article,
+				result: finalResult,
+				embedding,
+				acquiredContent,
+				preserveAcquiredSourceType: target.kind === 'article' && target.reacquire,
+				extraction,
+				ogImagePatch,
+				paperEnrichment,
+			});
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 

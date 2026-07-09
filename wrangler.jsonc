@@ -55,6 +55,11 @@
 			"binding": "MONITOR_WORKFLOW",
 			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
+		},
+		{
+			"binding": "ACQUISITION_WORKFLOW",
+			"name": "newsence-acquisition-workflow",
+			"class_name": "AcquisitionWorkflow"
 		}
 	],
 	/**
