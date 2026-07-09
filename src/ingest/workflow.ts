@@ -75,9 +75,10 @@ function storedWorkflowId(resourceId: string): string {
 	return ['resource', workflowIdPart(resourceId)].join('-');
 }
 
-function shouldAcquireContent(resource: ResourceForProcessing): boolean {
+function shouldAcquireContent(resource: ResourceForProcessing & { has_content?: boolean; has_youtube_transcript?: boolean }): boolean {
 	const hasContent = 'has_content' in resource && !!resource.has_content;
-	return !hasContent && !resource.storage_key && !!resource.url;
+	const needsYouTubeAcquisition = resource.type === 'youtube' && !resource.has_youtube_transcript;
+	return (!hasContent || needsYouTubeAcquisition) && !resource.storage_key && !!resource.url;
 }
 
 async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {

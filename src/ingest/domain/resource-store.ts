@@ -1,6 +1,6 @@
 import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { entities, entityTranslations, resourceEntities, resources, resourceTranslations } from '@db/schema';
+import { entities, entityTranslations, resourceEntities, resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
@@ -19,7 +19,10 @@ import {
 } from '../../resources/types';
 import type { ResourceUpdate } from './resource-update';
 
-type StoredResourceForProcessing = ResourceForProcessing & { has_content?: boolean };
+type StoredResourceForProcessing = ResourceForProcessing & {
+	has_content?: boolean;
+	has_youtube_transcript?: boolean;
+};
 
 interface ResourceStoreRow {
 	id: string;
@@ -39,6 +42,7 @@ interface ResourceStoreRow {
 	platform_metadata: unknown;
 	enrichment_status?: string;
 	has_content?: boolean;
+	has_youtube_transcript?: boolean;
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;
@@ -68,8 +72,16 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 			await db
 				.select({
 					complete: sql<boolean>`${resources.enrichmentStatus} = 'enriched'
-							AND ${resources.embedding} IS NOT NULL
-							AND EXISTS (
+								AND ${resources.embedding} IS NOT NULL
+								AND (
+									${resources.type} <> 'youtube'
+									OR EXISTS (
+										SELECT 1
+										FROM ${youtubeTranscripts}
+										WHERE ${youtubeTranscripts.videoId} = ${resources.platformMetadata}->'data'->>'videoId'
+									)
+								)
+								AND EXISTS (
 								SELECT 1
 								FROM ${resourceTranslations}
 								WHERE ${resourceTranslations.resourceId} = ${resources.id}
@@ -130,6 +142,18 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
 			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0` : sql`NULL::boolean`} AS has_content,
+			${
+				shell
+					? sql`CASE
+						WHEN rl.type = 'youtube' THEN EXISTS (
+							SELECT 1
+							FROM ${youtubeTranscripts}
+							WHERE ${youtubeTranscripts.videoId} = rl.platform_metadata->'data'->>'videoId'
+						)
+						ELSE NULL
+					END`
+					: sql`NULL::boolean`
+			} AS has_youtube_transcript,
 			rl.original_lang AS original_lang,
 			COALESCE(
 				(
@@ -190,6 +214,7 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		platform_metadata: (row.platform_metadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
+	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
 	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
 	if (row.file_type) resource.file_type = row.file_type;
 	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;

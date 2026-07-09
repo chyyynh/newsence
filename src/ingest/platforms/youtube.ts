@@ -92,7 +92,9 @@ export async function prepareYouTubeHighlights(
 
 	const videoId = metadata.data.videoId;
 	if (!videoId) return null;
-	if (transcript) return prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments);
+	if (transcript) {
+		return transcript.segments.length ? prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments) : null;
+	}
 
 	const row = await withCoreDb(
 		env,

@@ -206,15 +206,12 @@ export async function scrapeYouTube(
 				description: snippet.description || '',
 			},
 		},
-		youtubeTranscript:
-			transcript.length > 0
-				? {
-						videoId: video.id,
-						segments: transcript,
-						language: transcriptLanguage,
-						chapters,
-						chaptersFromDescription: chapters.length > 0,
-					}
-				: undefined,
+		youtubeTranscript: {
+			videoId: video.id,
+			segments: transcript,
+			language: transcriptLanguage,
+			chapters,
+			chaptersFromDescription: chapters.length > 0,
+		},
 	};
 }
