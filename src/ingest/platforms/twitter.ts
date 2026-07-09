@@ -131,6 +131,8 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 const TWITTER_BATCH_SIZE = 20;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
+const TWITTER_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const TWITTER_WATERMARK_OVERLAP_MS = 60 * 60 * 1000;
 
 function normalizeRetweet(tweet: Tweet): Tweet | null {
 	if (tweet.retweeted_tweet) {
@@ -170,19 +172,17 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 }
 
 /**
- * Global sinceTime = oldest scraped_at across all users minus a 1h overlap.
- * If no user has been scraped before, fall back to 24h ago.
+ * Global sinceTime = oldest effective watermark across all users minus a 1h
+ * overlap. A missing or invalid per-user watermark falls back to 24h ago.
  */
 function calculateMonitoringSinceTime(users: Array<{ scraped_at?: Date | string | null }>): number {
-	if (!users.some((u) => u.scraped_at)) {
-		return Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+	const fallback = Date.now() - TWITTER_INITIAL_LOOKBACK_MS;
+	let oldest = Number.POSITIVE_INFINITY;
+	for (const user of users) {
+		const timestamp = user.scraped_at ? new Date(user.scraped_at).getTime() : Number.NaN;
+		oldest = Math.min(oldest, Number.isFinite(timestamp) ? timestamp : fallback);
 	}
-	const oldest = users.reduce((min, u) => {
-		if (!u.scraped_at) return min;
-		const t = new Date(u.scraped_at).getTime();
-		return t < min ? t : min;
-	}, Date.now());
-	return Math.floor((oldest - 60 * 60 * 1000) / 1000);
+	return Math.floor(((Number.isFinite(oldest) ? oldest : fallback) - TWITTER_WATERMARK_OVERLAP_MS) / 1000);
 }
 
 /** Fetch all tweets matching `(from:u1 OR from:u2 …) since_time:<unix>`, paginating through cursors. */
@@ -196,6 +196,7 @@ async function fetchTweetsForBatch(
 
 	const tweets: Tweet[] = [];
 	let cursor = '';
+	const seenCursors = new Set<string>();
 
 	while (true) {
 		const params = new URLSearchParams({ query, queryType: 'Latest' });
@@ -229,6 +230,11 @@ async function fetchTweetsForBatch(
 		if (!apiRes.has_next_page) break;
 		cursor = apiRes.next_cursor || '';
 		if (!cursor) break;
+		if (seenCursors.has(cursor)) {
+			console.error({ tag: 'TWITTER', msg: 'Advanced Search returned a repeated cursor', cursor: cursor.slice(0, 32) });
+			return { tweets, completed: false };
+		}
+		seenCursors.add(cursor);
 		await scheduler.wait(1000);
 	}
 
@@ -323,11 +329,11 @@ async function processTwitterBatches(
 	return { processed, allCompleted };
 }
 
-async function markTwitterFeedsScraped(env: CoreEnv, users: MonitoredTwitterUser[]): Promise<void> {
+async function markTwitterFeedsScraped(env: CoreEnv, users: MonitoredTwitterUser[], scrapedAt: Date): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		await db
 			.update(rssList)
-			.set({ scrapedAt: new Date() })
+			.set({ scrapedAt })
 			.where(
 				inArray(
 					rssList.id,
@@ -338,7 +344,12 @@ async function markTwitterFeedsScraped(env: CoreEnv, users: MonitoredTwitterUser
 }
 
 export async function handleTwitterCron(env: CoreEnv): Promise<void> {
+	if (!env.KAITO_API_KEY) {
+		console.info({ tag: 'TWITTER', msg: 'Skipped - KAITO_API_KEY not configured' });
+		return;
+	}
 	console.info({ tag: 'TWITTER', msg: 'start' });
+	const runStartedAt = new Date();
 	const users = await loadTwitterSourceFeeds(env);
 	if (!users.length) {
 		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
@@ -357,7 +368,7 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
 
 	const { processed, allCompleted } = await processTwitterBatches(env, batches, sinceTime);
-	if (allCompleted) await markTwitterFeedsScraped(env, monitoredUsers);
+	if (allCompleted) await markTwitterFeedsScraped(env, monitoredUsers, runStartedAt);
 
 	console.info({
 		tag: 'TWITTER',
