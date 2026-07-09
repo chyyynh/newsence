@@ -5,8 +5,8 @@
 import type { WorkflowStep } from 'cloudflare:workers';
 import type { PaperMetadata, PaperReference } from '@core-shared/types';
 import { fetchWithTimeout } from '@core-shared/web';
+import { withCoreTx } from '@db/client';
 import type { Client } from 'pg';
-import { Client as PgClient } from 'pg';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -262,14 +262,12 @@ async function upsertReferenceNode(db: Client, ref: PaperReference): Promise<str
 }
 
 async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
-	if (!paper.openAlexId) return null;
+	const openAlexId = paper.openAlexId;
+	if (!openAlexId) return null;
 
-	const db = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	await db.query('BEGIN');
-	try {
+	return withCoreTx(env, async (_drizzle, db) => {
 		const fromId = await upsertIngestedPaper(db, {
-			openAlexId: paper.openAlexId,
+			openAlexId,
 			doi: paper.doi ?? null,
 			articleId,
 			title: paper.title ?? null,
@@ -293,14 +291,8 @@ async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetad
 			);
 			edges++;
 		}
-		await db.query('COMMIT');
 		return { edges };
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'paper graph rollback failed', error: String(rollbackError) }));
-		throw error;
-	}
+	});
 }
 
 function idPath(id: PaperId): string {

@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
+import { withCoreTx } from '@db/client';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceArticle,
@@ -8,7 +9,6 @@ import {
 	syncArticleEntities,
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
-import { Client } from 'pg';
 import {
 	type AcquiredContent,
 	EMPTY_OG_IMAGE_PATCH,
@@ -270,10 +270,7 @@ async function persistWorkflowTarget(
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
 ): Promise<string> {
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	await db.query('BEGIN');
-	try {
+	return withCoreTx(env, async (_drizzle, db) => {
 		let articleId: string;
 		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		if (target.kind === 'source') {
@@ -317,14 +314,8 @@ async function persistWorkflowTarget(
 		}
 		if (youtubeTranscript || youtubeHighlights)
 			await persistYouTubeWorkflowData(db, { transcript: youtubeTranscript, highlights: youtubeHighlights });
-		await db.query('COMMIT');
 		return articleId;
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'workflow target rollback failed', error: String(rollbackError) }));
-		throw error;
-	}
+	});
 }
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { target: WorkflowTarget }> {
