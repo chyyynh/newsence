@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
-import type { Article, PaperMetadata, YoutubeTranscript } from '@core-shared/types';
+import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceArticle,
@@ -44,38 +44,20 @@ function sourceRecordToArticle(data: SourceArticleRecord): Article {
 	};
 }
 
-type ResourceUpdate = Record<string, unknown> & {
-	title?: string;
-	summary?: string | null;
-	content?: string | null;
-	source?: string;
-	published_date?: string;
-	source_type?: string;
-	og_image_url?: string;
-	platform_metadata?: Record<string, unknown>;
-	embedding?: string;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function buildResourcePlatformMetadata(
+function buildProcessorUpdatePayload(
 	article: Article,
 	result: ProcessorResult,
-	metadataPatches: Record<string, unknown>[],
-): Record<string, unknown> | undefined {
+	embedding?: number[] | null,
+	metadataPatch?: Record<string, unknown>,
+): Record<string, unknown> {
+	const updatePayload: Record<string, unknown> = { ...result.updateData };
 	const category = result.classificationCategory;
 	const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-	let mergedMetadata: Record<string, unknown> | null = article.platform_metadata ? { ...article.platform_metadata } : null;
+	let mergedMetadata: PlatformMetadata | null = article.platform_metadata ?? null;
 	if (hasEnrichments && mergedMetadata) {
 		mergedMetadata = {
 			...mergedMetadata,
-			enrichments: {
-				...(isRecord(mergedMetadata.enrichments) ? mergedMetadata.enrichments : {}),
-				...result.enrichments,
-				processedAt: new Date().toISOString(),
-			},
+			enrichments: { ...(mergedMetadata.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
 		};
 	}
 	if (category) {
@@ -84,55 +66,14 @@ function buildResourcePlatformMetadata(
 		mergedMetadata = {
 			...base,
 			classification: {
-				...(isRecord(base.classification) ? base.classification : {}),
+				...(base.classification ?? {}),
 				category,
 				classifiedAt: new Date().toISOString(),
 			},
 		};
 	}
-	for (const patch of metadataPatches) mergedMetadata = { ...(mergedMetadata ?? {}), ...patch };
-	return mergedMetadata ?? undefined;
-}
-
-function buildResourceUpdatePayload(input: {
-	article: Article;
-	result: ProcessorResult;
-	embedding: number[] | null;
-	acquiredContent: AcquiredContent | null;
-	preserveAcquiredSourceType?: boolean;
-	extraction?: Record<string, unknown>;
-	ogImagePatch: OgImagePatch;
-	paperEnrichment: PaperMetadata | null;
-}): ResourceUpdate {
-	const { article, result, embedding, acquiredContent, extraction, ogImagePatch, paperEnrichment } = input;
-	const updatePayload: ResourceUpdate = {};
-	const metadataPatches: Record<string, unknown>[] = [];
-
-	if (acquiredContent) {
-		const acquiredTitle = acquiredContent.title?.trim();
-		if (acquiredTitle) updatePayload.title = acquiredTitle;
-		if (acquiredContent.metadata.siteName || acquiredContent.metadata.author) {
-			updatePayload.source = acquiredContent.metadata.siteName ?? acquiredContent.metadata.author ?? undefined;
-		}
-		if (acquiredContent.metadata.publishedDate) updatePayload.published_date = acquiredContent.metadata.publishedDate;
-		if (acquiredContent.metadata.description !== null) updatePayload.summary = acquiredContent.metadata.description;
-		updatePayload.content = acquiredContent.markdown;
-		if (acquiredContent.platformMetadata) {
-			if (!input.preserveAcquiredSourceType) updatePayload.source_type = acquiredContent.platformMetadata.type;
-			metadataPatches.push({ ...acquiredContent.platformMetadata });
-		}
-	}
-
-	if (extraction) metadataPatches.push({ extraction });
-	if (ogImagePatch.ogImageUrl) updatePayload.og_image_url = ogImagePatch.ogImageUrl;
-	if (ogImagePatch.ogImageWidth && ogImagePatch.ogImageHeight) {
-		metadataPatches.push({ ogImageWidth: ogImagePatch.ogImageWidth, ogImageHeight: ogImagePatch.ogImageHeight });
-	}
-	if (paperEnrichment) metadataPatches.push({ type: 'paper', data: paperEnrichment });
-
-	Object.assign(updatePayload, result.updateData);
-	const platformMetadata = buildResourcePlatformMetadata(article, result, metadataPatches);
-	if (platformMetadata) updatePayload.platform_metadata = platformMetadata;
+	if (metadataPatch) updatePayload.platform_metadata = { ...(mergedMetadata ?? article.platform_metadata ?? {}), ...metadataPatch };
+	else if (mergedMetadata) updatePayload.platform_metadata = mergedMetadata;
 	if (embedding?.length) updatePayload.embedding = `[${embedding.join(',')}]`;
 	return updatePayload;
 }
@@ -202,6 +143,53 @@ function applyAcquiredContent(article: Article, acquired: AcquiredContent | null
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
 	};
+}
+
+function acquiredContentUpdatePayload(
+	acquired: AcquiredContent | null,
+	options?: { preserveSourceType?: boolean },
+): Record<string, unknown> {
+	if (!acquired) return {};
+	const acquiredTitle = acquired.title?.trim();
+	return {
+		...(acquiredTitle ? { title: acquiredTitle } : {}),
+		...(acquired.metadata.siteName || acquired.metadata.author ? { source: acquired.metadata.siteName ?? acquired.metadata.author } : {}),
+		...(acquired.metadata.publishedDate ? { published_date: acquired.metadata.publishedDate } : {}),
+		...(acquired.metadata.description !== null ? { summary: acquired.metadata.description } : {}),
+		content: acquired.markdown,
+		...(acquired.platformMetadata
+			? {
+					...(options?.preserveSourceType ? {} : { source_type: acquired.platformMetadata.type }),
+					platform_metadata: acquired.platformMetadata,
+				}
+			: {}),
+	};
+}
+
+function withoutPlatformMetadata(payload: Record<string, unknown>): Record<string, unknown> {
+	const { platform_metadata: _platformMetadata, ...rest } = payload;
+	return rest;
+}
+
+function ogImageUpdatePayload(patch: OgImagePatch): Record<string, unknown> {
+	const metadataPatch =
+		patch.ogImageWidth && patch.ogImageHeight ? { ogImageWidth: patch.ogImageWidth, ogImageHeight: patch.ogImageHeight } : null;
+	return {
+		...(patch.ogImageUrl ? { og_image_url: patch.ogImageUrl } : {}),
+		...(metadataPatch ? { platform_metadata: metadataPatch } : {}),
+	};
+}
+
+function mergeMetadataPatch(...patches: Array<unknown>): Record<string, unknown> | undefined {
+	const records = patches.filter(
+		(patch): patch is Record<string, unknown> => !!patch && typeof patch === 'object' && !Array.isArray(patch),
+	);
+	if (!records.length) return undefined;
+	return Object.assign({}, ...records);
+}
+
+function paperMetadataPatch(paperEnrichment: PaperMetadata | null): Record<string, unknown> | undefined {
+	return paperEnrichment ? { type: 'paper', data: paperEnrichment } : undefined;
 }
 
 function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
@@ -283,15 +271,18 @@ async function persistWorkflowTarget(
 	await db.query('BEGIN');
 	try {
 		let articleId: string;
+		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		if (target.kind === 'source') {
-			const updatePayload = buildResourceUpdatePayload({
+			const acquiredPayload = acquiredContentUpdatePayload(acquiredContent);
+			const acquiredMetadataPatch = acquiredPayload.platform_metadata;
+			const ogMetadataPatch = ogPayload.platform_metadata;
+			const updatePayload = buildProcessorUpdatePayload(
 				article,
 				result,
 				embedding,
-				acquiredContent,
-				ogImagePatch,
-				paperEnrichment,
-			});
+				mergeMetadataPatch(acquiredMetadataPatch, ogMetadataPatch, paperMetadataPatch(paperEnrichment)),
+			);
+			Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 			articleId = await insertFinalSourceArticle(db, sourceArticleBase(article, target.draft.article), updatePayload);
@@ -300,16 +291,18 @@ async function persistWorkflowTarget(
 			const finalResult =
 				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
 			const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
-			const updatePayload = buildResourceUpdatePayload({
-				article,
-				result: finalResult,
-				embedding,
-				acquiredContent,
-				preserveAcquiredSourceType: target.kind === 'article' && target.reacquire,
-				extraction,
-				ogImagePatch,
-				paperEnrichment,
-			});
+			const metadataPatch = mergeMetadataPatch(
+				extraction ? { extraction } : undefined,
+				ogPayload.platform_metadata,
+				paperMetadataPatch(paperEnrichment),
+			);
+			const updatePayload = {
+				...withoutPlatformMetadata(
+					acquiredContentUpdatePayload(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire }),
+				),
+				...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
+				...withoutPlatformMetadata(ogPayload),
+			};
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 
