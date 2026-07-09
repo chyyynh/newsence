@@ -1,6 +1,6 @@
 import type { TranscriptSegment } from '@core-shared/types';
 import { bigint, boolean, customType, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { RESOURCE_CATEGORIES, RESOURCE_TYPES } from '../resources/types';
+import { RESOURCE_CATEGORIES, RESOURCE_TRANSLATION_SOURCES, RESOURCE_TYPES } from '../resources/types';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
 	dataType() {
@@ -73,16 +73,9 @@ export const resources = pgTable('resources', {
 	normalizedUrl: text('normalized_url'),
 	storageKey: text('storage_key').unique(),
 	fileType: text('file_type'),
-	title: text('title'),
-	titleCn: text('title_cn'),
-	summary: text('summary'),
-	summaryCn: text('summary_cn'),
-	content: text('content'),
-	contentCn: text('content_cn'),
-	source: text('source'),
+	originalLang: varchar('original_lang', { length: 35 }).default('en').notNull(),
 	publishedDate: timestamp('published_date', { mode: 'date' }),
 	scrapedDate: timestamp('scraped_date', { mode: 'date' }),
-	keywords: text('keywords').array().default([]).notNull(),
 	tags: text('tags').array().default([]).notNull(),
 	category: text('category', { enum: RESOURCE_CATEGORIES }),
 	entities: jsonb('entities').$type<unknown>(),
@@ -93,6 +86,18 @@ export const resources = pgTable('resources', {
 	enrichmentStatus: text('enrichment_status', { enum: ['pending', 'enriched', 'failed'] })
 		.default('pending')
 		.notNull(),
+	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+});
+
+export const resourceTranslations = pgTable('resource_translations', {
+	resourceId: uuid('resource_id').notNull(),
+	lang: varchar('lang', { length: 35 }).notNull(),
+	title: text('title'),
+	summary: text('summary'),
+	content: text('content'),
+	keywords: text('keywords').array().default([]).notNull(),
+	source: varchar('source', { length: 16, enum: RESOURCE_TRANSLATION_SOURCES }).default('original').notNull(),
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });

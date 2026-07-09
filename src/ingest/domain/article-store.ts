@@ -1,9 +1,15 @@
 import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { articleEntities, articles, entities, resourceEntities, userFiles } from '@db/schema';
+import { articleEntities, articles, entities, resourceEntities, resourceTranslations, userFiles } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
-import { RESOURCE_CATEGORIES, RESOURCE_TYPES, type ResourceCategory, type ResourceType } from '../../resources/types';
+import {
+	RESOURCE_CATEGORIES,
+	RESOURCE_TYPES,
+	type ResourceCategory,
+	type ResourceTranslationSource,
+	type ResourceType,
+} from '../../resources/types';
 
 type ArticleStoreTable = 'articles' | 'user_files';
 
@@ -222,6 +228,9 @@ type ArticleUpdateValues = Partial<typeof articles.$inferInsert>;
 type UserFileUpdateValues = Partial<typeof userFiles.$inferInsert>;
 type ArticleStoreResourceTable = 'articles' | 'user_files';
 
+const DEFAULT_RESOURCE_LANG = 'en';
+const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
+
 interface ResourceMirrorRecord {
 	id: string;
 	type: ResourceType;
@@ -230,13 +239,13 @@ interface ResourceMirrorRecord {
 	normalizedUrl: string | null;
 	storageKey: string | null;
 	fileType: string | null;
+	originalLang: string;
 	title: string | null;
 	titleCn: string | null;
 	summary: string | null;
 	summaryCn: string | null;
 	content: string | null;
 	contentCn: string | null;
-	source: string | null;
 	publishedDate: Date | null;
 	scrapedDate: Date;
 	keywords: string[];
@@ -246,6 +255,16 @@ interface ResourceMirrorRecord {
 	ogImageUrl: string | null;
 	platformMetadataJson: string | null;
 	embedding: string | null;
+}
+
+interface ResourceTranslationRecord {
+	resourceId: string;
+	lang: string;
+	title: string | null;
+	summary: string | null;
+	content: string | null;
+	keywords: string[];
+	source: ResourceTranslationSource;
 }
 
 function articleUpdateValues(updatePayload: Record<string, unknown>): ArticleUpdateValues {
@@ -440,6 +459,7 @@ export async function syncResourceAfterProcessing(
 	const result = await db.execute(resourceUpsertStatement(record));
 	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
 	if (!resourceId) throw new Error(`Failed to sync resource mirror for ${table}:${legacyId}`);
+	await syncResourceTranslations(db, resourceId, record);
 	return resourceId;
 }
 
@@ -455,6 +475,12 @@ function resourceMirrorRecord(
 	const normalizedUrl = table === 'user_files' ? cleanString(article.normalized_source_url ?? article.url) : url;
 	const tags = stringArrayValue(updatePayload.tags ?? article.tags ?? [], 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords ?? article.keywords ?? [], 'keywords');
+	const title = cleanString(updatePayload.title ?? article.title);
+	const titleCn = cleanString(updatePayload.title_cn ?? article.title_cn);
+	const summary = cleanString(updatePayload.summary ?? article.summary);
+	const summaryCn = cleanString(updatePayload.summary_cn ?? article.summary_cn);
+	const content = cleanString(updatePayload.content ?? article.content);
+	const contentCn = cleanString(updatePayload.content_cn ?? article.content_cn);
 	return {
 		id: legacyId,
 		type: deriveResourceType({
@@ -469,13 +495,13 @@ function resourceMirrorRecord(
 		normalizedUrl,
 		storageKey: cleanString(article.storage_key),
 		fileType,
-		title: cleanString(updatePayload.title ?? article.title),
-		titleCn: cleanString(updatePayload.title_cn ?? article.title_cn),
-		summary: cleanString(updatePayload.summary ?? article.summary),
-		summaryCn: cleanString(updatePayload.summary_cn ?? article.summary_cn),
-		content: cleanString(updatePayload.content ?? article.content),
-		contentCn: cleanString(updatePayload.content_cn ?? article.content_cn),
-		source: cleanString(updatePayload.source ?? article.source),
+		originalLang: deriveOriginalLang({ title, summary, content, titleCn, summaryCn, contentCn }),
+		title,
+		titleCn,
+		summary,
+		summaryCn,
+		content,
+		contentCn,
 		publishedDate: optionalDateValue(updatePayload.published_date ?? article.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
@@ -505,8 +531,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 	return sql`
 		INSERT INTO resources (
 			id, type, scope, url, normalized_url, storage_key, file_type,
-			title, title_cn, summary, summary_cn, content, content_cn, source,
-			published_date, scraped_date, keywords, tags, category, entities,
+			original_lang, published_date, scraped_date, tags, category, entities,
 			og_image_url, platform_metadata, embedding, enrichment_status,
 			created_at, updated_at
 		)
@@ -518,16 +543,9 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			${record.normalizedUrl},
 			${record.storageKey},
 			${record.fileType},
-			${record.title},
-			${record.titleCn},
-			${record.summary},
-			${record.summaryCn},
-			${record.content},
-			${record.contentCn},
-			${record.source},
+			${record.originalLang},
 			${record.publishedDate},
 			${record.scrapedDate},
-			${record.keywords}::text[],
 			${record.tags}::text[],
 			${record.category},
 			${record.entitiesJson}::jsonb,
@@ -553,16 +571,9 @@ function resourceConflictSetSql(): SQL {
 		url = COALESCE(excluded.url, resources.url),
 		storage_key = COALESCE(excluded.storage_key, resources.storage_key),
 		file_type = COALESCE(excluded.file_type, resources.file_type),
-		title = COALESCE(NULLIF(excluded.title, ''), resources.title),
-		title_cn = COALESCE(NULLIF(excluded.title_cn, ''), resources.title_cn),
-		summary = COALESCE(NULLIF(excluded.summary, ''), resources.summary),
-		summary_cn = COALESCE(NULLIF(excluded.summary_cn, ''), resources.summary_cn),
-		content = COALESCE(NULLIF(excluded.content, ''), resources.content),
-		content_cn = COALESCE(NULLIF(excluded.content_cn, ''), resources.content_cn),
-		source = COALESCE(NULLIF(excluded.source, ''), resources.source),
+		original_lang = COALESCE(NULLIF(resources.original_lang, ''), excluded.original_lang),
 		published_date = COALESCE(excluded.published_date, resources.published_date),
 		scraped_date = COALESCE(excluded.scraped_date, resources.scraped_date),
-		keywords = CASE WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords ELSE resources.keywords END,
 		tags = CASE WHEN cardinality(excluded.tags) > 0 THEN excluded.tags ELSE resources.tags END,
 		category = COALESCE(excluded.category, resources.category),
 		entities = COALESCE(excluded.entities, resources.entities),
@@ -572,6 +583,72 @@ function resourceConflictSetSql(): SQL {
 		enrichment_status = excluded.enrichment_status,
 		updated_at = now()
 	`;
+}
+
+async function syncResourceTranslations(db: CoreDb, resourceId: string, record: ResourceMirrorRecord): Promise<void> {
+	for (const translation of resourceTranslationRecords(resourceId, record)) {
+		await db
+			.insert(resourceTranslations)
+			.values(translation)
+			.onConflictDoUpdate({
+				target: [resourceTranslations.resourceId, resourceTranslations.lang],
+				set: {
+					title: sql`COALESCE(NULLIF(excluded.title, ''), ${resourceTranslations.title})`,
+					summary: sql`COALESCE(NULLIF(excluded.summary, ''), ${resourceTranslations.summary})`,
+					content: sql`COALESCE(NULLIF(excluded.content, ''), ${resourceTranslations.content})`,
+					keywords: sql`CASE WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords ELSE ${resourceTranslations.keywords} END`,
+					source: sql`CASE WHEN ${resourceTranslations.source} = 'original' THEN ${resourceTranslations.source} ELSE excluded.source END`,
+					updatedAt: sql`now()`,
+				},
+			});
+	}
+}
+
+function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationRecord[] {
+	const originalUsesZhHant = record.originalLang === ZH_HANT_RESOURCE_LANG;
+	const translations: ResourceTranslationRecord[] = [
+		{
+			resourceId,
+			lang: record.originalLang,
+			title: originalUsesZhHant ? record.titleCn : record.title,
+			summary: originalUsesZhHant ? record.summaryCn : record.summary,
+			content: originalUsesZhHant ? record.contentCn : record.content,
+			keywords: record.keywords,
+			source: 'original',
+		},
+	];
+
+	if (!originalUsesZhHant && hasLocalizedText(record.titleCn, record.summaryCn, record.contentCn)) {
+		translations.push({
+			resourceId,
+			lang: ZH_HANT_RESOURCE_LANG,
+			title: record.titleCn,
+			summary: record.summaryCn,
+			content: record.contentCn,
+			keywords: record.keywords,
+			source: 'machine',
+		});
+	}
+
+	return translations;
+}
+
+function deriveOriginalLang(fields: {
+	title: string | null;
+	summary: string | null;
+	content: string | null;
+	titleCn: string | null;
+	summaryCn: string | null;
+	contentCn: string | null;
+}): string {
+	return !hasLocalizedText(fields.title, fields.summary, fields.content) &&
+		hasLocalizedText(fields.titleCn, fields.summaryCn, fields.contentCn)
+		? ZH_HANT_RESOURCE_LANG
+		: DEFAULT_RESOURCE_LANG;
+}
+
+function hasLocalizedText(...values: Array<string | null>): boolean {
+	return values.some((value) => !!value && value.trim().length > 0);
 }
 
 function cleanString(value: unknown): string | null {

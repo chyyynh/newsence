@@ -26,14 +26,12 @@ type CollectionRow = {
 type ResourceRow = {
 	id: string;
 	type: ResourceType;
+	original_lang: string;
+	lang: string | null;
 	title: string | null;
-	title_cn: string | null;
 	url: string | null;
-	source: string | null;
 	summary: string | null;
-	summary_cn: string | null;
 	content: string | null;
-	content_cn: string | null;
 	published_date: Date | string | null;
 	tags: string[] | null;
 	keywords: string[] | null;
@@ -41,6 +39,18 @@ type ResourceRow = {
 	scope: 'corpus' | 'private';
 	file_type: string | null;
 	enrichment_status: 'pending' | 'enriched' | 'failed';
+	translations: ResourceTranslationRow[];
+};
+
+type ResourceQueryRow = Omit<ResourceRow, 'translations'> & { translations: unknown };
+
+type ResourceTranslationRow = {
+	lang: string;
+	title: string | null;
+	summary: string | null;
+	content: string | null;
+	keywords: string[] | null;
+	source: 'original' | 'machine' | 'human';
 };
 
 type EntityLinkRow = {
@@ -111,41 +121,63 @@ async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
 }
 
 async function readCollectionResources(db: CoreDb, collectionId: string, viewerId: string | null): Promise<ResourceRow[]> {
-	return queryRows<ResourceRow>(
+	const rows = await queryRows<ResourceQueryRow>(
 		db,
 		sql`SELECT
 		     r.id::text,
 		     r.type,
-		     r.title,
-		     r.title_cn,
+		     r.original_lang,
+		     primary_translation.lang,
+		     primary_translation.title,
 		     r.url,
-		     r.source,
-		     r.summary,
-		     r.summary_cn,
+		     primary_translation.summary,
 		     CASE
 		       WHEN ${viewerId}::text IS NOT NULL
 		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
-		         THEN r.content
+		         THEN primary_translation.content
 		       ELSE NULL
 		     END AS content,
-		     CASE
-		       WHEN ${viewerId}::text IS NOT NULL
-		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
-		         THEN r.content_cn
-		       ELSE NULL
-		     END AS content_cn,
 		     r.published_date,
 		     r.tags,
-		     r.keywords,
+		     primary_translation.keywords,
 		     r.category,
 		     r.scope,
 		     r.file_type,
-		     r.enrichment_status
+		     r.enrichment_status,
+		     COALESCE(other_translations.translations, '[]'::jsonb) AS translations
 		   FROM citations c
 		   JOIN resources r ON c.to_type = 'resource' AND r.id = c.to_id
 		   LEFT JOIN library viewer_library
 		     ON viewer_library.resource_id = r.id
 		    AND viewer_library.user_id = ${viewerId}
+		   LEFT JOIN LATERAL (
+		     SELECT rt.lang, rt.title, rt.summary, rt.content, rt.keywords, rt.source
+		     FROM resource_translations rt
+		     WHERE rt.resource_id = r.id
+		     ORDER BY (rt.lang = r.original_lang) DESC, (rt.source = 'original') DESC, rt.lang ASC
+		     LIMIT 1
+		   ) primary_translation ON TRUE
+		   LEFT JOIN LATERAL (
+		     SELECT jsonb_agg(
+		       jsonb_build_object(
+		         'lang', rt.lang,
+		         'title', rt.title,
+		         'summary', rt.summary,
+		         'content', CASE
+		           WHEN ${viewerId}::text IS NOT NULL
+		             AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
+		             THEN rt.content
+		           ELSE NULL
+		         END,
+		         'keywords', rt.keywords,
+		         'source', rt.source
+		       )
+		       ORDER BY rt.lang
+		     ) AS translations
+		     FROM resource_translations rt
+		     WHERE rt.resource_id = r.id
+		       AND (primary_translation.lang IS NULL OR rt.lang <> primary_translation.lang)
+		   ) other_translations ON TRUE
 		   WHERE c.from_type = 'collection'
 		     AND c.from_id = ${collectionId}::text
 		     AND (
@@ -157,6 +189,7 @@ async function readCollectionResources(db: CoreDb, collectionId: string, viewerI
 		     )
 		   ORDER BY c.created_at ASC`,
 	);
+	return rows.map((row) => ({ ...row, translations: normalizeTranslations(row.translations) }));
 }
 
 async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Promise<EntityLinkRow[]> {
@@ -246,13 +279,13 @@ function renderRootIndex(
 }
 
 function resourceLabel(resource: ResourceRow): string {
-	return resource.title || resource.title_cn || resource.url || resource.id;
+	return resource.title || resource.url || resource.id;
 }
 
 function renderResource(resource: ResourceRow, links: EntityLinkRow[], entityPaths: Map<string, string>): string {
-	const content = resource.content ?? resource.content_cn ?? '';
+	const content = resource.content ?? '';
 	const entityLinks = uniqueBy(links, (link) => link.id).map((link) => `- ${markdownLink(link.name, `/${entityPaths.get(link.id)}`)}`);
-	const citation = resource.url ? ['# Citations', `[1] ${markdownLink(resource.source || resource.url, resource.url)}`] : [];
+	const citation = resource.url ? ['# Citations', `[1] ${markdownLink(resource.url, resource.url)}`] : [];
 	return compactMarkdown([
 		frontmatter({
 			type: resource.type,
@@ -264,10 +297,8 @@ function renderResource(resource: ResourceRow, links: EntityLinkRow[], entityPat
 			// extension keys (spec §frontmatter: consumers must tolerate unknown keys)
 			keywords: resource.keywords?.length ? resource.keywords : undefined,
 			category: resource.category,
-			source: resource.source,
-			title_cn: resource.title_cn,
-			description_cn: resource.summary_cn,
-			content_cn: resource.content_cn,
+			original_lang: resource.original_lang,
+			...translationExtensionFields(resource.translations),
 			scope: resource.scope,
 			file_type: resource.file_type,
 			enrichment_status: resource.enrichment_status,
@@ -280,6 +311,18 @@ function renderResource(resource: ResourceRow, links: EntityLinkRow[], entityPat
 		content,
 		...citation,
 	]);
+}
+
+function translationExtensionFields(translations: ResourceTranslationRow[]): Record<string, unknown> {
+	const fields: Record<string, unknown> = {};
+	for (const translation of translations) {
+		const suffix = translation.lang;
+		fields[`title_${suffix}`] = translation.title;
+		fields[`description_${suffix}`] = translation.summary;
+		fields[`keywords_${suffix}`] = translation.keywords?.length ? translation.keywords : undefined;
+		fields[`content_${suffix}`] = translation.content;
+	}
+	return fields;
 }
 
 function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], resources: ResourceRow[], resourcePaths: Map<string, string>): string {
@@ -307,6 +350,46 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], resources: 
 	]);
 }
 
+function normalizeTranslations(value: unknown): ResourceTranslationRow[] {
+	const raw = typeof value === 'string' ? safeJsonParse(value) : value;
+	if (!Array.isArray(raw)) return [];
+	return raw.flatMap((item) => {
+		if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+		const row = item as Record<string, unknown>;
+		const lang = typeof row.lang === 'string' && row.lang.trim() ? row.lang.trim() : null;
+		if (!lang) return [];
+		const source = row.source === 'machine' || row.source === 'human' || row.source === 'original' ? row.source : 'machine';
+		return [
+			{
+				lang,
+				title: nullableStringValue(row.title),
+				summary: nullableStringValue(row.summary),
+				content: nullableStringValue(row.content),
+				keywords: stringArrayValue(row.keywords),
+				source,
+			},
+		];
+	});
+}
+
+function safeJsonParse(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return null;
+	}
+}
+
+function nullableStringValue(value: unknown): string | null {
+	return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function stringArrayValue(value: unknown): string[] | null {
+	if (!Array.isArray(value)) return null;
+	const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+	return items.length ? items : null;
+}
+
 function renderLog(collection: CollectionRow, resourceCount: number, entityCount: number): string {
 	const exportedAt = new Date().toISOString();
 	return compactMarkdown([
@@ -315,7 +398,7 @@ function renderLog(collection: CollectionRow, resourceCount: number, entityCount
 		`* **Export**: OKF bundle for "${collection.name}" — ${resourceCount} resources, ${entityCount} entity pages.`,
 		`* **Collection id**: ${collection.id} (visibility: ${collection.visibility}). Exported at ${exportedAt}.`,
 		'* **Entity links**: exported from stored `resource_entities` links.',
-		'* **Producer notes**: bilingual fields (`title_cn`, `description_cn`, `content_cn`, `name_cn`) and `keywords`/`category`/`source` are extension frontmatter keys.',
+		'* **Producer notes**: non-primary locale fields use BCP-47 suffixes like `title_zh-Hant`; `keywords` and `category` are extension frontmatter keys.',
 	]);
 }
 
