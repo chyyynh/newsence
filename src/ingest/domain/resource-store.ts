@@ -21,11 +21,10 @@ type StoredResourceForProcessing = ResourceForProcessing & { has_content?: boole
 interface ResourceStoreRow {
 	id: string;
 	title: string | null;
-	zh_hant_title: string | null;
 	summary: string | null;
-	zh_hant_summary: string | null;
 	content: string | null;
-	zh_hant_content: string | null;
+	original_lang: string | null;
+	translations: unknown;
 	url: string | null;
 	og_image_url: string | null;
 	source: string | null;
@@ -42,6 +41,15 @@ interface ResourceStoreRow {
 	normalized_source_url?: string | null;
 	origin_type?: string;
 }
+
+type ResourceStoreTranslationRow = {
+	lang?: unknown;
+	title?: unknown;
+	summary?: unknown;
+	content?: unknown;
+	keywords?: unknown;
+	source?: unknown;
+};
 
 export async function loadResourceForProcessing(env: CoreEnv, resourceId: string, shell = false): Promise<StoredResourceForProcessing> {
 	return withCoreDb(env, async (db) => {
@@ -71,33 +79,46 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing | undefined> {
 	const result = await db.execute(sql`
 		SELECT
-			r.id::text AS id,
-			original.title AS title,
-			zh.title AS zh_hant_title,
-			original.summary AS summary,
-			zh.summary AS zh_hant_summary,
-			${shell ? sql`NULL::text` : sql`original.content`} AS content,
-			${shell ? sql`NULL::text` : sql`zh.content`} AS zh_hant_content,
-			${shell ? sql`original.content IS NOT NULL AND length(original.content) > 0` : sql`NULL::boolean`} AS has_content,
-			r.url AS url,
-			r.og_image_url AS og_image_url,
-			COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
-			r.type AS type,
-			r.scope AS scope,
-			r.published_date AS published_date,
-			r.tags AS tags,
-			COALESCE(original.keywords, '{}'::text[]) AS keywords,
-			r.platform_metadata AS platform_metadata,
-			r.enrichment_status AS enrichment_status,
-			r.storage_key AS storage_key,
-			r.file_type AS file_type,
-			r.normalized_url AS normalized_source_url
-		FROM resources r
-		LEFT JOIN resource_translations original
-		  ON original.resource_id = r.id AND original.lang = r.original_lang
-		LEFT JOIN resource_translations zh
-		  ON zh.resource_id = r.id AND zh.lang = 'zh-Hant'
-		WHERE r.id = ${resourceId}::uuid
+			rl.id::text AS id,
+			rl.title AS title,
+			rl.summary AS summary,
+			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
+			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0` : sql`NULL::boolean`} AS has_content,
+			rl.original_lang AS original_lang,
+			COALESCE(
+				(
+					SELECT jsonb_agg(
+						jsonb_build_object(
+							'lang', rt.lang,
+							'title', rt.title,
+							'summary', rt.summary,
+							'content', ${shell ? sql`NULL::text` : sql`rt.content`},
+							'keywords', COALESCE(rt.keywords, '{}'::text[]),
+							'source', rt.source
+						)
+						ORDER BY (rt.lang = rl.original_lang) DESC, rt.lang ASC
+					)
+					FROM resource_translations rt
+					WHERE rt.resource_id = rl.id
+				),
+				'[]'::jsonb
+			) AS translations,
+			rl.url AS url,
+			rl.og_image_url AS og_image_url,
+			COALESCE(NULLIF(rl.platform_metadata->>'sourceName', ''), rl.type) AS source,
+			rl.type AS type,
+			rl.scope AS scope,
+			rl.published_date AS published_date,
+			rl.tags AS tags,
+			COALESCE(rl.keywords, '{}'::text[]) AS keywords,
+			rl.platform_metadata AS platform_metadata,
+			rl.enrichment_status AS enrichment_status,
+			rl.storage_key AS storage_key,
+			rl.file_type AS file_type,
+			rl.normalized_url AS normalized_source_url
+		FROM resources_localized rl
+		WHERE rl.id = ${resourceId}::uuid
+		  AND rl.lang = rl.original_lang
 		LIMIT 1
 	`);
 	const row = (result.rows as unknown as ResourceStoreRow[])[0];
@@ -130,13 +151,26 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 }
 
 function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMap {
-	const zhHant = compactLocaleText({
-		title: row.zh_hant_title,
-		summary: row.zh_hant_summary,
-		content: row.zh_hant_content,
-		source: 'machine',
-	});
-	return zhHant ? { [ZH_HANT_RESOURCE_LANG]: zhHant } : {};
+	const map: ResourceTranslationMap = {};
+	if (!Array.isArray(row.translations)) return map;
+	for (const item of row.translations) {
+		if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+		const translation = item as ResourceStoreTranslationRow;
+		const lang = cleanString(translation.lang);
+		if (!lang) continue;
+		const compact = compactLocaleText({
+			title: translation.title as ResourceLocaleText['title'],
+			summary: translation.summary as ResourceLocaleText['summary'],
+			content: translation.content as ResourceLocaleText['content'],
+			keywords:
+				translation.keywords === null || translation.keywords === undefined
+					? null
+					: stringArrayValue(translation.keywords, 'translation keywords'),
+			source: translation.source as ResourceLocaleText['source'],
+		});
+		if (compact) map[lang] = compact;
+	}
+	return map;
 }
 
 function formatPublishedDate(value: Date | string | null): string {
@@ -698,7 +732,7 @@ type ExistingResourceRecord = {
 	id: string;
 	url: string;
 	type: ResourceType;
-	zhHantSummary: string | null;
+	hasZhHantSummary: boolean;
 };
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
@@ -708,10 +742,14 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			r.id::text AS id,
 			COALESCE(r.normalized_url, r.url) AS url,
 			r.type AS type,
-			zh.summary AS "zhHantSummary"
+			EXISTS (
+				SELECT 1
+				  FROM resource_translations rt
+				 WHERE rt.resource_id = r.id
+				   AND rt.lang = ${ZH_HANT_RESOURCE_LANG}
+				   AND NULLIF(rt.summary, '') IS NOT NULL
+			) AS "hasZhHantSummary"
 		FROM resources r
-		LEFT JOIN resource_translations zh
-		  ON zh.resource_id = r.id AND zh.lang = 'zh-Hant'
 		WHERE r.normalized_url = ANY(${urls}::text[])
 		   OR r.url = ANY(${urls}::text[])
 	`);
