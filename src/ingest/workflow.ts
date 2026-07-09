@@ -644,7 +644,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		const processorResult = await step.do(
 			'ai-analysis',
-			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '180 seconds' },
+			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
 				const fullArticle = await loadFullTargetArticle(
 					this.env,
