@@ -4,7 +4,7 @@ import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@cor
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList, youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingResourcesByUrl } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -172,21 +172,23 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 			return false;
 		}
 
+		const resourceId = await withCoreDb(env, async (db) => {
+			const resourceId = await upsertPendingSourceResource(db, {
+				url: video.url,
+				title,
+				source: youtubeMetadata.channelName,
+				publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
+				summary: scraped.metadata.description ?? '',
+				sourceType: 'youtube',
+				content: scraped.markdown,
+				platformMetadata: scraped.platformMetadata,
+			});
+			await persistYouTubeWorkflowData(db, { transcript: scraped.youtubeTranscript });
+			return resourceId;
+		});
 		await enqueueProcessing(env, {
-			kind: 'source',
-			draft: {
-				article: {
-					url: video.url,
-					title,
-					source: youtubeMetadata.channelName,
-					publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
-					summary: scraped.metadata.description ?? '',
-					sourceType: 'youtube',
-					content: scraped.markdown,
-					platformMetadata: scraped.platformMetadata,
-				},
-				youtubeTranscript: scraped.youtubeTranscript,
-			},
+			kind: 'resource',
+			rowId: resourceId,
 		});
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
 		return true;

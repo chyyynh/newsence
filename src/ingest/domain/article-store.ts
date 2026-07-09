@@ -128,7 +128,7 @@ function formatPublishedDate(value: Date | string | null): string {
 	return value ?? '';
 }
 
-interface PreparedArticleRecord {
+export interface SourceResourceDraft {
 	url: string;
 	title: string;
 	source: string;
@@ -142,6 +142,7 @@ interface PreparedArticleRecord {
 }
 
 type ResourceMirrorOrigin = 'source' | 'resource';
+type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
 const DEFAULT_RESOURCE_LANG = 'en';
 const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
@@ -170,6 +171,7 @@ interface ResourceMirrorRecord {
 	ogImageUrl: string | null;
 	platformMetadataJson: string | null;
 	embedding: string | null;
+	enrichmentStatus: ResourceEnrichmentStatus;
 }
 
 interface ResourceTranslationRecord {
@@ -204,7 +206,7 @@ function nullableVector(value: unknown, field: string): string | null {
 /**
  * Core sink dedup policy:
  * - Source resources are globally unique by normalized URL. Discovery may
- *   pre-query with getExistingResourcesByUrl, but insertFinalSourceResource is
+ *   pre-query with getExistingResourcesByUrl, but pending resource upsert is
  *   the authoritative ON CONFLICT guard.
  * - Stored enrichment targets are canonical resources only.
  */
@@ -242,7 +244,7 @@ export async function updateResourceAfterProcessing(
 	return updatedId;
 }
 
-function preparedRecordToArticle(base: PreparedArticleRecord): Article {
+function preparedRecordToArticle(base: SourceResourceDraft): Article {
 	return {
 		id: base.url,
 		title: base.title,
@@ -262,15 +264,11 @@ function preparedRecordToArticle(base: PreparedArticleRecord): Article {
 	};
 }
 
-export async function insertFinalSourceResource(
-	db: CoreDb,
-	base: PreparedArticleRecord,
-	updatePayload: Record<string, unknown>,
-): Promise<string> {
-	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToArticle(base), updatePayload);
+export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
+	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToArticle(base), {}, 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
 	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
-	if (!resourceId) throw new Error(`Failed to insert finalized resource for ${base.url}`);
+	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
 	await syncResourceTranslations(db, resourceId, record);
 	return resourceId;
 }
@@ -280,6 +278,7 @@ function resourceMirrorRecord(
 	resourceId: string,
 	article: Article,
 	updatePayload: Record<string, unknown>,
+	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata ?? null;
 	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, article.source);
@@ -324,6 +323,7 @@ function resourceMirrorRecord(
 		ogImageUrl: cleanString(updatePayload.og_image_url ?? article.og_image_url),
 		platformMetadataJson: jsonbParam(storedPlatformMetadata),
 		embedding: nullableVector(updatePayload.embedding, 'embedding'),
+		enrichmentStatus,
 	};
 }
 
@@ -374,7 +374,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			${record.ogImageUrl},
 			${record.platformMetadataJson}::jsonb,
 			${record.embedding}::vector,
-			'enriched',
+			${record.enrichmentStatus},
 			now(),
 			now()
 		)
@@ -402,7 +402,11 @@ function resourceConflictSetSql(): SQL {
 		og_image_url = COALESCE(NULLIF(excluded.og_image_url, ''), resources.og_image_url),
 		platform_metadata = COALESCE(excluded.platform_metadata, resources.platform_metadata),
 		embedding = COALESCE(excluded.embedding, resources.embedding),
-		enrichment_status = excluded.enrichment_status,
+		enrichment_status = CASE
+			WHEN excluded.enrichment_status = 'pending' AND resources.enrichment_status = 'enriched'
+				THEN resources.enrichment_status
+			ELSE excluded.enrichment_status
+		END,
 		updated_at = now()
 	`;
 }

@@ -2,19 +2,6 @@ import type { Article, PaperMetadata, PlatformMetadata } from '@core-shared/type
 import { type AcquiredContent, type OgImagePatch, PDF_MIME } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
-export interface SourceResourceRecord {
-	url: string;
-	title: string;
-	source: string;
-	publishedDate: Date | string;
-	summary: string;
-	sourceType: string;
-	content: string | null;
-	platformMetadata: unknown | null;
-	keywords?: string[];
-	tags?: string[];
-}
-
 type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 	Partial<{
 		title: string;
@@ -28,25 +15,6 @@ type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 	}>;
 
 type ResourceMetadataPatch = Record<string, unknown>;
-
-export function sourceRecordToArticle(data: SourceResourceRecord): Article {
-	return {
-		id: data.url,
-		title: data.title,
-		title_cn: null,
-		summary: data.summary || null,
-		summary_cn: null,
-		content: data.content,
-		content_cn: null,
-		url: data.url,
-		source: data.source,
-		published_date: typeof data.publishedDate === 'string' ? data.publishedDate : data.publishedDate.toISOString(),
-		tags: data.tags ?? [],
-		keywords: data.keywords ?? [],
-		source_type: data.sourceType,
-		platform_metadata: data.platformMetadata as Article['platform_metadata'],
-	};
-}
 
 export function applyAcquiredContent(article: Article, acquired: AcquiredContent | null): Article {
 	if (!acquired) return article;
@@ -63,22 +31,6 @@ export function applyAcquiredContent(article: Article, acquired: AcquiredContent
 			article.source_type === 'rss' && acquiredSourceType === 'default' ? article.source_type : (acquiredSourceType ?? article.source_type),
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
-	};
-}
-
-export function sourceArticleBase(article: Article, fallback: SourceResourceRecord): SourceResourceRecord {
-	return {
-		...fallback,
-		url: article.url || fallback.url,
-		title: article.title || fallback.title,
-		source: article.source || fallback.source,
-		publishedDate: article.published_date || fallback.publishedDate,
-		summary: article.summary ?? fallback.summary,
-		sourceType: article.source_type || fallback.sourceType,
-		content: article.content ?? fallback.content,
-		platformMetadata: article.platform_metadata ?? fallback.platformMetadata,
-		tags: article.tags?.length ? article.tags : fallback.tags,
-		keywords: article.keywords?.length ? article.keywords : fallback.keywords,
 	};
 }
 

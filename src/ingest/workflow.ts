@@ -3,12 +3,7 @@ import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-
 import type { Article, PaperMetadata, YoutubeTranscript } from '@core-shared/types';
 import { type CoreDb, withCoreTx } from '@db/client';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
-import {
-	insertFinalSourceResource,
-	loadResourceForProcessing,
-	syncResourceEntities,
-	updateResourceAfterProcessing,
-} from '@ingest/domain/article-store';
+import { loadResourceForProcessing, syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/article-store';
 import {
 	type AcquiredContent,
 	EMPTY_OG_IMAGE_PATCH,
@@ -20,40 +15,26 @@ import {
 	scrapeSavedUrlArtifact,
 } from './acquisition';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
-import {
-	applyAcquiredContent,
-	ResourceUpdateBuilder,
-	type SourceResourceRecord,
-	sourceArticleBase,
-	sourceRecordToArticle,
-} from './domain/resource-update';
+import { applyAcquiredContent, ResourceUpdateBuilder } from './domain/resource-update';
 import { processHackerNewsArticle } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
 import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
-type StoredWorkflowTarget = { kind: 'resource'; rowId: string };
-
-type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
-type SourceWorkflowTarget = Extract<WorkflowTarget, { kind: 'source' }>;
+type WorkflowTarget = { kind: 'resource'; rowId: string };
 type PersistedTargetIds = { resourceId: string };
-
-interface SourceArticleDraft {
-	article: SourceResourceRecord;
-	youtubeTranscript?: YoutubeTranscript;
-}
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
 export async function enqueueProcessing(env: CoreEnv, target: WorkflowTarget): Promise<string> {
-	const workflowId = target.kind === 'source' ? await sourceArticleWorkflowId(target.draft.article.url) : storedWorkflowId(target);
+	const workflowId = storedWorkflowId(target);
 	const [created] = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
 	if (created) return created.id;
 
 	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
 	const { status } = await instance.status();
-	if (ACTIVE_WORKFLOW_STATUSES.has(status) || (target.kind === 'source' && status === 'complete')) return instance.id;
+	if (ACTIVE_WORKFLOW_STATUSES.has(status)) return instance.id;
 
 	await instance.restart();
 	return instance.id;
@@ -63,24 +44,13 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedWorkflowId(target: StoredWorkflowTarget): string {
+function storedWorkflowId(target: WorkflowTarget): string {
 	return ['resource', workflowIdPart(target.rowId)].join('-');
 }
 
-async function sourceArticleWorkflowId(url: string): Promise<string> {
-	const bytes = new TextEncoder().encode(url);
-	const digest = await crypto.subtle.digest('SHA-256', bytes);
-	const hash = [...new Uint8Array(digest)]
-		.slice(0, 16)
-		.map((byte) => byte.toString(16).padStart(2, '0'))
-		.join('');
-	return `source-article-${hash}`;
-}
-
-function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
+function shouldAcquireContent(article: Article): boolean {
 	const hasContent = 'has_content' in article && !!article.has_content;
-	if (target.kind === 'resource') return !hasContent && !article.storage_key && !!article.url;
-	return target.kind === 'source' && (article.source_type === 'rss' || article.source_type === 'default');
+	return !hasContent && !article.storage_key && !!article.url;
 }
 
 async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<AcquiredContent | null> {
@@ -110,8 +80,6 @@ async function loadFullTargetArticle(
 	let article: Article;
 	if (baseArticle) {
 		article = baseArticle;
-	} else if (target.kind === 'source') {
-		article = sourceRecordToArticle(target.draft.article);
 	} else {
 		article = await loadResourceForProcessing(env, target.rowId);
 	}
@@ -120,37 +88,9 @@ async function loadFullTargetArticle(
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
 }
 
-async function persistSourceWorkflowTarget(
-	coreDb: CoreDb,
-	target: SourceWorkflowTarget,
-	article: Article,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	acquiredContent: AcquiredContent | null,
-	paperEnrichment: PaperMetadata | null,
-	ogImagePatch: OgImagePatch,
-): Promise<PersistedTargetIds> {
-	const updatePayload = new ResourceUpdateBuilder(article)
-		.addAcquiredMetadata(acquiredContent)
-		.addOgMetadata(ogImagePatch)
-		.addPaperMetadata(paperEnrichment)
-		.applyProcessorResult(result, embedding)
-		.applyAcquiredFields(acquiredContent)
-		.applyOgFields(ogImagePatch)
-		.build();
-
-	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
-	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-	const resourceId = await insertFinalSourceResource(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
-	if (entities) {
-		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
-	}
-	return { resourceId };
-}
-
 async function persistStoredWorkflowTarget(
 	coreDb: CoreDb,
-	target: StoredWorkflowTarget,
+	target: WorkflowTarget,
 	article: Article,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -193,20 +133,17 @@ async function persistWorkflowTarget(
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
 ): Promise<PersistedTargetIds> {
 	return withCoreTx(env, async (coreDb, _db) => {
-		const persisted =
-			target.kind === 'source'
-				? await persistSourceWorkflowTarget(coreDb, target, article, result, embedding, acquiredContent, paperEnrichment, ogImagePatch)
-				: await persistStoredWorkflowTarget(
-						coreDb,
-						target,
-						article,
-						result,
-						embedding,
-						pdfTextArtifact,
-						acquiredContent,
-						paperEnrichment,
-						ogImagePatch,
-					);
+		const persisted = await persistStoredWorkflowTarget(
+			coreDb,
+			target,
+			article,
+			result,
+			embedding,
+			pdfTextArtifact,
+			acquiredContent,
+			paperEnrichment,
+			ogImagePatch,
+		);
 		if (youtubeTranscript || youtubeHighlights)
 			await persistYouTubeWorkflowData(coreDb, { transcript: youtubeTranscript, highlights: youtubeHighlights });
 		return persisted;
@@ -217,28 +154,22 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
 		const target = event.payload.target;
 		const initialArticle = await step.do(
-			target.kind === 'source' ? 'load-source-article-shell' : 'fetch-article-shell',
+			'fetch-article-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => {
-				if (target.kind === 'source') return { ...sourceRecordToArticle(target.draft.article), content: null };
-				return loadResourceForProcessing(this.env, target.rowId, true);
-			},
+			async () => loadResourceForProcessing(this.env, target.rowId, true),
 		);
-		const acquiredContent = shouldAcquireContent(target, initialArticle)
-			? await stageSavedUrlAcquisition(this.env, step, initialArticle)
-			: null;
+		const acquiredContent = shouldAcquireContent(initialArticle) ? await stageSavedUrlAcquisition(this.env, step, initialArticle) : null;
 		const article = applyAcquiredContent(initialArticle, acquiredContent);
 		const metadataType = article.platform_metadata?.type;
 		const sourceType =
 			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.source_type ?? 'default');
-		const logContext =
-			target.kind === 'source' ? { url: article.url, table: 'resources' } : { resource_id: target.rowId, table: 'resources' };
+		const logContext = { resource_id: target.rowId, table: 'resources' };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', sourceType, ...logContext });
 
 		const hasContent = 'has_content' in article && !!article.has_content;
 		const pdfTextArtifact =
-			target.kind !== 'source' && !hasContent && article.storage_key && article.file_type === PDF_MIME
+			!hasContent && article.storage_key && article.file_type === PDF_MIME
 				? await stagePdfTextExtraction(this.env, step, {
 						sourceStorageKey: article.storage_key,
 					})
@@ -290,12 +221,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			},
 		);
 
-		const youtubeTranscript =
-			sourceType === 'youtube'
-				? target.kind === 'source'
-					? target.draft.youtubeTranscript
-					: acquiredContent?.youtubeTranscript
-				: undefined;
+		const youtubeTranscript = sourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
 			sourceType === 'youtube'
 				? await step.do(
@@ -305,13 +231,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 					)
 				: null;
 		const persisted = await step.do(
-			target.kind === 'source' ? 'insert-final-resource' : 'update-db',
+			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () =>
 				persistWorkflowTarget(
 					this.env,
 					target,
-					target.kind === 'source' || pdfTextArtifact?.text || acquiredContent
+					pdfTextArtifact?.text || acquiredContent
 						? await loadFullTargetArticle(this.env, target, pdfTextArtifact, acquiredContent, acquiredContent ? article : undefined)
 						: article,
 					processorResult,
@@ -327,7 +253,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 
 		await syncPaperGraphForEnrichment(this.env, step, persisted.resourceId, paperEnrichment);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persisted.resourceId, ...logContext });
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persisted.resourceId, table: 'resources' });
 		return { success: true, resource_id: persisted.resourceId };
 	}
 }

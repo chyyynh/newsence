@@ -2,7 +2,7 @@ import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@cor
 import { withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingResourcesByUrl } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { and, eq } from 'drizzle-orm';
 
@@ -52,20 +52,21 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	for (const { item, url } of newItems) {
 		try {
 			const description = item.description?.trim() ?? '';
+			const resourceId = await withCoreDb(env, (db) =>
+				upsertPendingSourceResource(db, {
+					url,
+					title: item.title || 'No Title',
+					source: feed.name,
+					publishedDate: item.published ? new Date(item.published) : new Date(),
+					summary: description,
+					sourceType: 'rss',
+					content: null,
+					platformMetadata: null,
+				}),
+			);
 			await enqueueProcessing(env, {
-				kind: 'source',
-				draft: {
-					article: {
-						url,
-						title: item.title || 'No Title',
-						source: feed.name,
-						publishedDate: item.published ? new Date(item.published) : new Date(),
-						summary: description,
-						sourceType: 'rss',
-						content: null,
-						platformMetadata: null,
-					},
-				},
+				kind: 'resource',
+				rowId: resourceId,
 			});
 			queued++;
 		} catch (err) {

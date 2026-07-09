@@ -4,7 +4,7 @@ import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { entityExtractionExclusionNames } from '@entities/normalize';
-import { getExistingResourcesByUrl, reopenResourceForReprocessing } from '@ingest/domain/article-store';
+import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
@@ -12,6 +12,7 @@ import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorR
 import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
 async function enqueueTwitterArticle(
+	db: CoreDb,
 	env: CoreEnv,
 	data: {
 		url: string;
@@ -24,21 +25,20 @@ async function enqueueTwitterArticle(
 		hashTags?: string[];
 	},
 ): Promise<boolean> {
+	const resourceId = await upsertPendingSourceResource(db, {
+		url: data.url,
+		title: data.title,
+		source: data.source,
+		publishedDate: data.publishedDate,
+		summary: data.summary,
+		sourceType: 'twitter',
+		content: data.content,
+		platformMetadata: data.platformMetadata,
+		keywords: data.hashTags,
+	});
 	await enqueueProcessing(env, {
-		kind: 'source',
-		draft: {
-			article: {
-				url: data.url,
-				title: data.title,
-				source: data.source,
-				publishedDate: data.publishedDate,
-				summary: data.summary,
-				sourceType: 'twitter',
-				content: data.content,
-				platformMetadata: data.platformMetadata,
-				keywords: data.hashTags,
-			},
-		},
+		kind: 'resource',
+		rowId: resourceId,
 	});
 	return true;
 }
@@ -71,7 +71,7 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
-	const queued = await enqueueTwitterArticle(env, {
+	const queued = await enqueueTwitterArticle(db, env, {
 		url: articleUrl,
 		title,
 		source,
@@ -100,7 +100,7 @@ async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<bo
 		return true;
 	}
 
-	const queued = await enqueueTwitterArticle(env, {
+	const queued = await enqueueTwitterArticle(db, env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
