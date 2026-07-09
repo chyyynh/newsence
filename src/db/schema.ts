@@ -110,6 +110,7 @@ export const library = pgTable(
 export const rssList = pgTable('RssList', {
 	id: bigint('id', { mode: 'number' }).primaryKey(),
 	name: text('name').notNull(),
+	url: text('url'),
 	rssLink: text('RSSLink'),
 	type: text('type').notNull(),
 	isDefault: boolean('is_default').notNull(),
