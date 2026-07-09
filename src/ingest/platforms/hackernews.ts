@@ -2,7 +2,7 @@ import { generateText } from '@core-ai/embedding';
 import type { HackerNewsMetadata, NormalizedContent, PlatformEnrichments, ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
-import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
+import { generateResourceAnalysis, mergeResourceAnalysis, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 
@@ -182,7 +182,7 @@ const EDITORIAL_EN: EditorialPrompts = {
 	instruction: `Write a 400-600 word editorial note in English using flowing paragraphs, not bullet points. Format:
 
 ## Background
-2-3 sentences of context so a reader unfamiliar with the article can quickly understand what is being discussed.
+2-3 sentences of context so a reader unfamiliar with the resource can quickly understand what is being discussed.
 
 ## Community Perspectives
 The most important section. Summarize HN commenters' viewpoints in coherent paragraphs — major arguments for and against, interesting supplementary perspectives, and notable debates or consensus. Weave different viewpoints together naturally, like a short commentary piece.
@@ -192,7 +192,7 @@ Valuable resources, tools, or links mentioned in the comments. Omit this section
 	rules: [
 		'Write in English',
 		'Do not use any emoji',
-		'Focus on how the community reacted, not restating the article',
+		'Focus on how the community reacted, not restating the resource',
 		'Synthesize and paraphrase commenter opinions — do not translate verbatim',
 		'Maintain a neutral, objective but engaging tone',
 		'Output Markdown directly, do not wrap in a code block',
@@ -245,8 +245,8 @@ async function generateHnEditorial(
 	return { en, cn };
 }
 
-export async function processHackerNewsArticle(article: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
-	const metadata = article.platform_metadata;
+export async function processHackerNewsResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
+	const metadata = resource.platform_metadata;
 	const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
 
 	const hnData: HnItem | null = itemId
@@ -258,7 +258,7 @@ export async function processHackerNewsArticle(article: ResourceForProcessing, e
 
 	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
-	const editorial = hnData ? await generateHnEditorial(env, article.title, hnData.text || '', comments) : null;
+	const editorial = hnData ? await generateHnEditorial(env, resource.title, hnData.text || '', comments) : null;
 	const updateData: ProcessorResult['updateData'] = {
 		...(editorial?.cn
 			? {
@@ -283,8 +283,8 @@ export async function processHackerNewsArticle(article: ResourceForProcessing, e
 			}
 		: {};
 
-	const analysis = await generateArticleAnalysis(article, env);
-	const merged = mergeArticleAnalysis(article, analysis, {
+	const analysis = await generateResourceAnalysis(resource, env);
+	const merged = mergeResourceAnalysis(resource, analysis, {
 		updateData,
 		extraTags: ['HackerNews'],
 		overwriteSummary: true,

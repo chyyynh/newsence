@@ -83,11 +83,11 @@ export async function persistYouTubeWorkflowData(
 
 export async function prepareYouTubeHighlights(
 	env: CoreEnv,
-	article: ResourceForProcessing,
+	resource: ResourceForProcessing,
 	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	if (article.type !== 'youtube') return null;
-	const metadata = article.platform_metadata;
+	if (resource.type !== 'youtube') return null;
+	const metadata = resource.platform_metadata;
 	if (metadata?.type !== 'youtube') return null;
 
 	const videoId = metadata.data.videoId;

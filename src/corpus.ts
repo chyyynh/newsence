@@ -1,4 +1,4 @@
-import { generateArticleEmbedding } from '@core-ai/embedding';
+import { generateResourceEmbedding } from '@core-ai/embedding';
 import { normalizeUrl } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
@@ -237,7 +237,7 @@ async function rankResources(
 	const tokens = tokenize(sanitized);
 	const patterns = tokens.length > 0 ? tokens.map((t) => `%${t}%`) : [`%${sanitized}%`];
 
-	const embedding = await generateArticleEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME).catch(() => null);
+	const embedding = await generateResourceEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME).catch(() => null);
 	if (!embedding) return keywordOnly(db, patterns, limit, options);
 	const vectorStr = `[${embedding.join(',')}]`;
 	const overfetchLimit = Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP);

@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
+import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
 import { type CoreDb, withCoreTx } from '@db/client';
 import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
@@ -14,12 +14,12 @@ import {
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
+import { generateResourceAnalysis, mergeResourceAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { applyAcquiredContent, ResourceUpdateBuilder } from './domain/resource-update';
-import { processHackerNewsArticle } from './platforms/hackernews';
+import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
 import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
-import { processTwitterArticle } from './platforms/twitter';
+import { processTwitterResource } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
 type WorkflowPayload = { resourceId: string };
@@ -199,9 +199,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					acquiredContent,
 					acquiredContent ? resource : undefined,
 				);
-				if (resourceType === 'hackernews') return processHackerNewsArticle(fullResource, this.env);
-				if (resourceType === 'twitter') return processTwitterArticle(fullResource, this.env);
-				return mergeArticleAnalysis(fullResource, await generateArticleAnalysis(fullResource, this.env));
+				if (resourceType === 'hackernews') return processHackerNewsResource(fullResource, this.env);
+				if (resourceType === 'twitter') return processTwitterResource(fullResource, this.env);
+				return mergeResourceAnalysis(fullResource, await generateResourceAnalysis(fullResource, this.env));
 			},
 		);
 
@@ -216,14 +216,14 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					acquiredContent,
 					acquiredContent ? resource : undefined,
 				);
-				const text = prepareArticleTextForEmbedding({
+				const text = prepareResourceTextForEmbedding({
 					title: fullResource.title,
 					summary: processorResult.updateData.summary ?? fullResource.summary,
 					content: processorResult.updateData.content ?? fullResource.content,
 					tags: processorResult.updateData.tags ?? fullResource.tags,
 					keywords: processorResult.updateData.keywords ?? fullResource.keywords,
 				});
-				return text && this.env.AI ? generateArticleEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
+				return text && this.env.AI ? generateResourceEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
 			},
 		);
 

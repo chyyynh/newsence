@@ -52,9 +52,9 @@ function isTwitterHost(hostname: string): boolean {
 	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
 }
 
-const NON_ARTICLE_LINK_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
+const NON_RESOURCE_LINK_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
 
-function isNonArticleLinkUrl(url: string): boolean {
+function isNonResourceLinkUrl(url: string): boolean {
 	let hostname: string;
 	try {
 		hostname = new URL(url).hostname.toLowerCase();
@@ -62,7 +62,7 @@ function isNonArticleLinkUrl(url: string): boolean {
 		return false;
 	}
 	if (hostname.startsWith('www.')) hostname = hostname.slice(4);
-	for (const host of NON_ARTICLE_LINK_HOSTS) {
+	for (const host of NON_RESOURCE_LINK_HOSTS) {
 		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
 	}
 	return false;
@@ -128,12 +128,12 @@ function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 	};
 }
 
-function findTwitterArticleUrl(urls: string[], tweetUrl?: string): string | undefined {
+function findTwitterLongformUrl(urls: string[], tweetUrl?: string): string | undefined {
 	return [tweetUrl, ...urls].find((u) => u && /(?:twitter\.com|x\.com)\/i\/article\//.test(u));
 }
 
-function findLinkedArticleUrl(urls: string[]): string | undefined {
-	return urls.find((u) => !/(?:t\.co)/.test(u) && !isNonArticleLinkUrl(u));
+function findLinkedContentUrl(urls: string[]): string | undefined {
+	return urls.find((u) => !/(?:t\.co)/.test(u) && !isNonResourceLinkUrl(u));
 }
 
 export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
@@ -142,7 +142,7 @@ export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
 	return `${author}: ${tweet.text.substring(0, maxLength)}${suffix}`;
 }
 
-export function buildThreadArticleParts<T extends Tweet>(
+export function buildThreadResourceParts<T extends Tweet>(
 	tweets: T[],
 ): {
 	first: T;
@@ -153,7 +153,7 @@ export function buildThreadArticleParts<T extends Tweet>(
 } {
 	const sorted = [...tweets].sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
 	const first = sorted[0];
-	if (!first) throw new Error('Cannot build twitter thread article from empty tweets');
+	if (!first) throw new Error('Cannot build twitter thread resource from empty tweets');
 
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
@@ -221,7 +221,7 @@ function buildTweetPlatformMetadata(
 	};
 }
 
-function buildTwitterArticlePlatformMetadata(
+function buildTwitterLongformPlatformMetadata(
 	tweetId: string,
 	author: Tweet['author'] | undefined,
 ): Extract<PlatformMetadata, { type: 'twitter' }> {
@@ -229,7 +229,7 @@ function buildTwitterArticlePlatformMetadata(
 		type: 'twitter',
 		fetchedAt: new Date().toISOString(),
 		data: {
-			variant: 'article',
+			variant: 'longform',
 			tweetId,
 			authorName: author?.name ?? '',
 			authorUserName: author?.userName ?? '',
@@ -239,7 +239,7 @@ function buildTwitterArticlePlatformMetadata(
 	};
 }
 
-interface TwitterArticle {
+interface TwitterLongform {
 	title?: string;
 	preview_text?: string;
 	cover_media_img_url?: string;
@@ -256,13 +256,13 @@ interface TwitterArticle {
 	createdAt?: string;
 }
 
-async function scrapeTwitterArticle(
+async function scrapeTwitterLongform(
 	tweetId: string,
 	apiKey: string,
 ): Promise<(NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
-	console.info({ tag: 'TWITTER', msg: 'Fetching article for tweet', tweetId });
+	console.info({ tag: 'TWITTER', msg: 'Fetching longform for tweet', tweetId });
 
-	let data: { article?: TwitterArticle; status?: string };
+	let data: { article?: TwitterLongform; status?: string };
 	try {
 		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
 			headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
@@ -271,46 +271,46 @@ async function scrapeTwitterArticle(
 			await response.body?.cancel();
 			return null;
 		}
-		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterArticle; status?: string };
+		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterLongform; status?: string };
 	} catch {
 		return null;
 	}
 	if ((data.status && data.status !== 'success') || !data.article) return null;
 
-	const article = data.article;
-	const contentText = (article.contents ?? [])
+	const longform = data.article;
+	const contentText = (longform.contents ?? [])
 		.map((c) => c.text ?? c.content ?? '')
 		.filter(Boolean)
 		.join('\n\n');
-	if (!article.title && !contentText) return null;
-	const title = article.title || `Twitter Article ${tweetId}`;
-	const summary = article.preview_text || contentText.slice(0, 280);
+	if (!longform.title && !contentText) return null;
+	const title = longform.title || `Twitter longform ${tweetId}`;
+	const summary = longform.preview_text || contentText.slice(0, 280);
 
 	let md = `# ${title}\n\n`;
-	if (article.author) {
-		md += `**Author:** ${article.author.name || article.author.userName}`;
-		if (article.author.isBlueVerified) md += ' ✓';
-		if (article.author.userName) md += ` (@${article.author.userName})`;
+	if (longform.author) {
+		md += `**Author:** ${longform.author.name || longform.author.userName}`;
+		if (longform.author.isBlueVerified) md += ' ✓';
+		if (longform.author.userName) md += ` (@${longform.author.userName})`;
 		md += '\n\n';
 	}
-	if (article.cover_media_img_url) md += `![Cover](${article.cover_media_img_url})\n\n`;
+	if (longform.cover_media_img_url) md += `![Cover](${longform.cover_media_img_url})\n\n`;
 	md += `${contentText}\n\n---\n\n**Engagement:**\n`;
-	if (article.viewCount !== undefined) md += `- Views: ${article.viewCount.toLocaleString()}\n`;
-	if (article.likeCount !== undefined) md += `- Likes: ${article.likeCount.toLocaleString()}\n`;
-	if (article.replyCount !== undefined) md += `- Replies: ${article.replyCount.toLocaleString()}\n`;
+	if (longform.viewCount !== undefined) md += `- Views: ${longform.viewCount.toLocaleString()}\n`;
+	if (longform.likeCount !== undefined) md += `- Likes: ${longform.likeCount.toLocaleString()}\n`;
+	if (longform.replyCount !== undefined) md += `- Replies: ${longform.replyCount.toLocaleString()}\n`;
 
-	console.info({ tag: 'TWITTER', msg: 'Article fetched', title });
+	console.info({ tag: 'TWITTER', msg: 'Longform fetched', title });
 
 	return {
 		title,
 		markdown: md,
 		metadata: {
-			author: article.author?.userName || null,
-			publishedDate: article.createdAt || null,
+			author: longform.author?.userName || null,
+			publishedDate: longform.createdAt || null,
 			siteName: 'Twitter',
 			description: summary,
 		},
-		platformMetadata: buildTwitterArticlePlatformMetadata(tweetId, article.author),
+		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, longform.author),
 	};
 }
 
@@ -348,27 +348,27 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	const expandedUrls = extractExpandedUrls(tweet);
 	const tweetText = stripTweetUrls(tweet.text);
 
-	const articleUrl = findTwitterArticleUrl(expandedUrls, tweet.url);
-	const linkedArticleUrl = findLinkedArticleUrl(expandedUrls);
+	const longformUrl = findTwitterLongformUrl(expandedUrls, tweet.url);
+	const linkedContentUrl = findLinkedContentUrl(expandedUrls);
 
-	if (articleUrl || expandedUrls.length === 0) {
-		if (articleUrl) console.info({ tag: 'TWITTER', msg: 'Detected Twitter Article', articleUrl });
+	if (longformUrl || expandedUrls.length === 0) {
+		if (longformUrl) console.info({ tag: 'TWITTER', msg: 'Detected Twitter longform', longformUrl });
 		const tweetId = tweet.id ?? extractTweetId(tweet.url);
-		const articleContent = tweetId ? await scrapeTwitterArticle(tweetId, apiKey) : null;
-		if (articleContent) {
+		const longformContent = tweetId ? await scrapeTwitterLongform(tweetId, apiKey) : null;
+		if (longformContent) {
 			return {
 				kind: 'longform' as const,
-				scraped: articleContent,
+				scraped: longformContent,
 				canonicalUrl: tweet.url || `https://x.com/i/status/${tweetId}`,
-				eventText: articleContent.metadata.description || tweetText,
+				eventText: longformContent.metadata.description || tweetText,
 			};
 		}
-		if (articleUrl) throw new Error('Twitter Article API failed');
+		if (longformUrl) throw new Error('Twitter longform API failed');
 	}
 
-	if (linkedArticleUrl) {
-		const scraped = buildExternalLinkTweet(tweet, linkedArticleUrl, media, tweetText, ogImageUrl);
-		return { kind: 'share' as const, scraped, canonicalUrl: linkedArticleUrl, eventText: tweetText };
+	if (linkedContentUrl) {
+		const scraped = buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText, ogImageUrl);
+		return { kind: 'share' as const, scraped, canonicalUrl: linkedContentUrl, eventText: tweetText };
 	}
 
 	const title = buildTweetTitle(tweet, 80);

@@ -73,7 +73,7 @@ export interface YoutubeTranscript {
 
 export interface NormalizedContent {
 	title: string | null;
-	/** Platform APIs return markdown or plain text for source article drafts. */
+	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
 	metadata: {
 		author: string | null;
@@ -118,7 +118,7 @@ export interface RetweetedByData {
 }
 
 interface TwitterMetadata extends TwitterAuthorFields {
-	variant?: 'shared' | 'article';
+	variant?: 'shared' | 'longform';
 	tweetId?: string;
 	media?: TwitterMedia[];
 	createdAt?: string;

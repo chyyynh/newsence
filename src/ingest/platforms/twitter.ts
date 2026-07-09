@@ -9,10 +9,10 @@ import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
-import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
-import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
+import { generateResourceAnalysis, isEmpty, mergeResourceAnalysis, type ProcessorResult } from '../domain/ai-utils';
+import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
-async function enqueueTwitterArticle(
+async function enqueueTwitterResource(
 	db: CoreDb,
 	env: CoreEnv,
 	data: {
@@ -55,11 +55,11 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 		return false;
 	}
 
-	const articleUrl = normalizeUrl(resolved.canonicalUrl);
-	const [existingArticle] = await getExistingResourcesByUrl(db, [articleUrl]);
-	if (existingArticle) {
-		if (!existingArticle.hasZhHantSummary) await enqueueProcessing(env, existingArticle.id);
-		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
+	const resourceUrl = normalizeUrl(resolved.canonicalUrl);
+	const [existingResource] = await getExistingResourcesByUrl(db, [resourceUrl]);
+	if (existingResource) {
+		if (!existingResource.hasZhHantSummary) await enqueueProcessing(env, existingResource.id);
+		console.info({ tag: 'TWITTER', msg: 'Resource already exists (dedup)', url: resourceUrl, eventType: resolved.kind });
 		return true;
 	}
 
@@ -69,8 +69,8 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
-	const queued = await enqueueTwitterArticle(db, env, {
-		url: articleUrl,
+	const queued = await enqueueTwitterResource(db, env, {
+		url: resourceUrl,
 		title,
 		source,
 		publishedDate: new Date(scraped.metadata.publishedDate || tweet.createdAt),
@@ -84,7 +84,7 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 }
 
 async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<boolean> {
-	const { first, combinedText, platformMetadata } = buildThreadArticleParts(tweets);
+	const { first, combinedText, platformMetadata } = buildThreadResourceParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
 
@@ -98,7 +98,7 @@ async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<bo
 		return true;
 	}
 
-	const queued = await enqueueTwitterArticle(db, env, {
+	const queued = await enqueueTwitterResource(db, env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
@@ -235,7 +235,7 @@ async function fetchTweetsForBatch(
 }
 
 /**
- * Group tweets by conversation so threads can be saved as a single merged article.
+ * Group tweets by conversation so threads can be saved as a single merged resource.
  * Root tweets + self-replies in the same conversation merge; orphan self-replies
  * (reply targets we didn't fetch) get saved as standalone tweets.
  */
@@ -368,25 +368,25 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	});
 }
 
-export async function processTwitterArticle(article: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
+export async function processTwitterResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
 	const updateData: ProcessorResult['updateData'] = {};
-	const hasFullContent = !isEmpty(article.content) && article.content!.length > 200;
+	const hasFullContent = !isEmpty(resource.content) && resource.content!.length > 200;
 
 	if (hasFullContent) {
-		console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter Article', title: article.title.slice(0, 50) });
-		const analysis = await generateArticleAnalysis(article, env);
-		return mergeArticleAnalysis(article, analysis, { updateData });
+		console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter resource', title: resource.title.slice(0, 50) });
+		const analysis = await generateResourceAnalysis(resource, env);
+		return mergeResourceAnalysis(resource, analysis, { updateData });
 	}
 
-	const tweetText = article.summary?.trim() || article.content || '';
-	if (isEmpty(article.summary)) updateData.summary = tweetText;
+	const tweetText = resource.summary?.trim() || resource.content || '';
+	if (isEmpty(resource.summary)) updateData.summary = tweetText;
 
-	const analysis = await translateTweet(tweetText, article, env);
-	if (!analysis) return mergeArticleAnalysis(article, { tags: ['Twitter'] }, { updateData });
-	const merged = mergeArticleAnalysis(
-		article,
+	const analysis = await translateTweet(tweetText, resource, env);
+	if (!analysis) return mergeResourceAnalysis(resource, { tags: ['Twitter'] }, { updateData });
+	const merged = mergeResourceAnalysis(
+		resource,
 		{
-			content: isEmpty(article.content) ? tweetText : undefined,
+			content: isEmpty(resource.content) ? tweetText : undefined,
 			translations: {
 				[ZH_HANT_RESOURCE_LANG]: {
 					title: analysis.summary.slice(0, 80),
@@ -442,15 +442,15 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, article: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis | null> {
+async function translateTweet(tweetText: string, resource: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
-	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
+	const excludedEntities = entityExtractionExclusionNames(resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 
 	try {
 		const result = await generateObject<TweetAnalysis>(
 			env.AI,
-			`推文來源: ${article.source}${excludedLine}
+			`推文來源: ${resource.source}${excludedLine}
 推文內容：
 ${tweetText}`,
 			{

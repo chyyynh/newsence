@@ -82,7 +82,7 @@
 	/**
 	 * R2 buckets.
 	 *
-	 * `R2` — user_file blob storage (PDF/image uploads + chat-generated images).
+	 * `R2` — uploaded blob storage (PDF/image uploads + chat-generated images).
 	 *   Also written by the app worker; the core worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 */

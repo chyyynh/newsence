@@ -27,8 +27,8 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export function mergeArticleAnalysis(
-	article: ResourceForProcessing,
+export function mergeResourceAnalysis(
+	resource: ResourceForProcessing,
 	analysis: AIAnalysisResult,
 	options: {
 		updateData?: ProcessorResult['updateData'];
@@ -41,19 +41,19 @@ export function mergeArticleAnalysis(
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
 	const includeContent = options.includeContent ?? true;
 	const zhHantAnalysis = analysis.translations?.[ZH_HANT_RESOURCE_LANG];
-	const zhHantArticle = article.translations?.[ZH_HANT_RESOURCE_LANG];
+	const zhHantResource = resource.translations?.[ZH_HANT_RESOURCE_LANG];
 
-	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
-	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-	if (isEmpty(zhHantArticle?.title) && zhHantAnalysis?.title) {
+	if (!resource.tags?.length && allTags.length) updateData.tags = allTags;
+	if (!resource.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
+	if (isEmpty(zhHantResource?.title) && zhHantAnalysis?.title) {
 		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { title: zhHantAnalysis.title, source: 'machine' });
 	}
-	if ((options.overwriteSummary || isEmpty(article.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
-	if ((options.overwriteSummary || isEmpty(zhHantArticle?.summary)) && zhHantAnalysis?.summary) {
+	if ((options.overwriteSummary || isEmpty(resource.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
+	if ((options.overwriteSummary || isEmpty(zhHantResource?.summary)) && zhHantAnalysis?.summary) {
 		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { summary: zhHantAnalysis.summary, source: 'machine' });
 	}
 	if (includeContent && analysis.content) updateData.content = analysis.content;
-	if (includeContent && shouldWriteContentTranslation(article) && zhHantAnalysis?.content) {
+	if (includeContent && shouldWriteResourceContentTranslation(resource) && zhHantAnalysis?.content) {
 		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { content: zhHantAnalysis.content, source: 'machine' });
 	}
 	if (analysis.entities) updateData.entities = analysis.entities;
@@ -87,20 +87,20 @@ const ExtractedEntitySchema = z.object({
 	type: z.enum(ENTITY_TYPES),
 });
 
-const ArticleTranslationSchema = z.object({
+const ResourceTranslationSchema = z.object({
 	title: z.string().min(1),
 	summary_en: z.string().min(1),
 	summary: z.string().min(1),
 });
 
-const ArticleClassificationSchema = z.object({
+const ResourceClassificationSchema = z.object({
 	tags: z.array(z.string().min(1)).min(1),
 	keywords: z.array(z.string().min(1)).min(1),
 	entities: z.array(ExtractedEntitySchema),
 	category: z.enum(RESOURCE_CATEGORIES),
 });
 
-const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
+const RESOURCE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
 
 任務：
 - 翻譯 title
@@ -113,7 +113,7 @@ const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要�
 - 如果原文已是目標語言，保留自然表達，不要硬改寫
 - 所有文字都不要使用 Markdown。`;
 
-const ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文翻譯編輯。請將原文完整翻譯成自然流暢的繁體中文。
+const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文翻譯編輯。請將原文完整翻譯成自然流暢的繁體中文。
 
 規則：
 - 忠實翻譯原文，不要摘要、不要評論、不要新增資訊
@@ -123,7 +123,7 @@ const ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文�
 - 若原文已是繁體中文，直接保留原文；若是簡體中文，轉為自然繁體中文
 - 直接輸出翻譯後的 Markdown，不要包 code block。`;
 
-const ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理編輯。請清理抽取出的原文 Markdown，只移除非正文內容。
+const RESOURCE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理編輯。請清理抽取出的原文 Markdown，只移除非正文內容。
 
 移除：
 - 廣告、贊助、活動宣傳、newsletter/subscribe CTA、cookie/privacy banner
@@ -140,7 +140,7 @@ const ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理
 - 若內容已乾淨，直接原樣輸出
 - 直接輸出清理後 Markdown，不要包 code block，不要解釋。`;
 
-const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
+const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
 任務：
 - 產生 tags、keywords、category
@@ -164,16 +164,16 @@ const ARTICLE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實�
 
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
-function buildArticleContextPrompt(article: ResourceForProcessing): string {
-	const content = article.content || article.summary || article.title;
-	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
+function buildResourceContextPrompt(resource: ResourceForProcessing): string {
+	const content = resource.content || resource.summary || resource.title;
+	const excludedEntities = entityExtractionExclusionNames(resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
-	const zhHantSummary = article.translations?.[ZH_HANT_RESOURCE_LANG]?.summary;
+	const zhHantSummary = resource.translations?.[ZH_HANT_RESOURCE_LANG]?.summary;
 	return `文章資訊:
-標題: ${article.title}
-來源: ${article.source}
-資源類型: ${article.type}${excludedLine}
-摘要: ${article.summary || zhHantSummary || '無摘要'}
+標題: ${resource.title}
+來源: ${resource.source}
+資源類型: ${resource.type}${excludedLine}
+摘要: ${resource.summary || zhHantSummary || '無摘要'}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
@@ -185,17 +185,17 @@ function cjkRatio(text: string): number {
 	return cjk / letters;
 }
 
-function shouldTranslateArticleContent(article: ResourceForProcessing): boolean {
-	const content = article.content?.trim();
+function shouldTranslateResourceContent(resource: ResourceForProcessing): boolean {
+	const content = resource.content?.trim();
 	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
-	if (!shouldWriteContentTranslation(article)) return false;
+	if (!shouldWriteResourceContentTranslation(resource)) return false;
 	return true;
 }
 
-function shouldWriteContentTranslation(article: ResourceForProcessing): boolean {
-	const zhHantContent = article.translations?.[ZH_HANT_RESOURCE_LANG]?.content;
+function shouldWriteResourceContentTranslation(resource: ResourceForProcessing): boolean {
+	const zhHantContent = resource.translations?.[ZH_HANT_RESOURCE_LANG]?.content;
 	if (isEmpty(zhHantContent)) return true;
-	const content = article.content?.trim();
+	const content = resource.content?.trim();
 	const translated = zhHantContent?.trim();
 	if (!content || !translated || content.length < 1000) return false;
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
@@ -289,16 +289,16 @@ function contentTranslationPrompt(chunk: string, index: number, total: number): 
 	return `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`;
 }
 
-async function generateArticleContentTranslation(article: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
-	const content = article.content?.trim();
-	if (!content || !shouldTranslateArticleContent(article)) return null;
+async function generateResourceContentTranslation(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
+	const content = resource.content?.trim();
+	if (!content || !shouldTranslateResourceContent(resource)) return null;
 
 	const source = content.length > MAX_CONTENT_TRANSLATION_LENGTH ? content.slice(0, MAX_CONTENT_TRANSLATION_LENGTH) : content;
 	if (source.length < content.length) {
 		console.warn({
 			tag: 'AI',
-			msg: 'Article content translation truncated to max chunks',
-			title: article.title.substring(0, 80),
+			msg: 'Resource content translation truncated to max chunks',
+			title: resource.title.substring(0, 80),
 			contentLength: content.length,
 			translatedSourceLength: source.length,
 		});
@@ -307,11 +307,11 @@ async function generateArticleContentTranslation(article: ResourceForProcessing,
 	const chunks = splitContentForTranslation(source).slice(0, CONTENT_TRANSLATION_MAX_CHUNKS);
 	const translatedChunks = await mapWithConcurrency(chunks, CONTENT_TRANSLATION_CONCURRENCY, async (chunk, index) =>
 		generateText(env.AI, contentTranslationPrompt(chunk, index, chunks.length), {
-			task: 'article-content-translation',
+			task: 'resource-content-translation',
 			gatewayId: env.AI_GATEWAY_NAME,
 			maxTokens: 8000,
 			temperature: 0.2,
-			systemPrompt: ARTICLE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
+			systemPrompt: RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
 		}),
 	);
 	if (translatedChunks.some((chunk) => !chunk?.trim())) return null;
@@ -320,8 +320,8 @@ async function generateArticleContentTranslation(article: ResourceForProcessing,
 	if (!translated) {
 		console.error({
 			tag: 'AI',
-			msg: 'Article content translation rejected',
-			title: article.title.substring(0, 80),
+			msg: 'Resource content translation rejected',
+			title: resource.title.substring(0, 80),
 			sourceLength: source.length,
 			translatedLength: translatedChunks.join('\n\n').trim().length,
 			chunks: chunks.length,
@@ -330,53 +330,53 @@ async function generateArticleContentTranslation(article: ResourceForProcessing,
 	return translated;
 }
 
-async function generateArticleContentCleanup(article: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
-	const content = article.content?.trim();
-	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || article.type === 'youtube' || article.type === 'hackernews') return null;
+async function generateResourceContentCleanup(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
+	const content = resource.content?.trim();
+	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || resource.type === 'youtube' || resource.type === 'hackernews') return null;
 	const cleanupContent = content.slice(0, MAX_CONTENT_CLEANUP_LENGTH);
 	const cleaned = await generateText(env.AI, `原文 Markdown:\n${cleanupContent}`, {
-		task: 'article-content-cleanup',
+		task: 'resource-content-cleanup',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 6000,
 		temperature: 0.1,
-		systemPrompt: ARTICLE_CONTENT_CLEANUP_SYSTEM_PROMPT,
+		systemPrompt: RESOURCE_CONTENT_CLEANUP_SYSTEM_PROMPT,
 	});
 	return validateCleanedContent(cleanupContent, cleaned);
 }
 
-export async function generateArticleAnalysis(article: ResourceForProcessing, env: CoreEnv): Promise<AIAnalysisResult> {
-	console.info({ tag: 'AI', msg: 'Analyzing', title: article.title.substring(0, 80) });
+export async function generateResourceAnalysis(resource: ResourceForProcessing, env: CoreEnv): Promise<AIAnalysisResult> {
+	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
 	try {
-		const cleanedContent = await generateArticleContentCleanup(article, env).catch((error) => {
-			console.error({ tag: 'AI', msg: 'Article content cleanup failed', error: String(error) });
+		const cleanedContent = await generateResourceContentCleanup(resource, env).catch((error) => {
+			console.error({ tag: 'AI', msg: 'Resource content cleanup failed', error: String(error) });
 			return null;
 		});
-		const articleForAnalysis = cleanedContent ? { ...article, content: cleanedContent } : article;
-		const articlePrompt = buildArticleContextPrompt(articleForAnalysis);
+		const resourceForAnalysis = cleanedContent ? { ...resource, content: cleanedContent } : resource;
+		const resourcePrompt = buildResourceContextPrompt(resourceForAnalysis);
 		const [translation, classification, contentTranslation] = await Promise.all([
-			generateObject(env.AI, articlePrompt, {
-				schema: ArticleTranslationSchema,
-				task: 'article-translation',
+			generateObject(env.AI, resourcePrompt, {
+				schema: ResourceTranslationSchema,
+				task: 'resource-translation',
 				gatewayId: env.AI_GATEWAY_NAME,
 				maxTokens: 700,
-				systemPrompt: ARTICLE_TRANSLATION_SYSTEM_PROMPT,
+				systemPrompt: RESOURCE_TRANSLATION_SYSTEM_PROMPT,
 			}).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Article translation failed', error: String(error) });
+				console.error({ tag: 'AI', msg: 'Resource translation failed', error: String(error) });
 				return null;
 			}),
-			generateObject(env.AI, articlePrompt, {
-				schema: ArticleClassificationSchema,
-				task: 'article-classification',
+			generateObject(env.AI, resourcePrompt, {
+				schema: ResourceClassificationSchema,
+				task: 'resource-classification',
 				gatewayId: env.AI_GATEWAY_NAME,
 				maxTokens: 500,
-				systemPrompt: ARTICLE_CLASSIFICATION_SYSTEM_PROMPT,
+				systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
 			}).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Article classification failed', error: String(error) });
+				console.error({ tag: 'AI', msg: 'Resource classification failed', error: String(error) });
 				return null;
 			}),
-			generateArticleContentTranslation(articleForAnalysis, env).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Article content translation failed', error: String(error) });
+			generateResourceContentTranslation(resourceForAnalysis, env).catch((error) => {
+				console.error({ tag: 'AI', msg: 'Resource content translation failed', error: String(error) });
 				return null;
 			}),
 		]);

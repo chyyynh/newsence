@@ -31,20 +31,20 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 // translations dilutes the budget without adding recall.
 type EmbeddingInput = Pick<ResourceForProcessing, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
 
-export function prepareArticleTextForEmbedding(article: EmbeddingInput): string {
-	const headerParts = [article.title];
-	if (article.summary) headerParts.push(article.summary);
-	if (article.tags.length) headerParts.push(article.tags.join(' '));
-	if (article.keywords.length) headerParts.push(article.keywords.join(' '));
+export function prepareResourceTextForEmbedding(resource: EmbeddingInput): string {
+	const headerParts = [resource.title];
+	if (resource.summary) headerParts.push(resource.summary);
+	if (resource.tags.length) headerParts.push(resource.tags.join(' '));
+	if (resource.keywords.length) headerParts.push(resource.keywords.join(' '));
 
 	const headerText = headerParts.join(' ');
 	const contentBudget = MAX_TEXT_LENGTH - headerText.length - 1;
 
-	if (contentBudget <= 200 || !article.content) {
+	if (contentBudget <= 200 || !resource.content) {
 		return headerText.slice(0, MAX_TEXT_LENGTH);
 	}
 
-	return `${headerText} ${article.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
+	return `${headerText} ${resource.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
 }
 
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
@@ -128,7 +128,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 	}
 }
 
-export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName?: string): Promise<number[] | null> {
+export async function generateResourceEmbedding(text: string, ai: Ai, gatewayName?: string): Promise<number[] | null> {
 	const sanitizedText = text?.trim();
 	if (!sanitizedText) return null;
 
@@ -140,7 +140,7 @@ export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName
 				gateway: {
 					id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
 					collectLog: true,
-					metadata: { app: 'newsence', task: 'article-embedding' },
+					metadata: { app: 'newsence', task: 'resource-embedding' },
 				},
 			},
 		);

@@ -308,7 +308,7 @@ function renderRootIndex(
 	resourcePaths: Map<string, string>,
 	entityPaths: Map<string, string>,
 ): string {
-	// Bundle-absolute links throughout, matching article/entity pages.
+	// Bundle-absolute links throughout, matching resource/entity pages.
 	const lines = [
 		frontmatter({ okf_version: '0.1' }),
 		`# ${collection.name}`,

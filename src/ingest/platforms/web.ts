@@ -1,6 +1,6 @@
 import type { NormalizedContent } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
-import { extractReadableArticleHtml, preferReadableArticleText } from '@ingest/html-content';
+import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -285,9 +285,9 @@ async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquire
 }
 
 async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<WebAcquiredContent> {
-	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableArticleHtml(html)]);
+	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableContentHtml(html)]);
 	const markdown = await markdownFromHtml(env, readable?.html ?? html, url);
-	const content = preferReadableArticleText(markdown, readable);
+	const content = preferReadableContentText(markdown, readable);
 	const title = metadata.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
 	return {
 		title,

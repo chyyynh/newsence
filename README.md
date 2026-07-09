@@ -20,7 +20,7 @@
 
 ## What is newsence?
 
-Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / user files, runs bilingual AI analysis on each, stores them as searchable embeddings and an entity graph. Follows the [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern — each source is read once and integrated into a persistent artifact (summaries, entities, embeddings, cross-refs), not RAG'd at query time.
+Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, stores them as searchable resources and an entity graph. Follows the [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern — each source is read once and integrated into a persistent artifact (summaries, entities, embeddings, cross-refs), not RAG'd at query time.
 
 ## Supported Platforms
 
@@ -32,48 +32,48 @@ Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls content
 | Platform             | Type      | Schedule      | What it does                                                                |
 | -------------------- | --------- | ------------- | --------------------------------------------------------------------------- |
 | **RSS Feeds**        | Monitor   | Every 5 min   | Fetches feeds, deduplicates by URL, detects HN links                        |
-| **Twitter/X**        | Monitor   | Every 6 hours | Tracks users via Kaito API — tweets, threads, articles, media               |
+| **Twitter/X**        | Monitor   | Every 6 hours | Tracks users via Kaito API — tweets, threads, longform posts, media         |
 | **YouTube**          | Monitor   | Every 30 min  | Atom feed → video metadata, transcripts, chapters, AI highlights            |
 | **Hacker News**      | Processor | Via RSS       | Detects HN links → fetches comments via Algolia → generates editorial notes |
 | **Web**              | Scraper   | Saved URL     | Full content extraction (Readability + Cheerio), OG metadata                |
-| **User Files**       | Ingestion | Real-time     | App service-binding RPC — saved URL scrape + enrichment; blob lifecycle stays app-owned |
+| **App Inputs**       | Ingestion | Real-time     | Service-binding RPC — saved URL/blob acquisition + enrichment; membership stays app-owned |
 
 All platforms output a unified `NormalizedContent` shape → same AI pipeline.
 
 ## How it works
 
-Each article goes through an automated workflow with independent retries:
+Each resource goes through an automated workflow with independent retries:
 
 ```
-Content arrives (source monitor / saved URL / retry)
+Content arrives (source monitor / saved URL / uploaded blob / retry)
   │
-  ├─ 1. Load Content ───────── Source draft payload, or user_file/article row for upload/retry
+  ├─ 1. Load Resource ──────── Canonical resources row; acquire URL content or extract uploaded PDF text
   ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
-  ├─ 3. Save to DB ─────────── Source: single final INSERT; row-based: one final UPDATE
-  ├─    Sync Entities ──────── (conditional) Upsert entities, link to article
+  ├─ 3. Save to DB ─────────── Update resources + resource_translations
+  ├─    Sync Entities ──────── Upsert entities, link through resource_entities
   ├─ 4. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
   └─ 5. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
 ```
 
-Roughly 30 seconds per article. Each step retries independently with exponential backoff.
+Roughly 30 seconds per resource. Each step retries independently with exponential backoff.
 
 ## AI Pipeline
 
 | Stage                   | Model             | What it does                                                                                      |
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| **Analysis**          | AI Gateway text model | Article → bilingual title, summary, tags, keywords, category                                      |
-| **Entity Extraction** | AI Gateway JSON model | Article → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
+| **Analysis**          | AI Gateway text model | Resource → bilingual title, summary, tags, keywords, category                                      |
+| **Entity Extraction** | AI Gateway JSON model | Resource → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
 | **Embedding**         | BGE-M3 (1024d)        | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
 
-Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole article into fallback.
+Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole resource into fallback.
 
 ### Entity Quality Policy
 
-The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, and caps stored entities per article.
+The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, and caps stored entities per resource.
 
 It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and OKF-style alias groups are presentation or export-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
 
-Change the DB schema only when the product needs a query shape that the current `entities` plus `article_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
+Change the DB schema only when the product needs a query shape that the current `entities` plus `resource_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
 
 ## Stack
 
@@ -94,7 +94,7 @@ The one-click Deploy button above handles Worker + Workflows, but **Hyperdrive, 
 
 You need a PostgreSQL instance with pgvector. Currently runs on PlanetScale Postgres (via Cloudflare Hyperdrive); any Postgres ≥ 15 with the `vector` extension works.
 
-Required tables: `articles`, `user_articles`, `RssList`, `youtube_transcripts`, plus entity/citation tables. The canonical schema is defined in `web-tanstack/prisma/schema.prisma` in the parent monorepo — a standalone `schema.sql` is on the roadmap. For now, inspect the Prisma models or reach out via Issues if you want to run just the worker.
+Required tables: `resources`, `resource_translations`, `library`, `rss_list`, `youtube_transcripts`, plus entity/citation/paper tables. The canonical schema is defined in `web-tanstack/prisma/schema.prisma` and mirrored for the worker in `src/db/schema.ts`. For now, inspect those schema files or reach out via Issues if you want to run just the worker.
 
 ### 2. Hyperdrive binding
 
@@ -132,15 +132,15 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 
 ## API surface
 
-This Worker does not expose a public HTTP API. App/chat integrations use Cloudflare service-binding RPC, while cron monitors run through scheduled triggers. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
+This Worker exposes a small acquisition HTTP surface for internal callers: `POST /scrape` returns one `NormalizedContent` result synchronously, while `POST /acquisition` + `GET /acquisition/:id` provide a durable pollable job. App/chat integrations primarily use Cloudflare service-binding RPC, while cron monitors run through scheduled triggers. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
 
 ## CLI & MCP
 
 Also available as a CLI and [MCP](https://modelcontextprotocol.io) server via the separate [`newsence`](https://www.npmjs.com/package/newsence) npm package:
 
 ```bash
-npx newsence search "AI agents"       # search articles
-npx newsence recent --hours 6         # recent articles
+npx newsence search "AI agents"       # search resources
+npx newsence recent --hours 6         # recent resources
 
 claude mcp add newsence -- npx newsence mcp   # Claude Code
 # Remote MCP: https://www.newsence.app/api/mcp
@@ -154,9 +154,9 @@ src/
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
 ├── shared/               # small cross-subsystem primitives
-│   ├── types.ts          # Article, NormalizedContent, YoutubeTranscript
+│   ├── types.ts          # ResourceForProcessing, NormalizedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
-├── ingest/               # ── article ingestion pipeline (the open-source core) ──
+├── ingest/               # ── resource ingestion pipeline (the open-source core) ──
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
 │   ├── domain/           # sink and AI merge helpers
 │   └── platforms/        # one file per source/stage
@@ -177,7 +177,7 @@ Bindings (in `wrangler.jsonc`):
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
-| `R2`               | App-owned `user_files` blob reads for PDF extraction |
+| `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding (AI Gateway text calls + BGE-M3 embeddings) |
 
 Secrets (via `wrangler secret put`):
@@ -190,7 +190,7 @@ Secrets (via `wrangler secret put`):
 
 ## Adding a Platform
 
-Platforms are source adapters. Each platform lives in one `ingest/platforms/*.ts` file with the discovery/scrape/process pieces it actually needs. App-owned saved URLs and uploads arrive as `user_files` row IDs; cron sources enqueue source drafts. SQL writes stay in `ingest/domain/article-store.ts`.
+Platforms are source adapters. Each platform lives in one `ingest/platforms/*.ts` file with the discovery/scrape/process pieces it actually needs. App-owned saved URLs and uploads are persisted as `resources`/`library` rows by the app; the workflow receives a `resourceId`. SQL writes stay in `ingest/domain/resource-store.ts`.
 
 Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernews`) is not content shape (`pdf`, academic paper) and not origin (`upload`, `saved_url`, `generated`). PDF extraction and Semantic Scholar paper enrichment are workflow stages keyed from row content/metadata, not platform adapters.
 
@@ -201,7 +201,7 @@ Minimum to add a new source:
 3. **Monitor** (optional) — if the source is pollable, wire its cron handler from `src/index.ts`.
 4. **Workflow hook** (optional) — only if the source needs behavior beyond the default AI merge.
 
-The new article goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
+The new resource goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
 
 ## License
 

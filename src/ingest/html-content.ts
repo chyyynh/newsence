@@ -1,4 +1,4 @@
-const ARTICLE_SELECTORS = [
+const READABLE_CONTENT_SELECTORS = [
 	'article',
 	'[itemprop="articleBody"]',
 	'.entry-content',
@@ -30,13 +30,13 @@ const JUNK_SELECTORS = [
 ] as const;
 
 const TEXT_BLOCK_SELECTORS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'pre'] as const;
-const START_MARKER = '<!--newsence-article-start-->';
-const END_MARKER = '<!--newsence-article-end-->';
-const GOOD_ARTICLE_TEXT_CHARS = 400;
-const MIN_ARTICLE_TEXT_CHARS = 180;
+const START_MARKER = '<!--newsence-resource-content-start-->';
+const END_MARKER = '<!--newsence-resource-content-end-->';
+const GOOD_CONTENT_TEXT_CHARS = 400;
+const MIN_CONTENT_TEXT_CHARS = 180;
 const READABLE_TEXT_FALLBACK_RATIO = 1.8;
 
-export type ReadableArticleHtml = {
+export type ReadableContentHtml = {
 	html: string;
 	text: string;
 	selector: string;
@@ -63,7 +63,7 @@ function decodeHtmlEntities(value: string): string {
 		.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
 }
 
-async function cleanArticleHtml(html: string): Promise<string> {
+async function cleanContentHtml(html: string): Promise<string> {
 	let rewriter = new HTMLRewriter();
 	for (const selector of JUNK_SELECTORS) {
 		rewriter = rewriter.on(selector, {
@@ -130,27 +130,27 @@ async function extractBlockText(html: string): Promise<string> {
 	return normalizeText(fallbackChunks.join(' '));
 }
 
-export async function extractReadableArticleHtml(html: string): Promise<ReadableArticleHtml | null> {
-	let best: ReadableArticleHtml | null = null;
-	for (const selector of ARTICLE_SELECTORS) {
+export async function extractReadableContentHtml(html: string): Promise<ReadableContentHtml | null> {
+	let best: ReadableContentHtml | null = null;
+	for (const selector of READABLE_CONTENT_SELECTORS) {
 		const extracted = await extractFirstElementHtml(html, selector);
 		if (!extracted) continue;
 
-		const cleanHtml = await cleanArticleHtml(extracted);
+		const cleanHtml = await cleanContentHtml(extracted);
 		const text = await extractBlockText(cleanHtml);
-		if (text.length < MIN_ARTICLE_TEXT_CHARS) continue;
+		if (text.length < MIN_CONTENT_TEXT_CHARS) continue;
 
 		const candidate = { html: cleanHtml, text, selector };
-		if (text.length >= GOOD_ARTICLE_TEXT_CHARS) return candidate;
+		if (text.length >= GOOD_CONTENT_TEXT_CHARS) return candidate;
 		if (!best || text.length > best.text.length) best = candidate;
 	}
 	return best;
 }
 
-export function preferReadableArticleText(markdown: string, readable: ReadableArticleHtml | null): string {
+export function preferReadableContentText(markdown: string, readable: ReadableContentHtml | null): string {
 	const trimmedMarkdown = decodeHtmlEntities(markdown).trim();
 	const readableText = normalizeText(readable?.text ?? '');
-	if (readableText.length >= GOOD_ARTICLE_TEXT_CHARS && readableText.length > trimmedMarkdown.length * READABLE_TEXT_FALLBACK_RATIO) {
+	if (readableText.length >= GOOD_CONTENT_TEXT_CHARS && readableText.length > trimmedMarkdown.length * READABLE_TEXT_FALLBACK_RATIO) {
 		return readableText;
 	}
 	return trimmedMarkdown;
