@@ -1,16 +1,19 @@
-import type { ResourceForProcessing } from '@core-shared/types';
+import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { entities, entityTranslations, resourceEntities, resources, resourceTranslations } from '@db/schema';
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
+	DEFAULT_RESOURCE_LANG,
 	RESOURCE_CATEGORIES,
 	RESOURCE_SCOPES,
+	RESOURCE_TRANSLATION_SOURCES,
 	RESOURCE_TYPES,
 	type ResourceCategory,
 	type ResourceScope,
 	type ResourceTranslationSource,
 	type ResourceType,
+	ZH_HANT_RESOURCE_LANG,
 } from '../../resources/types';
 
 type StoredResourceForProcessing = ResourceForProcessing & { has_content?: boolean };
@@ -18,10 +21,11 @@ type StoredResourceForProcessing = ResourceForProcessing & { has_content?: boole
 interface ResourceStoreRow {
 	id: string;
 	title: string | null;
-	title_cn: string | null;
+	zh_hant_title: string | null;
 	summary: string | null;
-	summary_cn: string | null;
+	zh_hant_summary: string | null;
 	content: string | null;
+	zh_hant_content: string | null;
 	url: string | null;
 	og_image_url: string | null;
 	source: string | null;
@@ -69,10 +73,11 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 		SELECT
 			r.id::text AS id,
 			original.title AS title,
-			zh.title AS title_cn,
+			zh.title AS zh_hant_title,
 			original.summary AS summary,
-			zh.summary AS summary_cn,
+			zh.summary AS zh_hant_summary,
 			${shell ? sql`NULL::text` : sql`original.content`} AS content,
+			${shell ? sql`NULL::text` : sql`zh.content`} AS zh_hant_content,
 			${shell ? sql`original.content IS NOT NULL AND length(original.content) > 0` : sql`NULL::boolean`} AS has_content,
 			r.url AS url,
 			r.og_image_url AS og_image_url,
@@ -103,10 +108,9 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	const article: StoredResourceForProcessing = {
 		id: row.id,
 		title: row.title ?? '',
-		title_cn: row.title_cn,
 		summary: row.summary,
-		summary_cn: row.summary_cn,
 		content: row.content,
+		translations: resourceStoreTranslations(row),
 		url: row.url ?? '',
 		og_image_url: row.og_image_url,
 		source: row.source ?? '',
@@ -123,6 +127,16 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	if ('normalized_source_url' in row) article.normalized_source_url = row.normalized_source_url ?? null;
 	if (row.origin_type) article.origin_type = row.origin_type;
 	return article;
+}
+
+function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMap {
+	const zhHant = compactLocaleText({
+		title: row.zh_hant_title,
+		summary: row.zh_hant_summary,
+		content: row.zh_hant_content,
+		source: 'machine',
+	});
+	return zhHant ? { [ZH_HANT_RESOURCE_LANG]: zhHant } : {};
 }
 
 function formatPublishedDate(value: Date | string | null): string {
@@ -146,9 +160,6 @@ export interface SourceResourceDraft {
 type ResourceMirrorOrigin = 'source' | 'resource';
 type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
-const DEFAULT_RESOURCE_LANG = 'en';
-const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
-
 interface ResourceMirrorRecord {
 	id: string;
 	type: ResourceType;
@@ -159,11 +170,9 @@ interface ResourceMirrorRecord {
 	fileType: string | null;
 	originalLang: string;
 	title: string | null;
-	titleCn: string | null;
 	summary: string | null;
-	summaryCn: string | null;
 	content: string | null;
-	contentCn: string | null;
+	translations: ResourceTranslationMap;
 	publishedDate: Date | null;
 	scrapedDate: Date;
 	keywords: string[];
@@ -251,11 +260,9 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		id: base.url,
 		title: base.title,
 		scope: 'corpus',
-		title_cn: null,
 		summary: base.summary,
-		summary_cn: null,
 		content: base.content,
-		content_cn: null,
+		translations: {},
 		url: base.url,
 		og_image_url: null,
 		source: base.source,
@@ -291,11 +298,9 @@ function resourceMirrorRecord(
 	const tags = stringArrayValue(updatePayload.tags ?? article.tags ?? [], 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords ?? article.keywords ?? [], 'keywords');
 	const title = cleanString(updatePayload.title ?? article.title);
-	const titleCn = cleanString(updatePayload.title_cn ?? article.title_cn);
 	const summary = cleanString(updatePayload.summary ?? article.summary);
-	const summaryCn = cleanString(updatePayload.summary_cn ?? article.summary_cn);
 	const content = cleanString(updatePayload.content ?? article.content);
-	const contentCn = cleanString(updatePayload.content_cn ?? article.content_cn);
+	const translations = mergeResourceTranslations(article.translations, updatePayload.translations);
 	return {
 		id: resourceId,
 		type: parseResourceType(updatePayload.type ?? article.type),
@@ -304,13 +309,11 @@ function resourceMirrorRecord(
 		normalizedUrl,
 		storageKey: cleanString(article.storage_key),
 		fileType,
-		originalLang: deriveOriginalLang({ title, summary, content, titleCn, summaryCn, contentCn }),
+		originalLang: deriveOriginalLang({ title, summary, content, translations }),
 		title,
-		titleCn,
 		summary,
-		summaryCn,
 		content,
-		contentCn,
+		translations,
 		publishedDate: optionalDateValue(updatePayload.published_date ?? article.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
@@ -331,6 +334,39 @@ function platformMetadataWithSourceName(platformMetadata: unknown, source: strin
 		return { ...(platformMetadata as Record<string, unknown>), sourceName };
 	}
 	return { type: 'default', fetchedAt: new Date().toISOString(), data: null, sourceName };
+}
+
+function mergeResourceTranslations(current: ResourceTranslationMap | undefined, update: unknown): ResourceTranslationMap {
+	const merged: ResourceTranslationMap = { ...(current ?? {}) };
+	if (update === null || update === undefined) return merged;
+	if (typeof update !== 'object' || Array.isArray(update)) throw new Error('Invalid translations: expected object');
+	for (const [lang, value] of Object.entries(update)) {
+		if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+		const patch = compactLocaleText(value as ResourceLocaleText);
+		if (!patch) continue;
+		merged[lang] = {
+			...(merged[lang] ?? {}),
+			...patch,
+		};
+	}
+	return merged;
+}
+
+function compactLocaleText(value: ResourceLocaleText): ResourceLocaleText | null {
+	const title = cleanString(value.title);
+	const summary = cleanString(value.summary);
+	const content = cleanString(value.content);
+	const keywords =
+		value.keywords === null || value.keywords === undefined ? null : stringArrayValue(value.keywords, 'translation keywords');
+	const source = parseTranslationSource(value.source);
+	if (!title && !summary && !content && !keywords?.length) return null;
+	return {
+		...(title ? { title } : {}),
+		...(summary ? { summary } : {}),
+		...(content ? { content } : {}),
+		...(keywords?.length ? { keywords } : {}),
+		...(source ? { source } : {}),
+	};
 }
 
 function resourceUpsertStatement(record: ResourceMirrorRecord): SQL {
@@ -438,28 +474,31 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 }
 
 function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationRecord[] {
-	const originalUsesZhHant = record.originalLang === ZH_HANT_RESOURCE_LANG;
+	const originalTranslation = record.translations[record.originalLang];
 	const translations: ResourceTranslationRecord[] = [
 		{
 			resourceId,
 			lang: record.originalLang,
-			title: originalUsesZhHant ? record.titleCn : record.title,
-			summary: originalUsesZhHant ? record.summaryCn : record.summary,
-			content: originalUsesZhHant ? record.contentCn : record.content,
-			keywords: record.keywords,
+			title: record.originalLang === DEFAULT_RESOURCE_LANG ? record.title : cleanString(originalTranslation?.title),
+			summary: record.originalLang === DEFAULT_RESOURCE_LANG ? record.summary : cleanString(originalTranslation?.summary),
+			content: record.originalLang === DEFAULT_RESOURCE_LANG ? record.content : cleanString(originalTranslation?.content),
+			keywords: originalTranslation?.keywords?.length ? originalTranslation.keywords : record.keywords,
 			source: 'original',
 		},
 	];
 
-	if (!originalUsesZhHant && hasLocalizedText(record.titleCn, record.summaryCn, record.contentCn)) {
+	for (const [lang, translation] of Object.entries(record.translations)) {
+		if (lang === record.originalLang) continue;
+		const compact = translation ? compactLocaleText(translation) : null;
+		if (!compact) continue;
 		translations.push({
 			resourceId,
-			lang: ZH_HANT_RESOURCE_LANG,
-			title: record.titleCn,
-			summary: record.summaryCn,
-			content: record.contentCn,
-			keywords: record.keywords,
-			source: 'machine',
+			lang,
+			title: cleanString(compact.title),
+			summary: cleanString(compact.summary),
+			content: cleanString(compact.content),
+			keywords: compact.keywords?.length ? compact.keywords : record.keywords,
+			source: parseTranslationSource(compact.source) ?? 'machine',
 		});
 	}
 
@@ -470,12 +509,11 @@ function deriveOriginalLang(fields: {
 	title: string | null;
 	summary: string | null;
 	content: string | null;
-	titleCn: string | null;
-	summaryCn: string | null;
-	contentCn: string | null;
+	translations: ResourceTranslationMap;
 }): string {
+	const zhHant = fields.translations[ZH_HANT_RESOURCE_LANG];
 	return !hasLocalizedText(fields.title, fields.summary, fields.content) &&
-		hasLocalizedText(fields.titleCn, fields.summaryCn, fields.contentCn)
+		hasLocalizedText(cleanString(zhHant?.title), cleanString(zhHant?.summary), cleanString(zhHant?.content))
 		? ZH_HANT_RESOURCE_LANG
 		: DEFAULT_RESOURCE_LANG;
 }
@@ -530,6 +568,16 @@ function isResourceScope(value: unknown): value is ResourceScope {
 
 function parseResourceScope(value: unknown): ResourceScope {
 	if (!isResourceScope(value)) throw new Error(`Invalid resource scope: ${String(value)}`);
+	return value;
+}
+
+function isTranslationSource(value: unknown): value is ResourceTranslationSource {
+	return typeof value === 'string' && (RESOURCE_TRANSLATION_SOURCES as readonly string[]).includes(value);
+}
+
+function parseTranslationSource(value: unknown): ResourceTranslationSource | null {
+	if (value === null || value === undefined) return null;
+	if (!isTranslationSource(value)) throw new Error(`Invalid translation source: ${String(value)}`);
 	return value;
 }
 
@@ -650,7 +698,7 @@ type ExistingResourceRecord = {
 	id: string;
 	url: string;
 	type: ResourceType;
-	summary_cn: string | null;
+	zhHantSummary: string | null;
 };
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
@@ -660,7 +708,7 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			r.id::text AS id,
 			COALESCE(r.normalized_url, r.url) AS url,
 			r.type AS type,
-			zh.summary AS summary_cn
+			zh.summary AS "zhHantSummary"
 		FROM resources r
 		LEFT JOIN resource_translations zh
 		  ON zh.resource_id = r.id AND zh.lang = 'zh-Hant'

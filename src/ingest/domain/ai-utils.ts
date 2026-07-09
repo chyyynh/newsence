@@ -1,18 +1,22 @@
 import { generateObject, generateText } from '@core-ai/embedding';
-import { type AIAnalysisResult, ENTITY_TYPES, type PlatformEnrichments, type ResourceForProcessing } from '@core-shared/types';
+import {
+	type AIAnalysisResult,
+	ENTITY_TYPES,
+	type PlatformEnrichments,
+	type ResourceForProcessing,
+	type ResourceTranslationMap,
+} from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import { RESOURCE_CATEGORIES, type ResourceCategory } from '../../resources/types';
+import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 
 export interface ProcessorResult {
 	updateData: {
 		tags?: string[];
 		keywords?: string[];
-		title_cn?: string;
 		summary?: string;
-		summary_cn?: string;
 		content?: string;
-		content_cn?: string;
+		translations?: ResourceTranslationMap;
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
@@ -36,17 +40,35 @@ export function mergeArticleAnalysis(
 	const updateData = options.updateData ?? {};
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
 	const includeContent = options.includeContent ?? true;
+	const zhHantAnalysis = analysis.translations?.[ZH_HANT_RESOURCE_LANG];
+	const zhHantArticle = article.translations?.[ZH_HANT_RESOURCE_LANG];
 
 	if (!article.tags?.length && allTags.length) updateData.tags = allTags;
 	if (!article.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-	if (isEmpty(article.title_cn) && analysis.title_cn) updateData.title_cn = analysis.title_cn;
+	if (isEmpty(zhHantArticle?.title) && zhHantAnalysis?.title) {
+		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { title: zhHantAnalysis.title, source: 'machine' });
+	}
 	if ((options.overwriteSummary || isEmpty(article.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
-	if ((options.overwriteSummary || isEmpty(article.summary_cn)) && analysis.summary_cn) updateData.summary_cn = analysis.summary_cn;
+	if ((options.overwriteSummary || isEmpty(zhHantArticle?.summary)) && zhHantAnalysis?.summary) {
+		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { summary: zhHantAnalysis.summary, source: 'machine' });
+	}
 	if (includeContent && analysis.content) updateData.content = analysis.content;
-	if (includeContent && shouldWriteContentTranslation(article) && analysis.content_cn) updateData.content_cn = analysis.content_cn;
+	if (includeContent && shouldWriteContentTranslation(article) && zhHantAnalysis?.content) {
+		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { content: zhHantAnalysis.content, source: 'machine' });
+	}
 	if (analysis.entities) updateData.entities = analysis.entities;
 
 	return { updateData, classificationCategory: analysis.category };
+}
+
+function setTranslationPatch(updateData: ProcessorResult['updateData'], lang: string, patch: NonNullable<ResourceTranslationMap[string]>) {
+	updateData.translations = {
+		...(updateData.translations ?? {}),
+		[lang]: {
+			...(updateData.translations?.[lang] ?? {}),
+			...patch,
+		},
+	};
 }
 
 const MAX_CONTENT_LENGTH = 10000;
@@ -66,9 +88,9 @@ const ExtractedEntitySchema = z.object({
 });
 
 const ArticleTranslationSchema = z.object({
-	title_cn: z.string().min(1),
+	title: z.string().min(1),
 	summary_en: z.string().min(1),
-	summary_cn: z.string().min(1),
+	summary: z.string().min(1),
 });
 
 const ArticleClassificationSchema = z.object({
@@ -81,13 +103,13 @@ const ArticleClassificationSchema = z.object({
 const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
 
 任務：
-- 翻譯 title_cn
-- 產生 summary_en / summary_cn
+- 翻譯 title
+- 產生 summary_en / summary
 
 翻譯要求：
-- title_cn: 將標題翻譯成自然流暢的繁體中文
+- title: 將標題翻譯成自然流暢的繁體中文
 - summary_en: 用英文寫 1-2 句簡潔摘要
-- summary_cn: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
+- summary: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
 - 如果原文已是目標語言，保留自然表達，不要硬改寫
 - 所有文字都不要使用 Markdown。`;
 
@@ -146,11 +168,12 @@ function buildArticleContextPrompt(article: ResourceForProcessing): string {
 	const content = article.content || article.summary || article.title;
 	const excludedEntities = entityExtractionExclusionNames(article.source, article.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
+	const zhHantSummary = article.translations?.[ZH_HANT_RESOURCE_LANG]?.summary;
 	return `文章資訊:
 標題: ${article.title}
 來源: ${article.source}
 資源類型: ${article.type}${excludedLine}
-摘要: ${article.summary || article.summary_cn || '無摘要'}
+摘要: ${article.summary || zhHantSummary || '無摘要'}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
@@ -170,9 +193,10 @@ function shouldTranslateArticleContent(article: ResourceForProcessing): boolean 
 }
 
 function shouldWriteContentTranslation(article: ResourceForProcessing): boolean {
-	if (isEmpty(article.content_cn)) return true;
+	const zhHantContent = article.translations?.[ZH_HANT_RESOURCE_LANG]?.content;
+	if (isEmpty(zhHantContent)) return true;
 	const content = article.content?.trim();
-	const translated = article.content_cn?.trim();
+	const translated = zhHantContent?.trim();
 	if (!content || !translated || content.length < 1000) return false;
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
@@ -363,11 +387,25 @@ export async function generateArticleAnalysis(article: ResourceForProcessing, en
 		}
 		if (translation) {
 			analysis.summary_en = translation.summary_en;
-			analysis.summary_cn = translation.summary_cn;
-			analysis.title_cn = translation.title_cn;
+			analysis.translations = {
+				...(analysis.translations ?? {}),
+				[ZH_HANT_RESOURCE_LANG]: {
+					...(analysis.translations?.[ZH_HANT_RESOURCE_LANG] ?? {}),
+					title: translation.title,
+					summary: translation.summary,
+					source: 'machine',
+				},
+			};
 		}
 		if (contentTranslation?.trim()) {
-			analysis.content_cn = contentTranslation.trim();
+			analysis.translations = {
+				...(analysis.translations ?? {}),
+				[ZH_HANT_RESOURCE_LANG]: {
+					...(analysis.translations?.[ZH_HANT_RESOURCE_LANG] ?? {}),
+					content: contentTranslation.trim(),
+					source: 'machine',
+				},
+			};
 		}
 		if (classification) {
 			analysis.tags = classification.tags.slice(0, 5);

@@ -1,15 +1,23 @@
-import type { ResourceCategory, ResourceScope, ResourceType } from '../resources/types';
+import type { ResourceCategory, ResourceScope, ResourceTranslationSource, ResourceType } from '../resources/types';
+
+export type ResourceLocaleText = {
+	title?: string | null;
+	summary?: string | null;
+	content?: string | null;
+	keywords?: string[] | null;
+	source?: ResourceTranslationSource;
+};
+
+export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefined>;
 
 export interface ResourceForProcessing {
 	id: string;
 	type: ResourceType;
 	scope: ResourceScope;
 	title: string;
-	title_cn?: string | null;
 	summary: string | null;
-	summary_cn?: string | null;
 	content: string | null;
-	content_cn?: string | null;
+	translations?: ResourceTranslationMap;
 	url: string;
 	og_image_url?: string | null;
 	source: string;
@@ -37,10 +45,8 @@ export interface AIAnalysisResult {
 	tags?: string[];
 	keywords?: string[];
 	summary_en?: string;
-	summary_cn?: string;
 	content?: string;
-	content_cn?: string;
-	title_cn?: string;
+	translations?: ResourceTranslationMap;
 	category?: ResourceCategory;
 	entities?: ExtractedEntity[];
 }

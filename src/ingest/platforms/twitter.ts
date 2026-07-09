@@ -8,6 +8,7 @@ import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPending
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
+import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
 import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
@@ -60,7 +61,7 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 	const articleUrl = normalizeUrl(resolved.canonicalUrl);
 	const [existingArticle] = await getExistingResourcesByUrl(db, [articleUrl]);
 	if (existingArticle) {
-		if (!existingArticle.summary_cn) await enqueueProcessing(env, { kind: 'resource', rowId: existingArticle.id });
+		if (!existingArticle.zhHantSummary) await enqueueProcessing(env, { kind: 'resource', rowId: existingArticle.id });
 		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
 		return true;
 	}
@@ -388,10 +389,15 @@ export async function processTwitterArticle(article: ResourceForProcessing, env:
 	const merged = mergeArticleAnalysis(
 		article,
 		{
-			title_cn: analysis.summary_cn.slice(0, 80),
-			summary_cn: analysis.summary_cn,
 			content: isEmpty(article.content) ? tweetText : undefined,
-			content_cn: analysis.summary_cn,
+			translations: {
+				[ZH_HANT_RESOURCE_LANG]: {
+					title: analysis.summary.slice(0, 80),
+					summary: analysis.summary,
+					content: analysis.summary,
+					source: 'machine',
+				},
+			},
 			tags: analysis.tags,
 			keywords: analysis.keywords,
 			entities: analysis.entities,
@@ -402,7 +408,7 @@ export async function processTwitterArticle(article: ResourceForProcessing, env:
 }
 
 const TweetAnalysisSchema = z.object({
-	summary_cn: z.string().min(1),
+	summary: z.string().min(1),
 	tags: z.array(z.string().min(1)),
 	keywords: z.array(z.string().min(1)),
 	entities: z.array(
@@ -422,7 +428,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 直接翻譯原文，保持原文的第一人稱或語氣，不要改寫成第三人稱描述
 - 不要用「這則推文」、「作者認為」、「該推文提到」等第三角度描述
 - 不要使用任何 Markdown 格式
-- summary_cn 是忠實翻譯，不是評論或摘要
+- summary 是忠實翻譯，不是評論或摘要
 
 實體擷取規則：
 - 提取重要的具名實體（人物、組織、產品、技術、事件、地點）
@@ -461,7 +467,7 @@ ${tweetText}`,
 		if (!result) throw new Error('No JSON found');
 
 		return {
-			summary_cn: result.summary_cn,
+			summary: result.summary,
 			tags: (result.tags.length ? result.tags : ['Twitter']).slice(0, 5),
 			keywords: result.keywords.slice(0, 8),
 			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],

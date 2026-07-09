@@ -6,6 +6,10 @@ export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 
 export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
 
+export const DEFAULT_RESOURCE_LANG = 'en';
+
+export const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
+
 export const RESOURCE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];
