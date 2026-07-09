@@ -144,7 +144,7 @@ export const entities = pgTable('entities', {
 	name: varchar('name', { length: 255 }).notNull(),
 	nameCn: varchar('name_cn', { length: 255 }),
 	type: varchar('type', { length: 20 }).notNull(),
-	articleCount: integer('article_count').default(0).notNull(),
+	resourceCount: integer('resource_count').default(0).notNull(),
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });
@@ -165,7 +165,7 @@ export const papers = pgTable('papers', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	openAlexId: varchar('openalex_id', { length: 32 }).notNull().unique(),
 	doi: text('doi').unique(),
-	articleId: uuid('article_id'),
+	resourceId: uuid('resource_id'),
 	title: text('title'),
 	authors: text('authors').array().notNull(),
 	venue: text('venue'),

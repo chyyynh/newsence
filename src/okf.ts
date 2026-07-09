@@ -60,7 +60,7 @@ type EntityLinkRow = {
 	name: string;
 	name_cn: string | null;
 	type: string;
-	article_count: number;
+	resource_count: number;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -217,11 +217,11 @@ async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Pr
 	return queryRows<EntityLinkRow>(
 		db,
 		sql`SELECT
-		   re.resource_id::text, e.id::text, e.name, e.name_cn, e.type, e.article_count
+		   re.resource_id::text, e.id::text, e.name, e.name_cn, e.type, e.resource_count
 		 FROM resource_entities re
 		 JOIN entities e ON e.id = re.entity_id
 		 WHERE re.resource_id = ANY(${resources.map((resource) => resource.id)}::uuid[])
-		 ORDER BY e.article_count DESC, e.name ASC`,
+		 ORDER BY e.resource_count DESC, e.name ASC`,
 	);
 }
 
@@ -361,7 +361,7 @@ function renderEntity(entity: EntityLinkRow, links: EntityLinkRow[], resources: 
 			// extension keys
 			name_cn: entity.name_cn,
 			newsence_entity_id: entity.id,
-			newsence_global_article_count: entity.article_count,
+			newsence_global_resource_count: entity.resource_count,
 			newsence_bundle_resource_count: linkedResources.length,
 		}),
 		`# ${entity.name}`,

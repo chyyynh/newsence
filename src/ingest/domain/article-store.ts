@@ -774,7 +774,7 @@ export async function syncArticleEntities(
 		await db.insert(articleEntities).values({ articleId, entityId }).onConflictDoNothing();
 	}
 
-	await refreshEntityArticleCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
+	await refreshEntityResourceCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
 
 	console.info({
 		tag: 'ENTITIES',
@@ -811,7 +811,7 @@ export async function syncResourceEntities(
 		await db.insert(resourceEntities).values({ resourceId, entityId }).onConflictDoNothing();
 	}
 
-	await refreshEntityArticleCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
+	await refreshEntityResourceCounts(db, [...existingLinks.map((row) => row.entityId), ...entityIds]);
 
 	console.info({
 		tag: 'ENTITIES',
@@ -857,14 +857,14 @@ async function upsertEntityIds(
 	return { normalizedEntities, entityIds };
 }
 
-async function refreshEntityArticleCounts(db: CoreDb, entityIds: string[]): Promise<void> {
+async function refreshEntityResourceCounts(db: CoreDb, entityIds: string[]): Promise<void> {
 	const uniqueIds = [...new Set(entityIds)];
 	if (!uniqueIds.length) return;
 	await db.execute(sql`
 		UPDATE entities e
-		    SET article_count = counts.article_count
+		    SET resource_count = counts.resource_count
 		   FROM (
-		     SELECT ids.id, COUNT(DISTINCT links.resource_id)::int AS article_count
+		     SELECT ids.id, COUNT(DISTINCT links.resource_id)::int AS resource_count
 		       FROM unnest(${uniqueIds}::uuid[]) AS ids(id)
 		       LEFT JOIN (
 		         SELECT article_id AS resource_id, entity_id FROM article_entities

@@ -72,7 +72,7 @@ interface S2MatchResponse {
 type PaperRow = {
 	openAlexId: string;
 	doi: string | null;
-	articleId: string | null;
+	resourceId: string | null;
 	title: string | null;
 	authors: string[];
 	venue: string | null;
@@ -229,7 +229,7 @@ async function upsertIngestedPaper(db: CoreDb, row: PaperRow): Promise<string> {
 		.values({
 			openAlexId: row.openAlexId,
 			doi: row.doi,
-			articleId: row.articleId,
+			resourceId: row.resourceId,
 			title: row.title,
 			authors: row.authors,
 			venue: row.venue,
@@ -242,7 +242,7 @@ async function upsertIngestedPaper(db: CoreDb, row: PaperRow): Promise<string> {
 			target: papers.openAlexId,
 			set: {
 				doi: sql`COALESCE(excluded.doi, ${papers.doi})`,
-				articleId: sql`COALESCE(excluded.article_id, ${papers.articleId})`,
+				resourceId: sql`COALESCE(excluded.resource_id, ${papers.resourceId})`,
 				title: sql`COALESCE(excluded.title, ${papers.title})`,
 				authors: sql`CASE WHEN cardinality(excluded.authors) > 0 THEN excluded.authors ELSE ${papers.authors} END`,
 				venue: sql`COALESCE(excluded.venue, ${papers.venue})`,
@@ -283,7 +283,7 @@ async function upsertReferenceNode(db: CoreDb, ref: PaperReference): Promise<str
 	return result?.id ?? null;
 }
 
-async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
+async function syncPaperGraph(env: CoreEnv, resourceId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
 	const openAlexId = paper.openAlexId;
 	if (!openAlexId) return null;
 
@@ -291,7 +291,7 @@ async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetad
 		const fromId = await upsertIngestedPaper(db, {
 			openAlexId,
 			doi: paper.doi ?? null,
-			articleId,
+			resourceId,
 			title: paper.title ?? null,
 			authors: paper.authors ?? [],
 			venue: paper.venue ?? null,
@@ -392,7 +392,7 @@ export async function stagePaperEnrichment(
 export async function syncPaperGraphForEnrichment(
 	env: CoreEnv,
 	step: WorkflowStep,
-	articleId: string,
+	resourceId: string,
 	paperEnrichment: PaperMetadata | null,
 ): Promise<void> {
 	if (!paperEnrichment?.openAlexId) return;
@@ -400,10 +400,10 @@ export async function syncPaperGraphForEnrichment(
 		const summary = await step.do(
 			'sync-paper-graph',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => syncPaperGraph(env, articleId, paperEnrichment),
+			() => syncPaperGraph(env, resourceId, paperEnrichment),
 		);
-		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', article_id: articleId, edges: summary?.edges ?? 0 });
+		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', resource_id: resourceId, edges: summary?.edges ?? 0 });
 	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', article_id: articleId, error: String(error) });
+		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', resource_id: resourceId, error: String(error) });
 	}
 }
