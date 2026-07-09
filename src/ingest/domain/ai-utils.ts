@@ -1,13 +1,8 @@
 import { generateObject, generateText } from '@core-ai/embedding';
-import {
-	type AIAnalysisResult,
-	type ArticleCategory,
-	ENTITY_TYPES,
-	type PlatformEnrichments,
-	type ResourceForProcessing,
-} from '@core-shared/types';
+import { type AIAnalysisResult, ENTITY_TYPES, type PlatformEnrichments, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
+import { RESOURCE_CATEGORIES, type ResourceCategory } from '../../resources/types';
 
 export interface ProcessorResult {
 	updateData: {
@@ -21,7 +16,7 @@ export interface ProcessorResult {
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
-	classificationCategory?: ArticleCategory;
+	classificationCategory?: ResourceCategory;
 }
 
 export function isEmpty(value: string | null | undefined): boolean {
@@ -37,7 +32,7 @@ export function mergeArticleAnalysis(
 		overwriteSummary?: boolean;
 		includeContent?: boolean;
 	} = {},
-): { updateData: ProcessorResult['updateData']; classificationCategory?: ArticleCategory } {
+): { updateData: ProcessorResult['updateData']; classificationCategory?: ResourceCategory } {
 	const updateData = options.updateData ?? {};
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
 	const includeContent = options.includeContent ?? true;
@@ -64,8 +59,6 @@ const CONTENT_TRANSLATION_CONCURRENCY = 3;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
 const MIN_CONTENT_TRANSLATION_LENGTH = 20;
-const ARTICLE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
-
 const ExtractedEntitySchema = z.object({
 	name: z.string().min(1),
 	name_cn: z.string().min(1),
@@ -82,7 +75,7 @@ const ArticleClassificationSchema = z.object({
 	tags: z.array(z.string().min(1)).min(1),
 	keywords: z.array(z.string().min(1)).min(1),
 	entities: z.array(ExtractedEntitySchema),
-	category: z.enum(ARTICLE_CATEGORIES),
+	category: z.enum(RESOURCE_CATEGORIES),
 });
 
 const ARTICLE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。

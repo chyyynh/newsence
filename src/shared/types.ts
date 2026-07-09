@@ -1,3 +1,5 @@
+import type { ResourceCategory } from '../resources/types';
+
 export interface ResourceForProcessing {
 	id: string;
 	title: string;
@@ -39,7 +41,7 @@ export interface AIAnalysisResult {
 	content?: string;
 	content_cn?: string;
 	title_cn?: string;
-	category?: ArticleCategory;
+	category?: ResourceCategory;
 	entities?: ExtractedEntity[];
 }
 
@@ -187,10 +189,8 @@ export interface PlatformEnrichments {
 	processedAt?: string;
 }
 
-export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
-
 interface ClassificationMetadata {
-	category?: ArticleCategory;
+	category?: ResourceCategory;
 	classifiedAt?: string;
 }
 
