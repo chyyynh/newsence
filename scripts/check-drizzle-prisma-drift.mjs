@@ -60,17 +60,37 @@ function parsePrismaModels(source) {
 
 function parseDrizzleTables(source) {
 	const tables = [];
-	const tablePattern = /export const (\w+) = pgTable\('([^']+)', \{([\s\S]*?)\n\}\);/g;
+	const tablePattern = /export const (\w+)\s*=\s*pgTable\(\s*'([^']+)'\s*,\s*\{/g;
 	const columnPattern = /^\s*\w+:\s*\w+(?:<[^>]+>)?\('([^']+)'/gm;
 
 	for (const match of source.matchAll(tablePattern)) {
-		const [, exportName, tableName, body] = match;
+		const [, exportName, tableName] = match;
+		const bodyStart = match.index + match[0].length - 1;
+		const bodyEnd = findMatchingBrace(source, bodyStart);
+		if (bodyEnd === -1) {
+			tables.push({ exportName, tableName, columns: new Set() });
+			continue;
+		}
+		const body = source.slice(bodyStart + 1, bodyEnd);
 		const columns = new Set();
 		for (const columnMatch of body.matchAll(columnPattern)) columns.add(columnMatch[1]);
 		tables.push({ exportName, tableName, columns });
 	}
 
 	return tables;
+}
+
+function findMatchingBrace(source, openIndex) {
+	let depth = 0;
+	for (let index = openIndex; index < source.length; index++) {
+		const char = source[index];
+		if (char === '{') depth++;
+		else if (char === '}') {
+			depth--;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
 }
 
 const prismaTables = parsePrismaModels(prismaSource);
