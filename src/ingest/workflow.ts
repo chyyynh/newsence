@@ -11,6 +11,7 @@ import {
 } from '@ingest/domain/article-store';
 import { Client } from 'pg';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
+import { extractReadableArticleHtml, preferReadableArticleText } from './html-content';
 import { extractHackerNewsId, processHackerNewsArticle, scrapeHackerNews } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
 import { type PdfTextArtifact, parsePdfBytes, stagePdfTextExtraction } from './platforms/pdf';
@@ -97,7 +98,7 @@ function buildProcessorUpdatePayload(
 	return updatePayload;
 }
 
-type StoredWorkflowTarget = { kind: 'article' | 'userFile'; rowId: string };
+type StoredWorkflowTarget = { kind: 'article' | 'userFile'; rowId: string; reacquire?: boolean };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
 type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
@@ -131,7 +132,9 @@ function storedTargetTable(target: StoredWorkflowTarget): 'articles' | 'user_fil
 }
 
 function storedWorkflowId(target: StoredWorkflowTarget): string {
-	return ['article', workflowIdPart(storedTargetTable(target)), workflowIdPart(target.rowId)].join('-');
+	return [target.reacquire ? 'article-reacquire' : 'article', workflowIdPart(storedTargetTable(target)), workflowIdPart(target.rowId)].join(
+		'-',
+	);
 }
 
 async function sourceArticleWorkflowId(url: string): Promise<string> {
@@ -217,12 +220,17 @@ async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetad
 		.transform(new Response(html))
 		.arrayBuffer();
 
+	const clean = (value: string | null): string | null => {
+		const decoded = value ? decodeHtmlEntities(value).trim() : '';
+		return decoded || null;
+	};
+
 	return {
-		title: title ?? (titleText.trim() || null),
-		author,
-		publishedDate,
-		siteName: siteName ?? urlHost(url),
-		description,
+		title: clean(title) ?? clean(titleText),
+		author: clean(author),
+		publishedDate: clean(publishedDate),
+		siteName: clean(siteName) ?? urlHost(url),
+		description: clean(description),
 	};
 }
 
@@ -379,11 +387,13 @@ async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<AcquiredCont
 
 	const finalUrl = response.url || url;
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-	const [metadata, markdown] = await Promise.all([extractHtmlMetadata(html, finalUrl), markdownFromHtml(env, html, finalUrl)]);
+	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, finalUrl), extractReadableArticleHtml(html)]);
+	const markdown = await markdownFromHtml(env, readable?.html ?? html, finalUrl);
+	const content = preferReadableArticleText(markdown, readable);
 	const title = metadata.title ?? titleFromMarkdown(markdown) ?? urlHost(finalUrl);
 	return {
 		title,
-		markdown,
+		markdown: content,
 		metadata: {
 			author: metadata.author,
 			publishedDate: metadata.publishedDate,
@@ -415,6 +425,7 @@ async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredConten
 function applyAcquiredContent(article: Article, acquired: AcquiredContent | null): Article {
 	if (!acquired) return article;
 	const acquiredTitle = acquired.title?.trim();
+	const acquiredSourceType = acquired.platformMetadata?.type;
 	return {
 		...article,
 		title: acquiredTitle || article.title,
@@ -422,13 +433,17 @@ function applyAcquiredContent(article: Article, acquired: AcquiredContent | null
 		content: acquired.markdown || article.content,
 		source: acquired.metadata.siteName ?? acquired.metadata.author ?? article.source,
 		published_date: acquired.metadata.publishedDate ?? article.published_date,
-		source_type: acquired.platformMetadata?.type ?? article.source_type,
+		source_type:
+			article.source_type === 'rss' && acquiredSourceType === 'default' ? article.source_type : (acquiredSourceType ?? article.source_type),
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
 	};
 }
 
-function acquiredContentUpdatePayload(acquired: AcquiredContent | null): Record<string, unknown> {
+function acquiredContentUpdatePayload(
+	acquired: AcquiredContent | null,
+	options?: { preserveSourceType?: boolean },
+): Record<string, unknown> {
 	if (!acquired) return {};
 	const acquiredTitle = acquired.title?.trim();
 	return {
@@ -439,7 +454,7 @@ function acquiredContentUpdatePayload(acquired: AcquiredContent | null): Record<
 		content: acquired.markdown,
 		...(acquired.platformMetadata
 			? {
-					source_type: acquired.platformMetadata.type,
+					...(options?.preserveSourceType ? {} : { source_type: acquired.platformMetadata.type }),
 					platform_metadata: acquired.platformMetadata,
 				}
 			: {}),
@@ -475,6 +490,11 @@ function paperMetadataPatch(paperEnrichment: PaperMetadata | null): Record<strin
 function shouldAcquireContent(target: WorkflowTarget, article: Article): boolean {
 	const hasContent = 'has_content' in article && !!article.has_content;
 	if (target.kind === 'userFile') return !hasContent && !article.storage_key && !!article.url;
+	if (target.kind === 'article' && target.reacquire) {
+		return (
+			!!article.url && !article.storage_key && (!article.source_type || article.source_type === 'rss' || article.source_type === 'default')
+		);
+	}
 	return target.kind === 'source' && (article.source_type === 'rss' || article.source_type === 'default');
 }
 
@@ -580,7 +600,9 @@ async function persistWorkflowTarget(
 				paperMetadataPatch(paperEnrichment),
 			);
 			const updatePayload = {
-				...withoutPlatformMetadata(acquiredContentUpdatePayload(acquiredContent)),
+				...withoutPlatformMetadata(
+					acquiredContentUpdatePayload(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire }),
+				),
 				...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
 				...withoutPlatformMetadata(ogPayload),
 			};
