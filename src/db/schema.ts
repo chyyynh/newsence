@@ -1,4 +1,5 @@
-import { bigint, boolean, customType, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { TranscriptSegment } from '@core-shared/types';
+import { bigint, boolean, customType, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
 	dataType() {
@@ -62,4 +63,16 @@ export const rssList = pgTable('RssList', {
 	type: text('type').notNull(),
 	isDefault: boolean('is_default').notNull(),
 	scrapedAt: timestamp('scraped_at', { mode: 'date' }).notNull(),
+});
+
+export const youtubeTranscripts = pgTable('youtube_transcripts', {
+	id: uuid('id').defaultRandom().primaryKey(),
+	videoId: text('video_id').notNull().unique(),
+	transcript: jsonb('transcript').$type<TranscriptSegment[]>().notNull(),
+	language: varchar('language', { length: 10 }),
+	chapters: jsonb('chapters').$type<unknown[]>().notNull(),
+	chaptersFromDescription: boolean('chapters_from_description').notNull(),
+	fetchedAt: timestamp('fetched_at', { mode: 'date' }).notNull(),
+	aiHighlights: jsonb('ai_highlights').$type<unknown>(),
+	highlightsGeneratedAt: timestamp('highlights_generated_at', { mode: 'date' }),
 });

@@ -1,16 +1,17 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
 import type { Article, TranscriptSegment, YoutubeTranscript } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { type CoreDb, withCoreDb } from '@db/client';
+import { rssList, youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { Client } from 'pg';
+import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { parseDurationSeconds, scrapeYouTube } from './youtube-acquisition';
 
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
-const SOURCE_FEED_FIELDS = 'id, name, "RSSLink"';
 
 const YouTubeHighlightSchema = z.object({
 	title: z.string().min(1),
@@ -47,35 +48,36 @@ const YouTubeHighlightsSchema = z.object({
 });
 
 export async function persistYouTubeWorkflowData(
-	db: Client,
+	db: CoreDb,
 	input: { transcript?: YoutubeTranscript | null; highlights?: YouTubeHighlightsUpdate | null },
 ): Promise<void> {
 	if (input.transcript) {
-		await db.query(
-			`INSERT INTO youtube_transcripts (video_id, transcript, language, chapters, chapters_from_description, fetched_at)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (video_id) DO UPDATE SET
-				transcript = EXCLUDED.transcript,
-				language = EXCLUDED.language,
-				chapters = EXCLUDED.chapters,
-				chapters_from_description = EXCLUDED.chapters_from_description,
-				fetched_at = EXCLUDED.fetched_at`,
-			[
-				input.transcript.videoId,
-				JSON.stringify(input.transcript.segments),
-				input.transcript.language,
-				input.transcript.chapters ? JSON.stringify(input.transcript.chapters) : null,
-				input.transcript.chaptersFromDescription ?? null,
-				new Date(),
-			],
-		);
+		await db
+			.insert(youtubeTranscripts)
+			.values({
+				videoId: input.transcript.videoId,
+				transcript: input.transcript.segments,
+				language: input.transcript.language,
+				chapters: input.transcript.chapters ?? [],
+				chaptersFromDescription: input.transcript.chaptersFromDescription ?? false,
+				fetchedAt: new Date(),
+			})
+			.onConflictDoUpdate({
+				target: youtubeTranscripts.videoId,
+				set: {
+					transcript: sql`excluded.transcript`,
+					language: sql`excluded.language`,
+					chapters: sql`excluded.chapters`,
+					chaptersFromDescription: sql`excluded.chapters_from_description`,
+					fetchedAt: sql`excluded.fetched_at`,
+				},
+			});
 	}
 	if (input.highlights) {
-		await db.query('UPDATE youtube_transcripts SET ai_highlights = $1, highlights_generated_at = $2 WHERE video_id = $3', [
-			JSON.stringify(input.highlights.value),
-			input.highlights.value.generatedAt,
-			input.highlights.videoId,
-		]);
+		await db
+			.update(youtubeTranscripts)
+			.set({ aiHighlights: input.highlights.value, highlightsGeneratedAt: new Date(input.highlights.value.generatedAt) })
+			.where(eq(youtubeTranscripts.videoId, input.highlights.videoId));
 	}
 }
 
@@ -90,15 +92,18 @@ export async function prepareYouTubeHighlights(
 	if (!videoId) return null;
 	if (transcript) return prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments);
 
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const row = (
-		await db.query<{ transcript: TranscriptSegment[] | null; ai_highlights: unknown }>(
-			'SELECT transcript, ai_highlights FROM youtube_transcripts WHERE video_id = $1',
-			[videoId],
-		)
-	).rows[0];
-	if (!row || row.ai_highlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
+	const row = await withCoreDb(
+		env,
+		async (db) =>
+			(
+				await db
+					.select({ transcript: youtubeTranscripts.transcript, aiHighlights: youtubeTranscripts.aiHighlights })
+					.from(youtubeTranscripts)
+					.where(eq(youtubeTranscripts.videoId, videoId))
+					.limit(1)
+			)[0],
+	);
+	if (!row || row.aiHighlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
 	return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
 }
@@ -197,13 +202,9 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const channels = (
-		await db.query<{ id: string; name: string; RSSLink: string | null }>(`SELECT ${SOURCE_FEED_FIELDS} FROM "RssList" WHERE type = $1`, [
-			'youtube_channel',
-		])
-	).rows;
+	const channels = await withCoreDb(env, async (db) =>
+		db.select({ id: rssList.id, name: rssList.name, RSSLink: rssList.rssLink }).from(rssList).where(eq(rssList.type, 'youtube_channel')),
+	);
 
 	let totalQueued = 0;
 	for (const channel of channels) {
@@ -218,12 +219,12 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
 			if (videos.length === 0) {
 				console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-				await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
+				await markChannelScraped(env, channel.id);
 				continue;
 			}
 
 			const videoUrls = videos.map(({ url }) => url);
-			const existingRecords = await getExistingArticlesByUrl(db, videoUrls);
+			const existingRecords = await withCoreDb(env, (_db, client) => getExistingArticlesByUrl(client, videoUrls));
 			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 
@@ -235,10 +236,16 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 				if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
 			}
 
-			await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), channel.id]);
+			await markChannelScraped(env, channel.id);
 		} catch (err) {
 			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
 		}
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
+}
+
+async function markChannelScraped(env: CoreEnv, channelId: number): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		await db.update(rssList).set({ scrapedAt: new Date() }).where(eq(rssList.id, channelId));
+	});
 }

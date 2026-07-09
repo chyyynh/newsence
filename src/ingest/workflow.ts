@@ -270,7 +270,7 @@ async function persistWorkflowTarget(
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
 ): Promise<string> {
-	return withCoreTx(env, async (_drizzle, db) => {
+	return withCoreTx(env, async (coreDb, db) => {
 		let articleId: string;
 		const ogPayload = ogImageUpdatePayload(ogImagePatch);
 		if (target.kind === 'source') {
@@ -313,7 +313,7 @@ async function persistWorkflowTarget(
 			articleId = target.rowId;
 		}
 		if (youtubeTranscript || youtubeHighlights)
-			await persistYouTubeWorkflowData(db, { transcript: youtubeTranscript, highlights: youtubeHighlights });
+			await persistYouTubeWorkflowData(coreDb, { transcript: youtubeTranscript, highlights: youtubeHighlights });
 		return articleId;
 	});
 }
