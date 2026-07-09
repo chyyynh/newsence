@@ -206,12 +206,152 @@ interface PreparedArticleRecord {
 	tags?: string[];
 }
 
-const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
-	content: 'extracted_text',
-	platform_metadata: 'metadata',
-	source: 'site_name',
-	source_type: 'platform_type',
-};
+type ArticleUpdateValues = Partial<typeof articles.$inferInsert>;
+type UserFileUpdateValues = Partial<typeof userFiles.$inferInsert>;
+
+function articleUpdateValues(updatePayload: Record<string, unknown>): ArticleUpdateValues {
+	const update: ArticleUpdateValues = {};
+	for (const [key, value] of Object.entries(updatePayload)) {
+		if (value === undefined) continue;
+		switch (key) {
+			case 'title':
+				update.title = requiredString(value, key);
+				break;
+			case 'title_cn':
+				update.titleCn = nullableString(value, key);
+				break;
+			case 'summary':
+				update.summary = nullableString(value, key);
+				break;
+			case 'summary_cn':
+				update.summaryCn = nullableString(value, key);
+				break;
+			case 'content':
+				update.content = nullableString(value, key);
+				break;
+			case 'content_cn':
+				update.contentCn = nullableString(value, key);
+				break;
+			case 'og_image_url':
+				update.ogImageUrl = nullableString(value, key);
+				break;
+			case 'source':
+				update.source = requiredString(value, key);
+				break;
+			case 'source_type':
+				update.sourceType = requiredString(value, key);
+				break;
+			case 'published_date':
+				update.publishedDate = dateValue(value, key);
+				break;
+			case 'tags':
+				update.tags = stringArrayValue(value, key);
+				break;
+			case 'keywords':
+				update.keywords = stringArrayValue(value, key);
+				break;
+			case 'platform_metadata':
+				update.platformMetadata = value;
+				break;
+			case 'entities':
+				update.entities = value;
+				break;
+			case 'embedding':
+				update.embedding = nullableVector(value, key);
+				break;
+			default:
+				throw new Error(`Unsupported articles update column: ${key}`);
+		}
+	}
+	return update;
+}
+
+function userFileUpdateValues(updatePayload: Record<string, unknown>): UserFileUpdateValues {
+	const update: UserFileUpdateValues = {};
+	for (const [key, value] of Object.entries(updatePayload)) {
+		if (value === undefined) continue;
+		switch (key) {
+			case 'title':
+				update.title = nullableString(value, key);
+				break;
+			case 'title_cn':
+				update.titleCn = nullableString(value, key);
+				break;
+			case 'summary':
+				update.summary = nullableString(value, key);
+				break;
+			case 'summary_cn':
+				update.summaryCn = nullableString(value, key);
+				break;
+			case 'content':
+				update.extractedText = nullableString(value, key);
+				break;
+			case 'content_cn':
+				update.contentCn = nullableString(value, key);
+				break;
+			case 'og_image_url':
+				update.ogImageUrl = nullableString(value, key);
+				break;
+			case 'source':
+				update.siteName = nullableString(value, key);
+				break;
+			case 'source_type':
+				update.platformType = nullableString(value, key);
+				break;
+			case 'published_date':
+				update.publishedDate = value === null ? null : dateValue(value, key);
+				break;
+			case 'tags':
+				update.tags = stringArrayValue(value, key);
+				break;
+			case 'keywords':
+				update.keywords = stringArrayValue(value, key);
+				break;
+			case 'platform_metadata':
+				update.metadata = value;
+				break;
+			case 'entities':
+				update.entities = value;
+				break;
+			case 'embedding':
+				update.embedding = nullableVector(value, key);
+				break;
+			default:
+				throw new Error(`Unsupported user_files update column: ${key}`);
+		}
+	}
+	return update;
+}
+
+function requiredString(value: unknown, field: string): string {
+	if (typeof value !== 'string') throw new Error(`Invalid ${field}: expected string`);
+	return value;
+}
+
+function nullableString(value: unknown, field: string): string | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value !== 'string') throw new Error(`Invalid ${field}: expected string`);
+	return value;
+}
+
+function stringArrayValue(value: unknown, field: string): string[] {
+	if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+		throw new Error(`Invalid ${field}: expected string[]`);
+	}
+	return value;
+}
+
+function dateValue(value: unknown, field: string): Date {
+	const date = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+	if (!date || Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}: expected date`);
+	return date;
+}
+
+function nullableVector(value: unknown, field: string): string | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value !== 'string') throw new Error(`Invalid ${field}: expected vector string`);
+	return value;
+}
 
 /**
  * Core sink dedup policy:
@@ -223,69 +363,66 @@ const ARTICLES_TO_USER_FILES_COLUMN_MAP: Record<string, string> = {
  *   per upload. Core only updates enrichment fields here.
  */
 export async function updateArticleAfterProcessing(
-	db: Client,
+	db: CoreDb,
 	table: ArticleStoreTable,
 	articleId: string,
 	updatePayload: Record<string, unknown>,
 ): Promise<void> {
 	if (table !== 'articles' && table !== 'user_files') throw new Error(`Unsupported article store table: ${table}`);
-	const columns = Object.keys(updatePayload);
-	if (columns.length === 0) return;
-
-	const setClauses = columns
-		.map((col, i) => `${table === 'user_files' ? (ARTICLES_TO_USER_FILES_COLUMN_MAP[col] ?? col) : col} = $${i + 1}`)
-		.join(', ');
-	const values = columns.map((col) => {
-		const value = updatePayload[col];
-		return value !== null && typeof value === 'object' && col !== 'tags' && col !== 'keywords' ? JSON.stringify(value) : value;
-	});
-	values.push(articleId);
-
-	const sql = `UPDATE ${table} SET ${setClauses} WHERE id = $${values.length}`;
-	const queryResult = await db.query(sql, values);
-	if (queryResult.rowCount === 0) {
+	const updated =
+		table === 'articles'
+			? await updateStoredArticle(db, articleId, updatePayload)
+			: await updateStoredUserFile(db, articleId, updatePayload);
+	if (updated.length === 0) {
 		throw new Error(`Failed to update article ${articleId}: no rows matched`);
 	}
 }
 
+async function updateStoredArticle(db: CoreDb, articleId: string, updatePayload: Record<string, unknown>): Promise<Array<{ id: string }>> {
+	const values = articleUpdateValues(updatePayload);
+	if (Object.keys(values).length === 0) return [{ id: articleId }];
+	return db.update(articles).set(values).where(eq(articles.id, articleId)).returning({ id: articles.id });
+}
+
+async function updateStoredUserFile(db: CoreDb, articleId: string, updatePayload: Record<string, unknown>): Promise<Array<{ id: string }>> {
+	const values = userFileUpdateValues(updatePayload);
+	if (Object.keys(values).length === 0) return [{ id: articleId }];
+	return db.update(userFiles).set(values).where(eq(userFiles.id, articleId)).returning({ id: userFiles.id });
+}
+
 export async function insertFinalSourceArticle(
-	db: Client,
+	db: CoreDb,
 	base: PreparedArticleRecord,
 	updatePayload: Record<string, unknown>,
 ): Promise<string> {
 	const platformMetadata = updatePayload.platform_metadata ?? base.platformMetadata;
 	const entities = updatePayload.entities ?? null;
-	const inserted = await db.query<{ id: string }>(
-		`INSERT INTO articles (
-			url, title, title_cn, source, published_date, scraped_date, keywords, tags, tokens,
-			summary, summary_cn, source_type, content, content_cn, og_image_url, platform_metadata, entities, embedding
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18)
-		ON CONFLICT (url) DO NOTHING
-		RETURNING id`,
-		[
-			base.url,
-			base.title,
-			updatePayload.title_cn ?? null,
-			base.source,
-			base.publishedDate,
-			new Date(),
-			updatePayload.keywords ?? base.keywords ?? [],
-			updatePayload.tags ?? base.tags ?? [],
-			[],
-			updatePayload.summary ?? base.summary,
-			updatePayload.summary_cn ?? null,
-			base.sourceType,
-			updatePayload.content ?? base.content,
-			updatePayload.content_cn ?? null,
-			updatePayload.og_image_url ?? null,
-			platformMetadata ? JSON.stringify(platformMetadata) : null,
-			entities ? JSON.stringify(entities) : null,
-			updatePayload.embedding ?? null,
-		],
-	);
+	const inserted = await db
+		.insert(articles)
+		.values({
+			url: base.url,
+			title: base.title,
+			titleCn: nullableString(updatePayload.title_cn, 'title_cn'),
+			source: base.source,
+			publishedDate: dateValue(base.publishedDate, 'publishedDate'),
+			scrapedDate: new Date(),
+			keywords: stringArrayValue(updatePayload.keywords ?? base.keywords ?? [], 'keywords'),
+			tags: stringArrayValue(updatePayload.tags ?? base.tags ?? [], 'tags'),
+			tokens: [],
+			summary: nullableString(updatePayload.summary ?? base.summary, 'summary'),
+			summaryCn: nullableString(updatePayload.summary_cn, 'summary_cn'),
+			sourceType: base.sourceType,
+			content: nullableString(updatePayload.content ?? base.content, 'content'),
+			contentCn: nullableString(updatePayload.content_cn, 'content_cn'),
+			ogImageUrl: nullableString(updatePayload.og_image_url, 'og_image_url'),
+			platformMetadata,
+			entities,
+			embedding: nullableVector(updatePayload.embedding, 'embedding'),
+		})
+		.onConflictDoNothing({ target: articles.url })
+		.returning({ id: articles.id });
 	const articleId =
-		inserted.rows[0]?.id ?? (await db.query<{ id: string }>('SELECT id FROM articles WHERE url = $1 LIMIT 1', [base.url])).rows[0]?.id;
+		inserted[0]?.id ?? (await db.select({ id: articles.id }).from(articles).where(eq(articles.url, base.url)).limit(1))[0]?.id;
 	if (!articleId) throw new Error(`Failed to insert finalized article for ${base.url}`);
 	return articleId;
 }

@@ -286,7 +286,7 @@ async function persistWorkflowTarget(
 			Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
 			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-			articleId = await insertFinalSourceArticle(db, sourceArticleBase(article, target.draft.article), updatePayload);
+			articleId = await insertFinalSourceArticle(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
 			if (entities) await syncArticleEntities(db, articleId, entities, article.source, platformMetadata);
 		} else {
 			const finalResult =
@@ -308,7 +308,7 @@ async function persistWorkflowTarget(
 			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
 
 			const table = storedTargetTable(target);
-			await updateArticleAfterProcessing(db, table, target.rowId, updatePayload);
+			await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
 			if (table === 'articles' && entities) await syncArticleEntities(db, target.rowId, entities, article.source, platformMetadata);
 			articleId = target.rowId;
 		}

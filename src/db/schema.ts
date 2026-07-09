@@ -8,8 +8,8 @@ const vector1024 = customType<{ data: string; driverData: string }>({
 });
 
 export const articles = pgTable('articles', {
-	id: uuid('id').primaryKey(),
-	url: text('url').notNull(),
+	id: uuid('id').defaultRandom().primaryKey(),
+	url: text('url').notNull().unique(),
 	title: text('title').notNull(),
 	titleCn: text('title_cn'),
 	summary: text('summary'),
