@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { type AcquiredContent, scrapeSavedUrl, validateAcquisitionUrl } from './acquisition';
+import { type AcquiredContent, readAcquiredContentArtifact, scrapeSavedUrlArtifact, validateAcquisitionUrl } from './acquisition';
 
 export type AcquisitionWorkflowParams = {
 	url: string;
@@ -28,8 +28,11 @@ export async function getAcquisitionJobStatus(env: CoreEnv, instanceId: string) 
 
 export class AcquisitionWorkflow extends WorkflowEntrypoint<CoreEnv, AcquisitionWorkflowParams> {
 	async run(event: WorkflowEvent<AcquisitionWorkflowParams>, step: WorkflowStep): Promise<AcquiredContent | null> {
-		return step.do('acquire', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-			scrapeSavedUrl(event.payload.url, this.env),
+		const artifact = await step.do(
+			'acquire',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => scrapeSavedUrlArtifact(event.payload.url, this.env),
 		);
+		return readAcquiredContentArtifact(artifact);
 	}
 }
