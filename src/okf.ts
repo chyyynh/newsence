@@ -1,4 +1,4 @@
-// OKF (Open Knowledge Format v0.1) collection export — issue #197 Phase 1.
+// OKF (Open Knowledge Format v0.1) collection export.
 // Streams a collection as a tar.gz bundle of markdown + YAML frontmatter:
 // index.md (okf_version) / resources/*.md / entities/*.md / log.md.
 // Entity links are read from resource_entities, which the ingest pipeline and
@@ -170,21 +170,27 @@ async function readCollectionResources(
 		     r.scope,
 		     r.file_type,
 		     r.enrichment_status,
-		     COALESCE(other_translations.translations, '[]'::jsonb) AS translations
+		     other_translations.translations AS translations
 		   FROM citations c
 		   JOIN resources r ON c.to_type = 'resource' AND r.id = c.to_id
 		   LEFT JOIN library viewer_library
 		     ON viewer_library.resource_id = r.id
 		    AND viewer_library.user_id = ${viewerId}
 		   LEFT JOIN LATERAL (
-		     SELECT rt.lang, rt.title, rt.summary, rt.content, rt.keywords, rt.source
-		     FROM resource_translations rt
-		     WHERE rt.resource_id = r.id
+		     SELECT
+		       rl.lang,
+		       rl.title,
+		       rl.summary,
+		       rl.content,
+		       rl.keywords,
+		       rl.translation_source AS source
+		     FROM resources_localized rl
+		     WHERE rl.id = r.id
 		     ORDER BY
-		       (${primaryLocale}::text IS NOT NULL AND rt.lang = ${primaryLocale}) DESC,
-		       (rt.lang = r.original_lang) DESC,
-		       (rt.source = 'original') DESC,
-		       rt.lang ASC
+		       (${primaryLocale}::text IS NOT NULL AND rl.lang = ${primaryLocale}) DESC,
+		       (rl.lang = r.original_lang) DESC,
+		       (rl.translation_source = 'original') DESC,
+		       rl.lang ASC
 		     LIMIT 1
 		   ) primary_translation ON TRUE
 		   LEFT JOIN LATERAL (
@@ -228,29 +234,24 @@ async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Pr
 		sql`SELECT
 		   re.resource_id::text,
 		   e.id::text,
-		   COALESCE(en_label.name, e.name) AS name,
-		   COALESCE(zh_label.name, e.name_cn) AS name_cn,
+		   e.name,
+		   e.name_cn,
 		   e.type,
 		   e.resource_count,
-		   COALESCE(
-		     jsonb_agg(
-		       jsonb_build_object(
-		         'lang', et.lang,
-		         'name', et.name,
-		         'source', et.source
-		       )
-		       ORDER BY et.lang
-		     ) FILTER (WHERE et.entity_id IS NOT NULL),
-		     '[]'::jsonb
-		   )::text AS translations
+		   jsonb_agg(
+		     jsonb_build_object(
+		       'lang', et.lang,
+		       'name', et.name,
+		       'source', et.source
+		     )
+		     ORDER BY et.lang
+		   ) FILTER (WHERE et.entity_id IS NOT NULL) AS translations
 		 FROM resource_entities re
 		 JOIN entities e ON e.id = re.entity_id
-		 LEFT JOIN entity_translations en_label ON en_label.entity_id = e.id AND en_label.lang = 'en'
-		 LEFT JOIN entity_translations zh_label ON zh_label.entity_id = e.id AND zh_label.lang = 'zh-Hant'
 		 LEFT JOIN entity_translations et ON et.entity_id = e.id
 		 WHERE re.resource_id = ANY(${resources.map((resource) => resource.id)}::uuid[])
-		 GROUP BY re.resource_id, e.id, en_label.name, zh_label.name
-		 ORDER BY e.resource_count DESC, COALESCE(en_label.name, e.name) ASC`,
+		 GROUP BY re.resource_id, e.id
+		 ORDER BY e.resource_count DESC, e.name ASC`,
 	);
 	return rows.map((row) => ({ ...row, translations: normalizeEntityTranslations(row.translations) }));
 }
