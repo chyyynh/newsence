@@ -423,7 +423,7 @@ function resourceTranslationJoins(): SQL {
 	`;
 }
 
-function resourceReadSelect(): SQL {
+function resourceReadSelect(userId: string): SQL {
 	return sql`
 		r.id::text,
 		r.type,
@@ -438,7 +438,14 @@ function resourceReadSelect(): SQL {
 		r.tags,
 		COALESCE(rt_primary.title, rt_en.title, rt_zh.title, rt_any.title) AS title,
 		COALESCE(rt_primary.summary, rt_en.summary, rt_zh.summary, rt_any.summary) AS summary,
-		COALESCE(rt_primary.content, rt_en.content, rt_zh.content, rt_any.content) AS content,
+		CASE WHEN EXISTS (
+			SELECT 1
+			FROM library content_library
+			WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
+		)
+		THEN COALESCE(rt_primary.content, rt_en.content, rt_zh.content, rt_any.content)
+		ELSE NULL
+		END AS content,
 		COALESCE(rt_primary.keywords, rt_en.keywords, rt_zh.keywords, rt_any.keywords) AS keywords,
 		COALESCE(rt_primary.lang, rt_en.lang, rt_zh.lang, rt_any.lang) AS translation_lang
 	`;
@@ -506,7 +513,7 @@ async function readResources(db: CoreDb, ids: string[], userId: string): Promise
 	const rows = await queryRows<ResourceContentRow>(
 		db,
 		sql`
-			SELECT ${resourceReadSelect()}
+			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceTranslationJoins()}
 			WHERE r.id = ANY(${validIds}::uuid[])
@@ -618,7 +625,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 	const resourceRows = await queryRows<ResourceContentRow>(
 		db,
 		sql`
-			SELECT ${resourceReadSelect()}
+			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceTranslationJoins()}
 			WHERE (r.url = ANY(${candidateUrls}::text[]) OR r.normalized_url = ANY(${candidateUrls}::text[]))
