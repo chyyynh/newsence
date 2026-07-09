@@ -1,19 +1,22 @@
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { withCoreDb } from '@db/client';
+import { rssList } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingArticlesByUrl } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { Client } from 'pg';
+import { and, eq } from 'drizzle-orm';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
-const RSS_SOURCE_FIELDS = 'id, name, "RSSLink"';
 
 type RssSource = {
-	id: string;
+	id: number;
 	name: string;
-	RSSLink: string;
+	RSSLink: string | null;
 };
 
-async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<void> {
+async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
+	if (!feed.RSSLink) return console.warn({ tag: 'RSS', msg: 'Feed has no RSSLink', feed: feed.name });
+
 	let res: Response;
 	try {
 		res = await fetchWithTimeout(feed.RSSLink, {
@@ -34,13 +37,13 @@ async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<v
 	).slice(0, 30) as FeedEntry[];
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
-		await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+		await markFeedScraped(env, feed.id);
 		return;
 	}
 
 	const itemUrls = items.flatMap((item) => (item.link ? [{ item, url: normalizeUrl(item.link) }] : []));
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await getExistingArticlesByUrl(db, urls);
+	const existingRecords = await withCoreDb(env, (_db, client) => getExistingArticlesByUrl(client, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 
@@ -70,17 +73,26 @@ async function processFeed(env: CoreEnv, db: Client, feed: RssSource): Promise<v
 		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
-	await db.query(`UPDATE "RssList" SET scraped_at = $1 WHERE id = $2`, [new Date(), feed.id]);
+	await markFeedScraped(env, feed.id);
+}
+
+async function markFeedScraped(env: CoreEnv, feedId: number): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		await db.update(rssList).set({ scrapedAt: new Date() }).where(eq(rssList.id, feedId));
+	});
 }
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const db = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	const feeds = (await db.query<RssSource>(`SELECT ${RSS_SOURCE_FIELDS} FROM "RssList" WHERE is_default = true AND type = 'rss'`)).rows;
+	const feeds = await withCoreDb(env, async (db) =>
+		db
+			.select({ id: rssList.id, name: rssList.name, RSSLink: rssList.rssLink })
+			.from(rssList)
+			.where(and(eq(rssList.isDefault, true), eq(rssList.type, 'rss'))),
+	);
 	for (const feed of feeds) {
 		try {
-			await processFeed(env, db, feed);
+			await processFeed(env, feed);
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Feed failed', feed: feed.name, error: String(err) });
 		}
