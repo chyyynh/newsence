@@ -16,7 +16,8 @@ import {
 	type OgImagePatch,
 	PDF_MIME,
 	pdfExtractionMetadata,
-	scrapeSavedUrl,
+	readAcquiredContentArtifact,
+	scrapeSavedUrlArtifact,
 } from './acquisition';
 import { generateArticleAnalysis, mergeArticleAnalysis, type ProcessorResult } from './domain/ai-utils';
 import { processHackerNewsArticle } from './platforms/hackernews';
@@ -220,9 +221,12 @@ function sourceArticleBase(article: Article, fallback: SourceArticleRecord): Sou
 }
 
 async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, article: Article): Promise<AcquiredContent | null> {
-	return step.do('acquire-content', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-		scrapeSavedUrl(article.url, env),
+	const artifact = await step.do(
+		'acquire-content',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => scrapeSavedUrlArtifact(article.url, env),
 	);
+	return readAcquiredContentArtifact(artifact);
 }
 
 async function stageOgImagePatch(step: WorkflowStep, article: Article, acquiredContent: AcquiredContent | null): Promise<OgImagePatch> {
