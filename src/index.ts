@@ -98,7 +98,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Enqueue canonical resources for the enrichment workflow after app-side persistence. */
 	async enqueueResourceProcessing(resourceId: string) {
 		if (await isResourceEnrichmentComplete(this.env, resourceId)) return undefined;
-		return enqueueProcessing(this.env, { kind: 'resource', rowId: resourceId });
+		return enqueueProcessing(this.env, resourceId);
 	}
 
 	/** Synchronously acquire one URL without DB persistence. */

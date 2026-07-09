@@ -64,10 +64,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 					platformMetadata: null,
 				}),
 			);
-			await enqueueProcessing(env, {
-				kind: 'resource',
-				rowId: resourceId,
-			});
+			await enqueueProcessing(env, resourceId);
 			queued++;
 		} catch (err) {
 			console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });

@@ -37,10 +37,7 @@ async function enqueueTwitterArticle(
 		platformMetadata: data.platformMetadata,
 		keywords: data.hashTags,
 	});
-	await enqueueProcessing(env, {
-		kind: 'resource',
-		rowId: resourceId,
-	});
+	await enqueueProcessing(env, resourceId);
 	return true;
 }
 
@@ -61,7 +58,7 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 	const articleUrl = normalizeUrl(resolved.canonicalUrl);
 	const [existingArticle] = await getExistingResourcesByUrl(db, [articleUrl]);
 	if (existingArticle) {
-		if (!existingArticle.hasZhHantSummary) await enqueueProcessing(env, { kind: 'resource', rowId: existingArticle.id });
+		if (!existingArticle.hasZhHantSummary) await enqueueProcessing(env, existingArticle.id);
 		console.info({ tag: 'TWITTER', msg: 'Article already exists (dedup)', url: articleUrl, eventType: resolved.kind });
 		return true;
 	}
@@ -96,7 +93,7 @@ async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<bo
 	if (existing) {
 		const existingId = existing.id;
 		await reopenResourceForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
-		await enqueueProcessing(env, { kind: 'resource', rowId: existingId });
+		await enqueueProcessing(env, existingId);
 		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: tweetCount });
 		return true;
 	}

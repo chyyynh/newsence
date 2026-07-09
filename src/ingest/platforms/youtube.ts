@@ -188,10 +188,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 			await persistYouTubeWorkflowData(db, { transcript: scraped.youtubeTranscript });
 			return resourceId;
 		});
-		await enqueueProcessing(env, {
-			kind: 'resource',
-			rowId: resourceId,
-		});
+		await enqueueProcessing(env, resourceId);
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
 		return true;
 	} catch (err) {

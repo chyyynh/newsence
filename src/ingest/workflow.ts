@@ -22,14 +22,14 @@ import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterArticle } from './platforms/twitter';
 import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
 
-type WorkflowTarget = { kind: 'resource'; rowId: string };
-type PersistedTargetIds = { resourceId: string };
+type WorkflowPayload = { resourceId: string };
+type PersistedResourceIds = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
-export async function enqueueProcessing(env: CoreEnv, target: WorkflowTarget): Promise<string> {
-	const workflowId = storedWorkflowId(target);
-	const [created] = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { target } }]);
+export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
+	const workflowId = storedWorkflowId(resourceId);
+	const [created] = await env.MONITOR_WORKFLOW.createBatch([{ id: workflowId, params: { resourceId } }]);
 	if (created) return created.id;
 
 	const instance = await env.MONITOR_WORKFLOW.get(workflowId);
@@ -44,8 +44,8 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedWorkflowId(target: WorkflowTarget): string {
-	return ['resource', workflowIdPart(target.rowId)].join('-');
+function storedWorkflowId(resourceId: string): string {
+	return ['resource', workflowIdPart(resourceId)].join('-');
 }
 
 function shouldAcquireContent(resource: ResourceForProcessing): boolean {
@@ -78,9 +78,9 @@ async function stageOgImagePatch(
 	);
 }
 
-async function loadFullTargetResource(
+async function loadFullResource(
 	env: CoreEnv,
-	target: WorkflowTarget,
+	resourceId: string,
 	pdfTextArtifact: PdfTextArtifact | null,
 	acquiredContent: AcquiredContent | null = null,
 	baseResource?: ResourceForProcessing,
@@ -89,16 +89,16 @@ async function loadFullTargetResource(
 	if (baseResource) {
 		resource = baseResource;
 	} else {
-		resource = await loadResourceForProcessing(env, target.rowId);
+		resource = await loadResourceForProcessing(env, resourceId);
 	}
 	resource = applyAcquiredContent(resource, acquiredContent);
 	const extractedPdfText = pdfTextArtifact?.text?.trim() || null;
 	return extractedPdfText === null ? resource : { ...resource, content: extractedPdfText };
 }
 
-async function persistStoredWorkflowTarget(
+async function persistStoredWorkflowResource(
 	coreDb: CoreDb,
-	target: WorkflowTarget,
+	resourceId: string,
 	resource: ResourceForProcessing,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -106,7 +106,7 @@ async function persistStoredWorkflowTarget(
 	acquiredContent: AcquiredContent | null,
 	paperEnrichment: PaperMetadata | null,
 	ogImagePatch: OgImagePatch,
-): Promise<PersistedTargetIds> {
+): Promise<PersistedResourceIds> {
 	const finalResult =
 		pdfTextArtifact?.text && resource.content ? { ...result, updateData: { ...result.updateData, content: resource.content } } : result;
 	const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
@@ -120,16 +120,16 @@ async function persistStoredWorkflowTarget(
 		.build();
 	const platformMetadata = updatePayload.platform_metadata ?? resource.platform_metadata;
 	const entities = normalizeResourceEntityUpdatePayload(updatePayload, resource.source, platformMetadata);
-	const resourceId = await updateResourceAfterProcessing(coreDb, target.rowId, resource, updatePayload);
+	const persistedResourceId = await updateResourceAfterProcessing(coreDb, resourceId, resource, updatePayload);
 	if (entities) {
-		await syncResourceEntities(coreDb, resourceId, entities, resource.source, platformMetadata);
+		await syncResourceEntities(coreDb, persistedResourceId, entities, resource.source, platformMetadata);
 	}
-	return { resourceId };
+	return { resourceId: persistedResourceId };
 }
 
-async function persistWorkflowTarget(
+async function persistWorkflowResource(
 	env: CoreEnv,
-	target: WorkflowTarget,
+	resourceId: string,
 	resource: ResourceForProcessing,
 	result: ProcessorResult,
 	embedding: number[] | null,
@@ -139,11 +139,11 @@ async function persistWorkflowTarget(
 	ogImagePatch: OgImagePatch,
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
-): Promise<PersistedTargetIds> {
+): Promise<PersistedResourceIds> {
 	return withCoreTx(env, async (coreDb, _db) => {
-		const persisted = await persistStoredWorkflowTarget(
+		const persisted = await persistStoredWorkflowResource(
 			coreDb,
-			target,
+			resourceId,
 			resource,
 			result,
 			embedding,
@@ -158,18 +158,18 @@ async function persistWorkflowTarget(
 	});
 }
 
-export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { target: WorkflowTarget }> {
-	async run(event: WorkflowEvent<{ target: WorkflowTarget }>, step: WorkflowStep) {
-		const target = event.payload.target;
+export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
+	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
+		const { resourceId } = event.payload;
 		const initialResource = await step.do(
 			'fetch-resource-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => loadResourceForProcessing(this.env, target.rowId, true),
+			async () => loadResourceForProcessing(this.env, resourceId, true),
 		);
 		const acquiredContent = shouldAcquireContent(initialResource) ? await stageSavedUrlAcquisition(this.env, step, initialResource) : null;
 		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const resourceType = resource.type;
-		const logContext = { resource_id: target.rowId, table: 'resources' };
+		const logContext = { resource_id: resourceId, table: 'resources' };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', resourceType, ...logContext });
 
@@ -184,7 +184,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource, {
 			hasStagedText: !!pdfTextArtifact?.text,
 			loadContent: async () =>
-				(await loadFullTargetResource(this.env, target, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)).content,
+				(await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)).content,
 		});
 		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent);
 
@@ -192,9 +192,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
-				const fullResource = await loadFullTargetResource(
+				const fullResource = await loadFullResource(
 					this.env,
-					target,
+					resourceId,
 					pdfTextArtifact,
 					acquiredContent,
 					acquiredContent ? resource : undefined,
@@ -209,9 +209,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			'generate-embedding',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
-				const fullResource = await loadFullTargetResource(
+				const fullResource = await loadFullResource(
 					this.env,
-					target,
+					resourceId,
 					pdfTextArtifact,
 					acquiredContent,
 					acquiredContent ? resource : undefined,
@@ -240,11 +240,11 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () =>
-				persistWorkflowTarget(
+				persistWorkflowResource(
 					this.env,
-					target,
+					resourceId,
 					pdfTextArtifact?.text || acquiredContent
-						? await loadFullTargetResource(this.env, target, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)
+						? await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)
 						: resource,
 					processorResult,
 					embedding,
