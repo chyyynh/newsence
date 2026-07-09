@@ -224,7 +224,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			}
 
 			const videoUrls = videos.map(({ url }) => url);
-			const existingRecords = await withCoreDb(env, (_db, client) => getExistingArticlesByUrl(client, videoUrls));
+			const existingRecords = await withCoreDb(env, (db) => getExistingArticlesByUrl(db, videoUrls));
 			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 

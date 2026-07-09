@@ -2,7 +2,7 @@ import type { Article } from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { articles, userFiles } from '@db/schema';
 import { type ArticleEntityInput, canonicalizeEntityName, normalizeArticleEntitiesForStorage } from '@entities/normalize';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { Client } from 'pg';
 
 type ArticleStoreTable = 'articles' | 'user_files';
@@ -368,28 +368,35 @@ type ExistingArticleRecord = {
 	summary_cn: string | null;
 };
 
-export async function getExistingArticlesByUrl(db: Client, urls: string[]): Promise<ExistingArticleRecord[]> {
+export async function getExistingArticlesByUrl(db: CoreDb, urls: string[]): Promise<ExistingArticleRecord[]> {
 	if (urls.length === 0) return [];
-	return (
-		await db.query<ExistingArticleRecord>('SELECT id, url, source, source_type, summary_cn FROM articles WHERE url = ANY($1)', [urls])
-	).rows;
+	return db
+		.select({
+			id: articles.id,
+			url: articles.url,
+			source: articles.source,
+			source_type: articles.sourceType,
+			summary_cn: articles.summaryCn,
+		})
+		.from(articles)
+		.where(inArray(articles.url, urls));
 }
 
 export async function reopenArticleForReprocessing(
-	db: Client,
+	db: CoreDb,
 	articleId: string,
 	update: { summary: string; content: string; platformMetadata: unknown },
 ): Promise<void> {
-	await db.query(
-		`UPDATE articles
-		 SET summary = $1,
-		     content = $2,
-		     platform_metadata = $3,
-		     summary_cn = NULL,
-		     content_cn = NULL,
-		     title_cn = NULL,
-		     embedding = NULL
-		 WHERE id = $4`,
-		[update.summary, update.content, JSON.stringify(update.platformMetadata), articleId],
-	);
+	await db
+		.update(articles)
+		.set({
+			summary: update.summary,
+			content: update.content,
+			platformMetadata: update.platformMetadata,
+			summaryCn: null,
+			contentCn: null,
+			titleCn: null,
+			embedding: null,
+		})
+		.where(eq(articles.id, articleId));
 }

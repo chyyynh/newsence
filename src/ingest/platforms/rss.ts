@@ -43,7 +43,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 	const itemUrls = items.flatMap((item) => (item.link ? [{ item, url: normalizeUrl(item.link) }] : []));
 	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await withCoreDb(env, (_db, client) => getExistingArticlesByUrl(client, urls));
+	const existingRecords = await withCoreDb(env, (db) => getExistingArticlesByUrl(db, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 

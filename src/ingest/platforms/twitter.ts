@@ -1,13 +1,12 @@
 import { generateObject } from '@core-ai/embedding';
 import { type Article, ENTITY_TYPES, type PlatformMetadata } from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
-import { withCoreDb } from '@db/client';
+import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { getExistingArticlesByUrl, reopenArticleForReprocessing } from '@ingest/domain/article-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
-import type { Client } from 'pg';
 import { z } from 'zod';
 import { generateArticleAnalysis, isEmpty, mergeArticleAnalysis, type ProcessorResult } from '../domain/ai-utils';
 import { buildThreadArticleParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
@@ -46,7 +45,7 @@ async function enqueueTwitterArticle(
 
 const MIN_TWEET_LENGTH = 150;
 
-async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolean> {
+async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolean> {
 	const resolved = await resolveTweetContent(tweet, env.KAITO_API_KEY).catch((err) => {
 		console.warn({ tag: 'TWITTER', msg: 'Tweet content resolution failed', url: tweet.url, error: String(err) });
 		return null;
@@ -86,7 +85,7 @@ async function saveTweet(db: Client, tweet: Tweet, env: CoreEnv): Promise<boolea
 	return queued;
 }
 
-async function saveThread(db: Client, tweets: Tweet[], env: CoreEnv): Promise<boolean> {
+async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	const { first, combinedText, platformMetadata } = buildThreadArticleParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
@@ -291,7 +290,7 @@ function batchTwitterUserNames(userNames: string[]): string[][] {
 	return batches;
 }
 
-async function saveTweetGroups(env: CoreEnv, db: Client, tweets: Tweet[]): Promise<{ processed: number; allSaved: boolean }> {
+async function saveTweetGroups(env: CoreEnv, db: CoreDb, tweets: Tweet[]): Promise<{ processed: number; allSaved: boolean }> {
 	let processed = 0;
 	let allSaved = true;
 	for (const group of groupTweetsIntoThreads(tweets)) {
@@ -318,7 +317,7 @@ async function processTwitterBatches(
 	for (const batch of batches) {
 		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
 		if (!completed) allCompleted = false;
-		const saved = await withCoreDb(env, (_db, client) => saveTweetGroups(env, client, tweets));
+		const saved = await withCoreDb(env, (db) => saveTweetGroups(env, db, tweets));
 		processed += saved.processed;
 		if (!saved.allSaved) allCompleted = false;
 	}
