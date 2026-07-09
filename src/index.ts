@@ -108,7 +108,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	}
 
 	/** Synchronously acquire one URL without DB persistence. */
-	scrapeUrl(url: string): Promise<AcquiredContent | null> {
+	scrapeUrl(url: string): Promise<AcquiredContent> {
 		return scrapeSavedUrl(url, this.env);
 	}
 

@@ -17,7 +17,7 @@ type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 
 type ResourceMetadataPatch = Record<string, unknown>;
 
-export function applyAcquiredContent(resource: ResourceForProcessing, acquired: AcquiredContent | null): ResourceForProcessing {
+export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
 	const acquiredTitle = acquired.title?.trim();
 	const acquiredSourceType = acquired.platformMetadata?.type;
@@ -44,10 +44,6 @@ export class ResourceUpdateBuilder {
 
 	constructor(private readonly resource: ResourceForProcessing) {}
 
-	addAcquiredMetadata(acquired: AcquiredContent | null): this {
-		return this.addMetadataPatch(acquired?.platformMetadata);
-	}
-
 	addExtractionMetadata(extraction: AcquiredContent['extraction'] | undefined): this {
 		return extraction ? this.addMetadataPatch({ extraction }) : this;
 	}
@@ -64,7 +60,7 @@ export class ResourceUpdateBuilder {
 		return this.addMetadataPatch({ type: 'paper', data: paperEnrichment });
 	}
 
-	applyAcquiredFields(acquired: AcquiredContent | null): this {
+	applyAcquiredFields(acquired?: AcquiredContent): this {
 		if (!acquired) return this;
 		const acquiredTitle = acquired.title?.trim();
 		if (acquiredTitle) this.update.title = acquiredTitle;

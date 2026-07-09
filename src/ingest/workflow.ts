@@ -1,29 +1,26 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
-import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
-import { type CoreDb, withCoreTx } from '@db/client';
-import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
-import { loadResourceForProcessing, syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/resource-store';
+import type { ResourceForProcessing } from '@core-shared/types';
+import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
 	EMPTY_OG_IMAGE_PATCH,
 	fetchOgImage,
 	type OgImagePatch,
 	PDF_MIME,
-	pdfExtractionMetadata,
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { generateResourceAnalysis, mergeResourceAnalysis, type ProcessorResult } from './domain/ai-utils';
-import { applyAcquiredContent, ResourceUpdateBuilder } from './domain/resource-update';
+import { generateResourceAnalysis, mergeResourceAnalysis } from './domain/ai-utils';
+import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
 import { type PdfTextArtifact, stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterResource } from './platforms/twitter';
-import { persistYouTubeWorkflowData, prepareYouTubeHighlights } from './platforms/youtube';
+import { prepareYouTubeHighlights } from './platforms/youtube';
+import { persistProcessedResource } from './resource-persistence';
 
 type WorkflowPayload = { resourceId: string };
-type PersistedResourceIds = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 
@@ -53,11 +50,7 @@ function shouldAcquireContent(resource: ResourceForProcessing): boolean {
 	return !hasContent && !resource.storage_key && !!resource.url;
 }
 
-async function stageSavedUrlAcquisition(
-	env: CoreEnv,
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-): Promise<AcquiredContent | null> {
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
 	const artifact = await step.do(
 		'acquire-content',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
@@ -69,7 +62,7 @@ async function stageSavedUrlAcquisition(
 async function stageOgImagePatch(
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
-	acquiredContent: AcquiredContent | null,
+	acquiredContent?: AcquiredContent,
 ): Promise<OgImagePatch> {
 	if (resource.og_image_url || !resource.url || resource.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
 	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
@@ -82,7 +75,7 @@ async function loadFullResource(
 	env: CoreEnv,
 	resourceId: string,
 	pdfTextArtifact: PdfTextArtifact | null,
-	acquiredContent: AcquiredContent | null = null,
+	acquiredContent?: AcquiredContent,
 	baseResource?: ResourceForProcessing,
 ): Promise<ResourceForProcessing> {
 	let resource: ResourceForProcessing;
@@ -92,70 +85,8 @@ async function loadFullResource(
 		resource = await loadResourceForProcessing(env, resourceId);
 	}
 	resource = applyAcquiredContent(resource, acquiredContent);
-	const extractedPdfText = pdfTextArtifact?.text?.trim() || null;
-	return extractedPdfText === null ? resource : { ...resource, content: extractedPdfText };
-}
-
-async function persistStoredWorkflowResource(
-	coreDb: CoreDb,
-	resourceId: string,
-	resource: ResourceForProcessing,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	pdfTextArtifact: PdfTextArtifact | null,
-	acquiredContent: AcquiredContent | null,
-	paperEnrichment: PaperMetadata | null,
-	ogImagePatch: OgImagePatch,
-): Promise<PersistedResourceIds> {
-	const finalResult =
-		pdfTextArtifact?.text && resource.content ? { ...result, updateData: { ...result.updateData, content: resource.content } } : result;
-	const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
-	const updatePayload = new ResourceUpdateBuilder(resource)
-		.addExtractionMetadata(extraction)
-		.addOgMetadata(ogImagePatch)
-		.addPaperMetadata(paperEnrichment)
-		.applyAcquiredFields(acquiredContent)
-		.applyProcessorResult(finalResult, embedding)
-		.applyOgFields(ogImagePatch)
-		.build();
-	const platformMetadata = updatePayload.platform_metadata ?? resource.platform_metadata;
-	const entities = normalizeResourceEntityUpdatePayload(updatePayload, resource.source, platformMetadata);
-	const persistedResourceId = await updateResourceAfterProcessing(coreDb, resourceId, resource, updatePayload);
-	if (entities) {
-		await syncResourceEntities(coreDb, persistedResourceId, entities, resource.source, platformMetadata);
-	}
-	return { resourceId: persistedResourceId };
-}
-
-async function persistWorkflowResource(
-	env: CoreEnv,
-	resourceId: string,
-	resource: ResourceForProcessing,
-	result: ProcessorResult,
-	embedding: number[] | null,
-	pdfTextArtifact: PdfTextArtifact | null,
-	acquiredContent: AcquiredContent | null,
-	paperEnrichment: PaperMetadata | null,
-	ogImagePatch: OgImagePatch,
-	youtubeTranscript: YoutubeTranscript | undefined,
-	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
-): Promise<PersistedResourceIds> {
-	return withCoreTx(env, async (coreDb, _db) => {
-		const persisted = await persistStoredWorkflowResource(
-			coreDb,
-			resourceId,
-			resource,
-			result,
-			embedding,
-			pdfTextArtifact,
-			acquiredContent,
-			paperEnrichment,
-			ogImagePatch,
-		);
-		if (youtubeTranscript || youtubeHighlights)
-			await persistYouTubeWorkflowData(coreDb, { transcript: youtubeTranscript, highlights: youtubeHighlights });
-		return persisted;
-	});
+	const extractedPdfText = pdfTextArtifact?.text?.trim();
+	return extractedPdfText ? { ...resource, content: extractedPdfText } : resource;
 }
 
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
@@ -166,7 +97,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceForProcessing(this.env, resourceId, true),
 		);
-		const acquiredContent = shouldAcquireContent(initialResource) ? await stageSavedUrlAcquisition(this.env, step, initialResource) : null;
+		const acquiredContent = shouldAcquireContent(initialResource)
+			? await stageSavedUrlAcquisition(this.env, step, initialResource)
+			: undefined;
 		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const resourceType = resource.type;
 		const logContext = { resource_id: resourceId, table: 'resources' };
@@ -236,16 +169,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 						async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
 					)
 				: null;
-		const persisted = await step.do(
+		const persistedResourceId = await step.do(
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () =>
-				persistWorkflowResource(
-					this.env,
-					resourceId,
+			async () => {
+				const resourceToPersist =
 					pdfTextArtifact?.text || acquiredContent
 						? await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)
-						: resource,
+						: resource;
+				return persistProcessedResource(this.env, {
+					resourceId,
+					resource: resourceToPersist,
 					processorResult,
 					embedding,
 					pdfTextArtifact,
@@ -254,12 +188,13 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					ogImagePatch,
 					youtubeTranscript,
 					youtubeHighlights,
-				),
+				});
+			},
 		);
 
-		await syncPaperGraphForEnrichment(this.env, step, persisted.resourceId, paperEnrichment);
+		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persisted.resourceId, table: 'resources' });
-		return { success: true, resource_id: persisted.resourceId };
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
+		return { success: true, resource_id: persistedResourceId };
 	}
 }

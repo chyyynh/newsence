@@ -31,7 +31,7 @@ export function validateAcquisitionUrl(url: string): string {
 	return parsed.toString();
 }
 
-export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent | null> {
+export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 
 	const videoId = extractYouTubeId(validatedUrl);
@@ -62,6 +62,26 @@ export async function scrapeBlobArtifact(input: BlobAcquisitionInput, env: CoreE
 	return new Blob([bytes], { type: 'application/json' }).stream();
 }
 
-export async function readAcquiredContentArtifact(artifact: ReadableStream<Uint8Array>): Promise<AcquiredContent | null> {
-	return (await new Response(artifact).json()) as AcquiredContent | null;
+function isNullableString(value: unknown): value is string | null {
+	return value === null || typeof value === 'string';
+}
+
+function isAcquiredContent(value: unknown): value is AcquiredContent {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const content = value as Record<string, unknown>;
+	if (!isNullableString(content.title) || typeof content.markdown !== 'string') return false;
+	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
+	const metadata = content.metadata as Record<string, unknown>;
+	return (
+		isNullableString(metadata.author) &&
+		isNullableString(metadata.publishedDate) &&
+		isNullableString(metadata.siteName) &&
+		isNullableString(metadata.description)
+	);
+}
+
+export async function readAcquiredContentArtifact(artifact: ReadableStream<Uint8Array>): Promise<AcquiredContent> {
+	const acquired: unknown = await new Response(artifact).json();
+	if (!isAcquiredContent(acquired)) throw new Error('Acquisition artifact did not contain valid content');
+	return acquired;
 }

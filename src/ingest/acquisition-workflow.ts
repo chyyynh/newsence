@@ -27,7 +27,7 @@ export async function getAcquisitionJobStatus(env: CoreEnv, instanceId: string) 
 }
 
 export class AcquisitionWorkflow extends WorkflowEntrypoint<CoreEnv, AcquisitionWorkflowParams> {
-	async run(event: WorkflowEvent<AcquisitionWorkflowParams>, step: WorkflowStep): Promise<AcquiredContent | null> {
+	async run(event: WorkflowEvent<AcquisitionWorkflowParams>, step: WorkflowStep): Promise<AcquiredContent> {
 		const artifact = await step.do(
 			'acquire',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
