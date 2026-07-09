@@ -371,7 +371,7 @@ function platformMetadataWithSourceName(platformMetadata: unknown, source: strin
 	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
 		return { ...(platformMetadata as Record<string, unknown>), sourceName };
 	}
-	return { type: 'default', fetchedAt: new Date().toISOString(), data: null, sourceName };
+	return { fetchedAt: new Date().toISOString(), data: null, sourceName };
 }
 
 function mergeResourceTranslations(current: ResourceTranslationMap | undefined, update: unknown): ResourceTranslationMap {
@@ -608,6 +608,7 @@ export async function syncResourceEntities(
 	db: CoreDb,
 	resourceId: string,
 	inputEntities: ResourceEntityInput[],
+	resourceType: ResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<void> {
@@ -615,7 +616,7 @@ export async function syncResourceEntities(
 		.select({ entityId: resourceEntities.entityId })
 		.from(resourceEntities)
 		.where(eq(resourceEntities.resourceId, resourceId));
-	const { normalizedEntities, entityIds } = await upsertEntityIds(db, inputEntities, source, platformMetadata);
+	const { normalizedEntities, entityIds } = await upsertEntityIds(db, inputEntities, resourceType, source, platformMetadata);
 
 	if (entityIds.length) {
 		await db
@@ -644,10 +645,11 @@ export async function syncResourceEntities(
 async function upsertEntityIds(
 	db: CoreDb,
 	inputEntities: ResourceEntityInput[],
+	resourceType: ResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<{ normalizedEntities: ResourceEntityInput[]; entityIds: string[] }> {
-	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, source, platformMetadata);
+	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, resourceType, source, platformMetadata);
 	const entityIds: string[] = [];
 
 	for (const entity of normalizedEntities) {

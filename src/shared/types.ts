@@ -72,7 +72,8 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent {
+export interface NormalizedContent<T extends ResourceType = ResourceType> {
+	type: T;
 	title: string | null;
 	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
@@ -82,7 +83,7 @@ export interface NormalizedContent {
 		siteName: string | null;
 		description: string | null;
 	};
-	platformMetadata?: PlatformMetadata;
+	platformMetadata?: PlatformMetadata<T>;
 	youtubeTranscript?: YoutubeTranscript;
 }
 
@@ -210,21 +211,37 @@ interface OgImageDimensions {
 	ogImageHeight?: number | null;
 }
 
-export type PlatformMetadata =
-	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
-			OgImageDimensions)
-	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
-			OgImageDimensions)
-	| ({
-			type: 'hackernews';
-			fetchedAt: string;
-			data: HackerNewsMetadata;
-			enrichments?: PlatformEnrichments | null;
-	  } & ClassificationEnvelope &
-			OgImageDimensions)
-	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
-			OgImageDimensions)
-	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
-			OgImageDimensions)
-	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope &
-			OgImageDimensions);
+export interface PlatformMetadataDataByResourceType {
+	web: null;
+	rss: null;
+	twitter: TwitterMetadata;
+	youtube: YouTubeMetadata;
+	hackernews: HackerNewsMetadata;
+	pdf: PdfMetadata;
+	paper: PaperMetadata;
+	image: null;
+	file: null;
+}
+
+export interface PdfExtractionMetadata {
+	status: 'ok' | 'needs_ocr';
+	parser: 'liteparse';
+	chars: number;
+	pages: number;
+}
+
+export type PlatformMetadata<T extends ResourceType = ResourceType> = {
+	fetchedAt: string;
+	data: PlatformMetadataDataByResourceType[T];
+	enrichments?: PlatformEnrichments | null;
+	sourceName?: string;
+	extraction?: PdfExtractionMetadata;
+} & ClassificationEnvelope &
+	OgImageDimensions;
+
+export function platformMetadataFor<T extends ResourceType>(
+	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
+	type: T,
+): PlatformMetadata<T> | null {
+	return resource.type === type && resource.platform_metadata ? (resource.platform_metadata as PlatformMetadata<T>) : null;
+}

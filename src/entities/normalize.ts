@@ -5,6 +5,7 @@
 // pipeline (persistence + prompt exclusion lists).
 
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
+import type { ResourceType } from '../resources/types';
 
 export type ResourceEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedResourceEntity = { name: string; name_cn: string; type: EntityType };
@@ -114,41 +115,40 @@ function hostFromSource(value: string): string | null {
 	}
 }
 
-function platformMetadataSourceAliases(metadata: unknown): string[] {
+function platformMetadataSourceAliases(resourceType: ResourceType, metadata: unknown): string[] {
 	const envelope = recordValue(metadata);
 	const data = recordValue(envelope?.data);
-	const type = stringValue(envelope?.type);
-	if (!type || !data) return [];
+	if (!data) return [];
 	const aliases: string[] = [];
 	const add = (value: unknown) => {
 		const str = stringValue(value);
 		if (str) aliases.push(str);
 	};
 
-	if (type === 'twitter') {
+	if (resourceType === 'twitter') {
 		add(data.authorName);
 		const userName = stringValue(data.authorUserName);
 		if (userName) aliases.push(userName, `@${userName}`);
 		aliases.push('Twitter', 'X');
-	} else if (type === 'youtube') {
+	} else if (resourceType === 'youtube') {
 		add(data.channelName);
 		aliases.push('YouTube');
-	} else if (type === 'hackernews') {
+	} else if (resourceType === 'hackernews') {
 		add(data.author);
 		aliases.push('Hacker News');
 	}
 	return aliases;
 }
 
-function excludedEntityCanonicalNames(source?: string | null, platformMetadata?: unknown): Set<string> {
-	const names = entityExtractionExclusionNames(source, platformMetadata);
+function excludedEntityCanonicalNames(resourceType: ResourceType, source?: string | null, platformMetadata?: unknown): Set<string> {
+	const names = entityExtractionExclusionNames(resourceType, source, platformMetadata);
 	return new Set(names.map(canonicalizeEntityName).filter(Boolean));
 }
 
-export function entityExtractionExclusionNames(source?: string | null, platformMetadata?: unknown): string[] {
+export function entityExtractionExclusionNames(resourceType: ResourceType, source?: string | null, platformMetadata?: unknown): string[] {
 	const seen = new Set<string>();
 	const names: string[] = [];
-	for (const name of [...sourceNameAliases(source), ...platformMetadataSourceAliases(platformMetadata)]) {
+	for (const name of [...sourceNameAliases(source), ...platformMetadataSourceAliases(resourceType, platformMetadata)]) {
 		const canonical = canonicalizeEntityName(name);
 		if (!canonical || seen.has(canonical)) continue;
 		seen.add(canonical);
@@ -160,11 +160,12 @@ export function entityExtractionExclusionNames(source?: string | null, platformM
 
 export function normalizeResourceEntitiesForStorage(
 	entities: ResourceEntityInput[],
+	resourceType: ResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): NormalizedResourceEntity[] {
 	const byCanonical = new Map<string, NormalizedResourceEntity>();
-	const excludedCanonicals = excludedEntityCanonicalNames(source, platformMetadata);
+	const excludedCanonicals = excludedEntityCanonicalNames(resourceType, source, platformMetadata);
 	for (const entity of entities) {
 		const normalized = normalizeResourceEntity(entity);
 		if (!normalized) continue;
@@ -178,11 +179,17 @@ export function normalizeResourceEntitiesForStorage(
 
 export function normalizeResourceEntityUpdatePayload(
 	updatePayload: { entities?: unknown },
+	resourceType: ResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): NormalizedResourceEntity[] | null {
 	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeResourceEntitiesForStorage(updatePayload.entities.filter(isResourceEntityInput), source, platformMetadata);
+	const entities = normalizeResourceEntitiesForStorage(
+		updatePayload.entities.filter(isResourceEntityInput),
+		resourceType,
+		source,
+		platformMetadata,
+	);
 	updatePayload.entities = entities;
 	return entities;
 }

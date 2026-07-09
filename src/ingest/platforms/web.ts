@@ -1,4 +1,4 @@
-import type { NormalizedContent } from '@core-shared/types';
+import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
@@ -11,20 +11,13 @@ const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
 
-export type PdfExtractionMetadata = {
-	status: PdfTextArtifact['status'];
-	parser: 'liteparse';
-	chars: number;
-	pages: number;
-};
-
 export type OgImagePatch = {
 	ogImageUrl: string | null;
 	ogImageWidth: number | null;
 	ogImageHeight: number | null;
 };
 
-export type WebAcquiredContent = NormalizedContent & {
+export type WebAcquiredContent = NormalizedContent<'web' | 'pdf' | 'file'> & {
 	extraction?: PdfExtractionMetadata;
 	ogImage?: OgImagePatch;
 };
@@ -261,6 +254,7 @@ async function scrapePdfBytes(bytes: Uint8Array, url: string, fileName: string):
 	const parsed = await parsePdfBytes(bytes);
 	const title = titleFromFileName(fileName) || 'PDF document';
 	return {
+		type: 'pdf',
 		title,
 		markdown: parsed.text,
 		metadata: {
@@ -270,7 +264,6 @@ async function scrapePdfBytes(bytes: Uint8Array, url: string, fileName: string):
 			description: parsed.text.slice(0, 500) || null,
 		},
 		platformMetadata: {
-			type: 'pdf',
 			fetchedAt: new Date().toISOString(),
 			data: { fileName, fileSize: bytes.byteLength },
 		},
@@ -290,6 +283,7 @@ async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileNa
 	const content = preferReadableContentText(markdown, readable);
 	const title = metadata.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
 	return {
+		type: 'web',
 		title,
 		markdown: content,
 		metadata: {
@@ -298,7 +292,7 @@ async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileNa
 			siteName: metadata.siteName,
 			description: metadata.description,
 		},
-		platformMetadata: { type: 'default', fetchedAt: new Date().toISOString(), data: null },
+		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
 		ogImage: extractOgImageFromHtml(html, url),
 	};
 }
@@ -306,6 +300,7 @@ async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileNa
 function scrapeTextBlob(text: string, fileName: string): WebAcquiredContent {
 	const title = titleFromMarkdown(text) ?? titleFromFileName(fileName);
 	return {
+		type: 'file',
 		title,
 		markdown: text.trim(),
 		metadata: {
@@ -315,7 +310,6 @@ function scrapeTextBlob(text: string, fileName: string): WebAcquiredContent {
 			description: text.trim().slice(0, 500) || null,
 		},
 		platformMetadata: {
-			type: 'default',
 			fetchedAt: new Date().toISOString(),
 			data: null,
 		},

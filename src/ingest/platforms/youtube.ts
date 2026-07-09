@@ -1,5 +1,5 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
-import type { ResourceForProcessing, TranscriptSegment, YoutubeTranscript } from '@core-shared/types';
+import { platformMetadataFor, type ResourceForProcessing, type TranscriptSegment, type YoutubeTranscript } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { rssList, youtubeTranscripts } from '@db/schema';
@@ -87,8 +87,8 @@ export async function prepareYouTubeHighlights(
 	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
 	if (resource.type !== 'youtube') return null;
-	const metadata = resource.platform_metadata;
-	if (metadata?.type !== 'youtube') return null;
+	const metadata = platformMetadataFor(resource, 'youtube');
+	if (!metadata) return null;
 
 	const videoId = metadata.data.videoId;
 	if (!videoId) return null;

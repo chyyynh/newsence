@@ -1,5 +1,11 @@
 import { generateText } from '@core-ai/embedding';
-import type { HackerNewsMetadata, NormalizedContent, PlatformEnrichments, ResourceForProcessing } from '@core-shared/types';
+import {
+	type HackerNewsMetadata,
+	type NormalizedContent,
+	type PlatformEnrichments,
+	platformMetadataFor,
+	type ResourceForProcessing,
+} from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 import { generateResourceAnalysis, mergeResourceAnalysis, type ProcessorResult } from '../domain/ai-utils';
@@ -97,13 +103,14 @@ function buildHnMarkdown(item: HnItem): string {
 	return parts.join('\n');
 }
 
-export async function scrapeHackerNews(itemId: string): Promise<NormalizedContent> {
+export async function scrapeHackerNews(itemId: string): Promise<NormalizedContent<'hackernews'>> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
 	const title = item.title || `HN Item ${itemId}`;
 	const summary = item.text ? htmlToText(item.text).slice(0, 280) : title;
 	console.info({ tag: 'HN', msg: 'Item fetched', title });
 	return {
+		type: 'hackernews',
 		title,
 		markdown: buildHnMarkdown(item),
 		metadata: {
@@ -112,7 +119,7 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 			siteName: 'Hacker News',
 			description: summary,
 		},
-		platformMetadata: { type: 'hackernews', fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
+		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 	};
 }
 
@@ -246,8 +253,8 @@ async function generateHnEditorial(
 }
 
 export async function processHackerNewsResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
-	const metadata = resource.platform_metadata;
-	const itemId = metadata?.type === 'hackernews' ? metadata.data.itemId || null : null;
+	const metadata = platformMetadataFor(resource, 'hackernews');
+	const itemId = metadata?.data.itemId || null;
 
 	const hnData: HnItem | null = itemId
 		? await fetchHnItem(itemId).catch((error) => {

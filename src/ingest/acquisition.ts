@@ -1,5 +1,6 @@
-import type { NormalizedContent } from '@core-shared/types';
+import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { extractYouTubeId } from '@core-shared/web';
+import { isResourceType } from '../resources/types';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import {
@@ -8,7 +9,6 @@ import {
 	fetchOgImage,
 	type OgImagePatch,
 	PDF_MIME,
-	type PdfExtractionMetadata,
 	pdfExtractionMetadata,
 	scrapeGenericUrl,
 	scrapeBlob as scrapeWebBlob,
@@ -17,7 +17,8 @@ import { scrapeYouTube } from './platforms/youtube-acquisition';
 
 export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
 export type { BlobAcquisitionInput };
-export type { OgImagePatch, PdfExtractionMetadata };
+export type { PdfExtractionMetadata } from '@core-shared/types';
+export type { OgImagePatch };
 
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
@@ -69,7 +70,7 @@ function isNullableString(value: unknown): value is string | null {
 function isAcquiredContent(value: unknown): value is AcquiredContent {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const content = value as Record<string, unknown>;
-	if (!isNullableString(content.title) || typeof content.markdown !== 'string') return false;
+	if (!isResourceType(content.type) || !isNullableString(content.title) || typeof content.markdown !== 'string') return false;
 	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
 	const metadata = content.metadata as Record<string, unknown>;
 	return (

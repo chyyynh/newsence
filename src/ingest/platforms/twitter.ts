@@ -444,7 +444,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 
 async function translateTweet(tweetText: string, resource: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis | null> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
-	const excludedEntities = entityExtractionExclusionNames(resource.source, resource.platform_metadata);
+	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 
 	try {

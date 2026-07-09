@@ -184,7 +184,7 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實
 
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
 	const content = resource.content || resource.summary || resource.title;
-	const excludedEntities = entityExtractionExclusionNames(resource.source, resource.platform_metadata);
+	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 	const zhHantSummary = resource.translations?.[ZH_HANT_RESOURCE_LANG]?.summary;
 	return `文章資訊:

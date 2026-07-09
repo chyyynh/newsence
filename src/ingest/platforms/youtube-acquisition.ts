@@ -131,7 +131,7 @@ export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
 	options: YouTubeScrapeOptions = {},
-): Promise<NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'youtube' }> }> {
+): Promise<NormalizedContent<'youtube'> & { platformMetadata: PlatformMetadata<'youtube'> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
 	const videoData = await fetchYouTubeVideoData(videoId, youtubeApiKey);
@@ -182,6 +182,7 @@ export async function scrapeYouTube(
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
+		type: 'youtube',
 		title: snippet.title,
 		markdown: content,
 		metadata: {
@@ -191,7 +192,6 @@ export async function scrapeYouTube(
 			description: snippet.description.substring(0, 500) || null,
 		},
 		platformMetadata: {
-			type: 'youtube',
 			fetchedAt: new Date().toISOString(),
 			data: {
 				videoId: video.id,

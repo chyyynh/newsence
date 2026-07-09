@@ -1,5 +1,5 @@
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import { isResourceType, type ResourceType } from '../../resources/types';
+import type { ResourceType } from '../../resources/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
@@ -16,7 +16,6 @@ type ResourceMetadataPatch = Record<string, unknown>;
 export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
 	const acquiredTitle = acquired.title?.trim();
-	const acquiredSourceType = acquired.platformMetadata?.type;
 	return {
 		...resource,
 		title: acquiredTitle || resource.title,
@@ -24,14 +23,14 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		content: acquired.markdown || resource.content,
 		source: acquired.metadata.siteName ?? acquired.metadata.author ?? resource.source,
 		published_date: acquired.metadata.publishedDate ?? resource.published_date,
-		type: resourceTypeAfterAcquisition(resource.type, acquiredSourceType),
+		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
 		platform_metadata: acquired.platformMetadata ?? resource.platform_metadata,
-		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : resource.file_type,
+		file_type: acquired.type === 'pdf' ? PDF_MIME : resource.file_type,
 	};
 }
 
-function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: string | undefined): ResourceType {
-	return isResourceType(acquiredType) ? acquiredType : currentType;
+function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: ResourceType): ResourceType {
+	return acquiredType === 'web' && currentType !== 'web' ? currentType : acquiredType;
 }
 
 export class ResourceUpdateBuilder {
@@ -53,7 +52,7 @@ export class ResourceUpdateBuilder {
 	addPaperMetadata(paperEnrichment: PaperMetadata | null): this {
 		if (!paperEnrichment) return this;
 		this.update.type = 'paper';
-		return this.addMetadataPatch({ type: 'paper', data: paperEnrichment });
+		return this.addMetadataPatch({ data: paperEnrichment });
 	}
 
 	applyProcessorResult(result: ProcessorResult, embedding?: number[] | null): this {
@@ -68,8 +67,7 @@ export class ResourceUpdateBuilder {
 			};
 		}
 		if (category) {
-			const base = mergedMetadata ??
-				this.resource.platform_metadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null };
+			const base = mergedMetadata ?? this.resource.platform_metadata ?? { fetchedAt: new Date().toISOString(), data: null };
 			mergedMetadata = {
 				...base,
 				classification: {

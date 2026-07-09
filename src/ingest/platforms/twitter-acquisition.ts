@@ -149,7 +149,7 @@ export function buildThreadResourceParts<T extends Tweet>(
 	sorted: T[];
 	combinedText: string;
 	media: TwitterMedia[];
-	platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }>;
+	platformMetadata: PlatformMetadata<'twitter'>;
 } {
 	const sorted = [...tweets].sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
 	const first = sorted[0];
@@ -187,7 +187,7 @@ function buildTweetPlatformMetadata(
 		media?: TwitterMedia[];
 		quotedTweet?: QuotedTweetData;
 	} = {},
-): Extract<PlatformMetadata, { type: 'twitter' }> {
+): PlatformMetadata<'twitter'> {
 	const media = options.media ?? extractTweetMedia(tweet);
 	const tweetText = options.tweetText ?? stripTweetUrls(tweet.text);
 	const base = {
@@ -200,7 +200,6 @@ function buildTweetPlatformMetadata(
 
 	if (options.externalUrl) {
 		return {
-			type: 'twitter',
 			fetchedAt: new Date().toISOString(),
 			data: {
 				variant: 'shared',
@@ -215,18 +214,13 @@ function buildTweetPlatformMetadata(
 	}
 
 	return {
-		type: 'twitter',
 		fetchedAt: new Date().toISOString(),
 		data: { ...base, quotedTweet: options.quotedTweet ?? extractQuotedTweet(tweet) },
 	};
 }
 
-function buildTwitterLongformPlatformMetadata(
-	tweetId: string,
-	author: Tweet['author'] | undefined,
-): Extract<PlatformMetadata, { type: 'twitter' }> {
+function buildTwitterLongformPlatformMetadata(tweetId: string, author: Tweet['author'] | undefined): PlatformMetadata<'twitter'> {
 	return {
-		type: 'twitter',
 		fetchedAt: new Date().toISOString(),
 		data: {
 			variant: 'longform',
@@ -259,7 +253,7 @@ interface TwitterLongform {
 async function scrapeTwitterLongform(
 	tweetId: string,
 	apiKey: string,
-): Promise<(NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> }) | null> {
+): Promise<(NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> }) | null> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching longform for tweet', tweetId });
 
 	let data: { article?: TwitterLongform; status?: string };
@@ -302,6 +296,7 @@ async function scrapeTwitterLongform(
 	console.info({ tag: 'TWITTER', msg: 'Longform fetched', title });
 
 	return {
+		type: 'twitter',
 		title,
 		markdown: md,
 		metadata: {
@@ -320,9 +315,10 @@ function buildExternalLinkTweet(
 	media: TwitterMedia[],
 	tweetText: string,
 	ogImageUrl: string | null,
-): NormalizedContent & { platformMetadata: Extract<PlatformMetadata, { type: 'twitter' }> } {
+): NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> } {
 	const title = `@${tweet.author?.userName}: ${tweetText || tweet.text}`.slice(0, 120);
 	return {
+		type: 'twitter',
 		title,
 		markdown: tweetText || tweet.text,
 		metadata: {
@@ -378,6 +374,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	return {
 		kind: 'tweet' as const,
 		scraped: {
+			type: 'twitter' as const,
 			title,
 			markdown: tweet.text,
 			metadata: {
@@ -393,7 +390,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	};
 }
 
-export async function scrapeTweet(tweetId: string, apiKey: string): Promise<NormalizedContent> {
+export async function scrapeTweet(tweetId: string, apiKey: string): Promise<NormalizedContent<'twitter'>> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching tweet', tweetId });
 	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweets?tweet_ids=${tweetId}`, {
 		headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
