@@ -583,6 +583,7 @@ function resourceMirrorRecord(
 	updatePayload: Record<string, unknown>,
 ): ResourceMirrorRecord {
 	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata ?? null;
+	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, article.source);
 	const fileType = stringOrNull(article.file_type);
 	const url = cleanString(updatePayload.url ?? article.url);
 	const normalizedUrl = table === 'user_files' ? cleanString(article.normalized_source_url ?? article.url) : url;
@@ -619,12 +620,21 @@ function resourceMirrorRecord(
 		scrapedDate: new Date(),
 		keywords,
 		tags,
-		category: deriveResourceCategory(platformMetadata, tags),
+		category: deriveResourceCategory(storedPlatformMetadata, tags),
 		entitiesJson: jsonbParam(updatePayload.entities ?? null),
 		ogImageUrl: cleanString(updatePayload.og_image_url ?? article.og_image_url),
-		platformMetadataJson: jsonbParam(platformMetadata),
+		platformMetadataJson: jsonbParam(storedPlatformMetadata),
 		embedding: nullableVector(updatePayload.embedding, 'embedding'),
 	};
+}
+
+function platformMetadataWithSourceName(platformMetadata: unknown, source: string | null | undefined): unknown {
+	const sourceName = cleanString(source);
+	if (!sourceName) return platformMetadata;
+	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
+		return { ...(platformMetadata as Record<string, unknown>), sourceName };
+	}
+	return { type: 'default', fetchedAt: new Date().toISOString(), data: null, sourceName };
 }
 
 function resourceUpsertStatement(record: ResourceMirrorRecord): SQL {
