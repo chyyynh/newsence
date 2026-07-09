@@ -126,7 +126,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 }
 
 function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
-	const article: StoredResourceForProcessing = {
+	const resource: StoredResourceForProcessing = {
 		id: row.id,
 		title: row.title ?? '',
 		summary: row.summary,
@@ -142,12 +142,12 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		scope: parseResourceScope(row.scope),
 		platform_metadata: (row.platform_metadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
-	if (typeof row.has_content === 'boolean') article.has_content = row.has_content;
-	if ('storage_key' in row) article.storage_key = row.storage_key ?? null;
-	if (row.file_type) article.file_type = row.file_type;
-	if ('normalized_source_url' in row) article.normalized_source_url = row.normalized_source_url ?? null;
-	if (row.origin_type) article.origin_type = row.origin_type;
-	return article;
+	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
+	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
+	if (row.file_type) resource.file_type = row.file_type;
+	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;
+	if (row.origin_type) resource.origin_type = row.origin_type;
+	return resource;
 }
 
 function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMap {
@@ -258,10 +258,10 @@ function nullableVector(value: unknown, field: string): string | null {
 export async function updateResourceAfterProcessing(
 	db: CoreDb,
 	resourceId: string,
-	article: ResourceForProcessing,
+	resource: ResourceForProcessing,
 	updatePayload: Record<string, unknown>,
 ): Promise<string> {
-	const record = resourceMirrorRecord('resource', resourceId, article, updatePayload);
+	const record = resourceMirrorRecord('resource', resourceId, resource, updatePayload);
 	const result = await db.execute(sql`
 		UPDATE resources
 		   SET type = ${record.type},
@@ -320,41 +320,41 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 function resourceMirrorRecord(
 	origin: ResourceMirrorOrigin,
 	resourceId: string,
-	article: ResourceForProcessing,
+	resource: ResourceForProcessing,
 	updatePayload: Record<string, unknown>,
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
-	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata ?? null;
-	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, article.source);
-	const fileType = stringOrNull(article.file_type);
-	const url = cleanString(updatePayload.url ?? article.url);
-	const normalizedUrl = origin === 'resource' ? cleanString(article.normalized_source_url ?? article.url) : url;
-	const tags = stringArrayValue(updatePayload.tags ?? article.tags ?? [], 'tags');
-	const keywords = stringArrayValue(updatePayload.keywords ?? article.keywords ?? [], 'keywords');
-	const title = cleanString(updatePayload.title ?? article.title);
-	const summary = cleanString(updatePayload.summary ?? article.summary);
-	const content = cleanString(updatePayload.content ?? article.content);
-	const translations = mergeResourceTranslations(article.translations, updatePayload.translations);
+	const platformMetadata = updatePayload.platform_metadata ?? resource.platform_metadata ?? null;
+	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, resource.source);
+	const fileType = stringOrNull(resource.file_type);
+	const url = cleanString(updatePayload.url ?? resource.url);
+	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url ?? resource.url) : url;
+	const tags = stringArrayValue(updatePayload.tags ?? resource.tags ?? [], 'tags');
+	const keywords = stringArrayValue(updatePayload.keywords ?? resource.keywords ?? [], 'keywords');
+	const title = cleanString(updatePayload.title ?? resource.title);
+	const summary = cleanString(updatePayload.summary ?? resource.summary);
+	const content = cleanString(updatePayload.content ?? resource.content);
+	const translations = mergeResourceTranslations(resource.translations, updatePayload.translations);
 	return {
 		id: resourceId,
-		type: parseResourceType(updatePayload.type ?? article.type),
-		scope: origin === 'source' ? 'corpus' : article.scope,
+		type: parseResourceType(updatePayload.type ?? resource.type),
+		scope: origin === 'source' ? 'corpus' : resource.scope,
 		url,
 		normalizedUrl,
-		storageKey: cleanString(article.storage_key),
+		storageKey: cleanString(resource.storage_key),
 		fileType,
 		originalLang: deriveOriginalLang({ title, summary, content, translations }),
 		title,
 		summary,
 		content,
 		translations,
-		publishedDate: optionalDateValue(updatePayload.published_date ?? article.published_date, 'published_date'),
+		publishedDate: optionalDateValue(updatePayload.published_date ?? resource.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
 		tags,
 		category: deriveResourceCategory(storedPlatformMetadata, tags),
 		entitiesJson: jsonbParam(updatePayload.entities ?? null),
-		ogImageUrl: cleanString(updatePayload.og_image_url ?? article.og_image_url),
+		ogImageUrl: cleanString(updatePayload.og_image_url ?? resource.og_image_url),
 		platformMetadataJson: jsonbParam(storedPlatformMetadata),
 		embedding: nullableVector(updatePayload.embedding, 'embedding'),
 		enrichmentStatus,

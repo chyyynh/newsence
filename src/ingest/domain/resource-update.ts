@@ -17,20 +17,20 @@ type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 
 type ResourceMetadataPatch = Record<string, unknown>;
 
-export function applyAcquiredContent(article: ResourceForProcessing, acquired: AcquiredContent | null): ResourceForProcessing {
-	if (!acquired) return article;
+export function applyAcquiredContent(resource: ResourceForProcessing, acquired: AcquiredContent | null): ResourceForProcessing {
+	if (!acquired) return resource;
 	const acquiredTitle = acquired.title?.trim();
 	const acquiredSourceType = acquired.platformMetadata?.type;
 	return {
-		...article,
-		title: acquiredTitle || article.title,
-		summary: acquired.metadata.description ?? article.summary,
-		content: acquired.markdown || article.content,
-		source: acquired.metadata.siteName ?? acquired.metadata.author ?? article.source,
-		published_date: acquired.metadata.publishedDate ?? article.published_date,
-		type: resourceTypeAfterAcquisition(article.type, acquiredSourceType),
-		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
-		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
+		...resource,
+		title: acquiredTitle || resource.title,
+		summary: acquired.metadata.description ?? resource.summary,
+		content: acquired.markdown || resource.content,
+		source: acquired.metadata.siteName ?? acquired.metadata.author ?? resource.source,
+		published_date: acquired.metadata.publishedDate ?? resource.published_date,
+		type: resourceTypeAfterAcquisition(resource.type, acquiredSourceType),
+		platform_metadata: acquired.platformMetadata ?? resource.platform_metadata,
+		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : resource.file_type,
 	};
 }
 
@@ -46,7 +46,7 @@ export class ResourceUpdateBuilder {
 	private readonly update: ResourceUpdate = {};
 	private readonly metadataPatches: ResourceMetadataPatch[] = [];
 
-	constructor(private readonly article: ResourceForProcessing) {}
+	constructor(private readonly resource: ResourceForProcessing) {}
 
 	addAcquiredMetadata(acquired: AcquiredContent | null): this {
 		return this.addMetadataPatch(acquired?.platformMetadata);
@@ -77,7 +77,7 @@ export class ResourceUpdateBuilder {
 		if (acquired.metadata.publishedDate) this.update.published_date = acquired.metadata.publishedDate;
 		if (acquired.metadata.description !== null) this.update.summary = acquired.metadata.description;
 		this.update.content = acquired.markdown;
-		if (acquired.platformMetadata) this.update.type = resourceTypeAfterAcquisition(this.article.type, acquired.platformMetadata.type);
+		if (acquired.platformMetadata) this.update.type = resourceTypeAfterAcquisition(this.resource.type, acquired.platformMetadata.type);
 		return this;
 	}
 
@@ -85,7 +85,7 @@ export class ResourceUpdateBuilder {
 		Object.assign(this.update, result.updateData);
 		const category = result.classificationCategory;
 		const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-		let mergedMetadata: PlatformMetadata | null = this.article.platform_metadata ?? null;
+		let mergedMetadata: PlatformMetadata | null = this.resource.platform_metadata ?? null;
 		if (hasEnrichments && mergedMetadata) {
 			mergedMetadata = {
 				...mergedMetadata,
@@ -94,7 +94,7 @@ export class ResourceUpdateBuilder {
 		}
 		if (category) {
 			const base = mergedMetadata ??
-				this.article.platform_metadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null };
+				this.resource.platform_metadata ?? { type: 'default' as const, fetchedAt: new Date().toISOString(), data: null };
 			mergedMetadata = {
 				...base,
 				classification: {
@@ -106,7 +106,7 @@ export class ResourceUpdateBuilder {
 		}
 
 		const metadataPatch = this.mergedMetadataPatch();
-		if (metadataPatch) this.update.platform_metadata = { ...(mergedMetadata ?? this.article.platform_metadata ?? {}), ...metadataPatch };
+		if (metadataPatch) this.update.platform_metadata = { ...(mergedMetadata ?? this.resource.platform_metadata ?? {}), ...metadataPatch };
 		else if (mergedMetadata) this.update.platform_metadata = mergedMetadata;
 		if (embedding?.length) this.update.embedding = `[${embedding.join(',')}]`;
 		return this;
