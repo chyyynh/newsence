@@ -137,7 +137,7 @@ export async function searchCorpusArticles(env: CoreEnv, input: ArticleSearchInp
 				sql`
 					SELECT ${resourceSearchSelect()}
 					FROM resources r
-					${resourceTranslationJoins()}
+					${resourceLocalizedJoin()}
 					WHERE r.id = ANY(${candidateIds}::uuid[])
 						AND r.scope = 'corpus'
 						AND r.enrichment_status = 'enriched'
@@ -155,7 +155,7 @@ export async function searchCorpusArticles(env: CoreEnv, input: ArticleSearchInp
 			sql`
 				SELECT ${resourceSearchSelect()}
 				FROM resources r
-				${resourceTranslationJoins()}
+				${resourceLocalizedJoin()}
 				WHERE r.scope = 'corpus'
 					AND r.enrichment_status = 'enriched'
 					${fromDate ? sql`AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${fromDate}` : sql``}
@@ -393,33 +393,20 @@ function capReadContextContent(results: ReadContextResult[]): ReadContextResult[
 	});
 }
 
-function resourceTranslationJoins(): SQL {
+function resourceLocalizedJoin(): SQL {
 	return sql`
 		LEFT JOIN LATERAL (
-			SELECT lang, title, summary, content, keywords, source
-			FROM resource_translations
-			WHERE resource_id = r.id AND lang = r.original_lang
+			SELECT lang, title, summary, content, keywords, translation_source
+			FROM resources_localized
+			WHERE id = r.id
+			ORDER BY
+				(lang = r.original_lang) DESC,
+				(lang = 'en') DESC,
+				(lang = 'zh-Hant') DESC,
+				(translation_source = 'original') DESC,
+				lang ASC
 			LIMIT 1
-		) rt_primary ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT lang, title, summary, content, keywords, source
-			FROM resource_translations
-			WHERE resource_id = r.id AND lang = 'en'
-			LIMIT 1
-		) rt_en ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT lang, title, summary, content, keywords, source
-			FROM resource_translations
-			WHERE resource_id = r.id AND lang = 'zh-Hant'
-			LIMIT 1
-		) rt_zh ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT lang, title, summary, content, keywords, source
-			FROM resource_translations
-			WHERE resource_id = r.id
-			ORDER BY CASE source WHEN 'original' THEN 0 WHEN 'human' THEN 1 ELSE 2 END, lang
-			LIMIT 1
-		) rt_any ON TRUE
+		) rt ON TRUE
 	`;
 }
 
@@ -436,37 +423,37 @@ function resourceReadSelect(userId: string): SQL {
 		r.published_date,
 		r.scraped_date,
 		r.tags,
-		COALESCE(rt_primary.title, rt_en.title, rt_zh.title, rt_any.title) AS title,
-		COALESCE(rt_primary.summary, rt_en.summary, rt_zh.summary, rt_any.summary) AS summary,
+		rt.title AS title,
+		rt.summary AS summary,
 		CASE WHEN EXISTS (
 			SELECT 1
 			FROM library content_library
 			WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
 		)
-		THEN COALESCE(rt_primary.content, rt_en.content, rt_zh.content, rt_any.content)
+		THEN rt.content
 		ELSE NULL
 		END AS content,
-		COALESCE(rt_primary.keywords, rt_en.keywords, rt_zh.keywords, rt_any.keywords) AS keywords,
-		COALESCE(rt_primary.lang, rt_en.lang, rt_zh.lang, rt_any.lang) AS translation_lang
+		rt.keywords AS keywords,
+		rt.lang AS translation_lang
 	`;
 }
 
 function resourceSummarySelect(): SQL {
 	return sql`
 		r.id::text,
-		COALESCE(rt_primary.title, rt_en.title, rt_zh.title, rt_any.title) AS title,
-		COALESCE(rt_primary.summary, rt_en.summary, rt_zh.summary, rt_any.summary) AS summary
+		rt.title AS title,
+		rt.summary AS summary
 	`;
 }
 
 function resourceSearchSelect(): SQL {
 	return sql`
 		r.id::text,
-		COALESCE(rt_primary.title, rt_en.title, rt_zh.title, rt_any.title) AS title,
+		rt.title AS title,
 		r.url,
 		COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_date,
 		r.type AS source,
-		COALESCE(rt_primary.summary, rt_en.summary, rt_zh.summary, rt_any.summary) AS summary,
+		rt.summary AS summary,
 		r.tags
 	`;
 }
@@ -515,7 +502,7 @@ async function readResources(db: CoreDb, ids: string[], userId: string): Promise
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
-			${resourceTranslationJoins()}
+			${resourceLocalizedJoin()}
 			WHERE r.id = ANY(${validIds}::uuid[])
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -532,7 +519,7 @@ async function readResourceSummaries(db: CoreDb, ids: string[], userId: string):
 		sql`
 			SELECT ${resourceSummarySelect()}
 			FROM resources r
-			${resourceTranslationJoins()}
+			${resourceLocalizedJoin()}
 			WHERE r.id = ANY(${validIds}::uuid[])
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -627,7 +614,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
-			${resourceTranslationJoins()}
+			${resourceLocalizedJoin()}
 			WHERE (r.url = ANY(${candidateUrls}::text[]) OR r.normalized_url = ANY(${candidateUrls}::text[]))
 				AND ${resourceAccessPredicate(userId)}
 		`,
