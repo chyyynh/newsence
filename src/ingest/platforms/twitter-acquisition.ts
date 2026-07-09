@@ -367,7 +367,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 
 	if (linkedContentUrl) {
 		const scraped = buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText, ogImageUrl);
-		return { kind: 'share' as const, scraped, canonicalUrl: linkedContentUrl, eventText: tweetText };
+		return { kind: 'share' as const, scraped, canonicalUrl: tweet.url, eventText: tweetText };
 	}
 
 	const title = buildTweetTitle(tweet, 80);

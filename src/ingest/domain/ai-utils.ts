@@ -373,6 +373,7 @@ export async function generateResourceAnalysis(resource: ResourceForProcessing, 
 		});
 		const resourceForAnalysis = cleanedContent ? { ...resource, content: cleanedContent } : resource;
 		const resourcePrompt = buildResourceContextPrompt(resourceForAnalysis);
+		const contentTranslationRequired = shouldTranslateResourceContent(resourceForAnalysis);
 		const [translation, classification, contentTranslation] = await Promise.all([
 			generateObject(env.AI, resourcePrompt, {
 				schema: ResourceTranslationSchema,
@@ -399,6 +400,11 @@ export async function generateResourceAnalysis(resource: ResourceForProcessing, 
 				return null;
 			}),
 		]);
+		if (!translation) throw new Error('Resource translation did not return valid output');
+		if (!classification) throw new Error('Resource classification did not return valid output');
+		if (contentTranslationRequired && !contentTranslation?.trim()) {
+			throw new Error('Resource content translation did not return valid output');
+		}
 
 		const analysis: AIAnalysisResult = {};
 		if (cleanedContent) {
@@ -434,7 +440,7 @@ export async function generateResourceAnalysis(resource: ResourceForProcessing, 
 		}
 		return analysis;
 	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Parse failed', error: String(error) });
-		return {};
+		console.error({ tag: 'AI', msg: 'Analysis failed', error: String(error) });
+		throw error;
 	}
 }

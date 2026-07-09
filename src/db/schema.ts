@@ -179,7 +179,7 @@ export const papers = pgTable(
 	'papers',
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
-		openAlexId: varchar('openalex_id', { length: 32 }).notNull().unique(),
+		openAlexId: varchar('openalex_id', { length: 64 }).notNull().unique(),
 		doi: text('doi').unique(),
 		resourceId: uuid('resource_id').references(() => resources.id, { onDelete: 'set null' }),
 		title: text('title'),

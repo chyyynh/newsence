@@ -1,7 +1,11 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { ResourceForProcessing } from '@core-shared/types';
-import { loadResourceForProcessing } from '@ingest/domain/resource-store';
+import {
+	claimResourcesForEnrichmentRecovery,
+	loadResourceForProcessing,
+	markResourceEnrichmentFailed,
+} from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
 	EMPTY_OG_IMAGE_PATCH,
@@ -35,6 +39,32 @@ export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promi
 
 	await instance.restart();
 	return instance.id;
+}
+
+export async function recoverStalledResourceProcessing(env: CoreEnv): Promise<void> {
+	const resourceIds = await claimResourcesForEnrichmentRecovery(env);
+	let queued = 0;
+	let failed = 0;
+
+	for (let index = 0; index < resourceIds.length; index += 10) {
+		const batch = resourceIds.slice(index, index + 10);
+		const results = await Promise.allSettled(batch.map((resourceId) => enqueueProcessing(env, resourceId)));
+		for (const [resultIndex, result] of results.entries()) {
+			if (result.status === 'fulfilled') {
+				queued++;
+				continue;
+			}
+
+			failed++;
+			const resourceId = batch[resultIndex]!;
+			console.error({ tag: 'RECOVERY', msg: 'Resource re-enqueue failed', resource_id: resourceId, error: String(result.reason) });
+			await markResourceEnrichmentFailed(env, resourceId).catch((error) =>
+				console.error({ tag: 'RECOVERY', msg: 'Failed to restore failed status', resource_id: resourceId, error: String(error) }),
+			);
+		}
+	}
+
+	if (resourceIds.length) console.info({ tag: 'RECOVERY', msg: 'Sweep completed', claimed: resourceIds.length, queued, failed });
 }
 
 function workflowIdPart(value: string): string {
@@ -92,6 +122,26 @@ async function loadFullResource(
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId } = event.payload;
+		try {
+			return await this.runResource(resourceId, step);
+		} catch (error) {
+			await step
+				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
+					markResourceEnrichmentFailed(this.env, resourceId),
+				)
+				.catch((markError) =>
+					console.error({
+						tag: 'WORKFLOW',
+						msg: 'Failed to mark resource enrichment as failed',
+						resource_id: resourceId,
+						error: String(markError),
+					}),
+				);
+			throw error;
+		}
+	}
+
+	private async runResource(resourceId: string, step: WorkflowStep) {
 		const initialResource = await step.do(
 			'fetch-resource-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -156,7 +206,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					tags: processorResult.updateData.tags ?? fullResource.tags,
 					keywords: processorResult.updateData.keywords ?? fullResource.keywords,
 				});
-				return text && this.env.AI ? generateResourceEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME) : null;
+				if (!text) throw new Error(`Resource ${resourceId} has no text to embed`);
+				const generated = await generateResourceEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME);
+				if (!generated?.length) throw new Error(`Embedding generation failed for resource ${resourceId}`);
+				return generated;
 			},
 		);
 

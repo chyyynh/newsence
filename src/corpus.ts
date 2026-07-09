@@ -106,8 +106,9 @@ export async function searchCorpusResourceRanks(
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
+	const vector = await searchQueryVector(env, query);
 	return withCoreDb(env, async (db) => {
-		const ranks = await rankResources(db, env, query, limit);
+		const ranks = await rankResources(db, query, limit, {}, vector);
 		return [...ranks].map(([id, score]) => ({ id, score }));
 	});
 }
@@ -126,22 +127,28 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
+	const vector = query ? await searchQueryVector(env, query) : null;
 	return withCoreDb(env, async (db) => {
-		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
+		const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
+		const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
 		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = query ? await rankResources(db, env, query, rankLimit, { fromDate }) : null;
+		const ranks = query ? await rankResources(db, query, rankLimit, { fromDate }, vector) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
 			const candidateIds = [...ranks.keys()].filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
+			const candidateIdArray = sql`ARRAY[${sql.join(
+				candidateIds.map((id) => sql`${id}`),
+				sql`, `,
+			)}]::uuid[]`;
 			const rows = await queryRows<ResourceSearchRow>(
 				db,
 				sql`
 					SELECT ${resourceSearchSelect()}
 					FROM resources r
 					${resourceLocalizedJoin()}
-					WHERE r.id = ANY(${candidateIds}::uuid[])
+					WHERE r.id = ANY(${candidateIdArray})
 						AND r.scope = 'corpus'
 						AND r.enrichment_status = 'enriched'
 						${fromDate ? sql`AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${fromDate}` : sql``}
@@ -226,20 +233,22 @@ async function relatedResources(db: CoreDb, seed: { id: string; type: 'resource'
 
 async function rankResources(
 	db: CoreDb,
-	env: CoreEnv,
 	query: string,
 	limit = 100,
 	options: RankResourceOptions = {},
+	vectorStr: string | null = null,
 ): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 
 	const tokens = tokenize(sanitized);
-	const patterns = tokens.length > 0 ? tokens.map((t) => `%${t}%`) : [`%${sanitized}%`];
+	const patterns = tokens.length > 0 ? tokens.map(likePattern) : [likePattern(sanitized)];
+	const patternArray = sql`ARRAY[${sql.join(
+		patterns.map((pattern) => sql`${pattern}`),
+		sql`, `,
+	)}]::text[]`;
 
-	const embedding = await generateResourceEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME).catch(() => null);
-	if (!embedding) return keywordOnly(db, patterns, limit, options);
-	const vectorStr = `[${embedding.join(',')}]`;
+	if (!vectorStr) return keywordOnly(db, patternArray, limit, options);
 	const overfetchLimit = Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP);
 	const dateFilter = () =>
 		options.fromDate ? sql` AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${options.fromDate}` : sql``;
@@ -263,19 +272,19 @@ async function rankResources(
 				WHERE r.scope = 'corpus'
 					AND r.enrichment_status = 'enriched'
 					AND (
-					EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patterns}::text[]))
+					EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
 					OR EXISTS (
 						SELECT 1
 						FROM resource_translations rt
 						WHERE rt.resource_id = r.id
 							AND (
-								EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patterns}::text[]))
-								OR rt.title ILIKE ANY(${patterns}::text[])
-								OR rt.summary ILIKE ANY(${patterns}::text[])
+								EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
+								OR rt.title ILIKE ANY(${patternArray})
+								OR rt.summary ILIKE ANY(${patternArray})
 							)
 					)
-					OR r.type ILIKE ANY(${patterns}::text[])
-					OR r.url ILIKE ANY(${patterns}::text[])
+					OR r.type ILIKE ANY(${patternArray})
+					OR r.url ILIKE ANY(${patternArray})
 				)${dateFilter()}
 				LIMIT ${overfetchLimit}
 			),
@@ -289,7 +298,7 @@ async function rankResources(
 			)
 			SELECT
 				s.id::text,
-				s.s * (1.0 / (1 + EXTRACT(EPOCH FROM now() - COALESCE(r.published_date, r.scraped_date, r.created_at)) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
+					s.s * (1.0 / (1 + GREATEST(EXTRACT(EPOCH FROM now() - COALESCE(r.published_date, r.scraped_date, r.created_at)), 0) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
 			FROM scored s
 			JOIN resources r ON s.id = r.id
 			ORDER BY score DESC
@@ -299,11 +308,22 @@ async function rankResources(
 		return new Map(rows.map((r) => [r.id, Number(r.score)]));
 	} catch (error) {
 		console.warn({ tag: 'CORPUS', msg: 'hybrid query failed, falling back to keyword search', error: String(error) });
-		return keywordOnly(db, patterns, limit, options);
+		return keywordOnly(db, patternArray, limit, options);
 	}
 }
 
-async function keywordOnly(db: CoreDb, patterns: string[], limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
+async function searchQueryVector(env: CoreEnv, query: string): Promise<string | null> {
+	const sanitized = sanitize(query);
+	if (!sanitized) return null;
+	const embedding = await generateResourceEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME);
+	return embedding?.length ? `[${embedding.join(',')}]` : null;
+}
+
+function likePattern(value: string): string {
+	return `%${value.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
+async function keywordOnly(db: CoreDb, patternArray: SQL, limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
 	const dateFilter = () =>
 		options.fromDate ? sql` AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${options.fromDate}` : sql``;
 	try {
@@ -312,14 +332,14 @@ async function keywordOnly(db: CoreDb, patterns: string[], limit: number, option
 			sql`
 			SELECT r.id,
 				(
-					(SELECT COUNT(*) FROM unnest(r.tags) k WHERE k ILIKE ANY(${patterns}::text[]))
-					+ CASE WHEN r.type ILIKE ANY(${patterns}::text[]) THEN 1 ELSE 0 END
-					+ CASE WHEN r.url ILIKE ANY(${patterns}::text[]) THEN 1 ELSE 0 END
+					(SELECT COUNT(*) FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
+					+ CASE WHEN r.type ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
+					+ CASE WHEN r.url ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
 					+ (
 						SELECT COALESCE(SUM(
-							(SELECT COUNT(*) FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patterns}::text[]))
-							+ CASE WHEN rt.title ILIKE ANY(${patterns}::text[]) THEN 1 ELSE 0 END
-							+ CASE WHEN rt.summary ILIKE ANY(${patterns}::text[]) THEN 1 ELSE 0 END
+							(SELECT COUNT(*) FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
+							+ CASE WHEN rt.title ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
+							+ CASE WHEN rt.summary ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
 						), 0)
 						FROM resource_translations rt
 						WHERE rt.resource_id = r.id
@@ -329,19 +349,19 @@ async function keywordOnly(db: CoreDb, patterns: string[], limit: number, option
 			WHERE r.scope = 'corpus'
 				AND r.enrichment_status = 'enriched'
 				AND (
-				EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patterns}::text[]))
+				EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
 				OR EXISTS (
 					SELECT 1
 					FROM resource_translations rt
 					WHERE rt.resource_id = r.id
 						AND (
-							EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patterns}::text[]))
-							OR rt.title ILIKE ANY(${patterns}::text[])
-							OR rt.summary ILIKE ANY(${patterns}::text[])
+							EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
+							OR rt.title ILIKE ANY(${patternArray})
+							OR rt.summary ILIKE ANY(${patternArray})
 						)
 				)
-				OR r.type ILIKE ANY(${patterns}::text[])
-				OR r.url ILIKE ANY(${patterns}::text[])
+				OR r.type ILIKE ANY(${patternArray})
+				OR r.url ILIKE ANY(${patternArray})
 			)${dateFilter()}
 			ORDER BY match_count DESC, COALESCE(r.published_date, r.scraped_date, r.created_at) DESC NULLS LAST
 			LIMIT ${limit}
@@ -506,13 +526,17 @@ function formatResourceReadResult(resource: ResourceContentRow): ReadContextResu
 async function readResources(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
+	const validIdArray = sql`ARRAY[${sql.join(
+		validIds.map((id) => sql`${id}`),
+		sql`, `,
+	)}]::uuid[]`;
 	const rows = await queryRows<ResourceContentRow>(
 		db,
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceLocalizedJoin()}
-			WHERE r.id = ANY(${validIds}::uuid[])
+				WHERE r.id = ANY(${validIdArray})
 				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
@@ -523,13 +547,17 @@ async function readResources(db: CoreDb, ids: string[], userId: string): Promise
 async function readResourceSummaries(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ResourceSummaryRow>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
+	const validIdArray = sql`ARRAY[${sql.join(
+		validIds.map((id) => sql`${id}`),
+		sql`, `,
+	)}]::uuid[]`;
 	const rows = await queryRows<ResourceSummaryRow>(
 		db,
 		sql`
 			SELECT ${resourceSummarySelect()}
 			FROM resources r
 			${resourceLocalizedJoin()}
-			WHERE r.id = ANY(${validIds}::uuid[])
+				WHERE r.id = ANY(${validIdArray})
 				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
@@ -539,6 +567,14 @@ async function readResourceSummaries(db: CoreDb, ids: string[], userId: string):
 async function readCollections(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
+	const validUuidArray = sql`ARRAY[${sql.join(
+		validIds.map((id) => sql`${id}`),
+		sql`, `,
+	)}]::uuid[]`;
+	const validTextArray = sql`ARRAY[${sql.join(
+		validIds.map((id) => sql`${id}`),
+		sql`, `,
+	)}]::text[]`;
 
 	const [collectionRows, citationRows] = await Promise.all([
 		queryRows<{ id: string; name: string; description: string | null }>(
@@ -546,7 +582,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 			sql`
 				SELECT id, name, description
 				FROM collections
-				WHERE id = ANY(${validIds}::uuid[]) AND user_id = ${userId}
+					WHERE id = ANY(${validUuidArray}) AND user_id = ${userId}
 			`,
 		),
 		queryRows<{ from_id: string; to_id: string }>(
@@ -556,7 +592,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 				FROM citations
 				WHERE user_id = ${userId}
 					AND from_type = 'collection'
-					AND from_id = ANY(${validIds}::text[])
+						AND from_id = ANY(${validTextArray})
 					AND to_type = 'resource'
 				ORDER BY created_at DESC
 			`,
@@ -617,6 +653,10 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
 	const candidateUrls = [...new Set(urlPairs.flat())];
+	const candidateUrlArray = sql`ARRAY[${sql.join(
+		candidateUrls.map((url) => sql`${url}`),
+		sql`, `,
+	)}]::text[]`;
 
 	const resourceRows = await queryRows<ResourceContentRow>(
 		db,
@@ -624,7 +664,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceLocalizedJoin()}
-			WHERE (r.url = ANY(${candidateUrls}::text[]) OR r.normalized_url = ANY(${candidateUrls}::text[]))
+				WHERE (r.url = ANY(${candidateUrlArray}) OR r.normalized_url = ANY(${candidateUrlArray}))
 				AND ${resourceAccessPredicate(userId)}
 		`,
 	);

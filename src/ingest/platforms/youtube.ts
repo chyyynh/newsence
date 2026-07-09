@@ -131,8 +131,7 @@ async function prepareYouTubeHighlightsFromTranscript(
 	});
 
 	if (!highlights?.highlights.length) {
-		console.error({ tag: 'AI', msg: 'YouTube highlights: invalid JSON', videoId });
-		return null;
+		throw new Error(`YouTube highlights did not return valid output for ${videoId}`);
 	}
 
 	console.info({ tag: 'AI', msg: 'YouTube highlights generated', videoId, count: highlights.highlights.length });
@@ -214,6 +213,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			if (!channel.RSSLink) continue;
 			const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
 			if (!res.ok) {
+				await res.body?.cancel();
 				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
 				continue;
 			}
@@ -229,6 +229,21 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
 			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
+			for (const existing of existingRecords) {
+				if (!existing.shouldRetryEnrichment) continue;
+				try {
+					await enqueueProcessing(env, existing.id);
+					totalQueued++;
+				} catch (err) {
+					console.warn({
+						tag: 'YOUTUBE-CRON',
+						msg: 'Existing resource retry enqueue failed',
+						channel: channel.name,
+						url: existing.url,
+						error: String(err),
+					});
+				}
+			}
 
 			if (!newVideos.length) {
 				console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });

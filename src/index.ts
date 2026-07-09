@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { timingSafeEqual } from 'node:crypto';
 import { readTextWithLimit } from '@core-shared/web';
 import {
 	type AcquiredContent,
@@ -15,7 +16,7 @@ import {
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { enqueueProcessing, NewsenceMonitorWorkflow, recoverStalledResourceProcessing } from '@ingest/workflow';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -24,9 +25,41 @@ import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 export { AcquisitionWorkflow, NewsenceMonitorWorkflow };
 
 const REQUEST_JSON_MAX_BYTES = 16 * 1024;
+const AUTH_ENCODER = new TextEncoder();
+const HTTP_CORS_HEADERS: Record<string, string> = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type, X-Internal-Token, Authorization',
+};
 
 function jsonError(status: number, message: string): Response {
-	return Response.json({ error: message }, { status });
+	return Response.json({ error: message }, { status, headers: HTTP_CORS_HEADERS });
+}
+
+function isHttpEnginePath(pathname: string): boolean {
+	return pathname === '/scrape' || pathname === '/acquisition' || pathname.startsWith('/acquisition/');
+}
+
+async function requireHttpAuth(env: CoreEnv, request: Request): Promise<Response | null> {
+	const expected = env.CORE_WORKER_INTERNAL_TOKEN?.trim();
+	const provided = (
+		request.headers.get('x-internal-token') ??
+		request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
+		''
+	).trim();
+	if (!expected) {
+		console.error({ tag: 'AUTH', msg: 'CORE_WORKER_INTERNAL_TOKEN is not configured' });
+		return jsonError(401, 'Missing or invalid internal token');
+	}
+	if (!provided) return jsonError(401, 'Missing or invalid internal token');
+
+	const [providedHash, expectedHash] = await Promise.all([
+		crypto.subtle.digest('SHA-256', AUTH_ENCODER.encode(provided)),
+		crypto.subtle.digest('SHA-256', AUTH_ENCODER.encode(expected)),
+	]);
+	return timingSafeEqual(new Uint8Array(providedHash), new Uint8Array(expectedHash))
+		? null
+		: jsonError(401, 'Missing or invalid internal token');
 }
 
 async function readRequestText(request: Request): Promise<string> {
@@ -55,7 +88,7 @@ async function handleScrapeRequest(env: CoreEnv, request: Request): Promise<Resp
 	}
 
 	try {
-		return Response.json(await scrapeSavedUrl(url, env));
+		return Response.json(await scrapeSavedUrl(url, env), { headers: HTTP_CORS_HEADERS });
 	} catch (error) {
 		return jsonError(502, error instanceof Error ? error.message : 'Scrape failed');
 	}
@@ -68,17 +101,23 @@ async function handleCreateAcquisitionJob(env: CoreEnv, request: Request): Promi
 	} catch (error) {
 		return jsonError(400, error instanceof Error ? error.message : 'Invalid acquisition request');
 	}
-	return Response.json(await createAcquisitionWorkflowJob(env, url), { status: 202 });
+	return Response.json(await createAcquisitionWorkflowJob(env, url), { status: 202, headers: HTTP_CORS_HEADERS });
 }
 
 async function handleAcquisitionStatus(env: CoreEnv, instanceId: string | null): Promise<Response> {
 	if (!instanceId) return jsonError(400, 'Acquisition workflow id is required');
-	return Response.json(await readAcquisitionJobStatus(env, instanceId));
+	return Response.json(await readAcquisitionJobStatus(env, instanceId), { headers: HTTP_CORS_HEADERS });
 }
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		if (request.method === 'GET' && url.pathname === '/health') return Response.json({ status: 'ok' });
+		if (request.method === 'OPTIONS' && isHttpEnginePath(url.pathname)) return new Response(null, { headers: HTTP_CORS_HEADERS });
+		if (isHttpEnginePath(url.pathname)) {
+			const unauthorized = await requireHttpAuth(this.env, request);
+			if (unauthorized) return unauthorized;
+		}
 		if (request.method === 'POST' && url.pathname === '/scrape') return handleScrapeRequest(this.env, request);
 		if (request.method === 'POST' && url.pathname === '/acquisition') return handleCreateAcquisitionJob(this.env, request);
 		if (request.method === 'GET' && url.pathname.startsWith('/acquisition/')) {
@@ -93,8 +132,15 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override scheduled(event: ScheduledController): void {
 		console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
 
-		if (event.cron === '*/5 * * * *') this.ctx.waitUntil(handleRSSCron(this.env));
-		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
+		if (event.cron === '*/5 * * * *') {
+			this.ctx.waitUntil(
+				Promise.allSettled([handleRSSCron(this.env), recoverStalledResourceProcessing(this.env)]).then((results) => {
+					for (const result of results) {
+						if (result.status === 'rejected') console.error({ tag: 'CORE', msg: 'Scheduled task failed', error: String(result.reason) });
+					}
+				}),
+			);
+		} else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
 	}
 

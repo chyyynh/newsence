@@ -4,13 +4,14 @@
 
 import type { WorkflowStep } from 'cloudflare:workers';
 import type { PaperMetadata, PaperReference } from '@core-shared/types';
-import { fetchWithTimeout } from '@core-shared/web';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { type CoreDb, withCoreTx } from '@db/client';
 import { paperReferences, papers } from '@db/schema';
 import { sql } from 'drizzle-orm';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
+const RESPONSE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_REFERENCES = 50;
 const MAX_EDGES = 50;
 const PDF_MIME = 'application/pdf';
@@ -156,22 +157,30 @@ async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
 			const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
-			if (res.ok) return (await res.json()) as T;
-			if (res.status === 429 && attempt < 2) {
+			if (res.ok) return JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)) as T;
+			if (res.status === 404) {
+				await res.body?.cancel();
+				return null;
+			}
+			if ((res.status === 429 || res.status >= 500) && attempt < 2) {
 				const retryAfter = Math.min(Number.parseInt(res.headers.get('retry-after') ?? '', 10) || 2, 5);
 				await res.body?.cancel();
 				await scheduler.wait(retryAfter * 1000);
 				continue;
 			}
-			console.warn({ tag: 'S2', msg: 'non-ok', status: res.status, path: path.slice(0, 80) });
 			await res.body?.cancel();
-			return null;
+			if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+				console.warn({ tag: 'S2', msg: 'request rejected', status: res.status, path: path.slice(0, 80) });
+				return null;
+			}
+			throw new Error(`Semantic Scholar request failed with HTTP ${res.status}`);
 		} catch (error) {
-			console.warn({ tag: 'S2', msg: 'fetch threw', error: String(error) });
-			return null;
+			if (attempt >= 2) throw error;
+			console.warn({ tag: 'S2', msg: 'request failed, retrying', attempt: attempt + 1, error: String(error) });
+			await scheduler.wait(2 ** attempt * 1000);
 		}
 	}
-	return null;
+	throw new Error('Semantic Scholar request exhausted retries');
 }
 
 function authorNames(authors: S2Author[] | undefined): string[] {
@@ -373,20 +382,15 @@ export async function stagePaperEnrichment(
 ): Promise<PaperMetadata | null> {
 	if (!input.hasStagedText && candidate.file_type !== PDF_MIME && !detectPaperId(candidate.url, null, false).hasAcademicMarker) return null;
 
-	try {
-		return await step.do(
-			'enrich-paper-metadata',
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () =>
-				enrichPaperMetadata(
-					{ url: candidate.url, title: candidate.title, fileType: candidate.file_type, content: await input.loadContent() },
-					env.S2_API_KEY,
-				),
-		);
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper enrichment failed, continuing', url: candidate.url, error: String(error) });
-		return null;
-	}
+	return step.do(
+		'enrich-paper-metadata',
+		{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+		async () =>
+			enrichPaperMetadata(
+				{ url: candidate.url, title: candidate.title, fileType: candidate.file_type, content: await input.loadContent() },
+				env.S2_API_KEY,
+			),
+	);
 }
 
 export async function syncPaperGraphForEnrichment(
@@ -396,14 +400,10 @@ export async function syncPaperGraphForEnrichment(
 	paperEnrichment: PaperMetadata | null,
 ): Promise<void> {
 	if (!paperEnrichment?.openAlexId) return;
-	try {
-		const summary = await step.do(
-			'sync-paper-graph',
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => syncPaperGraph(env, resourceId, paperEnrichment),
-		);
-		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', resource_id: resourceId, edges: summary?.edges ?? 0 });
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', resource_id: resourceId, error: String(error) });
-	}
+	const summary = await step.do(
+		'sync-paper-graph',
+		{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => syncPaperGraph(env, resourceId, paperEnrichment),
+	);
+	console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', resource_id: resourceId, edges: summary?.edges ?? 0 });
 }

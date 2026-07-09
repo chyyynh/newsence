@@ -21,7 +21,7 @@
 	 */
 	"rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }],
 	"observability": {
-		"enabled": false,
+		"enabled": true,
 		"head_sampling_rate": 1,
 		"logs": {
 			"enabled": true,
@@ -32,7 +32,7 @@
 		"traces": {
 			"enabled": true,
 			"persist": true,
-			"head_sampling_rate": 1
+			"head_sampling_rate": 0.05
 		}
 	},
 	/**
@@ -103,12 +103,13 @@
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *
 	 * Required secrets:
+	 * - CORE_WORKER_INTERNAL_TOKEN authenticates the external HTTP engine surface.
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
 	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
 	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
 	 */
 	"secrets": {
-		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
+		"required": ["CORE_WORKER_INTERNAL_TOKEN", "KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
 		"AI_GATEWAY_NAME": "default"

@@ -28,7 +28,10 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	} catch (err) {
 		return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, error: String(err) });
 	}
-	if (!res.ok) return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
+	if (!res.ok) {
+		await res.body?.cancel();
+		return console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status: res.status });
+	}
 
 	const items = (
 		extractFromXml(await readTextWithLimit(res, MAX_FEED_BYTES), {
@@ -46,8 +49,18 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, urls));
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
+	let retried = 0;
+	for (const existing of existingRecords) {
+		if (!existing.shouldRetryEnrichment) continue;
+		try {
+			await enqueueProcessing(env, existing.id);
+			retried++;
+		} catch (err) {
+			console.warn({ tag: 'RSS', msg: 'Existing resource retry enqueue failed', feed: feed.name, url: existing.url, error: String(err) });
+		}
+	}
 
-	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, totalCount: items.length });
+	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, retried, totalCount: items.length });
 	let queued = 0;
 	for (const { item, url } of newItems) {
 		try {

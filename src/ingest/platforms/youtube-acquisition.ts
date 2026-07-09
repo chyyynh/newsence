@@ -159,12 +159,8 @@ export async function scrapeYouTube(
 	const shouldFetchTranscript =
 		!options.minDurationSecondsForTranscript || !durationSeconds || durationSeconds >= options.minDurationSecondsForTranscript;
 	if (shouldFetchTranscript) {
-		try {
-			console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-			transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
-		} catch (e) {
-			console.warn({ tag: 'YOUTUBE', msg: 'Failed to fetch transcript', videoId, error: String(e) });
-		}
+		console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
+		transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
 	} else {
 		console.info({
 			tag: 'YOUTUBE',

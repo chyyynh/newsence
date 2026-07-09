@@ -68,7 +68,14 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 			await db
 				.select({
 					complete: sql<boolean>`${resources.enrichmentStatus} = 'enriched'
-						AND ${resources.embedding} IS NOT NULL`,
+							AND ${resources.embedding} IS NOT NULL
+							AND EXISTS (
+								SELECT 1
+								FROM ${resourceTranslations}
+								WHERE ${resourceTranslations.resourceId} = ${resources.id}
+									AND ${resourceTranslations.lang} = ${ZH_HANT_RESOURCE_LANG}
+									AND NULLIF(${resourceTranslations.summary}, '') IS NOT NULL
+							)`,
 				})
 				.from(resources)
 				.where(eq(resources.id, resourceId))
@@ -76,6 +83,42 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 		)[0];
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
 		return row.complete;
+	});
+}
+
+export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		const updated = await db
+			.update(resources)
+			.set({ enrichmentStatus: 'failed', updatedAt: sql`NOW()` })
+			.where(eq(resources.id, resourceId))
+			.returning({ id: resources.id });
+		if (!updated.length) throw new Error(`Failed to mark resource ${resourceId} as failed: not found`);
+	});
+}
+
+export async function claimResourcesForEnrichmentRecovery(env: CoreEnv, limit = 50): Promise<string[]> {
+	return withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			WITH candidates AS (
+				SELECT id
+				FROM resources
+				WHERE type IN ('web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf', 'paper')
+				  AND (
+					enrichment_status = 'pending' AND updated_at < NOW() - INTERVAL '15 minutes'
+					OR enrichment_status = 'failed' AND updated_at < NOW() - INTERVAL '30 minutes'
+				  )
+				ORDER BY updated_at ASC
+				LIMIT ${Math.max(1, Math.min(Math.trunc(limit), 100))}
+				FOR UPDATE SKIP LOCKED
+			)
+			UPDATE resources AS resource
+			SET enrichment_status = 'pending', updated_at = NOW()
+			FROM candidates
+			WHERE resource.id = candidates.id
+			RETURNING resource.id::text AS id
+		`);
+		return (result.rows as Array<{ id: string }>).map((row) => row.id);
 	});
 }
 
@@ -413,7 +456,8 @@ function resourceUpsertStatement(record: ResourceMirrorRecord): SQL {
 	if (record.normalizedUrl) {
 		return resourceInsertStatement(
 			record,
-			sql`ON CONFLICT (normalized_url) WHERE normalized_url IS NOT NULL DO UPDATE SET ${resourceConflictSetSql()}`,
+			sql`ON CONFLICT (normalized_url) WHERE normalized_url IS NOT NULL DO UPDATE SET ${resourceConflictSetSql()}
+				WHERE resources.scope <> 'private' OR excluded.scope = 'private'`,
 		);
 	}
 	if (record.storageKey) {
@@ -519,9 +563,9 @@ function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRe
 		{
 			resourceId,
 			lang: record.originalLang,
-			title: record.title,
-			summary: record.summary,
-			content: record.content,
+			title: record.title ?? cleanString(originalTranslation?.title),
+			summary: record.summary ?? cleanString(originalTranslation?.summary),
+			content: record.content ?? cleanString(originalTranslation?.content),
 			keywords: originalTranslation?.keywords?.length ? originalTranslation.keywords : record.keywords,
 			source: 'original',
 		},
@@ -698,26 +742,27 @@ type ExistingResourceRecord = {
 	id: string;
 	url: string;
 	type: ResourceType;
-	hasZhHantSummary: boolean;
+	shouldRetryEnrichment: boolean;
 };
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
 	if (urls.length === 0) return [];
+	const urlArray = sql`ARRAY[${sql.join(
+		urls.map((url) => sql`${url}`),
+		sql`, `,
+	)}]::text[]`;
 	const result = await db.execute(sql`
 		SELECT
 			r.id::text AS id,
 			COALESCE(r.normalized_url, r.url) AS url,
 			r.type AS type,
-			EXISTS (
-				SELECT 1
-				  FROM resource_translations rt
-				 WHERE rt.resource_id = r.id
-				   AND rt.lang = ${ZH_HANT_RESOURCE_LANG}
-				   AND NULLIF(rt.summary, '') IS NOT NULL
-			) AS "hasZhHantSummary"
+			(
+				r.enrichment_status = 'pending'
+				OR (r.enrichment_status = 'failed' AND r.updated_at < NOW() - INTERVAL '30 minutes')
+			) AS "shouldRetryEnrichment"
 		FROM resources r
-		WHERE r.normalized_url = ANY(${urls}::text[])
-		   OR r.url = ANY(${urls}::text[])
+		WHERE r.normalized_url = ANY(${urlArray})
+		   OR r.url = ANY(${urlArray})
 	`);
 	return result.rows as unknown as ExistingResourceRecord[];
 }
@@ -726,9 +771,22 @@ export async function reopenResourceForReprocessing(
 	db: CoreDb,
 	resourceId: string,
 	update: { summary: string; content: string; platformMetadata: unknown },
-): Promise<void> {
-	const [resource] = await db.select({ originalLang: resources.originalLang }).from(resources).where(eq(resources.id, resourceId)).limit(1);
+): Promise<boolean> {
+	const [resource] = await db
+		.select({
+			originalLang: resources.originalLang,
+			summary: resourceTranslations.summary,
+			content: resourceTranslations.content,
+		})
+		.from(resources)
+		.leftJoin(
+			resourceTranslations,
+			and(eq(resourceTranslations.resourceId, resources.id), eq(resourceTranslations.lang, resources.originalLang)),
+		)
+		.where(eq(resources.id, resourceId))
+		.limit(1);
 	if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
+	if (resource.summary === update.summary && resource.content === update.content) return false;
 	await db
 		.update(resources)
 		.set({
@@ -760,4 +818,5 @@ export async function reopenResourceForReprocessing(
 	await db
 		.delete(resourceTranslations)
 		.where(and(eq(resourceTranslations.resourceId, resourceId), not(eq(resourceTranslations.lang, resource.originalLang))));
+	return true;
 }

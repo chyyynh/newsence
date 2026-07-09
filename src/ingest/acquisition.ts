@@ -1,5 +1,5 @@
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
-import { extractYouTubeId } from '@core-shared/web';
+import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
 import { isResourceType } from '../resources/types';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
@@ -29,7 +29,7 @@ export function validateAcquisitionUrl(url: string): string {
 	const parsed = new URL(url);
 	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http(s) URLs are allowed');
 	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
-	return parsed.toString();
+	return normalizeUrl(parsed.toString());
 }
 
 export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {

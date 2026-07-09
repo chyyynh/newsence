@@ -11,6 +11,7 @@ import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 import { generateResourceAnalysis, mergeResourceAnalysis, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
+const HN_ITEM_MAX_BYTES = 5 * 1024 * 1024;
 
 interface HnComment {
 	author?: string;
@@ -64,7 +65,7 @@ async function fetchHnItem(itemId: string): Promise<HnItem> {
 		await response.body?.cancel();
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
-	return JSON.parse(await readTextWithLimit(response)) as HnItem;
+	return JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)) as HnItem;
 }
 
 interface HnCollectedComment {
@@ -249,6 +250,7 @@ async function generateHnEditorial(
 		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: 'hn-editorial-cn', gatewayId: env.AI_GATEWAY_NAME }),
 		generateText(env.AI, enPrompt.user, { systemPrompt: enPrompt.system, task: 'hn-editorial-en', gatewayId: env.AI_GATEWAY_NAME }),
 	]);
+	if (!cn || !en) throw new Error('Hacker News editorial generation did not return both locales');
 
 	return { en, cn };
 }
@@ -257,12 +259,7 @@ export async function processHackerNewsResource(resource: ResourceForProcessing,
 	const metadata = platformMetadataFor(resource, 'hackernews');
 	const itemId = metadata?.data.itemId || null;
 
-	const hnData: HnItem | null = itemId
-		? await fetchHnItem(itemId).catch((error) => {
-				console.error({ tag: 'HN-PROCESSOR', msg: 'Failed to fetch HN data', error: String(error) });
-				return null;
-			})
-		: null;
+	const hnData: HnItem | null = itemId ? await fetchHnItem(itemId) : null;
 
 	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 

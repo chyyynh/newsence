@@ -43,7 +43,13 @@ function urlHost(url: string): string {
 }
 
 function fileNameFromUrl(url: string, fallback: string): string {
-	const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '');
+	const encodedName = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '';
+	let name = encodedName;
+	try {
+		name = decodeURIComponent(encodedName);
+	} catch {
+		// Keep the encoded path segment when the source URL has malformed escapes.
+	}
 	return name || fallback;
 }
 
@@ -235,8 +241,10 @@ export async function fetchOgImage(url: string): Promise<OgImagePatch> {
 		while (totalBytes < OG_MAX_BYTES) {
 			const { done, value } = await reader.read();
 			if (done || !value) break;
-			chunks.push(value);
-			totalBytes += value.byteLength;
+			const remaining = OG_MAX_BYTES - totalBytes;
+			const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+			chunks.push(chunk);
+			totalBytes += chunk.byteLength;
 		}
 		await reader.cancel();
 
@@ -334,8 +342,11 @@ export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Pro
 	const mimeType = input.mimeType?.toLowerCase().split(';')[0]?.trim() || null;
 	const fileName = input.fileName?.trim() || (mimeType === PDF_MIME || isPdfBytes(bytes) ? 'document.pdf' : 'document.html');
 	const sourceUrl = normalizeBlobSourceUrl(input.sourceUrl?.trim(), fileName);
+	const isPdf = mimeType === PDF_MIME || /\.pdf$/i.test(fileName) || isPdfBytes(bytes);
+	const maxBytes = isPdf ? GENERIC_PDF_MAX_BYTES : GENERIC_HTML_MAX_BYTES;
+	if (bytes.byteLength > maxBytes) throw new Error(`Blob exceeded ${maxBytes} bytes`);
 
-	if (mimeType === PDF_MIME || /\.pdf$/i.test(fileName) || isPdfBytes(bytes)) {
+	if (isPdf) {
 		return scrapePdfBytes(bytes, sourceUrl, fileName);
 	}
 

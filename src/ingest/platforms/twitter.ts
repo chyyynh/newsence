@@ -1,7 +1,7 @@
 import { generateObject } from '@core-ai/embedding';
 import { ENTITY_TYPES, type PlatformMetadata, type ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
-import { type CoreDb, withCoreDb } from '@db/client';
+import { withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
@@ -13,7 +13,6 @@ import { generateResourceAnalysis, isEmpty, mergeResourceAnalysis, type Processo
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
 async function enqueueTwitterResource(
-	db: CoreDb,
 	env: CoreEnv,
 	data: {
 		url: string;
@@ -27,30 +26,28 @@ async function enqueueTwitterResource(
 		hashTags?: string[];
 	},
 ): Promise<boolean> {
-	const resourceId = await upsertPendingSourceResource(db, {
-		url: data.url,
-		title: data.title,
-		source: data.source,
-		publishedDate: data.publishedDate,
-		summary: data.summary,
-		type: 'twitter',
-		originalLang: data.originalLang,
-		content: data.content,
-		platformMetadata: data.platformMetadata,
-		keywords: data.hashTags,
-	});
+	const resourceId = await withCoreDb(env, (db) =>
+		upsertPendingSourceResource(db, {
+			url: data.url,
+			title: data.title,
+			source: data.source,
+			publishedDate: data.publishedDate,
+			summary: data.summary,
+			type: 'twitter',
+			originalLang: data.originalLang,
+			content: data.content,
+			platformMetadata: data.platformMetadata,
+			keywords: data.hashTags,
+		}),
+	);
 	await enqueueProcessing(env, resourceId);
 	return true;
 }
 
 const MIN_TWEET_LENGTH = 150;
 
-async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolean> {
-	const resolved = await resolveTweetContent(tweet, env.KAITO_API_KEY).catch((err) => {
-		console.warn({ tag: 'TWITTER', msg: 'Tweet content resolution failed', url: tweet.url, error: String(err) });
-		return null;
-	});
-	if (!resolved) return false;
+async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
+	const resolved = await resolveTweetContent(tweet, env.KAITO_API_KEY);
 
 	if (resolved.kind === 'tweet' && !tweet.retweetedBy && resolved.eventText.length < MIN_TWEET_LENGTH) {
 		console.info({ tag: 'TWITTER', msg: 'Filtered tweet', author: tweet.author?.userName, reason: 'too short standalone tweet' });
@@ -58,9 +55,9 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 	}
 
 	const resourceUrl = normalizeUrl(resolved.canonicalUrl);
-	const [existingResource] = await getExistingResourcesByUrl(db, [resourceUrl]);
+	const [existingResource] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [resourceUrl]));
 	if (existingResource) {
-		if (!existingResource.hasZhHantSummary) await enqueueProcessing(env, existingResource.id);
+		if (existingResource.shouldRetryEnrichment) await enqueueProcessing(env, existingResource.id);
 		console.info({ tag: 'TWITTER', msg: 'Resource already exists (dedup)', url: resourceUrl, eventType: resolved.kind });
 		return true;
 	}
@@ -71,7 +68,7 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
-	const queued = await enqueueTwitterResource(db, env, {
+	const queued = await enqueueTwitterResource(env, {
 		url: resourceUrl,
 		title,
 		source,
@@ -86,22 +83,29 @@ async function saveTweet(db: CoreDb, tweet: Tweet, env: CoreEnv): Promise<boolea
 	return queued;
 }
 
-async function saveThread(db: CoreDb, tweets: Tweet[], env: CoreEnv): Promise<boolean> {
+async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	const { first, combinedText, platformMetadata } = buildThreadResourceParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
 
-	const [existing] = await getExistingResourcesByUrl(db, [firstUrl]);
+	const [existing] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [firstUrl]));
 
 	if (existing) {
 		const existingId = existing.id;
-		await reopenResourceForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata });
-		await enqueueProcessing(env, existingId);
-		console.info({ tag: 'TWITTER', msg: 'Updated thread', author: first.author?.userName, tweets: tweetCount });
+		const changed = await withCoreDb(env, (db) =>
+			reopenResourceForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata }),
+		);
+		if (changed || existing.shouldRetryEnrichment) await enqueueProcessing(env, existingId);
+		console.info({
+			tag: 'TWITTER',
+			msg: changed ? 'Updated thread' : 'Thread unchanged',
+			author: first.author?.userName,
+			tweets: tweetCount,
+		});
 		return true;
 	}
 
-	const queued = await enqueueTwitterResource(db, env, {
+	const queued = await enqueueTwitterResource(env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
@@ -125,7 +129,6 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 
 /** Max usernames per query batch to stay within query length limits */
 const TWITTER_BATCH_SIZE = 20;
-const TWITTER_MAX_PAGES_PER_BATCH = 5;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
 
@@ -193,10 +196,8 @@ async function fetchTweetsForBatch(
 
 	const tweets: Tweet[] = [];
 	let cursor = '';
-	let pages = 0;
 
 	while (true) {
-		pages++;
 		const params = new URLSearchParams({ query, queryType: 'Latest' });
 		if (cursor) params.set('cursor', cursor);
 
@@ -226,10 +227,6 @@ async function fetchTweetsForBatch(
 		}
 
 		if (!apiRes.has_next_page) break;
-		if (pages >= TWITTER_MAX_PAGES_PER_BATCH) {
-			console.warn({ tag: 'TWITTER', msg: 'Advanced Search page cap reached', users: userNames.length, sinceTime, pages });
-			return { tweets, completed: false };
-		}
 		cursor = apiRes.next_cursor || '';
 		if (!cursor) break;
 		await scheduler.wait(1000);
@@ -292,14 +289,14 @@ function batchTwitterUserNames(userNames: string[]): string[][] {
 	return batches;
 }
 
-async function saveTweetGroups(env: CoreEnv, db: CoreDb, tweets: Tweet[]): Promise<{ processed: number; allSaved: boolean }> {
+async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<{ processed: number; allSaved: boolean }> {
 	let processed = 0;
 	let allSaved = true;
 	for (const group of groupTweetsIntoThreads(tweets)) {
 		const first = group[0];
 		if (!first) continue;
 		try {
-			const saved = group.length >= 2 ? await saveThread(db, group, env) : await saveTweet(db, first, env);
+			const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
 			if (saved) processed++;
 		} catch (err) {
 			allSaved = false;
@@ -319,7 +316,7 @@ async function processTwitterBatches(
 	for (const batch of batches) {
 		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
 		if (!completed) allCompleted = false;
-		const saved = await withCoreDb(env, (db) => saveTweetGroups(env, db, tweets));
+		const saved = await saveTweetGroups(env, tweets);
 		processed += saved.processed;
 		if (!saved.allSaved) allCompleted = false;
 	}
@@ -386,7 +383,6 @@ export async function processTwitterResource(resource: ResourceForProcessing, en
 	if (isEmpty(resource.summary)) updateData.summary = tweetText;
 
 	const analysis = await translateTweet(tweetText, resource, env);
-	if (!analysis) return mergeResourceAnalysis(resource, { tags: ['Twitter'] }, { updateData });
 	const merged = mergeResourceAnalysis(
 		resource,
 		{
@@ -446,7 +442,7 @@ const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，
 - 產業應用: Tech, Finance, Healthcare, Gaming, Creative
 - 事件類型: ProductLaunch, Research, Partnership, Announcement`;
 
-async function translateTweet(tweetText: string, resource: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis | null> {
+async function translateTweet(tweetText: string, resource: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis> {
 	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
 	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
@@ -465,7 +461,7 @@ ${tweetText}`,
 				systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
 			},
 		);
-		if (!result) throw new Error('No JSON found');
+		if (!result) throw new Error('Tweet translation did not return valid output');
 
 		return {
 			summary: result.summary,
@@ -475,6 +471,6 @@ ${tweetText}`,
 		};
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Tweet translation failed', error: String(error) });
-		return null;
+		throw error;
 	}
 }

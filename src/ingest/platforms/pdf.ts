@@ -13,6 +13,7 @@ export interface PdfTextArtifact {
 
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
+const MAX_PDF_BYTES = 25 * 1024 * 1024;
 
 let pdfParserReady = false;
 
@@ -33,6 +34,7 @@ export async function parsePdfBytes(bytes: Uint8Array): Promise<PdfTextArtifact>
 async function extractPdfText(env: CoreEnv, input: { sourceStorageKey: string }): Promise<ReadableStream<Uint8Array>> {
 	const obj = await env.R2.get(input.sourceStorageKey);
 	if (!obj) throw new Error(`PDF source object missing: ${input.sourceStorageKey}`);
+	if (obj.size > MAX_PDF_BYTES) throw new Error(`PDF source object exceeded ${MAX_PDF_BYTES} bytes`);
 	const { text, status, chars, pages } = await parsePdfBytes(new Uint8Array(await obj.arrayBuffer()));
 	return new Response(JSON.stringify({ status, chars, pages, text } satisfies PdfTextArtifact)).body!;
 }
