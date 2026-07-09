@@ -81,13 +81,30 @@ function shouldAcquireContent(resource: ResourceForProcessing & { has_content?: 
 	return (!hasContent || needsYouTubeAcquisition) && !resource.storage_key && !!resource.url;
 }
 
-async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
-	const artifact = await step.do(
-		'acquire-content',
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		() => scrapeSavedUrlArtifact(resource.url, env),
-	);
-	return readAcquiredContentArtifact(artifact);
+async function stageSavedUrlAcquisition(
+	env: CoreEnv,
+	step: WorkflowStep,
+	resource: ResourceForProcessing,
+): Promise<AcquiredContent | undefined> {
+	try {
+		const artifact = await step.do(
+			'acquire-content',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => scrapeSavedUrlArtifact(resource.url, env),
+		);
+		return readAcquiredContentArtifact(artifact);
+	} catch (error) {
+		const hasFeedFallback = resource.type === 'rss' && !!(resource.summary?.trim() || resource.content?.trim());
+		if (!hasFeedFallback) throw error;
+		console.warn({
+			tag: 'WORKFLOW',
+			msg: 'URL acquisition failed; continuing with RSS feed content',
+			resource_id: resource.id,
+			url: resource.url,
+			error: String(error),
+		});
+		return undefined;
+	}
 }
 
 async function stageOgImagePatch(
