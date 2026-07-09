@@ -892,6 +892,12 @@ export async function reopenResourceForReprocessing(
 		});
 	await db
 		.delete(resourceTranslations)
-		.where(and(eq(resourceTranslations.resourceId, resourceId), not(eq(resourceTranslations.lang, resource.originalLang))));
+		.where(
+			and(
+				eq(resourceTranslations.resourceId, resourceId),
+				not(eq(resourceTranslations.lang, resource.originalLang)),
+				not(eq(resourceTranslations.source, 'human')),
+			),
+		);
 	return true;
 }
