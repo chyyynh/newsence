@@ -158,8 +158,7 @@ async function readCollectionResources(
 		     r.url,
 		     primary_translation.summary,
 		     CASE
-		       WHEN ${viewerId}::text IS NOT NULL
-		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
+		       WHEN viewer_library.id IS NOT NULL
 		         THEN primary_translation.content
 		       ELSE NULL
 		     END AS content,
@@ -200,8 +199,7 @@ async function readCollectionResources(
 		         'title', rt.title,
 		         'summary', rt.summary,
 		         'content', CASE
-		           WHEN ${viewerId}::text IS NOT NULL
-		             AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
+		           WHEN viewer_library.id IS NOT NULL
 		             THEN rt.content
 		           ELSE NULL
 		         END,
@@ -218,10 +216,7 @@ async function readCollectionResources(
 		     AND c.from_id = ${collectionId}::text
 		     AND (
 		       r.scope = 'corpus'
-		       OR (
-		         ${viewerId}::text IS NOT NULL
-		         AND (c.user_id = ${viewerId} OR viewer_library.id IS NOT NULL)
-		       )
+		       OR viewer_library.id IS NOT NULL
 		     )
 		   ORDER BY c.created_at ASC`,
 	);
