@@ -309,6 +309,7 @@ export async function updateResourceAfterProcessing(
 	updatePayload: ResourceUpdate,
 ): Promise<string> {
 	const record = resourceMirrorRecord('resource', resourceId, resource, updatePayload);
+	const tags = textArraySql(record.tags);
 	const result = await db.execute(sql`
 		UPDATE resources
 		   SET type = ${record.type},
@@ -319,7 +320,7 @@ export async function updateResourceAfterProcessing(
 		       original_lang = ${record.originalLang},
 		       published_date = COALESCE(${record.publishedDate}, resources.published_date),
 		       scraped_date = ${record.scrapedDate},
-		       tags = CASE WHEN cardinality(${record.tags}::text[]) > 0 THEN ${record.tags}::text[] ELSE resources.tags END,
+		       tags = CASE WHEN cardinality(${tags}) > 0 THEN ${tags} ELSE resources.tags END,
 		       category = COALESCE(${record.category}, resources.category),
 		       entities = COALESCE(${record.entitiesJson}::jsonb, resources.entities),
 		       og_image_url = COALESCE(NULLIF(${record.ogImageUrl}, ''), resources.og_image_url),
@@ -467,6 +468,7 @@ function resourceUpsertStatement(record: ResourceMirrorRecord): SQL {
 }
 
 function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL): SQL {
+	const tags = textArraySql(record.tags);
 	return sql`
 		INSERT INTO resources (
 			id, type, scope, url, normalized_url, storage_key, file_type,
@@ -485,7 +487,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			${record.originalLang},
 			${record.publishedDate},
 			${record.scrapedDate},
-			${record.tags}::text[],
+			${tags},
 			${record.category},
 			${record.entitiesJson}::jsonb,
 			${record.ogImageUrl},
@@ -498,6 +500,13 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 		${conflictSql}
 		RETURNING id::text AS id
 	`;
+}
+
+function textArraySql(values: string[]): SQL {
+	return sql`ARRAY[${sql.join(
+		values.map((value) => sql`${value}`),
+		sql`, `,
+	)}]::text[]`;
 }
 
 function resourceConflictSetSql(): SQL {
