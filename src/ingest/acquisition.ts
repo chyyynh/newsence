@@ -45,7 +45,8 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<Acquire
 
 export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
 	const acquired = await scrapeSavedUrl(url, env);
-	return new Response(JSON.stringify(acquired)).body!;
+	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
+	return new Blob([bytes], { type: 'application/json' }).stream();
 }
 
 export async function readAcquiredContentArtifact(artifact: ReadableStream<Uint8Array>): Promise<AcquiredContent | null> {
