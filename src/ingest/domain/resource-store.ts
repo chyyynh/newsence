@@ -385,9 +385,10 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
 	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToResource(base), {}, 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
-	const resourceId = (result.rows as Array<{ id?: string }>)[0]?.id;
+	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
+	const resourceId = row?.id;
 	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
-	await syncResourceTranslations(db, resourceId, record);
+	if (row.enrichment_status !== 'enriched') await syncResourceTranslations(db, resourceId, record);
 	return resourceId;
 }
 
@@ -523,7 +524,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			now()
 		)
 		${conflictSql}
-		RETURNING id::text AS id
+		RETURNING id::text AS id, enrichment_status
 	`;
 }
 
@@ -535,30 +536,46 @@ function textArraySql(values: string[]): SQL {
 }
 
 function resourceConflictSetSql(): SQL {
+	const preserveEnriched = sql`excluded.enrichment_status = 'pending' AND resources.enrichment_status = 'enriched'`;
 	return sql`
-		type = excluded.type,
+		type = CASE WHEN ${preserveEnriched} THEN resources.type ELSE excluded.type END,
 		scope = CASE
 			WHEN resources.scope = 'corpus' OR excluded.scope = 'private' THEN resources.scope
 			ELSE excluded.scope
 		END,
-		url = COALESCE(excluded.url, resources.url),
-		storage_key = COALESCE(excluded.storage_key, resources.storage_key),
-		file_type = COALESCE(excluded.file_type, resources.file_type),
-		original_lang = excluded.original_lang,
-		published_date = COALESCE(excluded.published_date, resources.published_date),
-		scraped_date = COALESCE(excluded.scraped_date, resources.scraped_date),
-		tags = CASE WHEN cardinality(excluded.tags) > 0 THEN excluded.tags ELSE resources.tags END,
-		category = COALESCE(excluded.category, resources.category),
-		entities = COALESCE(excluded.entities, resources.entities),
-		og_image_url = COALESCE(NULLIF(excluded.og_image_url, ''), resources.og_image_url),
-		platform_metadata = COALESCE(excluded.platform_metadata, resources.platform_metadata),
-		embedding = COALESCE(excluded.embedding, resources.embedding),
+		url = CASE WHEN ${preserveEnriched} THEN resources.url ELSE COALESCE(excluded.url, resources.url) END,
+		storage_key = CASE WHEN ${preserveEnriched} THEN resources.storage_key ELSE COALESCE(excluded.storage_key, resources.storage_key) END,
+		file_type = CASE WHEN ${preserveEnriched} THEN resources.file_type ELSE COALESCE(excluded.file_type, resources.file_type) END,
+		original_lang = CASE WHEN ${preserveEnriched} THEN resources.original_lang ELSE excluded.original_lang END,
+		published_date = CASE
+			WHEN ${preserveEnriched} THEN resources.published_date
+			ELSE COALESCE(excluded.published_date, resources.published_date)
+		END,
+		scraped_date = CASE
+			WHEN ${preserveEnriched} THEN resources.scraped_date
+			ELSE COALESCE(excluded.scraped_date, resources.scraped_date)
+		END,
+		tags = CASE
+			WHEN ${preserveEnriched} THEN resources.tags
+			WHEN cardinality(excluded.tags) > 0 THEN excluded.tags
+			ELSE resources.tags
+		END,
+		category = CASE WHEN ${preserveEnriched} THEN resources.category ELSE COALESCE(excluded.category, resources.category) END,
+		entities = CASE WHEN ${preserveEnriched} THEN resources.entities ELSE COALESCE(excluded.entities, resources.entities) END,
+		og_image_url = CASE
+			WHEN ${preserveEnriched} THEN resources.og_image_url
+			ELSE COALESCE(NULLIF(excluded.og_image_url, ''), resources.og_image_url)
+		END,
+		platform_metadata = CASE
+			WHEN ${preserveEnriched} THEN resources.platform_metadata
+			ELSE COALESCE(excluded.platform_metadata, resources.platform_metadata)
+		END,
+		embedding = CASE WHEN ${preserveEnriched} THEN resources.embedding ELSE COALESCE(excluded.embedding, resources.embedding) END,
 		enrichment_status = CASE
-			WHEN excluded.enrichment_status = 'pending' AND resources.enrichment_status = 'enriched'
-				THEN resources.enrichment_status
+			WHEN ${preserveEnriched} THEN resources.enrichment_status
 			ELSE excluded.enrichment_status
 		END,
-		updated_at = now()
+		updated_at = CASE WHEN ${preserveEnriched} THEN resources.updated_at ELSE now() END
 	`;
 }
 
