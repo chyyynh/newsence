@@ -1,7 +1,7 @@
 import type { NormalizedContent } from '@core-shared/types';
 import { extractYouTubeId } from '@core-shared/web';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
-import { extractTweetId, scrapeTweet } from './platforms/twitter';
+import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import {
 	EMPTY_OG_IMAGE_PATCH,
 	fetchOgImage,
@@ -11,7 +11,7 @@ import {
 	pdfExtractionMetadata,
 	scrapeGenericUrl,
 } from './platforms/web';
-import { scrapeYouTube } from './platforms/youtube';
+import { scrapeYouTube } from './platforms/youtube-acquisition';
 
 export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
 export type { OgImagePatch, PdfExtractionMetadata };
