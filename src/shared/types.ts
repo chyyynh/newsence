@@ -14,6 +14,7 @@ export interface ResourceForProcessing {
 	id: string;
 	type: ResourceType;
 	scope: ResourceScope;
+	original_lang: string;
 	title: string;
 	summary: string | null;
 	content: string | null;

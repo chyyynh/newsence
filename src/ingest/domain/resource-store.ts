@@ -4,6 +4,7 @@ import { entities, entityTranslations, resourceEntities, resources, resourceTran
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, type SQL, sql } from 'drizzle-orm';
 import {
+	canonicalizeResourceLang,
 	DEFAULT_RESOURCE_LANG,
 	isResourceType,
 	RESOURCE_CATEGORIES,
@@ -23,7 +24,7 @@ interface ResourceStoreRow {
 	title: string | null;
 	summary: string | null;
 	content: string | null;
-	original_lang: string | null;
+	original_lang: string;
 	translations: unknown;
 	url: string | null;
 	og_image_url: string | null;
@@ -128,6 +129,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
 	const resource: StoredResourceForProcessing = {
 		id: row.id,
+		original_lang: canonicalizeResourceLang(row.original_lang),
 		title: row.title ?? '',
 		summary: row.summary,
 		content: row.content,
@@ -156,8 +158,7 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 	for (const item of row.translations) {
 		if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
 		const translation = item as ResourceStoreTranslationRow;
-		const lang = cleanString(translation.lang);
-		if (!lang) continue;
+		const lang = canonicalizeResourceLang(translation.lang);
 		const compact = compactLocaleText({
 			title: translation.title as ResourceLocaleText['title'],
 			summary: translation.summary as ResourceLocaleText['summary'],
@@ -185,6 +186,7 @@ export interface SourceResourceDraft {
 	publishedDate: Date | string;
 	summary: string;
 	type: ResourceType;
+	originalLang?: string;
 	content: string | null;
 	platformMetadata: unknown | null;
 	keywords?: string[];
@@ -292,6 +294,7 @@ export async function updateResourceAfterProcessing(
 function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {
 	return {
 		id: base.url,
+		original_lang: canonicalizeResourceLang(base.originalLang ?? DEFAULT_RESOURCE_LANG),
 		title: base.title,
 		scope: 'corpus',
 		summary: base.summary,
@@ -343,7 +346,7 @@ function resourceMirrorRecord(
 		normalizedUrl,
 		storageKey: cleanString(resource.storage_key),
 		fileType,
-		originalLang: deriveOriginalLang({ title, summary, content, translations }),
+		originalLang: canonicalizeResourceLang(resource.original_lang),
 		title,
 		summary,
 		content,
@@ -374,10 +377,11 @@ function mergeResourceTranslations(current: ResourceTranslationMap | undefined, 
 	const merged: ResourceTranslationMap = { ...(current ?? {}) };
 	if (update === null || update === undefined) return merged;
 	if (typeof update !== 'object' || Array.isArray(update)) throw new Error('Invalid translations: expected object');
-	for (const [lang, value] of Object.entries(update)) {
+	for (const [rawLang, value] of Object.entries(update)) {
 		if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
 		const patch = compactLocaleText(value as ResourceLocaleText);
 		if (!patch) continue;
+		const lang = canonicalizeResourceLang(rawLang);
 		merged[lang] = {
 			...(merged[lang] ?? {}),
 			...patch,
@@ -513,15 +517,16 @@ function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRe
 		{
 			resourceId,
 			lang: record.originalLang,
-			title: record.originalLang === DEFAULT_RESOURCE_LANG ? record.title : cleanString(originalTranslation?.title),
-			summary: record.originalLang === DEFAULT_RESOURCE_LANG ? record.summary : cleanString(originalTranslation?.summary),
-			content: record.originalLang === DEFAULT_RESOURCE_LANG ? record.content : cleanString(originalTranslation?.content),
+			title: record.title,
+			summary: record.summary,
+			content: record.content,
 			keywords: originalTranslation?.keywords?.length ? originalTranslation.keywords : record.keywords,
 			source: 'original',
 		},
 	];
 
-	for (const [lang, translation] of Object.entries(record.translations)) {
+	for (const [rawLang, translation] of Object.entries(record.translations)) {
+		const lang = canonicalizeResourceLang(rawLang);
 		if (lang === record.originalLang) continue;
 		const compact = translation ? compactLocaleText(translation) : null;
 		if (!compact) continue;
@@ -537,23 +542,6 @@ function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRe
 	}
 
 	return translations;
-}
-
-function deriveOriginalLang(fields: {
-	title: string | null;
-	summary: string | null;
-	content: string | null;
-	translations: ResourceTranslationMap;
-}): string {
-	const zhHant = fields.translations[ZH_HANT_RESOURCE_LANG];
-	return !hasLocalizedText(fields.title, fields.summary, fields.content) &&
-		hasLocalizedText(cleanString(zhHant?.title), cleanString(zhHant?.summary), cleanString(zhHant?.content))
-		? ZH_HANT_RESOURCE_LANG
-		: DEFAULT_RESOURCE_LANG;
-}
-
-function hasLocalizedText(...values: Array<string | null>): boolean {
-	return values.some((value) => !!value && value.trim().length > 0);
 }
 
 function cleanString(value: unknown): string | null {

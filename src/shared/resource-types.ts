@@ -14,6 +14,22 @@ export const DEFAULT_RESOURCE_LANG = 'en';
 
 export const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
 
+const RESOURCE_LANG_MAX_LENGTH = 35;
+
+export function canonicalizeResourceLang(value: unknown): string {
+	if (typeof value !== 'string') throw new Error(`Invalid resource language: ${String(value)}`);
+	const lang = value.trim();
+	if (!lang || lang.length > RESOURCE_LANG_MAX_LENGTH) throw new Error(`Invalid resource language: ${value}`);
+
+	try {
+		const canonical = Intl.getCanonicalLocales(lang)[0];
+		if (!canonical || canonical.length > RESOURCE_LANG_MAX_LENGTH) throw new Error('Invalid locale');
+		return canonical;
+	} catch {
+		throw new Error(`Invalid resource language: ${value}`);
+	}
+}
+
 export const RESOURCE_CATEGORIES = ['AI', 'Tech', 'Finance', 'Research', 'Business', 'Other'] as const;
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];

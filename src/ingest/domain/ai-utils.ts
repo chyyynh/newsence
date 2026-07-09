@@ -8,7 +8,7 @@ import {
 } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
+import { DEFAULT_RESOURCE_LANG, RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 
 export interface ProcessorResult {
 	updateData: {
@@ -40,6 +40,7 @@ export function mergeResourceAnalysis(
 	const updateData = options.updateData ?? {};
 	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
 	const includeContent = options.includeContent ?? true;
+	const englishResource = resource.translations?.[DEFAULT_RESOURCE_LANG];
 	const zhHantAnalysis = analysis.translations?.[ZH_HANT_RESOURCE_LANG];
 	const zhHantResource = resource.translations?.[ZH_HANT_RESOURCE_LANG];
 
@@ -48,7 +49,7 @@ export function mergeResourceAnalysis(
 	if (isEmpty(zhHantResource?.title) && zhHantAnalysis?.title) {
 		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { title: zhHantAnalysis.title, source: 'machine' });
 	}
-	if ((options.overwriteSummary || isEmpty(resource.summary)) && analysis.summary_en) updateData.summary = analysis.summary_en;
+	applyEnglishSummary(updateData, resource, englishResource, analysis.summary_en, options.overwriteSummary ?? false);
 	if ((options.overwriteSummary || isEmpty(zhHantResource?.summary)) && zhHantAnalysis?.summary) {
 		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { summary: zhHantAnalysis.summary, source: 'machine' });
 	}
@@ -69,6 +70,23 @@ function setTranslationPatch(updateData: ProcessorResult['updateData'], lang: st
 			...patch,
 		},
 	};
+}
+
+function applyEnglishSummary(
+	updateData: ProcessorResult['updateData'],
+	resource: ResourceForProcessing,
+	englishResource: NonNullable<ResourceTranslationMap[string]> | undefined,
+	summary: string | undefined,
+	overwrite: boolean,
+): void {
+	if (!summary) return;
+	if (resource.original_lang === DEFAULT_RESOURCE_LANG) {
+		if (overwrite || isEmpty(resource.summary)) updateData.summary = summary;
+		return;
+	}
+	if (overwrite || isEmpty(englishResource?.summary)) {
+		setTranslationPatch(updateData, DEFAULT_RESOURCE_LANG, { summary, source: 'machine' });
+	}
 }
 
 const MAX_CONTENT_LENGTH = 10000;
@@ -188,6 +206,7 @@ function cjkRatio(text: string): number {
 function shouldTranslateResourceContent(resource: ResourceForProcessing): boolean {
 	const content = resource.content?.trim();
 	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
+	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	if (!shouldWriteResourceContentTranslation(resource)) return false;
 	return true;
 }
