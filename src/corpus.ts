@@ -40,7 +40,7 @@ export interface ReadContextResult {
 	id: string;
 	title?: string;
 	content?: string;
-	articles?: Array<{ id: string; title: string; summary: string | null }>;
+	resources?: Array<{ id: string; title: string; summary: string | null }>;
 	metadata?: Record<string, unknown>;
 	error?: string;
 }
@@ -580,8 +580,8 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 					id: col.id,
 					title: col.name,
 					content: col.description || undefined,
-					articles: [],
-					metadata: { articleCount: 0 },
+					resources: [],
+					metadata: { resourceCount: 0 },
 				},
 			]),
 		);
@@ -606,8 +606,8 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 					id: col.id,
 					title: col.name,
 					content: col.description || undefined,
-					articles: entries,
-					metadata: { articleCount: entries.length, resourceCount: colResources.length },
+					resources: entries,
+					metadata: { resourceCount: entries.length },
 				},
 			];
 		}),
