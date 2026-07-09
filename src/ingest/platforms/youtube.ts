@@ -86,9 +86,11 @@ export async function prepareYouTubeHighlights(
 	article: ResourceForProcessing,
 	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	if (article.platform_metadata?.type !== 'youtube') return null;
+	if (article.type !== 'youtube') return null;
+	const metadata = article.platform_metadata;
+	if (metadata?.type !== 'youtube') return null;
 
-	const videoId = article.platform_metadata.data.videoId;
+	const videoId = metadata.data.videoId;
 	if (!videoId) return null;
 	if (transcript) return prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments);
 
@@ -179,7 +181,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 				source: youtubeMetadata.channelName,
 				publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
 				summary: scraped.metadata.description ?? '',
-				resourceType: 'youtube',
+				type: 'youtube',
 				content: scraped.markdown,
 				platformMetadata: scraped.platformMetadata,
 			});

@@ -1,7 +1,8 @@
-import type { ResourceCategory } from '../resources/types';
+import type { ResourceCategory, ResourceType } from '../resources/types';
 
 export interface ResourceForProcessing {
 	id: string;
+	type: ResourceType;
 	title: string;
 	title_cn?: string | null;
 	summary: string | null;
@@ -14,7 +15,6 @@ export interface ResourceForProcessing {
 	published_date: string;
 	tags: string[];
 	keywords: string[];
-	resource_type?: string;
 	platform_metadata?: PlatformMetadata;
 	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;

@@ -149,7 +149,7 @@ function buildArticleContextPrompt(article: ResourceForProcessing): string {
 	return `文章資訊:
 標題: ${article.title}
 來源: ${article.source}
-資源類型: ${article.resource_type ?? 'unknown'}${excludedLine}
+資源類型: ${article.type}${excludedLine}
 摘要: ${article.summary || article.summary_cn || '無摘要'}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
@@ -308,13 +308,7 @@ async function generateArticleContentTranslation(article: ResourceForProcessing,
 
 async function generateArticleContentCleanup(article: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
 	const content = article.content?.trim();
-	if (
-		!content ||
-		content.length < MIN_CONTENT_CLEANUP_LENGTH ||
-		article.resource_type === 'youtube' ||
-		article.resource_type === 'hackernews'
-	)
-		return null;
+	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || article.type === 'youtube' || article.type === 'hackernews') return null;
 	const cleanupContent = content.slice(0, MAX_CONTENT_CLEANUP_LENGTH);
 	const cleaned = await generateText(env.AI, `原文 Markdown:\n${cleanupContent}`, {
 		task: 'article-content-cleanup',

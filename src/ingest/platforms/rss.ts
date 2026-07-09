@@ -59,7 +59,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 					source: feed.name,
 					publishedDate: item.published ? new Date(item.published) : new Date(),
 					summary: description,
-					resourceType: 'rss',
+					type: 'rss',
 					content: null,
 					platformMetadata: null,
 				}),

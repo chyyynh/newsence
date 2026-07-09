@@ -1,4 +1,5 @@
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
+import { RESOURCE_TYPES, type ResourceType } from '../../resources/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
@@ -7,7 +8,7 @@ type ResourceUpdate = Partial<ProcessorResult['updateData']> &
 		title: string;
 		source: string;
 		published_date: string;
-		resource_type: string;
+		type: ResourceType;
 		content: string;
 		og_image_url: string;
 		platform_metadata: PlatformMetadata | Record<string, unknown>;
@@ -27,14 +28,18 @@ export function applyAcquiredContent(article: ResourceForProcessing, acquired: A
 		content: acquired.markdown || article.content,
 		source: acquired.metadata.siteName ?? acquired.metadata.author ?? article.source,
 		published_date: acquired.metadata.publishedDate ?? article.published_date,
-		resource_type: resourceTypeAfterAcquisition(article.resource_type, acquiredSourceType),
+		type: resourceTypeAfterAcquisition(article.type, acquiredSourceType),
 		platform_metadata: acquired.platformMetadata ?? article.platform_metadata,
 		file_type: acquired.platformMetadata?.type === 'pdf' ? PDF_MIME : article.file_type,
 	};
 }
 
-function resourceTypeAfterAcquisition(currentType: string | undefined, acquiredType: string | undefined): string | undefined {
-	return currentType === 'rss' && acquiredType === 'default' ? currentType : (acquiredType ?? currentType);
+function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: string | undefined): ResourceType {
+	return isResourceType(acquiredType) ? acquiredType : currentType;
+}
+
+function isResourceType(value: unknown): value is ResourceType {
+	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
 
 export class ResourceUpdateBuilder {
@@ -58,7 +63,9 @@ export class ResourceUpdateBuilder {
 	}
 
 	addPaperMetadata(paperEnrichment: PaperMetadata | null): this {
-		return paperEnrichment ? this.addMetadataPatch({ type: 'paper', data: paperEnrichment }) : this;
+		if (!paperEnrichment) return this;
+		this.update.type = 'paper';
+		return this.addMetadataPatch({ type: 'paper', data: paperEnrichment });
 	}
 
 	applyAcquiredFields(acquired: AcquiredContent | null): this {
@@ -70,8 +77,7 @@ export class ResourceUpdateBuilder {
 		if (acquired.metadata.publishedDate) this.update.published_date = acquired.metadata.publishedDate;
 		if (acquired.metadata.description !== null) this.update.summary = acquired.metadata.description;
 		this.update.content = acquired.markdown;
-		if (acquired.platformMetadata)
-			this.update.resource_type = resourceTypeAfterAcquisition(this.article.resource_type, acquired.platformMetadata.type);
+		if (acquired.platformMetadata) this.update.type = resourceTypeAfterAcquisition(this.article.type, acquired.platformMetadata.type);
 		return this;
 	}
 

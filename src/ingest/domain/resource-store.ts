@@ -23,7 +23,7 @@ interface ResourceStoreRow {
 	url: string | null;
 	og_image_url: string | null;
 	source: string | null;
-	resource_type: string | null;
+	type: string | null;
 	published_date: Date | string | null;
 	tags: string[];
 	keywords: string[];
@@ -74,8 +74,8 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			${shell ? sql`original.content IS NOT NULL AND length(original.content) > 0` : sql`NULL::boolean`} AS has_content,
 			r.url AS url,
 			r.og_image_url AS og_image_url,
-			COALESCE(r.type, '') AS source,
-			r.type AS resource_type,
+			COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+			r.type AS type,
 			r.published_date AS published_date,
 			r.tags AS tags,
 			COALESCE(original.keywords, '{}'::text[]) AS keywords,
@@ -111,7 +111,7 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		published_date: formatPublishedDate(row.published_date),
 		tags: row.tags,
 		keywords: row.keywords,
-		resource_type: row.resource_type ?? undefined,
+		type: parseResourceType(row.type),
 		platform_metadata: (row.platform_metadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
 	if (typeof row.has_content === 'boolean') article.has_content = row.has_content;
@@ -134,7 +134,7 @@ export interface SourceResourceDraft {
 	source: string;
 	publishedDate: Date | string;
 	summary: string;
-	resourceType: string;
+	type: ResourceType;
 	content: string | null;
 	platformMetadata: unknown | null;
 	keywords?: string[];
@@ -259,7 +259,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		published_date: formatPublishedDate(base.publishedDate),
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
-		resource_type: base.resourceType,
+		type: base.type,
 		platform_metadata: (base.platformMetadata ?? undefined) as ResourceForProcessing['platform_metadata'],
 	};
 }
@@ -295,13 +295,7 @@ function resourceMirrorRecord(
 	const contentCn = cleanString(updatePayload.content_cn ?? article.content_cn);
 	return {
 		id: resourceId,
-		type: deriveResourceType({
-			origin,
-			platformMetadata,
-			resourceType: stringOrNull(updatePayload.resource_type ?? article.resource_type),
-			fileType,
-			resourceKind: article.resource_kind ?? null,
-		}),
+		type: parseResourceType(updatePayload.type ?? article.type),
 		scope: origin === 'source' || article.resource_kind === 'url' ? 'corpus' : 'private',
 		url,
 		normalizedUrl,
@@ -510,28 +504,6 @@ function jsonbParam(value: unknown): string | null {
 	return JSON.stringify(value);
 }
 
-function deriveResourceType(input: {
-	origin: ResourceMirrorOrigin;
-	platformMetadata: unknown;
-	resourceType: string | null;
-	fileType: string | null;
-	resourceKind: string | null;
-}): ResourceType {
-	const metadataType = platformMetadataType(input.platformMetadata);
-	if (metadataType) return metadataType;
-	if (isResourceType(input.resourceType)) return input.resourceType;
-	if (input.fileType === 'application/pdf') return 'pdf';
-	if (input.fileType?.startsWith('image/')) return 'image';
-	if (input.origin === 'resource' && input.resourceKind === 'url') return 'web';
-	return input.origin === 'resource' ? 'file' : 'web';
-}
-
-function platformMetadataType(value: unknown): ResourceType | null {
-	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-	const type = (value as { type?: unknown }).type;
-	return isResourceType(type) ? type : null;
-}
-
 function deriveResourceCategory(platformMetadata: unknown, tags: string[]): ResourceCategory | null {
 	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
 		const category = (platformMetadata as { classification?: { category?: unknown } }).classification?.category;
@@ -542,6 +514,11 @@ function deriveResourceCategory(platformMetadata: unknown, tags: string[]): Reso
 
 function isResourceType(value: unknown): value is ResourceType {
 	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
+}
+
+function parseResourceType(value: unknown): ResourceType {
+	if (!isResourceType(value)) throw new Error(`Invalid resource type: ${String(value)}`);
+	return value;
 }
 
 function isResourceCategory(value: unknown): value is ResourceCategory {
@@ -660,8 +637,7 @@ async function refreshEntityResourceCounts(db: CoreDb, entityIds: string[]): Pro
 type ExistingResourceRecord = {
 	id: string;
 	url: string;
-	source: string;
-	resource_type: string;
+	type: ResourceType;
 	summary_cn: string | null;
 };
 
@@ -671,8 +647,7 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 		SELECT
 			r.id::text AS id,
 			COALESCE(r.normalized_url, r.url) AS url,
-			r.type AS source,
-			r.type AS resource_type,
+			r.type AS type,
 			zh.summary AS summary_cn
 		FROM resources r
 		LEFT JOIN resource_translations zh

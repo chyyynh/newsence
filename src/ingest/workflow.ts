@@ -164,9 +164,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 		);
 		const acquiredContent = shouldAcquireContent(initialArticle) ? await stageSavedUrlAcquisition(this.env, step, initialArticle) : null;
 		const article = applyAcquiredContent(initialArticle, acquiredContent);
-		const metadataType = article.platform_metadata?.type;
-		const resourceType =
-			metadataType && metadataType !== 'pdf' && metadataType !== 'paper' ? metadataType : (article.resource_type ?? 'default');
+		const resourceType = article.type;
 		const logContext = { resource_id: target.rowId, table: 'resources' };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', resourceType, ...logContext });
