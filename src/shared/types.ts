@@ -17,6 +17,9 @@ export interface Article {
 	// user_files-only raw columns (undefined for articles path).
 	storage_key?: string | null;
 	file_type?: string;
+	normalized_source_url?: string | null;
+	resource_kind?: string;
+	origin_type?: string;
 }
 
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;

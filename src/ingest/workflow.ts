@@ -1,12 +1,14 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateArticleEmbedding, prepareArticleTextForEmbedding } from '@core-ai/embedding';
 import type { Article, PaperMetadata, PlatformMetadata, YoutubeTranscript } from '@core-shared/types';
-import { withCoreTx } from '@db/client';
+import { type CoreDb, withCoreTx } from '@db/client';
 import { normalizeArticleEntityUpdatePayload } from '@entities/normalize';
 import {
 	insertFinalSourceArticle,
 	loadArticleForProcessing,
 	syncArticleEntities,
+	syncResourceAfterProcessing,
+	syncResourceEntities,
 	updateArticleAfterProcessing,
 } from '@ingest/domain/article-store';
 import {
@@ -82,7 +84,9 @@ function buildProcessorUpdatePayload(
 type StoredWorkflowTarget = { kind: 'article' | 'userFile'; rowId: string; reacquire?: boolean };
 
 type WorkflowTarget = StoredWorkflowTarget | { kind: 'source'; draft: SourceArticleDraft };
+type SourceWorkflowTarget = Extract<WorkflowTarget, { kind: 'source' }>;
 type SourceArticleRecord = Parameters<typeof insertFinalSourceArticle>[1];
+type PersistedTargetIds = { legacyId: string; resourceId: string };
 
 interface SourceArticleDraft {
 	article: SourceArticleRecord;
@@ -257,6 +261,75 @@ async function loadFullTargetArticle(
 	return extractedPdfText === null ? article : { ...article, content: extractedPdfText };
 }
 
+async function persistSourceWorkflowTarget(
+	coreDb: CoreDb,
+	target: SourceWorkflowTarget,
+	article: Article,
+	result: ProcessorResult,
+	embedding: number[] | null,
+	acquiredContent: AcquiredContent | null,
+	paperEnrichment: PaperMetadata | null,
+	ogPayload: Record<string, unknown>,
+): Promise<PersistedTargetIds> {
+	const acquiredPayload = acquiredContentUpdatePayload(acquiredContent);
+	const updatePayload = buildProcessorUpdatePayload(
+		article,
+		result,
+		embedding,
+		mergeMetadataPatch(acquiredPayload.platform_metadata, ogPayload.platform_metadata, paperMetadataPatch(paperEnrichment)),
+	);
+	Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
+
+	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
+	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
+	const legacyId = await insertFinalSourceArticle(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
+	const resourceId = await syncResourceAfterProcessing(coreDb, 'articles', legacyId, article, updatePayload);
+	if (entities) {
+		await syncArticleEntities(coreDb, legacyId, entities, article.source, platformMetadata);
+		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
+	}
+	return { legacyId, resourceId };
+}
+
+async function persistStoredWorkflowTarget(
+	coreDb: CoreDb,
+	target: StoredWorkflowTarget,
+	article: Article,
+	result: ProcessorResult,
+	embedding: number[] | null,
+	pdfTextArtifact: PdfTextArtifact | null,
+	acquiredContent: AcquiredContent | null,
+	paperEnrichment: PaperMetadata | null,
+	ogPayload: Record<string, unknown>,
+): Promise<PersistedTargetIds> {
+	const finalResult =
+		pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
+	const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
+	const metadataPatch = mergeMetadataPatch(
+		extraction ? { extraction } : undefined,
+		ogPayload.platform_metadata,
+		paperMetadataPatch(paperEnrichment),
+	);
+	const updatePayload = {
+		...withoutPlatformMetadata(
+			acquiredContentUpdatePayload(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire }),
+		),
+		...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
+		...withoutPlatformMetadata(ogPayload),
+	};
+	const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
+	const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
+	const table = storedTargetTable(target);
+
+	await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
+	const resourceId = await syncResourceAfterProcessing(coreDb, table, target.rowId, article, updatePayload);
+	if (entities) {
+		if (table === 'articles') await syncArticleEntities(coreDb, target.rowId, entities, article.source, platformMetadata);
+		await syncResourceEntities(coreDb, resourceId, entities, article.source, platformMetadata);
+	}
+	return { legacyId: target.rowId, resourceId };
+}
+
 async function persistWorkflowTarget(
 	env: CoreEnv,
 	target: WorkflowTarget,
@@ -269,52 +342,26 @@ async function persistWorkflowTarget(
 	ogImagePatch: OgImagePatch,
 	youtubeTranscript: YoutubeTranscript | undefined,
 	youtubeHighlights: Awaited<ReturnType<typeof prepareYouTubeHighlights>>,
-): Promise<string> {
+): Promise<PersistedTargetIds> {
 	return withCoreTx(env, async (coreDb, _db) => {
-		let articleId: string;
 		const ogPayload = ogImageUpdatePayload(ogImagePatch);
-		if (target.kind === 'source') {
-			const acquiredPayload = acquiredContentUpdatePayload(acquiredContent);
-			const acquiredMetadataPatch = acquiredPayload.platform_metadata;
-			const ogMetadataPatch = ogPayload.platform_metadata;
-			const updatePayload = buildProcessorUpdatePayload(
-				article,
-				result,
-				embedding,
-				mergeMetadataPatch(acquiredMetadataPatch, ogMetadataPatch, paperMetadataPatch(paperEnrichment)),
-			);
-			Object.assign(updatePayload, withoutPlatformMetadata(acquiredPayload), withoutPlatformMetadata(ogPayload));
-			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
-			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-			articleId = await insertFinalSourceArticle(coreDb, sourceArticleBase(article, target.draft.article), updatePayload);
-			if (entities) await syncArticleEntities(coreDb, articleId, entities, article.source, platformMetadata);
-		} else {
-			const finalResult =
-				pdfTextArtifact?.text && article.content ? { ...result, updateData: { ...result.updateData, content: article.content } } : result;
-			const extraction = pdfTextArtifact ? pdfExtractionMetadata(pdfTextArtifact) : acquiredContent?.extraction;
-			const metadataPatch = mergeMetadataPatch(
-				extraction ? { extraction } : undefined,
-				ogPayload.platform_metadata,
-				paperMetadataPatch(paperEnrichment),
-			);
-			const updatePayload = {
-				...withoutPlatformMetadata(
-					acquiredContentUpdatePayload(acquiredContent, { preserveSourceType: target.kind === 'article' && target.reacquire }),
-				),
-				...buildProcessorUpdatePayload(article, finalResult, embedding, metadataPatch),
-				...withoutPlatformMetadata(ogPayload),
-			};
-			const platformMetadata = updatePayload.platform_metadata ?? article.platform_metadata;
-			const entities = normalizeArticleEntityUpdatePayload(updatePayload, article.source, platformMetadata);
-
-			const table = storedTargetTable(target);
-			await updateArticleAfterProcessing(coreDb, table, target.rowId, updatePayload);
-			if (table === 'articles' && entities) await syncArticleEntities(coreDb, target.rowId, entities, article.source, platformMetadata);
-			articleId = target.rowId;
-		}
+		const persisted =
+			target.kind === 'source'
+				? await persistSourceWorkflowTarget(coreDb, target, article, result, embedding, acquiredContent, paperEnrichment, ogPayload)
+				: await persistStoredWorkflowTarget(
+						coreDb,
+						target,
+						article,
+						result,
+						embedding,
+						pdfTextArtifact,
+						acquiredContent,
+						paperEnrichment,
+						ogPayload,
+					);
 		if (youtubeTranscript || youtubeHighlights)
 			await persistYouTubeWorkflowData(coreDb, { transcript: youtubeTranscript, highlights: youtubeHighlights });
-		return articleId;
+		return persisted;
 	});
 }
 
@@ -409,7 +456,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 						async () => prepareYouTubeHighlights(this.env, article, youtubeTranscript),
 					)
 				: null;
-		const articleId = await step.do(
+		const persisted = await step.do(
 			target.kind === 'source' ? 'insert-final-article' : 'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () =>
@@ -430,9 +477,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, { targe
 				),
 		);
 
-		await syncPaperGraphForEnrichment(this.env, step, articleId, paperEnrichment);
+		await syncPaperGraphForEnrichment(this.env, step, persisted.resourceId, paperEnrichment);
 
-		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: articleId, ...logContext });
-		return { success: true, article_id: articleId };
+		console.info({ tag: 'WORKFLOW', msg: 'Completed', article_id: persisted.legacyId, resource_id: persisted.resourceId, ...logContext });
+		return { success: true, article_id: persisted.legacyId, resource_id: persisted.resourceId };
 	}
 }
