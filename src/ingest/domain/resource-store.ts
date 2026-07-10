@@ -8,6 +8,8 @@ import {
 	DEFAULT_RESOURCE_LANG,
 	isResourceType,
 	RESOURCE_CATEGORIES,
+	RESOURCE_ENRICHMENT_TYPES,
+	RESOURCE_ORIGINAL_CONTENT_TYPES,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
 	type ResourceCategory,
@@ -90,7 +92,7 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 									  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 									  AND (
 										${resources.scope} <> 'corpus'
-										OR ${resources.type} NOT IN ('rss', 'hackernews', 'web', 'twitter')
+										OR ${resources.type} <> ALL(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
 										OR ${resources.url} IS NULL
 										OR (
 											NULLIF(BTRIM(original.content), '') IS NOT NULL
@@ -124,7 +126,7 @@ export async function claimResourcesForEnrichmentRecovery(env: CoreEnv, limit = 
 			WITH candidates AS (
 				SELECT id
 				FROM resources
-				WHERE type IN ('web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf', 'paper')
+				WHERE type = ANY(${textArraySql(RESOURCE_ENRICHMENT_TYPES)})
 				  AND (
 					enrichment_status = 'pending' AND updated_at < NOW() - INTERVAL '15 minutes'
 					OR (
@@ -132,7 +134,7 @@ export async function claimResourcesForEnrichmentRecovery(env: CoreEnv, limit = 
 						AND updated_at < NOW() - INTERVAL '30 minutes'
 						AND NOT (
 							scope = 'corpus'
-							AND type IN ('rss', 'hackernews', 'web', 'twitter')
+							AND type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
 							AND url IS NOT NULL
 							AND EXISTS (
 								SELECT 1
@@ -172,7 +174,7 @@ export async function claimMissingOriginalContentRecovery(env: CoreEnv, limit = 
 				  ON original.resource_id = r.id
 				 AND original.lang = r.original_lang
 				WHERE r.scope = 'corpus'
-				  AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
+				  AND r.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
 				  AND r.url IS NOT NULL
 				  AND r.enrichment_status IN ('enriched', 'failed')
 				  AND (r.enrichment_status <> 'failed' OR r.updated_at < NOW() - INTERVAL '30 minutes')
@@ -576,7 +578,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 	`;
 }
 
-function textArraySql(values: string[]): SQL {
+function textArraySql(values: readonly string[]): SQL {
 	return sql`ARRAY[${sql.join(
 		values.map((value) => sql`${value}`),
 		sql`, `,
@@ -643,7 +645,7 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 				resource.id,
 				(
 					resource.scope = 'corpus'
-					AND resource.type IN ('rss', 'hackernews', 'web', 'twitter')
+					AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
 					AND resource.url IS NOT NULL
 					AND resource.original_lang <> 'zh-Hant'
 				) AS requires_localization,
@@ -653,7 +655,7 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 				) AS has_usable_content,
 				CASE
 					WHEN resource.scope = 'corpus'
-					 AND resource.type IN ('rss', 'hackernews', 'web', 'twitter')
+					 AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
 					 AND resource.url IS NOT NULL
 					 AND resource.original_lang <> 'zh-Hant'
 					 AND NULLIF(BTRIM(original.title), '') IS NOT NULL
