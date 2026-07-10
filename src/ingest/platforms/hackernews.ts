@@ -7,8 +7,7 @@ import {
 	type ResourceForProcessing,
 } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
-import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
-import { generateResourceAnalysis, mergeResourceAnalysis, type ProcessorResult } from '../domain/ai-utils';
+import { generateResourceClassification, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const HN_ITEM_MAX_BYTES = 5 * 1024 * 1024;
@@ -163,28 +162,6 @@ interface EditorialPrompts {
 	rules: string[];
 }
 
-const EDITORIAL_CN: EditorialPrompts = {
-	system: '你是一位專業的科技新聞編輯，負責將 Hacker News 討論串整理成深度筆記。只使用提供的素材，直接輸出繁體中文 Markdown。',
-	instruction: `請用繁體中文撰寫 500-800 字的整理筆記，用段落式敘述，不要用條列式重點。格式：
-
-## 背景
-2-3 句介紹文章脈絡，讓沒看過原文的人快速了解在討論什麼。
-
-## 社群觀點
-最重要的部分。用連貫的段落整理 HN 留言者的觀點，包括主要的支持與反對意見、有趣的補充觀點、值得注意的爭論或共識。像寫一篇短評一樣自然地串接不同觀點。
-
-## 延伸閱讀
-留言中提到的有價值的資源、工具、連結。沒有就省略此段。`,
-	rules: [
-		'繁體中文，嚴禁簡體',
-		'不要使用任何 emoji',
-		'重點是社群怎麼看，不是複述原文',
-		'引用留言觀點做歸納，不逐字翻譯',
-		'語氣中立客觀但不死板',
-		'直接輸出 Markdown，不要包在 code block 裡',
-	],
-};
-
 const EDITORIAL_EN: EditorialPrompts = {
 	system:
 		'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.',
@@ -230,36 +207,20 @@ ${rulesBlock}`;
 	return { system: prompts.system, user };
 }
 
-async function generateHnEditorial(
-	env: CoreEnv,
-	title: string,
-	hnText: string,
-	comments: HnCollectedComment[],
-): Promise<{ en: string | null; cn: string | null }> {
-	if (comments.length < 4) return { en: null, cn: null };
+async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, comments: HnCollectedComment[]): Promise<string | null> {
+	if (comments.length < 4) return null;
 
 	const commentInput = comments
 		.map((comment) => `${comment.author ? `${comment.author}: ` : ''}${comment.text}`)
 		.join('\n')
 		.slice(0, 30000);
 
-	const cnPrompt = buildEditorialPrompt(EDITORIAL_CN, title, hnText, commentInput, comments.length);
 	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length);
-
-	const [cn, en] = await Promise.all([
-		generateText(env.AI, cnPrompt.user, { systemPrompt: cnPrompt.system, task: 'hn-editorial-cn', gatewayId: env.AI_GATEWAY_NAME }),
-		generateText(env.AI, enPrompt.user, { systemPrompt: enPrompt.system, task: 'hn-editorial-en', gatewayId: env.AI_GATEWAY_NAME }),
-	]);
-	if (!cn || !en) {
-		console.warn({
-			tag: 'HN',
-			msg: 'Editorial generation incomplete; continuing with available locales',
-			hasChinese: !!cn,
-			hasEnglish: !!en,
-		});
-	}
-
-	return { en, cn };
+	return generateText(env.AI, enPrompt.user, {
+		systemPrompt: enPrompt.system,
+		task: 'hn-editorial-en',
+		gatewayId: env.AI_GATEWAY_NAME,
+	});
 }
 
 export async function processHackerNewsResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
@@ -271,19 +232,7 @@ export async function processHackerNewsResource(resource: ResourceForProcessing,
 	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
 	const editorial = hnData ? await generateHnEditorial(env, resource.title, hnData.text || '', comments) : null;
-	const updateData: ProcessorResult['updateData'] = {
-		...(editorial?.cn
-			? {
-					translations: {
-						[ZH_HANT_RESOURCE_LANG]: {
-							content: editorial.cn,
-							source: 'machine' as const,
-						},
-					},
-				}
-			: {}),
-		...(editorial?.en ? { content: editorial.en } : {}),
-	};
+	const updateData: ProcessorResult['updateData'] = editorial ? { content: editorial } : {};
 
 	const enrichments: PlatformEnrichments = hnData
 		? {
@@ -295,12 +244,10 @@ export async function processHackerNewsResource(resource: ResourceForProcessing,
 			}
 		: {};
 
-	const analysis = await generateResourceAnalysis(resource, env);
-	const merged = mergeResourceAnalysis(resource, analysis, {
+	const classification = await generateResourceClassification(resource, env);
+	const merged = mergeResourceClassification(resource, classification, {
 		updateData,
 		extraTags: ['HackerNews'],
-		overwriteSummary: true,
-		includeContent: false,
 	});
 
 	return { updateData: merged.updateData, enrichments, classificationCategory: merged.classificationCategory };

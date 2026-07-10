@@ -36,22 +36,6 @@ export interface ResourceForProcessing {
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-interface ExtractedEntity {
-	name: string;
-	name_cn: string;
-	type: EntityType;
-}
-
-export interface AIAnalysisResult {
-	tags?: string[];
-	keywords?: string[];
-	summary_en?: string;
-	content?: string;
-	translations?: ResourceTranslationMap;
-	category?: ResourceCategory;
-	entities?: ExtractedEntity[];
-}
-
 export interface TranscriptSegment {
 	startTime: number;
 	endTime: number;

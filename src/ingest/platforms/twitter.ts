@@ -1,15 +1,11 @@
-import { generateObject } from '@core-ai/embedding';
-import { ENTITY_TYPES, type PlatformMetadata, type ResourceForProcessing } from '@core-shared/types';
+import type { PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { withCoreDb } from '@db/client';
 import { rssList } from '@db/schema';
-import { entityExtractionExclusionNames } from '@entities/normalize';
 import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, inArray } from 'drizzle-orm';
-import { z } from 'zod';
-import { ZH_HANT_RESOURCE_LANG } from '../../resources/types';
-import { generateResourceAnalysis, isEmpty, mergeResourceAnalysis, type ProcessorResult } from '../domain/ai-utils';
+import { generateResourceClassification, isEmpty, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
 async function enqueueTwitterResource(
@@ -382,106 +378,16 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 
 export async function processTwitterResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
 	const updateData: ProcessorResult['updateData'] = {};
-	const hasFullContent = !isEmpty(resource.content) && resource.content!.length > 200;
-
-	if (hasFullContent) {
-		console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Processing Twitter resource', title: resource.title.slice(0, 50) });
-		const analysis = await generateResourceAnalysis(resource, env);
-		return mergeResourceAnalysis(resource, analysis, { updateData });
-	}
-
 	const tweetText = resource.summary?.trim() || resource.content || '';
 	if (isEmpty(resource.summary)) updateData.summary = tweetText;
-
-	const analysis = await translateTweet(tweetText, resource, env);
-	const merged = mergeResourceAnalysis(
-		resource,
-		{
-			content: isEmpty(resource.content) ? tweetText : undefined,
-			translations: {
-				[ZH_HANT_RESOURCE_LANG]: {
-					title: analysis.summary.slice(0, 80),
-					summary: analysis.summary,
-					content: analysis.summary,
-					source: 'machine',
-				},
-			},
-			tags: analysis.tags,
-			keywords: analysis.keywords,
-			entities: analysis.entities,
-		},
-		{ updateData },
-	);
+	if (isEmpty(resource.content)) updateData.content = tweetText;
+	const resourceForClassification = {
+		...resource,
+		summary: updateData.summary ?? resource.summary,
+		content: updateData.content ?? resource.content,
+	};
+	console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Classifying Twitter resource', title: resource.title.slice(0, 50) });
+	const classification = await generateResourceClassification(resourceForClassification, env);
+	const merged = mergeResourceClassification(resourceForClassification, classification, { updateData, extraTags: ['Twitter'] });
 	return { updateData: merged.updateData, classificationCategory: merged.classificationCategory };
-}
-
-const TweetAnalysisSchema = z.object({
-	summary: z.string().min(1),
-	tags: z.array(z.string().min(1)),
-	keywords: z.array(z.string().min(1)),
-	entities: z.array(
-		z.object({
-			name: z.string().min(1),
-			name_cn: z.string().min(1),
-			type: z.enum(ENTITY_TYPES),
-		}),
-	),
-});
-
-type TweetAnalysis = z.infer<typeof TweetAnalysisSchema>;
-
-const TWEET_ANALYSIS_SYSTEM_PROMPT = `請將推文直接翻譯成繁體中文，並提供 tags、keywords、entities。
-
-翻譯規則：
-- 直接翻譯原文，保持原文的第一人稱或語氣，不要改寫成第三人稱描述
-- 不要用「這則推文」、「作者認為」、「該推文提到」等第三角度描述
-- 不要使用任何 Markdown 格式
-- summary 是忠實翻譯，不是評論或摘要
-
-實體擷取規則：
-- 提取重要的具名實體（人物、組織、產品、技術、事件、地點）
-- type 只能是 person, organization, product, technology, event, location
-- name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
-- 不要把 Twitter/X、作者帳號或發文平台當作實體，除非推文本身就在討論該平台或作者
-- 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
-- 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
-- 如果只能判斷出泛詞、版本碎片或來源名稱，寧可少提取
-
-標籤規則：
-- AI相關: AI, MachineLearning, DeepLearning, LLM, GenerativeAI
-- 產品相關: Coding, Robotics, SoftwareDevelopment, API
-- 產業應用: Tech, Finance, Healthcare, Gaming, Creative
-- 事件類型: ProductLaunch, Research, Partnership, Announcement`;
-
-async function translateTweet(tweetText: string, resource: ResourceForProcessing, env: CoreEnv): Promise<TweetAnalysis> {
-	console.info({ tag: 'AI', msg: 'Translating tweet', text: tweetText.substring(0, 60) });
-	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
-	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
-
-	try {
-		const result = await generateObject<TweetAnalysis>(
-			env.AI,
-			`推文來源: ${resource.source}${excludedLine}
-推文內容：
-${tweetText}`,
-			{
-				schema: TweetAnalysisSchema,
-				task: 'tweet-analysis',
-				gatewayId: env.AI_GATEWAY_NAME,
-				maxTokens: 600,
-				systemPrompt: TWEET_ANALYSIS_SYSTEM_PROMPT,
-			},
-		);
-		if (!result) throw new Error('Tweet translation did not return valid output');
-
-		return {
-			summary: result.summary,
-			tags: (result.tags.length ? result.tags : ['Twitter']).slice(0, 5),
-			keywords: result.keywords.slice(0, 8),
-			entities: Array.isArray(result.entities) ? result.entities.slice(0, 10) : [],
-		};
-	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Tweet translation failed', error: String(error) });
-		throw error;
-	}
 }

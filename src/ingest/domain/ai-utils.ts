@@ -1,14 +1,8 @@
 import { generateObject, generateText } from '@core-ai/embedding';
-import {
-	type AIAnalysisResult,
-	ENTITY_TYPES,
-	type PlatformEnrichments,
-	type ResourceForProcessing,
-	type ResourceTranslationMap,
-} from '@core-shared/types';
+import { ENTITY_TYPES, type PlatformEnrichments, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import { DEFAULT_RESOURCE_LANG, RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
+import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 
 export interface ProcessorResult {
 	updateData: {
@@ -16,7 +10,6 @@ export interface ProcessorResult {
 		keywords?: string[];
 		summary?: string;
 		content?: string;
-		translations?: ResourceTranslationMap;
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	enrichments?: PlatformEnrichments;
@@ -27,75 +20,36 @@ export function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export function mergeResourceAnalysis(
+export type ResourceClassification = {
+	tags: string[];
+	keywords: string[];
+	category: ResourceCategory;
+	entities: Array<{ name: string; name_cn: string; type: string }>;
+};
+
+export function mergeResourceClassification(
 	resource: ResourceForProcessing,
-	analysis: AIAnalysisResult,
+	classification: ResourceClassification,
 	options: {
 		updateData?: ProcessorResult['updateData'];
 		extraTags?: string[];
-		overwriteSummary?: boolean;
-		includeContent?: boolean;
 	} = {},
 ): { updateData: ProcessorResult['updateData']; classificationCategory?: ResourceCategory } {
 	const updateData = options.updateData ?? {};
-	const allTags = [...new Set([...(analysis.tags ?? []), ...(analysis.category ? [analysis.category] : []), ...(options.extraTags ?? [])])];
-	const includeContent = options.includeContent ?? true;
-	const englishResource = resource.translations?.[DEFAULT_RESOURCE_LANG];
-	const zhHantAnalysis = analysis.translations?.[ZH_HANT_RESOURCE_LANG];
-	const zhHantResource = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	const allTags = [...new Set([...classification.tags, classification.category, ...(options.extraTags ?? [])])];
 
 	if (!resource.tags?.length && allTags.length) updateData.tags = allTags;
-	if (!resource.keywords?.length && analysis.keywords?.length) updateData.keywords = analysis.keywords;
-	if (isEmpty(zhHantResource?.title) && zhHantAnalysis?.title) {
-		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { title: zhHantAnalysis.title, source: 'machine' });
-	}
-	applyEnglishSummary(updateData, resource, englishResource, analysis.summary_en, options.overwriteSummary ?? false);
-	if ((options.overwriteSummary || isEmpty(zhHantResource?.summary)) && zhHantAnalysis?.summary) {
-		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { summary: zhHantAnalysis.summary, source: 'machine' });
-	}
-	if (includeContent && analysis.content) updateData.content = analysis.content;
-	if (includeContent && shouldWriteResourceContentTranslation(resource) && zhHantAnalysis?.content) {
-		setTranslationPatch(updateData, ZH_HANT_RESOURCE_LANG, { content: zhHantAnalysis.content, source: 'machine' });
-	}
-	if (analysis.entities) updateData.entities = analysis.entities;
+	if (!resource.keywords?.length && classification.keywords.length) updateData.keywords = classification.keywords;
+	if (classification.entities.length) updateData.entities = classification.entities;
 
-	return { updateData, classificationCategory: analysis.category };
-}
-
-function setTranslationPatch(updateData: ProcessorResult['updateData'], lang: string, patch: NonNullable<ResourceTranslationMap[string]>) {
-	updateData.translations = {
-		...(updateData.translations ?? {}),
-		[lang]: {
-			...(updateData.translations?.[lang] ?? {}),
-			...patch,
-		},
-	};
-}
-
-function applyEnglishSummary(
-	updateData: ProcessorResult['updateData'],
-	resource: ResourceForProcessing,
-	englishResource: NonNullable<ResourceTranslationMap[string]> | undefined,
-	summary: string | undefined,
-	overwrite: boolean,
-): void {
-	if (!summary) return;
-	if (resource.original_lang === DEFAULT_RESOURCE_LANG) {
-		if (overwrite || isEmpty(resource.summary)) updateData.summary = summary;
-		return;
-	}
-	if (overwrite || isEmpty(englishResource?.summary)) {
-		setTranslationPatch(updateData, DEFAULT_RESOURCE_LANG, { summary, source: 'machine' });
-	}
+	return { updateData, classificationCategory: classification.category };
 }
 
 const MAX_CONTENT_LENGTH = 10000;
 const MAX_CONTENT_CLEANUP_LENGTH = 12000;
 const MIN_CONTENT_CLEANUP_LENGTH = 800;
 const CONTENT_TRANSLATION_CHUNK_LENGTH = 6000;
-const INLINE_CONTENT_TRANSLATION_MAX_CHUNKS = 24;
 export const DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS = 96;
-const CONTENT_TRANSLATION_CONCURRENCY = 3;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
 const MIN_CONTENT_TRANSLATION_LENGTH = 20;
@@ -104,12 +58,6 @@ const ExtractedEntitySchema = z.object({
 	name: z.string().min(1),
 	name_cn: z.string().min(1),
 	type: z.enum(ENTITY_TYPES),
-});
-
-const ResourceTranslationSchema = z.object({
-	title: z.string().min(1),
-	summary_en: z.string().min(1),
-	summary: z.string().min(1),
 });
 
 const ZhHantMetadataTranslationSchema = z.object({
@@ -123,19 +71,6 @@ const ResourceClassificationSchema = z.object({
 	entities: z.array(ExtractedEntitySchema),
 	category: z.enum(RESOURCE_CATEGORIES),
 });
-
-const RESOURCE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的翻譯與摘要。
-
-任務：
-- 翻譯 title
-- 產生 summary_en / summary
-
-翻譯要求：
-- title: 將標題翻譯成自然流暢的繁體中文
-- summary_en: 用英文寫 1-2 句簡潔摘要
-- summary: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
-- 如果原文已是目標語言，保留自然表達，不要硬改寫
-- 所有文字都不要使用 Markdown。`;
 
 const ZH_HANT_METADATA_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的繁體中文結果。
 
@@ -203,12 +138,11 @@ function buildResourceContextPrompt(resource: ResourceForProcessing): string {
 	const content = resource.content || resource.summary || resource.title;
 	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
-	const zhHantSummary = resource.translations?.[ZH_HANT_RESOURCE_LANG]?.summary;
 	return `文章資訊:
 標題: ${resource.title}
 來源: ${resource.source}
 資源類型: ${resource.type}${excludedLine}
-摘要: ${resource.summary || zhHantSummary || '無摘要'}
+摘要: ${resource.summary || '無摘要'}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
@@ -338,20 +272,6 @@ function splitContentForTranslation(content: string): string[] {
 	return chunks;
 }
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let nextIndex = 0;
-	await Promise.all(
-		Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-			while (nextIndex < items.length) {
-				const index = nextIndex++;
-				results[index] = await mapper(items[index]!, index);
-			}
-		}),
-	);
-	return results;
-}
-
 function validateTranslatedContent(original: string, translated: string | null): string | null {
 	const trimmed = translated?.trim();
 	if (!trimmed || looksLikeModelExplanation(trimmed)) return null;
@@ -396,18 +316,6 @@ export function assembleZhHantContentTranslation(original: string, translatedChu
 	return translated;
 }
 
-export async function generateZhHantContentTranslation(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
-	const content = resource.content?.trim();
-	if (!content || !needsZhHantContentTranslation(resource)) return null;
-
-	const chunks = createZhHantContentTranslationChunks(content, INLINE_CONTENT_TRANSLATION_MAX_CHUNKS);
-	const translatedChunks = await mapWithConcurrency(chunks, CONTENT_TRANSLATION_CONCURRENCY, async (chunk, index) =>
-		translateZhHantContentChunk(chunk, index, chunks.length, env),
-	);
-
-	return assembleZhHantContentTranslation(content, translatedChunks);
-}
-
 async function generateResourceContentCleanup(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
 	const content = resource.content?.trim();
 	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || resource.type === 'youtube' || resource.type === 'hackernews') return null;
@@ -422,7 +330,7 @@ async function generateResourceContentCleanup(resource: ResourceForProcessing, e
 	return validateCleanedContent(cleanupContent, cleaned);
 }
 
-export async function generateResourceAnalysis(resource: ResourceForProcessing, env: CoreEnv): Promise<AIAnalysisResult> {
+export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
 	try {
@@ -432,65 +340,20 @@ export async function generateResourceAnalysis(resource: ResourceForProcessing, 
 		});
 		const resourceForAnalysis = cleanedContent ? { ...resource, content: cleanedContent } : resource;
 		const resourcePrompt = buildResourceContextPrompt(resourceForAnalysis);
-		const [translation, classification, contentTranslation] = await Promise.all([
-			generateObject(env.AI, resourcePrompt, {
-				schema: ResourceTranslationSchema,
-				task: 'resource-translation',
-				gatewayId: env.AI_GATEWAY_NAME,
-				maxTokens: 700,
-				systemPrompt: RESOURCE_TRANSLATION_SYSTEM_PROMPT,
-			}).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Resource translation failed', error: String(error) });
-				return null;
-			}),
-			generateObject(env.AI, resourcePrompt, {
-				schema: ResourceClassificationSchema,
-				task: 'resource-classification',
-				gatewayId: env.AI_GATEWAY_NAME,
-				maxTokens: 500,
-				systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
-			}).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Resource classification failed', error: String(error) });
-				return null;
-			}),
-			generateZhHantContentTranslation(resource, env).catch((error) => {
-				console.error({ tag: 'AI', msg: 'Resource content translation failed', error: String(error) });
-				return null;
-			}),
-		]);
-		if (!translation) throw new Error('Resource translation did not return valid output');
+		const classification = await generateObject(env.AI, resourcePrompt, {
+			schema: ResourceClassificationSchema,
+			task: 'resource-classification',
+			gatewayId: env.AI_GATEWAY_NAME,
+			maxTokens: 500,
+			systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
+		});
 		if (!classification) throw new Error('Resource classification did not return valid output');
-
-		const analysis: AIAnalysisResult = {};
-		if (translation) {
-			analysis.summary_en = translation.summary_en;
-			analysis.translations = {
-				...(analysis.translations ?? {}),
-				[ZH_HANT_RESOURCE_LANG]: {
-					...(analysis.translations?.[ZH_HANT_RESOURCE_LANG] ?? {}),
-					title: translation.title,
-					summary: translation.summary,
-					source: 'machine',
-				},
-			};
-		}
-		if (contentTranslation?.trim()) {
-			analysis.translations = {
-				...(analysis.translations ?? {}),
-				[ZH_HANT_RESOURCE_LANG]: {
-					...(analysis.translations?.[ZH_HANT_RESOURCE_LANG] ?? {}),
-					content: contentTranslation.trim(),
-					source: 'machine',
-				},
-			};
-		}
-		if (classification) {
-			analysis.tags = classification.tags.slice(0, 5);
-			analysis.keywords = classification.keywords.slice(0, 8);
-			analysis.category = classification.category;
-			analysis.entities = classification.entities.slice(0, 10);
-		}
-		return analysis;
+		return {
+			tags: classification.tags.slice(0, 5),
+			keywords: classification.keywords.slice(0, 8),
+			category: classification.category,
+			entities: classification.entities.slice(0, 10),
+		};
 	} catch (error) {
 		console.error({ tag: 'AI', msg: 'Analysis failed', error: String(error) });
 		throw error;

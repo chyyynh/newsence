@@ -16,7 +16,7 @@ import {
 	scrapeSavedUrlArtifact,
 } from './acquisition';
 import { enqueueContentLocalization } from './content-localization-workflow';
-import { generateResourceAnalysis, mergeResourceAnalysis, needsZhHantContentTranslation, type ProcessorResult } from './domain/ai-utils';
+import { generateResourceClassification, mergeResourceClassification, type ProcessorResult } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
@@ -30,19 +30,14 @@ type WorkflowPayload = { resourceId: string };
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const CONTENT_LOCALIZATION_TYPES = new Set(['rss', 'hackernews', 'web', 'twitter']);
 
-function needsDedicatedContentLocalization(resource: ResourceForProcessing, result: ProcessorResult): boolean {
+function hasPersistedOriginalForLocalization(
+	resource: ResourceForProcessing,
+	result: ProcessorResult,
+	pdfTextArtifact: PdfTextArtifact | null,
+): boolean {
 	if (resource.scope !== 'corpus' || !resource.url || !CONTENT_LOCALIZATION_TYPES.has(resource.type)) return false;
-
-	const translations = { ...resource.translations };
-	for (const [lang, patch] of Object.entries(result.updateData.translations ?? {})) {
-		translations[lang] = { ...(translations[lang] ?? {}), ...patch };
-	}
-	const finalResource = {
-		...resource,
-		content: result.updateData.content ?? resource.content,
-		translations,
-	};
-	return !finalResource.content?.trim() || needsZhHantContentTranslation(finalResource);
+	if (resource.original_lang === 'zh-Hant') return false;
+	return !!(pdfTextArtifact?.text?.trim() || result.updateData.content?.trim() || resource.content?.trim());
 }
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
@@ -222,7 +217,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 				);
 				if (resourceType === 'hackernews') return processHackerNewsResource(fullResource, this.env);
 				if (resourceType === 'twitter') return processTwitterResource(fullResource, this.env);
-				return mergeResourceAnalysis(fullResource, await generateResourceAnalysis(fullResource, this.env));
+				return mergeResourceClassification(fullResource, await generateResourceClassification(fullResource, this.env));
 			},
 		);
 
@@ -260,7 +255,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 						async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
 					)
 				: null;
-		const enqueueLocalization = needsDedicatedContentLocalization(resource, processorResult);
+		const enqueueLocalization = hasPersistedOriginalForLocalization(resource, processorResult, pdfTextArtifact);
 		const persistedResourceId = await step.do(
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },

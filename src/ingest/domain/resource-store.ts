@@ -409,7 +409,7 @@ function resourceMirrorRecord(
 	const title = cleanString(resource.title);
 	const summary = cleanString(updatePayload.summary ?? resource.summary);
 	const content = cleanString(updatePayload.content ?? resource.content);
-	const translations = mergeResourceTranslations(resource.translations, updatePayload.translations);
+	const translations: ResourceTranslationMap = { ...(resource.translations ?? {}) };
 	return {
 		id: resourceId,
 		type: parseResourceType(updatePayload.type ?? resource.type),
@@ -443,23 +443,6 @@ function platformMetadataWithSourceName(platformMetadata: unknown, source: strin
 		return { ...(platformMetadata as Record<string, unknown>), sourceName };
 	}
 	return { fetchedAt: new Date().toISOString(), data: null, sourceName };
-}
-
-function mergeResourceTranslations(current: ResourceTranslationMap | undefined, update: unknown): ResourceTranslationMap {
-	const merged: ResourceTranslationMap = { ...(current ?? {}) };
-	if (update === null || update === undefined) return merged;
-	if (typeof update !== 'object' || Array.isArray(update)) throw new Error('Invalid translations: expected object');
-	for (const [rawLang, value] of Object.entries(update)) {
-		if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-		const patch = compactLocaleText(value as ResourceLocaleText);
-		if (!patch) continue;
-		const lang = canonicalizeResourceLang(rawLang);
-		merged[lang] = {
-			...(merged[lang] ?? {}),
-			...patch,
-		};
-	}
-	return merged;
 }
 
 function compactLocaleText(value: ResourceLocaleText): ResourceLocaleText | null {
@@ -627,7 +610,7 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 
 function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationRecord[] {
 	const originalTranslation = record.translations[record.originalLang];
-	const translations: ResourceTranslationRecord[] = [
+	return [
 		{
 			resourceId,
 			lang: record.originalLang,
@@ -638,24 +621,6 @@ function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRe
 			source: 'original',
 		},
 	];
-
-	for (const [rawLang, translation] of Object.entries(record.translations)) {
-		const lang = canonicalizeResourceLang(rawLang);
-		if (lang === record.originalLang) continue;
-		const compact = translation ? compactLocaleText(translation) : null;
-		if (!compact) continue;
-		translations.push({
-			resourceId,
-			lang,
-			title: cleanString(compact.title),
-			summary: cleanString(compact.summary),
-			content: cleanString(compact.content),
-			keywords: compact.keywords?.length ? compact.keywords : record.keywords,
-			source: parseTranslationSource(compact.source) ?? 'machine',
-		});
-	}
-
-	return translations;
 }
 
 function cleanString(value: unknown): string | null {
