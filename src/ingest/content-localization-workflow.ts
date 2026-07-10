@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import {
 	claimContentLocalizationBackfill,
+	clearMachineZhHantContent,
 	exhaustContentLocalizationAttempts,
 	markContentLocalizationComplete,
 	markContentLocalizationFailed,
@@ -16,6 +17,7 @@ import {
 	ContentTranslationLimitError,
 	createZhHantContentTranslationChunks,
 	DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS,
+	hasTranslatableContent,
 	needsZhHantContentTranslation,
 	translateZhHantContentChunk,
 } from './domain/ai-utils';
@@ -190,7 +192,20 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 
 		const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
 		const zhHantContent = zhHantTranslation?.source === 'human' ? null : zhHantTranslation?.content?.trim();
-		if (zhHantContent) {
+		if (resource.content && !hasTranslatableContent(resource.content) && zhHantContent) {
+			resource = {
+				...resource,
+				translations: {
+					...resource.translations,
+					[ZH_HANT_RESOURCE_LANG]: { ...zhHantTranslation, content: null },
+				},
+			};
+			await step.do(
+				'clear-nontext-zh-hant-content',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => clearMachineZhHantContent(this.env, resourceId),
+			);
+		} else if (zhHantContent) {
 			const sanitizedContent = sanitizeExtractedMarkdown(zhHantContent);
 			if (sanitizedContent !== zhHantContent) {
 				resource = {

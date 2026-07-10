@@ -37,6 +37,11 @@ export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10)
 						AND (
 							NULLIF(BTRIM(zh_hant.content), '') IS NULL
 							OR zh_hant.content ILIKE '%data:image/%'
+							OR (
+								zh_hant.source = 'machine'
+								AND NULLIF(BTRIM(regexp_replace(original.content, 'https?://[^[:space:]]+', '', 'gi')), '') IS NULL
+								AND NULLIF(BTRIM(zh_hant.content), '') IS NOT NULL
+							)
 							OR length(zh_hant.content)::numeric / GREATEST(length(original.content), 1) < ${PARTIAL_TRANSLATION_RATIO}
 						)
 					)
@@ -162,5 +167,17 @@ export async function persistBackfilledZhHantContent(env: CoreEnv, resourceId: s
 					updatedAt: sql`NOW()`,
 				},
 			});
+	});
+}
+
+export async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		await db.execute(sql`
+			UPDATE resource_translations
+			SET content = NULL, updated_at = NOW()
+			WHERE resource_id = ${resourceId}::uuid
+			  AND lang = 'zh-Hant'
+			  AND source = 'machine'
+		`);
 	});
 }

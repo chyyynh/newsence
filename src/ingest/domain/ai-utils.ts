@@ -99,6 +99,7 @@ const CONTENT_TRANSLATION_CONCURRENCY = 3;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
 const MIN_CONTENT_TRANSLATION_LENGTH = 20;
+const MIN_TRANSLATABLE_TEXT_LENGTH = 20;
 const ExtractedEntitySchema = z.object({
 	name: z.string().min(1),
 	name_cn: z.string().min(1),
@@ -206,9 +207,18 @@ function cjkRatio(text: string): number {
 export function needsZhHantContentTranslation(resource: ResourceForProcessing): boolean {
 	const content = resource.content?.trim();
 	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
+	if (!hasTranslatableContent(content)) return false;
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	if (!shouldWriteResourceContentTranslation(resource)) return false;
 	return true;
+}
+
+export function hasTranslatableContent(content: string): boolean {
+	const text = content
+		.replace(/https?:\/\/\S+/gi, ' ')
+		.replace(/<[^>]+>/g, ' ')
+		.replace(/[^\p{L}\p{N}]+/gu, '');
+	return text.length >= MIN_TRANSLATABLE_TEXT_LENGTH;
 }
 
 function shouldWriteResourceContentTranslation(resource: ResourceForProcessing): boolean {
