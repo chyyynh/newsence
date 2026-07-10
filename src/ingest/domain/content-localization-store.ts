@@ -4,11 +4,38 @@ import { sql } from 'drizzle-orm';
 
 const MAX_LOCALIZATION_ATTEMPTS = 3;
 const PARTIAL_TRANSLATION_RATIO = 0.2;
+const PERSISTED_ORIGINAL_READY_FOR_LOCALIZATION = sql`
+	r.enrichment_status = 'enriched'
+	AND r.scope = 'corpus'
+	AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
+	AND r.url IS NOT NULL
+	AND r.original_lang <> 'zh-Hant'
+	AND NULLIF(BTRIM(original.title), '') IS NOT NULL
+	AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+	AND original.content NOT ILIKE '%data:image/%'
+`;
 
 export type ContentLocalizationClaim = {
 	resourceId: string;
 	attempt: number;
 };
+
+export async function isPersistedResourceReadyForContentLocalization(env: CoreEnv, resourceId: string): Promise<boolean> {
+	return withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			SELECT EXISTS (
+				SELECT 1
+				FROM resources r
+				JOIN resource_translations original
+				  ON original.resource_id = r.id
+				 AND original.lang = r.original_lang
+				WHERE r.id = ${resourceId}::uuid
+				  AND ${PERSISTED_ORIGINAL_READY_FOR_LOCALIZATION}
+			) AS ready
+		`);
+		return (result.rows as Array<{ ready: boolean }>)[0]?.ready === true;
+	});
+}
 
 export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10): Promise<ContentLocalizationClaim[]> {
 	return withCoreDb(env, async (db) => {
@@ -24,13 +51,7 @@ export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10)
 				LEFT JOIN resource_translations zh_hant
 				  ON zh_hant.resource_id = r.id
 				 AND zh_hant.lang = 'zh-Hant'
-				WHERE r.enrichment_status = 'enriched'
-				  AND r.scope = 'corpus'
-				  AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
-				  AND r.url IS NOT NULL
-				  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
-				  AND original.content NOT ILIKE '%data:image/%'
-				  AND r.original_lang <> 'zh-Hant'
+				WHERE ${PERSISTED_ORIGINAL_READY_FOR_LOCALIZATION}
 				  AND zh_hant.source IS DISTINCT FROM 'human'
 				  AND (
 					NULLIF(BTRIM(zh_hant.title), '') IS NULL

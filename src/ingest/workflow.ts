@@ -17,7 +17,8 @@ import {
 	scrapeSavedUrlArtifact,
 } from './acquisition';
 import { enqueueContentLocalization } from './content-localization-workflow';
-import { generateResourceClassification, mergeResourceClassification, type ProcessorResult } from './domain/ai-utils';
+import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
+import { isPersistedResourceReadyForContentLocalization } from './domain/content-localization-store';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
@@ -29,17 +30,6 @@ import { persistProcessedResource } from './resource-persistence';
 type WorkflowPayload = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
-const CONTENT_LOCALIZATION_TYPES = new Set(['rss', 'hackernews', 'web', 'twitter']);
-
-function hasPersistedOriginalForLocalization(
-	resource: ResourceForProcessing,
-	result: ProcessorResult,
-	pdfTextArtifact: PdfTextArtifact | null,
-): boolean {
-	if (resource.scope !== 'corpus' || !resource.url || !CONTENT_LOCALIZATION_TYPES.has(resource.type)) return false;
-	if (resource.original_lang === 'zh-Hant') return false;
-	return !!(pdfTextArtifact?.text?.trim() || result.updateData.content?.trim() || resource.content?.trim());
-}
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
 	const workflowId = storedWorkflowId(resourceId);
@@ -265,7 +255,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 						async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
 					)
 				: null;
-		const enqueueLocalization = hasPersistedOriginalForLocalization(resource, processorResult, pdfTextArtifact);
 		const persistedResourceId = await step.do(
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -289,8 +278,12 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			},
 		);
 
-		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
-		if (enqueueLocalization) {
+		const localizationReady = await step.do(
+			'verify-persisted-original-content',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => isPersistedResourceReadyForContentLocalization(this.env, persistedResourceId),
+		);
+		if (localizationReady) {
 			await step
 				.do(
 					'enqueue-content-localization',
@@ -306,6 +299,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					}),
 				);
 		}
+		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return { success: true, resource_id: persistedResourceId };
