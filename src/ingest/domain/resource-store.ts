@@ -16,6 +16,7 @@ import {
 	type ResourceTranslationSource,
 	type ResourceType,
 } from '../../resources/types';
+import { type ResourceTranslationWrite, upsertResourceTranslation } from './resource-translation-store';
 import { mergePlatformMetadata, type ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
@@ -382,16 +383,6 @@ interface ResourceMirrorRecord {
 	enrichmentStatus: ResourceEnrichmentStatus;
 }
 
-interface ResourceTranslationRecord {
-	resourceId: string;
-	lang: string;
-	title: string | null;
-	summary: string | null;
-	content: string | null;
-	keywords: string[];
-	source: ResourceTranslationSource;
-}
-
 function stringArrayValue(value: unknown, field: string): string[] {
 	if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
 		throw new Error(`Invalid ${field}: expected string[]`);
@@ -655,37 +646,9 @@ function resourceConflictSetSql(): SQL {
 
 async function syncResourceTranslations(db: CoreDb, resourceId: string, record: ResourceMirrorRecord): Promise<void> {
 	for (const translation of resourceTranslationRecords(resourceId, record)) {
-		await db
-			.insert(resourceTranslations)
-			.values(translation)
-			.onConflictDoUpdate({
-				target: [resourceTranslations.resourceId, resourceTranslations.lang],
-				set: {
-					title: sql`CASE
-							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.title}
-							ELSE COALESCE(NULLIF(excluded.title, ''), ${resourceTranslations.title})
-						END`,
-					summary: sql`CASE
-							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.summary}
-							ELSE COALESCE(NULLIF(excluded.summary, ''), ${resourceTranslations.summary})
-						END`,
-					content: sql`CASE
-							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.content}
-							ELSE COALESCE(NULLIF(excluded.content, ''), ${resourceTranslations.content})
-						END`,
-					keywords: sql`CASE
-							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.keywords}
-							WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords
-							ELSE ${resourceTranslations.keywords}
-						END`,
-					source: sql`CASE
-							WHEN ${resourceTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${resourceTranslations.source}
-							WHEN ${resourceTranslations.source} = 'original' THEN ${resourceTranslations.source}
-							ELSE excluded.source
-						END`,
-					updatedAt: sql`now()`,
-				},
-			});
+		if (!(await upsertResourceTranslation(db, translation))) {
+			throw new Error(`Failed to sync ${translation.lang} translation for resource ${resourceId}`);
+		}
 	}
 	await db
 		.update(resourceTranslations)
@@ -757,7 +720,7 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 	`);
 }
 
-function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationRecord[] {
+function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationWrite[] {
 	const originalTranslation = record.translations[record.originalLang];
 	return [
 		{
@@ -986,25 +949,18 @@ export async function reopenResourceForReprocessing(
 			updatedAt: sql`NOW()`,
 		})
 		.where(eq(resources.id, resourceId));
-	await db
-		.insert(resourceTranslations)
-		.values({
+	if (
+		!(await upsertResourceTranslation(db, {
 			resourceId,
 			lang: resource.originalLang,
 			summary: update.summary,
 			content: update.content,
 			keywords: [],
 			source: 'original',
-		})
-		.onConflictDoUpdate({
-			target: [resourceTranslations.resourceId, resourceTranslations.lang],
-			set: {
-				summary: update.summary,
-				content: update.content,
-				source: 'original',
-				updatedAt: sql`NOW()`,
-			},
-		});
+		}))
+	) {
+		throw new Error(`Failed to reopen original translation for resource ${resourceId}`);
+	}
 	await db
 		.delete(resourceTranslations)
 		.where(

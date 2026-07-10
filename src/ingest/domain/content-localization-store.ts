@@ -1,5 +1,6 @@
 import { withCoreDb } from '@db/client';
 import { sql } from 'drizzle-orm';
+import { upsertResourceTranslation } from './resource-translation-store';
 
 // `currentSourceContentHash` versions the canonical original; `sourceContentHash`
 // advances only after every localization write for that version succeeds.
@@ -185,44 +186,17 @@ export async function persistMachineZhHantTranslation(
 	sourceContentHash: string,
 	patch: MachineTranslationPatch,
 ): Promise<void> {
-	const result = await withCoreDb(env, (db) =>
-		db.execute(sql`
-			INSERT INTO resource_translations AS current_translation (
-				resource_id, lang, title, summary, content, keywords, source
-			)
-			SELECT
-				resource.id,
-				'zh-Hant',
-				${patch.title ?? null},
-				${patch.summary ?? null},
-				${patch.content ?? null},
-				'{}'::text[],
-				'machine'
-			FROM resources resource
-			WHERE resource.id = ${resourceId}::uuid
-			  AND resource.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' = ${sourceContentHash}
-			ON CONFLICT (resource_id, lang) DO UPDATE SET
-				title = CASE
-					WHEN current_translation.source = 'human' THEN current_translation.title
-					ELSE COALESCE(NULLIF(excluded.title, ''), current_translation.title)
-				END,
-				summary = CASE
-					WHEN current_translation.source = 'human' THEN current_translation.summary
-					ELSE COALESCE(NULLIF(excluded.summary, ''), current_translation.summary)
-				END,
-				content = CASE
-					WHEN current_translation.source = 'human' THEN current_translation.content
-					ELSE COALESCE(NULLIF(excluded.content, ''), current_translation.content)
-				END,
-				source = CASE
-					WHEN current_translation.source = 'human' THEN current_translation.source
-					ELSE 'machine'
-				END,
-				updated_at = NOW()
-			RETURNING resource_id::text AS resource_id
-		`),
+	const persisted = await withCoreDb(env, (db) =>
+		upsertResourceTranslation(db, {
+			resourceId,
+			lang: 'zh-Hant',
+			...patch,
+			keywords: [],
+			source: 'machine',
+			expectedSourceContentHash: sourceContentHash,
+		}),
 	);
-	if (!result.rows.length) throw new ContentLocalizationSourceChangedError(resourceId);
+	if (!persisted) throw new ContentLocalizationSourceChangedError(resourceId);
 }
 
 export function persistBackfilledZhHantContent(
