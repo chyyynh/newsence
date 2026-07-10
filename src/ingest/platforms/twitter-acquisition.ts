@@ -167,12 +167,14 @@ export function buildThreadResourceParts<T extends Tweet>(
 
 	const media = sorted.flatMap(extractTweetMedia);
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
+	const platformMetadata = buildTweetPlatformMetadata(first, { media, quotedTweet });
+	platformMetadata.data.threadTweetCount = sorted.length;
 	return {
 		first,
 		sorted,
 		combinedText: uniqueTexts.join('\n\n'),
 		media,
-		platformMetadata: buildTweetPlatformMetadata(first, { media, quotedTweet }),
+		platformMetadata,
 	};
 }
 
@@ -406,5 +408,65 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 	const data = JSON.parse(await readTextWithLimit(response)) as { tweets?: Tweet[]; status: string; msg?: string };
 	const tweet = data.tweets?.[0];
 	if (!tweet) throw new Error(`Twitter API: Tweet not found (status=${data.status})`);
-	return (await resolveTweetContent(tweet, apiKey)).scraped;
+	const resolved = await resolveTweetContent(tweet, apiKey);
+	if (resolved.kind !== 'tweet') return resolved.scraped;
+
+	const contextTweets = await fetchTwitterThreadContext(tweetId, apiKey);
+	const conversationId = tweet.conversationId || tweet.id;
+	const authorUserName = tweet.author?.userName;
+	const seen = new Set<string>();
+	const thread = [tweet, ...contextTweets].filter((candidate) => {
+		const key = candidate.id || candidate.url;
+		if (!key || seen.has(key)) return false;
+		seen.add(key);
+		if (candidate.id === tweet.id) return true;
+		return (
+			!!conversationId && candidate.conversationId === conversationId && !!authorUserName && candidate.author?.userName === authorUserName
+		);
+	});
+	if (thread.length < 2) return resolved.scraped;
+
+	const parts = buildThreadResourceParts(thread);
+	return {
+		type: 'twitter',
+		title: buildTweetTitle(parts.first, 80),
+		markdown: parts.combinedText,
+		metadata: {
+			author: parts.first.author?.userName || null,
+			language: parts.first.lang ?? null,
+			publishedDate: parts.first.createdAt,
+			siteName: 'Twitter',
+			description: parts.combinedText,
+		},
+		platformMetadata: parts.platformMetadata,
+	};
+}
+
+async function fetchTwitterThreadContext(tweetId: string, apiKey: string): Promise<Tweet[]> {
+	const tweets: Tweet[] = [];
+	const seenCursors = new Set<string>();
+	let cursor = '';
+	for (let page = 0; page < 5; page++) {
+		const params = new URLSearchParams({ tweetId });
+		if (cursor) params.set('cursor', cursor);
+		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/tweet/thread_context?${params}`, {
+			headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+		});
+		if (!response.ok) {
+			await response.body?.cancel();
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+		const data = JSON.parse(await readTextWithLimit(response, 2 * 1024 * 1024)) as {
+			tweets?: Tweet[];
+			has_next_page?: boolean;
+			next_cursor?: string;
+		};
+		tweets.push(...(data.tweets ?? []));
+		if (!data.has_next_page) break;
+		cursor = data.next_cursor ?? '';
+		if (!cursor || seenCursors.has(cursor)) break;
+		seenCursors.add(cursor);
+		await scheduler.wait(250);
+	}
+	return tweets;
 }

@@ -41,9 +41,27 @@ export function validateAcquisitionUrl(url: string): string {
 	return normalizeUrl(parsed.toString());
 }
 
-function sanitizeAcquiredContent(acquired: AcquiredContent): AcquiredContent {
+async function sourceSnapshotHash(acquired: AcquiredContent): Promise<string> {
+	const input = JSON.stringify({
+		type: acquired.type,
+		title: acquired.title,
+		markdown: acquired.markdown,
+		metadata: acquired.metadata,
+	});
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<AcquiredContent> {
 	const markdown = sanitizeExtractedMarkdown(acquired.markdown);
-	return markdown === acquired.markdown ? acquired : { ...acquired, markdown };
+	const sanitized = markdown === acquired.markdown ? acquired : { ...acquired, markdown };
+	return {
+		...sanitized,
+		platformMetadata: {
+			...(sanitized.platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null }),
+			sourceSnapshotHash: await sourceSnapshotHash(sanitized),
+		},
+	};
 }
 
 export async function scrapeSavedUrl(url: string, env: CoreEnv, options: AcquisitionOptions = {}): Promise<AcquiredContent> {

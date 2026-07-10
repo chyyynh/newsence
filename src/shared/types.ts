@@ -107,6 +107,7 @@ export interface RetweetedByData {
 interface TwitterMetadata extends TwitterAuthorFields {
 	variant?: 'shared' | 'longform';
 	tweetId?: string;
+	threadTweetCount?: number;
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
@@ -218,6 +219,8 @@ export interface PdfExtractionMetadata {
 export type PlatformMetadata<T extends ResourceType = ResourceType> = {
 	fetchedAt: string;
 	data: PlatformMetadataDataByResourceType[T];
+	/** Hash of normalized source fields used to skip unchanged resync runs. */
+	sourceSnapshotHash?: string;
 	enrichments?: PlatformEnrichments | null;
 	sourceName?: string;
 	extraction?: PdfExtractionMetadata;

@@ -5,7 +5,7 @@ import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
-import { type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
+import { type AcquiredContent, type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { ResourceUpdateBuilder } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -39,6 +39,23 @@ export async function deleteResource(env: CoreEnv, resourceId: string): Promise<
 	return withCoreDb(env, async (db) => {
 		const deleted = await db.delete(resources).where(eq(resources.id, resourceId)).returning({ id: resources.id });
 		return deleted.length > 0;
+	});
+}
+
+export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {
+	const platformMetadataJson = JSON.stringify(acquired.platformMetadata ?? {});
+	const ogImageUrl = acquired.ogImage?.ogImageUrl?.trim() || null;
+	await withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			UPDATE resources
+			SET scraped_date = NOW(),
+				og_image_url = COALESCE(${ogImageUrl}, og_image_url),
+				platform_metadata = COALESCE(platform_metadata, '{}'::jsonb) || ${platformMetadataJson}::jsonb,
+				updated_at = NOW()
+			WHERE id = ${resourceId}::uuid
+			RETURNING id
+		`);
+		if (!result.rows.length) throw new Error(`Failed to record resource ${resourceId} resync: not found`);
 	});
 }
 

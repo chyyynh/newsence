@@ -17,7 +17,7 @@ import { ContentLocalizationWorkflow, scheduleContentLocalization } from '@inges
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { enqueueProcessing, enqueueResourceResync, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -154,6 +154,11 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	async enqueueResourceProcessing(resourceId: string) {
 		if (await isResourceEnrichmentComplete(this.env, resourceId)) return undefined;
 		return enqueueProcessing(this.env, resourceId);
+	}
+
+	/** Reacquire a URL-backed resource while preserving the current copy if the source fetch fails. */
+	async resyncResource(resourceId: string) {
+		return enqueueResourceResync(this.env, resourceId);
 	}
 
 	/** Synchronously acquire one URL without DB persistence. */

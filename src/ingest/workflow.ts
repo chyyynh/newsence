@@ -22,12 +22,25 @@ import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/p
 import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterResource } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import { deleteResource, markResourceEnrichmentFailed, persistProcessedResource } from './resource-persistence';
+import {
+	deleteResource,
+	markResourceEnrichmentFailed,
+	persistProcessedResource,
+	persistUnchangedResourceResync,
+} from './resource-persistence';
 
-type WorkflowPayload = { resourceId: string };
+type WorkflowOperation = 'ingest' | 'resync';
+type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
 	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
+}
+
+export function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
+	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
+		resourceId,
+		operation: 'resync',
+	});
 }
 
 function workflowIdPart(value: string): string {
@@ -38,7 +51,11 @@ function storedWorkflowId(resourceId: string): string {
 	return ['resource', workflowIdPart(resourceId)].join('-');
 }
 
-function shouldAcquireContent(resource: ResourceForProcessing & { has_content?: boolean; has_youtube_transcript?: boolean }): boolean {
+function shouldAcquireContent(
+	resource: ResourceForProcessing & { has_content?: boolean; has_youtube_transcript?: boolean },
+	force = false,
+): boolean {
+	if (force) return !!resource.url;
 	const hasContent = 'has_content' in resource && !!resource.has_content;
 	const needsYouTubeAcquisition = resource.type === 'youtube' && !resource.has_youtube_transcript;
 	return (!hasContent || needsYouTubeAcquisition) && !resource.storage_key && !!resource.url;
@@ -48,6 +65,7 @@ async function stageSavedUrlAcquisition(
 	env: CoreEnv,
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
+	allowFeedFallback: boolean,
 ): Promise<AcquiredContent | undefined> {
 	try {
 		const artifact = await step.do(
@@ -66,7 +84,7 @@ async function stageSavedUrlAcquisition(
 		);
 		return readAcquiredContentArtifact(artifact);
 	} catch (error) {
-		const hasFeedFallback = resource.type === 'rss' && !!(resource.summary?.trim() || resource.content?.trim());
+		const hasFeedFallback = allowFeedFallback && resource.type === 'rss' && !!(resource.summary?.trim() || resource.content?.trim());
 		if (!hasFeedFallback) throw error;
 		console.warn({
 			tag: 'WORKFLOW',
@@ -83,9 +101,10 @@ async function stageOgImagePatch(
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
 	acquiredContent?: AcquiredContent,
+	force = false,
 ): Promise<OgImagePatch> {
-	if (resource.og_image_url || !resource.url || resource.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
 	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
+	if ((!force && resource.og_image_url) || !resource.url || resource.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
 	return step.do('resolve-og-image', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
 		fetchOgImage(resource.url),
 	);
@@ -94,9 +113,11 @@ async function stageOgImagePatch(
 export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId } = event.payload;
+		const operation = event.payload.operation ?? 'ingest';
 		try {
-			return await this.runResource(resourceId, step);
+			return await this.runResource(resourceId, step, operation);
 		} catch (error) {
+			if (operation === 'resync') throw error;
 			await step
 				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
 					markResourceEnrichmentFailed(this.env, resourceId),
@@ -113,18 +134,21 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		}
 	}
 
-	private async runResource(resourceId: string, step: WorkflowStep) {
+	private async runResource(resourceId: string, step: WorkflowStep, operation: WorkflowOperation) {
 		const initialResource = await step.do(
 			'fetch-resource-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceForProcessing(this.env, resourceId, true),
 		);
+		if (operation === 'resync' && !initialResource.url) {
+			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
+		}
 		let acquiredContent: AcquiredContent | undefined;
-		if (shouldAcquireContent(initialResource)) {
+		if (shouldAcquireContent(initialResource, operation === 'resync')) {
 			try {
-				acquiredContent = await stageSavedUrlAcquisition(this.env, step, initialResource);
+				acquiredContent = await stageSavedUrlAcquisition(this.env, step, initialResource, operation !== 'resync');
 			} catch (error) {
-				if (acquisitionHttpStatus(error) !== 403) throw error;
+				if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
 				const deleted = await step.do(
 					'delete-forbidden-resource',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -139,6 +163,16 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 				});
 				return { resourceId, deleted, reason: 'acquisition_http_403' };
 			}
+		}
+		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
+		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
+		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
+			await step.do(
+				'record-unchanged-resync',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => persistUnchangedResourceResync(this.env, resourceId, acquiredContent),
+			);
+			return { success: true, resource_id: resourceId, operation, changed: false };
 		}
 		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const resourceType = resource.type;
@@ -165,7 +199,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			hasStagedText: !!pdfTextArtifact?.text,
 			loadContent: async () => (await loadFull()).content,
 		});
-		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent);
+		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent, operation === 'resync');
 
 		const processorResult = await step.do(
 			'ai-analysis',
@@ -250,6 +284,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
-		return { success: true, resource_id: persistedResourceId };
+		return {
+			success: true,
+			resource_id: persistedResourceId,
+			...(operation === 'resync' ? { operation, changed: true } : {}),
+		};
 	}
 }
