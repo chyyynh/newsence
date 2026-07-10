@@ -35,6 +35,13 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 	});
 }
 
+export async function deleteResource(env: CoreEnv, resourceId: string): Promise<boolean> {
+	return withCoreDb(env, async (db) => {
+		const deleted = await db.delete(resources).where(eq(resources.id, resourceId)).returning({ id: resources.id });
+		return deleted.length > 0;
+	});
+}
+
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {
 		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;

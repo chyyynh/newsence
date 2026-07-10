@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Client } from 'pg';
+import { Pool } from 'pg';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const WRANGLER = resolve(ROOT, 'node_modules/.bin/wrangler');
 const WORKFLOW_NAME = 'newsence-monitor-workflow';
 const MODES = new Set(['stalled', 'missing-content']);
+const WORKFLOW_BATCH_SIZE = 100;
 
 function option(name, fallback) {
 	const inline = process.argv.find((value) => value.startsWith(`${name}=`));
@@ -24,7 +26,15 @@ function positiveInteger(value, name, maximum) {
 	return parsed;
 }
 
-function directDatabaseUrl(value) {
+function nonNegativeInteger(value, name, maximum) {
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isInteger(parsed) || parsed < 0 || parsed > maximum) {
+		throw new Error(`${name} must be an integer between 0 and ${maximum}`);
+	}
+	return parsed;
+}
+
+function databaseConnectionUrl(value) {
 	const url = new URL(value);
 	url.searchParams.delete('pgbouncer');
 	if (url.searchParams.get('sslrootcert') === 'system') url.searchParams.delete('sslrootcert');
@@ -34,10 +44,13 @@ function directDatabaseUrl(value) {
 const mode = option('--mode', 'stalled');
 if (!MODES.has(mode)) throw new Error(`--mode must be one of: ${[...MODES].join(', ')}`);
 const limit = positiveInteger(option('--limit', '100'), '--limit', 1000);
-const concurrency = positiveInteger(option('--concurrency', '4'), '--concurrency', 16);
+const concurrency = positiveInteger(option('--concurrency', '1'), '--concurrency', 16);
+const delaySeconds = nonNegativeInteger(option('--delay', '60'), '--delay', 3600);
 const dryRun = process.argv.includes('--dry-run');
-const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL or DIRECT_URL is required');
+const all = process.argv.includes('--all');
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error('DATABASE_URL is required');
+if (dryRun && all) throw new Error('--dry-run and --all cannot be used together');
 
 const candidates = {
 	stalled: {
@@ -76,7 +89,7 @@ const candidates = {
 			AND r.url IS NOT NULL
 			AND r.enrichment_status IN ('enriched', 'failed')
 			AND r.updated_at < NOW() - INTERVAL '15 minutes'
-			AND NULLIF(BTRIM(original.content), '') IS NULL`,
+			AND (original.content IS NULL OR original.content = '')`,
 		orderBy: `
 			EXISTS (SELECT 1 FROM library item WHERE item.resource_id = r.id) DESC,
 			COALESCE(r.published_date, r.created_at) DESC,
@@ -84,43 +97,86 @@ const candidates = {
 	},
 }[mode];
 
-function triggerWorkflow(resourceId) {
-	return new Promise((resolvePromise, reject) => {
-		const child = spawn(
-			'pnpm',
-			['exec', 'wrangler', 'workflows', 'trigger', WORKFLOW_NAME, JSON.stringify({ resourceId }), '--config', 'wrangler.jsonc'],
-			{ cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
-		);
-		let stdout = '';
-		let stderr = '';
-		child.stdout.on('data', (chunk) => {
-			stdout += chunk;
-		});
-		child.stderr.on('data', (chunk) => {
-			stderr += chunk;
-		});
-		child.on('error', reject);
-		child.on('close', (code) => {
-			if (code === 0) resolvePromise();
-			else reject(new Error(stderr.trim() || stdout.trim() || `Wrangler exited with ${code}`));
-		});
+function wranglerJson(args) {
+	const result = spawnSync(WRANGLER, args, {
+		cwd: ROOT,
+		encoding: 'utf8',
 	});
+	if (result.status !== 0) {
+		throw new Error(result.stderr.trim() || result.stdout.trim() || `Wrangler exited with ${result.status}`);
+	}
+	return JSON.parse(result.stdout);
 }
 
-async function runPool(rows) {
+function loadCloudflareCredentials() {
+	const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? wranglerJson(['whoami', '--json']).accounts?.[0]?.id;
+	const apiToken = process.env.CLOUDFLARE_API_TOKEN ?? wranglerJson(['auth', 'token', '--json']).token;
+	if (!accountId || !apiToken) throw new Error('Cloudflare account ID or API token is unavailable');
+	return { accountId, apiToken };
+}
+
+function retryDelay(attempt) {
+	return Math.min(60_000, 5_000 * 2 ** attempt);
+}
+
+async function queryWithRetry(queryable, text, values) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await queryable.query(text, values);
+		} catch (error) {
+			if (attempt >= 8) throw error;
+			const delayMs = retryDelay(attempt);
+			process.stderr.write(`Database unavailable; retrying in ${delayMs / 1000}s: ${error.message}\n`);
+			await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+		}
+	}
+}
+
+async function triggerWorkflowBatch(rows, credentials) {
+	for (let attempt = 0; attempt <= 8; attempt++) {
+		const response = await fetch(
+			`https://api.cloudflare.com/client/v4/accounts/${credentials.accountId}/workflows/${WORKFLOW_NAME}/instances/batch`,
+			{
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${credentials.apiToken}`,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(rows.map((row) => ({ params: { resourceId: row.id } }))),
+			},
+		);
+		const payload = await response.json().catch(() => undefined);
+		if (response.ok && payload?.success === true && payload.result?.length === rows.length) return;
+		if (response.status === 429 && attempt < 8) {
+			const retryAfterSeconds = Number.parseFloat(response.headers.get('retry-after') ?? '');
+			const delayMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : retryDelay(attempt);
+			process.stderr.write(`Cloudflare rate limit; retrying ${rows.length} resources in ${delayMs / 1000}s\n`);
+			await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+			continue;
+		}
+		throw new Error(
+			`Cloudflare batch trigger failed (${response.status}): ${JSON.stringify(payload?.errors ?? payload ?? 'invalid response')}`,
+		);
+	}
+}
+
+async function runPool(rows, credentials) {
+	const batches = Array.from({ length: Math.ceil(rows.length / WORKFLOW_BATCH_SIZE) }, (_, index) =>
+		rows.slice(index * WORKFLOW_BATCH_SIZE, (index + 1) * WORKFLOW_BATCH_SIZE),
+	);
 	const failures = [];
 	let nextIndex = 0;
 	await Promise.all(
-		Array.from({ length: Math.min(concurrency, rows.length) }, async () => {
-			while (nextIndex < rows.length) {
+		Array.from({ length: Math.min(concurrency, batches.length) }, async () => {
+			while (nextIndex < batches.length) {
 				const index = nextIndex++;
-				const row = rows[index];
+				const batch = batches[index];
 				try {
-					await triggerWorkflow(row.id);
-					process.stdout.write(`[${index + 1}/${rows.length}] queued ${row.id}\n`);
+					await triggerWorkflowBatch(batch, credentials);
+					process.stdout.write(`[${index + 1}/${batches.length}] queued ${batch.length} resources\n`);
 				} catch (error) {
-					failures.push(row.id);
-					process.stderr.write(`[${index + 1}/${rows.length}] failed ${row.id}: ${String(error)}\n`);
+					failures.push(...batch);
+					process.stderr.write(`[${index + 1}/${batches.length}] failed ${batch.length} resources: ${String(error)}\n`);
 				}
 			}
 		}),
@@ -128,23 +184,14 @@ async function runPool(rows) {
 	return failures;
 }
 
-const client = new Client({ connectionString: directDatabaseUrl(databaseUrl) });
-await client.connect();
-try {
-	const selectSql = `
-		SELECT r.id::text AS id, r.enrichment_status AS status, r.updated_at
-		FROM ${candidates.from}
-		WHERE ${candidates.where}
-		ORDER BY ${candidates.orderBy}
-		LIMIT $1`;
-	if (dryRun) {
-		const preview = await client.query(selectSql, [limit]);
-		process.stdout.write(`${JSON.stringify({ mode, dryRun: true, candidates: preview.rowCount, rows: preview.rows }, null, 2)}\n`);
-	} else {
+async function claimRows(pool) {
+	const client = await pool.connect();
+	try {
+		await client.query('RESET statement_timeout');
 		await client.query('BEGIN');
 		const claimed = await client.query(
 			`WITH candidates AS (
-				SELECT r.id
+				SELECT r.id, r.enrichment_status AS previous_status
 				FROM ${candidates.from}
 				WHERE ${candidates.where}
 				ORDER BY ${candidates.orderBy}
@@ -155,28 +202,127 @@ try {
 			SET enrichment_status = 'pending', updated_at = NOW()
 			FROM candidates
 			WHERE resource.id = candidates.id
-			RETURNING resource.id::text AS id`,
+			RETURNING resource.id::text AS id, candidates.previous_status AS status`,
 			[limit],
 		);
 		await client.query('COMMIT');
-
-		const failures = await runPool(claimed.rows);
-		if (failures.length) {
-			await client.query(
-				`UPDATE resources
-				 SET enrichment_status = 'failed', updated_at = NOW()
-				 WHERE id = ANY($1::uuid[])`,
-				[failures],
-			);
-		}
-		process.stdout.write(
-			`${JSON.stringify({ mode, claimed: claimed.rowCount, queued: claimed.rowCount - failures.length, failed: failures.length })}\n`,
-		);
-		if (failures.length) process.exitCode = 1;
+		return claimed.rows;
+	} catch (error) {
+		await client.query('ROLLBACK').catch(() => undefined);
+		throw error;
+	} finally {
+		client.release();
 	}
-} catch (error) {
-	await client.query('ROLLBACK').catch(() => undefined);
-	throw error;
+}
+
+async function poolQuery(pool, text, values) {
+	const client = await pool.connect();
+	let connectionError;
+	try {
+		await client.query('RESET statement_timeout');
+		return await client.query(text, values);
+	} catch (error) {
+		connectionError = error;
+		throw error;
+	} finally {
+		client.release(connectionError);
+	}
+}
+
+async function claimSnapshotRows(client, rows) {
+	if (!rows.length) return [];
+	const values = [];
+	const placeholders = rows.map((row, index) => {
+		values.push(row.id, row.status);
+		return `($${index * 2 + 1}::uuid, $${index * 2 + 2}::text)`;
+	});
+	const claimed = await queryWithRetry(
+		client,
+		`UPDATE resources resource
+		 SET enrichment_status = 'pending', updated_at = NOW()
+		 FROM (VALUES ${placeholders.join(', ')}) AS candidate(id, previous_status)
+		 WHERE resource.id = candidate.id
+		   AND resource.enrichment_status = candidate.previous_status
+		 RETURNING resource.id::text AS id, candidate.previous_status AS status`,
+		values,
+	);
+	return claimed.rows;
+}
+
+async function selectCursorPage(client, afterId) {
+	const page = await queryWithRetry(
+		client,
+		`SELECT r.id::text AS id, r.enrichment_status AS status, r.updated_at
+		 FROM ${candidates.from}
+		 WHERE ${candidates.where}
+		   AND ($1::uuid IS NULL OR r.id > $1::uuid)
+		 ORDER BY r.id
+		 LIMIT $2`,
+		[afterId, limit],
+	);
+	return page.rows;
+}
+
+async function restoreFailures(client, failures) {
+	if (!failures.length) return;
+	const values = [];
+	const placeholders = failures.map((row, index) => {
+		values.push(row.id, row.status);
+		return `($${index * 2 + 1}::uuid, $${index * 2 + 2}::text)`;
+	});
+	await queryWithRetry(
+		client,
+		`UPDATE resources resource
+		 SET enrichment_status = failed.status, updated_at = NOW()
+		 FROM (VALUES ${placeholders.join(', ')}) AS failed(id, status)
+		 WHERE resource.id = failed.id`,
+		values,
+	);
+}
+
+const pool = new Pool({
+	connectionString: databaseConnectionUrl(databaseUrl),
+	max: 1,
+	idleTimeoutMillis: 10_000,
+});
+const database = { query: (text, values) => poolQuery(pool, text, values) };
+try {
+	const selectSql = (limitSql = 'LIMIT $1', orderSql = `ORDER BY ${candidates.orderBy}`) => `
+		SELECT r.id::text AS id, r.enrichment_status AS status, r.updated_at
+		FROM ${candidates.from}
+		WHERE ${candidates.where}
+		${orderSql}
+		${limitSql}`;
+	if (dryRun) {
+		const preview = await queryWithRetry(database, selectSql(), [limit]);
+		process.stdout.write(`${JSON.stringify({ mode, dryRun: true, candidates: preview.rowCount, rows: preview.rows }, null, 2)}\n`);
+	} else {
+		const credentials = loadCloudflareCredentials();
+		const totals = { selected: all ? 0 : undefined, claimed: 0, queued: 0, failed: 0, skipped: 0 };
+		let cursor;
+		while (true) {
+			const selected = all ? await selectCursorPage(database, cursor) : undefined;
+			if (selected?.length === 0) break;
+			if (selected) {
+				totals.selected += selected.length;
+				cursor = selected.at(-1).id;
+			}
+			const claimed = selected ? await claimSnapshotRows(database, selected) : await claimRows(pool);
+			const failures = await runPool(claimed, credentials);
+			await restoreFailures(database, failures);
+			totals.claimed += claimed.length;
+			totals.queued += claimed.length - failures.length;
+			totals.failed += failures.length;
+			totals.skipped += (selected?.length ?? claimed.length) - claimed.length;
+			process.stdout.write(`${JSON.stringify({ mode, batch: claimed.length, ...totals })}\n`);
+			if (!selected || failures.length || selected.length < limit) break;
+			if (delaySeconds) {
+				process.stdout.write(`Waiting ${delaySeconds}s before the next database batch\n`);
+				await new Promise((resolvePromise) => setTimeout(resolvePromise, delaySeconds * 1000));
+			}
+		}
+		if (totals.failed) process.exitCode = 1;
+	}
 } finally {
-	await client.end();
+	await pool.end();
 }

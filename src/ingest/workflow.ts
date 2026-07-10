@@ -1,9 +1,11 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { NonRetryableError } from 'cloudflare:workflows';
 import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
+	acquisitionHttpStatus,
 	EMPTY_OG_IMAGE_PATCH,
 	fetchOgImage,
 	type OgImagePatch,
@@ -20,7 +22,7 @@ import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/p
 import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterResource } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import { markResourceEnrichmentFailed, persistProcessedResource } from './resource-persistence';
+import { deleteResource, markResourceEnrichmentFailed, persistProcessedResource } from './resource-persistence';
 
 type WorkflowPayload = { resourceId: string };
 
@@ -51,10 +53,16 @@ async function stageSavedUrlAcquisition(
 		const artifact = await step.do(
 			'acquire-content',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() =>
-				scrapeSavedUrlArtifact(resource.url, env, {
-					allowRenderedFallback: resource.scope === 'corpus' && resource.type === 'rss',
-				}),
+			async () => {
+				try {
+					return await scrapeSavedUrlArtifact(resource.url, env, {
+						allowRenderedFallback: resource.scope === 'corpus' && resource.type === 'rss',
+					});
+				} catch (error) {
+					if (acquisitionHttpStatus(error) !== 403) throw error;
+					throw new NonRetryableError(error instanceof Error ? error.message : String(error), 'AcquisitionForbiddenError');
+				}
+			},
 		);
 		return readAcquiredContentArtifact(artifact);
 	} catch (error) {
@@ -111,9 +119,27 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceForProcessing(this.env, resourceId, true),
 		);
-		const acquiredContent = shouldAcquireContent(initialResource)
-			? await stageSavedUrlAcquisition(this.env, step, initialResource)
-			: undefined;
+		let acquiredContent: AcquiredContent | undefined;
+		if (shouldAcquireContent(initialResource)) {
+			try {
+				acquiredContent = await stageSavedUrlAcquisition(this.env, step, initialResource);
+			} catch (error) {
+				if (acquisitionHttpStatus(error) !== 403) throw error;
+				const deleted = await step.do(
+					'delete-forbidden-resource',
+					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+					() => deleteResource(this.env, resourceId),
+				);
+				console.info({
+					tag: 'WORKFLOW',
+					msg: 'Deleted resource after forbidden acquisition response',
+					resource_id: resourceId,
+					url: initialResource.url,
+					deleted,
+				});
+				return { resourceId, deleted, reason: 'acquisition_http_403' };
+			}
+		}
 		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const resourceType = resource.type;
 		const logContext = { resource_id: resourceId, table: 'resources' };

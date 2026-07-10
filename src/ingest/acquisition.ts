@@ -23,6 +23,12 @@ export type { PdfExtractionMetadata } from '@core-shared/types';
 export type { OgImagePatch };
 export type AcquisitionOptions = WebAcquisitionOptions;
 
+export function acquisitionHttpStatus(error: unknown): number | undefined {
+	const message = error instanceof Error ? error.message : String(error);
+	const status = Number.parseInt(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1] ?? '', 10);
+	return Number.isInteger(status) ? status : undefined;
+}
+
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
 	ogImage?: OgImagePatch;
