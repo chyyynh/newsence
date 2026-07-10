@@ -2,6 +2,7 @@ import { generateResourceEmbedding } from '@core-ai/embedding';
 import { normalizeUrl } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
+import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 
 export interface ResourceSummary {
 	id: string;
@@ -428,18 +429,22 @@ function resourceLocalizedJoin(): SQL {
 			SELECT lang, title, summary, content, keywords, translation_source
 			FROM resources_localized
 			WHERE id = r.id
-			ORDER BY
-				(lang = r.original_lang) DESC,
-				(lang = 'en') DESC,
-				(lang = 'zh-Hant') DESC,
-				(translation_source = 'original') DESC,
-				lang ASC
+			ORDER BY ${resourceTranslationOrderSql({ lang: sql`lang`, originalLang: sql`r.original_lang` })}
 			LIMIT 1
 		) rt ON TRUE
 	`;
 }
 
 function resourceReadSelect(userId: string): SQL {
+	const canReadContent = resourceContentAccessSql('ai-tools', {
+		hasViewer: sql`TRUE`,
+		inViewerLibrary: sql`EXISTS (
+			SELECT 1
+			FROM library content_library
+			WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
+		)`,
+		scope: sql`r.scope`,
+	});
 	return sql`
 		r.id::text,
 		r.type,
@@ -454,11 +459,7 @@ function resourceReadSelect(userId: string): SQL {
 		r.tags,
 		rt.title AS title,
 		rt.summary AS summary,
-		CASE WHEN EXISTS (
-			SELECT 1
-			FROM library content_library
-			WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
-		)
+		CASE WHEN ${canReadContent}
 		THEN rt.content
 		ELSE NULL
 		END AS content,

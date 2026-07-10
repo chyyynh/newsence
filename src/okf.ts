@@ -6,6 +6,7 @@
 
 import { type CoreDb, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
+import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 import type { ResourceCategory, ResourceType } from './resources/types';
 
 export type ExportCollectionOkfInput = {
@@ -147,6 +148,11 @@ async function readCollectionResources(
 	viewerId: string | null,
 	primaryLocale: string | null,
 ): Promise<ResourceRow[]> {
+	const canReadContent = resourceContentAccessSql('export', {
+		hasViewer: sql`${viewerId}::text IS NOT NULL`,
+		inViewerLibrary: sql`viewer_library.id IS NOT NULL`,
+		scope: sql`r.scope`,
+	});
 	const rows = await queryRows<ResourceQueryRow>(
 		db,
 		sql`SELECT
@@ -158,7 +164,7 @@ async function readCollectionResources(
 		     r.url,
 		     primary_translation.summary,
 		     CASE
-		       WHEN viewer_library.id IS NOT NULL
+		       WHEN ${canReadContent}
 		         THEN primary_translation.content
 		       ELSE NULL
 		     END AS content,
@@ -185,11 +191,11 @@ async function readCollectionResources(
 		       rl.translation_source AS source
 		     FROM resources_localized rl
 		     WHERE rl.id = r.id
-		     ORDER BY
-		       (${primaryLocale}::text IS NOT NULL AND rl.lang = ${primaryLocale}) DESC,
-		       (rl.lang = r.original_lang) DESC,
-		       (rl.translation_source = 'original') DESC,
-		       rl.lang ASC
+		     ORDER BY ${resourceTranslationOrderSql({
+						lang: sql`rl.lang`,
+						originalLang: sql`r.original_lang`,
+						requestedLocale: sql`${primaryLocale}::text`,
+					})}
 		     LIMIT 1
 		   ) primary_translation ON TRUE
 		   LEFT JOIN LATERAL (
@@ -199,7 +205,7 @@ async function readCollectionResources(
 		         'title', rt.title,
 		         'summary', rt.summary,
 		         'content', CASE
-		           WHEN viewer_library.id IS NOT NULL
+		           WHEN ${canReadContent}
 		             THEN rt.content
 		           ELSE NULL
 		         END,
