@@ -1,5 +1,5 @@
 import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
-import { type CoreDb, withCoreDb } from '@db/client';
+import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { textArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
@@ -517,7 +517,8 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 	await syncResourceContentLocalizationState(db, resourceId);
 }
 
-async function syncResourceContentLocalizationState(db: CoreDb, resourceId: string): Promise<void> {
+async function syncResourceContentLocalizationState(db: CoreDb, resourceId: string, sourceContentOverride?: string | null): Promise<void> {
+	const sourceContentSql = sourceContentOverride === undefined ? sql`original.content` : sql`${sourceContentOverride}::text`;
 	await db.execute(sql`
 		WITH source AS (
 			SELECT
@@ -530,7 +531,7 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 				) AS requires_localization,
 				(
 					NULLIF(BTRIM(original.title), '') IS NOT NULL
-					AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+					AND NULLIF(BTRIM(${sourceContentSql}), '') IS NOT NULL
 				) AS has_usable_content,
 				CASE
 					WHEN resource.scope = 'corpus'
@@ -538,8 +539,8 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 					 AND resource.url IS NOT NULL
 					 AND resource.original_lang <> 'zh-Hant'
 					 AND NULLIF(BTRIM(original.title), '') IS NOT NULL
-					 AND NULLIF(BTRIM(original.content), '') IS NOT NULL
-						THEN md5(original.content)
+					 AND NULLIF(BTRIM(${sourceContentSql}), '') IS NOT NULL
+						THEN md5(${sourceContentSql})
 					ELSE NULL
 				END AS current_source_content_hash
 			FROM resources resource
@@ -708,56 +709,75 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 }
 
 export async function reopenResourceForReprocessing(
-	db: CoreDb,
+	env: CoreEnv,
 	resourceId: string,
 	update: { summary: string; content: string; platformMetadata: unknown },
 ): Promise<boolean> {
-	const [resource] = await db
-		.select({
-			originalLang: resources.originalLang,
-			platformMetadata: resources.platformMetadata,
-			summary: resourceTranslations.summary,
-			content: resourceTranslations.content,
-		})
-		.from(resources)
-		.leftJoin(
-			resourceTranslations,
-			and(eq(resourceTranslations.resourceId, resources.id), eq(resourceTranslations.lang, resources.originalLang)),
-		)
-		.where(eq(resources.id, resourceId))
-		.limit(1);
-	if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
-	if (resource.summary === update.summary && resource.content === update.content) return false;
-	await db
-		.update(resources)
-		.set({
-			platformMetadata: mergePlatformMetadata(resource.platformMetadata, update.platformMetadata),
-			enrichmentStatus: 'pending',
-			embedding: null,
-			updatedAt: sql`NOW()`,
-		})
-		.where(eq(resources.id, resourceId));
-	if (
-		!(await upsertResourceTranslation(db, {
-			resourceId,
-			lang: resource.originalLang,
-			summary: update.summary,
-			content: update.content,
-			keywords: [],
-			source: 'original',
-		}))
-	) {
-		throw new Error(`Failed to reopen original translation for resource ${resourceId}`);
-	}
-	await db
-		.delete(resourceTranslations)
-		.where(
-			and(
-				eq(resourceTranslations.resourceId, resourceId),
-				not(eq(resourceTranslations.lang, resource.originalLang)),
-				not(eq(resourceTranslations.source, 'human')),
-			),
-		);
-	await syncResourceContentLocalizationState(db, resourceId);
-	return true;
+	return withCoreTx(env, async (db) => {
+		const resourceResult = await db.execute(sql`
+			SELECT original_lang, platform_metadata
+			FROM resources
+			WHERE id = ${resourceId}::uuid
+			FOR UPDATE
+		`);
+		const resource = (resourceResult.rows as Array<{ original_lang: string; platform_metadata: unknown }>)[0];
+		if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
+
+		const translationResult = await db.execute(sql`
+			SELECT summary, content, source
+			FROM resource_translations
+			WHERE resource_id = ${resourceId}::uuid
+			  AND lang = ${resource.original_lang}
+			FOR UPDATE
+		`);
+		const original = (
+			translationResult.rows as Array<{
+				summary: string | null;
+				content: string | null;
+				source: ResourceTranslationSource;
+			}>
+		)[0];
+		if (!original) throw new Error(`Failed to reopen resource ${resourceId}: original translation not found`);
+
+		const preserveOwnedTranslation = original.source === 'human';
+		const effectiveSummary = preserveOwnedTranslation || update.summary === '' ? original.summary : update.summary;
+		const effectiveContent = preserveOwnedTranslation || update.content === '' ? original.content : update.content;
+		const sourceContentChanged = original.content !== effectiveContent;
+		if (original.summary === effectiveSummary && !sourceContentChanged) return false;
+
+		await syncResourceContentLocalizationState(db, resourceId, effectiveContent);
+		await db
+			.update(resources)
+			.set({
+				platformMetadata: mergePlatformMetadata(resource.platform_metadata, update.platformMetadata),
+				enrichmentStatus: 'pending',
+				embedding: null,
+				updatedAt: sql`NOW()`,
+			})
+			.where(eq(resources.id, resourceId));
+		if (
+			!(await upsertResourceTranslation(db, {
+				resourceId,
+				lang: resource.original_lang,
+				summary: update.summary,
+				content: update.content,
+				keywords: [],
+				source: 'original',
+			}))
+		) {
+			throw new Error(`Failed to reopen original translation for resource ${resourceId}`);
+		}
+		if (sourceContentChanged) {
+			await db
+				.delete(resourceTranslations)
+				.where(
+					and(
+						eq(resourceTranslations.resourceId, resourceId),
+						not(eq(resourceTranslations.lang, resource.original_lang)),
+						not(eq(resourceTranslations.source, 'human')),
+					),
+				);
+		}
+		return true;
+	});
 }

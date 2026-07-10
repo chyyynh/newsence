@@ -88,9 +88,11 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 
 	if (existing) {
 		const existingId = existing.id;
-		const changed = await withCoreDb(env, (db) =>
-			reopenResourceForReprocessing(db, existingId, { summary: combinedText, content: combinedText, platformMetadata }),
-		);
+		const changed = await reopenResourceForReprocessing(env, existingId, {
+			summary: combinedText,
+			content: combinedText,
+			platformMetadata,
+		});
 		if (changed || existing.shouldRetryEnrichment) await enqueueProcessing(env, existingId);
 		console.info({
 			tag: 'TWITTER',
