@@ -370,7 +370,6 @@ interface ResourceMirrorRecord {
 	keywords: string[];
 	tags: string[];
 	category: ResourceCategory | null;
-	entitiesJson: string | null;
 	ogImageUrl: string | null;
 	platformMetadataJson: string | null;
 	embedding: string | null;
@@ -423,7 +422,6 @@ export async function updateResourceAfterProcessing(
 		       scraped_date = ${record.scrapedDate},
 		       tags = CASE WHEN cardinality(${tags}) > 0 THEN ${tags} ELSE resources.tags END,
 		       category = COALESCE(${record.category}, resources.category),
-		       entities = COALESCE(${record.entitiesJson}::jsonb, resources.entities),
 		       og_image_url = COALESCE(NULLIF(${record.ogImageUrl}, ''), resources.og_image_url),
 		       platform_metadata = COALESCE(${record.platformMetadataJson}::jsonb, resources.platform_metadata),
 		       embedding = COALESCE(${record.embedding}::vector, resources.embedding),
@@ -504,7 +502,6 @@ function resourceMirrorRecord(
 		keywords,
 		tags,
 		category: deriveResourceCategory(storedPlatformMetadata, tags),
-		entitiesJson: jsonbParam(updatePayload.entities ?? null),
 		ogImageUrl: cleanString(updatePayload.og_image_url),
 		platformMetadataJson: jsonbParam(storedPlatformMetadata),
 		embedding: nullableVector(updatePayload.embedding, 'embedding'),
@@ -548,7 +545,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 	return sql`
 		INSERT INTO resources (
 			id, type, scope, url, normalized_url, storage_key, file_type,
-			original_lang, published_date, scraped_date, tags, category, entities,
+			original_lang, published_date, scraped_date, tags, category,
 			og_image_url, platform_metadata, embedding, enrichment_status,
 			created_at, updated_at
 		)
@@ -565,7 +562,6 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			${record.scrapedDate},
 			${tags},
 			${record.category},
-			${record.entitiesJson}::jsonb,
 			${record.ogImageUrl},
 			${record.platformMetadataJson}::jsonb,
 			${record.embedding}::vector,
@@ -611,7 +607,6 @@ function resourceConflictSetSql(): SQL {
 			ELSE resources.tags
 		END,
 		category = CASE WHEN ${preserveEnriched} THEN resources.category ELSE COALESCE(excluded.category, resources.category) END,
-		entities = CASE WHEN ${preserveEnriched} THEN resources.entities ELSE COALESCE(excluded.entities, resources.entities) END,
 		og_image_url = CASE
 			WHEN ${preserveEnriched} THEN resources.og_image_url
 			ELSE COALESCE(NULLIF(excluded.og_image_url, ''), resources.og_image_url)

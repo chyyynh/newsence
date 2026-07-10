@@ -49,7 +49,6 @@ export const resources = pgTable(
 		scrapedDate: timestamp('scraped_date', { mode: 'date' }),
 		tags: text('tags').array().default([]).notNull(),
 		category: text('category', { enum: RESOURCE_CATEGORIES }),
-		entities: jsonb('entities').$type<unknown>(),
 		ogImageUrl: text('og_image_url'),
 		platformMetadata: jsonb('platform_metadata').$type<unknown>(),
 		searchVector: tsvector('search_vector'),
