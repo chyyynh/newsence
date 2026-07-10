@@ -28,23 +28,39 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 	const expectedSourceContentHash = input.expectedSourceContentHash ?? null;
 	const keywords = textArraySql(input.keywords ?? []);
 	const result = await db.execute(sql`
+		WITH target_resource AS (
+			SELECT resource.id
+			FROM resources resource
+			LEFT JOIN resource_localization_state localization
+			  ON localization.resource_id = resource.id
+			WHERE resource.id = ${input.resourceId}::uuid
+			  AND (${input.source} <> 'original' OR resource.original_lang = ${input.lang})
+			  AND (
+				${expectedSourceContentHash}::text IS NULL
+				OR localization.current_source_content_hash = ${expectedSourceContentHash}
+			  )
+		), demoted_originals AS (
+			UPDATE resource_translations translation
+			SET source = 'machine', updated_at = NOW()
+			FROM target_resource
+			WHERE ${input.source} = 'original'
+			  AND translation.resource_id = target_resource.id
+			  AND translation.lang <> ${input.lang}
+			  AND translation.source = 'original'
+			RETURNING translation.resource_id
+		)
 		INSERT INTO resource_translations AS current_translation (
 			resource_id, lang, title, summary, content, keywords, source
 		)
 		SELECT
-			resource.id,
+			target_resource.id,
 			${input.lang},
 			${input.title ?? null},
 			${input.summary ?? null},
 			${input.content ?? null},
 			${keywords},
 			${input.source}
-		FROM resources resource
-		WHERE resource.id = ${input.resourceId}::uuid
-		  AND (
-			${expectedSourceContentHash}::text IS NULL
-			OR resource.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' = ${expectedSourceContentHash}
-		  )
+		FROM target_resource
 		ON CONFLICT (resource_id, lang) DO UPDATE SET
 			title = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.title

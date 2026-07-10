@@ -2,16 +2,7 @@ import { withCoreDb } from '@db/client';
 import { sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
 
-// `currentSourceContentHash` versions the canonical original; `sourceContentHash`
-// advances only after every localization write for that version succeeds.
 const MAX_LOCALIZATION_ATTEMPTS = 3;
-const RESOURCE_REQUIRES_LOCALIZATION = sql`
-	r.enrichment_status = 'enriched'
-	AND r.scope = 'corpus'
-	AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
-	AND r.url IS NOT NULL
-	AND r.original_lang <> 'zh-Hant'
-`;
 
 export type ContentLocalizationClaim = {
 	resourceId: string;
@@ -29,11 +20,11 @@ export class ContentLocalizationSourceChangedError extends Error {
 export async function getPersistedResourceContentHashForLocalization(env: CoreEnv, resourceId: string): Promise<string | null> {
 	return withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
-			SELECT r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' AS source_content_hash
-			FROM resources r
-			WHERE r.id = ${resourceId}::uuid
-			  AND ${RESOURCE_REQUIRES_LOCALIZATION}
-			  AND r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' IS NOT NULL
+			SELECT current_source_content_hash AS source_content_hash
+			FROM resource_localization_state
+			WHERE resource_id = ${resourceId}::uuid
+			  AND current_source_content_hash IS NOT NULL
+			  AND source_content_hash IS DISTINCT FROM current_source_content_hash
 			LIMIT 1
 		`);
 		return (result.rows as Array<{ source_content_hash: string }>)[0]?.source_content_hash ?? null;
@@ -45,56 +36,42 @@ export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10)
 		const result = await db.execute(sql`
 			WITH candidates AS (
 				SELECT
-					r.id,
-					r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' AS source_content_hash,
+					state.resource_id,
+					state.current_source_content_hash AS source_content_hash,
 					CASE
-						WHEN r.platform_metadata #>> '{contentLocalization,attemptContentHash}' IS DISTINCT FROM
-							r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}'
-							THEN 1
-						ELSE COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) + 1
+						WHEN state.attempt_content_hash IS DISTINCT FROM state.current_source_content_hash THEN 1
+						ELSE state.attempts + 1
 					END AS attempt
-				FROM resources r
-				WHERE ${RESOURCE_REQUIRES_LOCALIZATION}
-				  AND r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' IS NOT NULL
-				  AND r.platform_metadata #>> '{contentLocalization,sourceContentHash}' IS DISTINCT FROM
-					r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}'
+				FROM resource_localization_state state
+				WHERE state.current_source_content_hash IS NOT NULL
+				  AND state.source_content_hash IS DISTINCT FROM state.current_source_content_hash
 				  AND (
-					r.platform_metadata #>> '{contentLocalization,attemptContentHash}' IS DISTINCT FROM
-						r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}'
-					OR COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) < ${MAX_LOCALIZATION_ATTEMPTS}
+					state.attempt_content_hash IS DISTINCT FROM state.current_source_content_hash
+					OR state.attempts < ${MAX_LOCALIZATION_ATTEMPTS}
 				  )
 				  AND (
-					r.platform_metadata #>> '{contentLocalization,attemptContentHash}' IS DISTINCT FROM
-						r.platform_metadata #>> '{contentLocalization,currentSourceContentHash}'
-					OR r.platform_metadata #>> '{contentLocalization,lastAttemptAt}' IS NULL
-					OR (r.platform_metadata #>> '{contentLocalization,lastAttemptAt}')::timestamptz < NOW() - CASE
-						WHEN COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) <= 1
-							THEN INTERVAL '15 minutes'
+					state.attempt_content_hash IS DISTINCT FROM state.current_source_content_hash
+					OR state.last_attempt_at IS NULL
+					OR state.last_attempt_at < NOW() - CASE
+						WHEN state.attempts <= 1 THEN INTERVAL '15 minutes'
 						ELSE INTERVAL '1 hour'
 					END
 				  )
-				ORDER BY r.id
+				ORDER BY state.resource_id
 				LIMIT ${Math.max(1, Math.min(Math.trunc(limit), 50))}
-				FOR UPDATE OF r SKIP LOCKED
+				FOR UPDATE OF state SKIP LOCKED
 			)
-			UPDATE resources resource
-			SET platform_metadata = jsonb_set(
-					COALESCE(resource.platform_metadata, '{}'::jsonb),
-					'{contentLocalization}',
-					COALESCE(resource.platform_metadata->'contentLocalization', '{}'::jsonb)
-						|| jsonb_build_object(
-							'status', 'queued',
-							'attemptContentHash', candidates.source_content_hash,
-							'attempts', candidates.attempt,
-							'lastAttemptAt', NOW(),
-							'completedAt', NULL,
-							'error', NULL
-						),
-				true
-			)
+			UPDATE resource_localization_state state
+			SET status = 'queued',
+				attempt_content_hash = candidates.source_content_hash,
+				attempts = candidates.attempt,
+				last_attempt_at = NOW(),
+				completed_at = NULL,
+				error = NULL,
+				updated_at = NOW()
 			FROM candidates
-			WHERE resource.id = candidates.id
-			RETURNING resource.id::text AS resource_id, candidates.source_content_hash, candidates.attempt
+			WHERE state.resource_id = candidates.resource_id
+			RETURNING state.resource_id::text AS resource_id, candidates.source_content_hash, candidates.attempt
 		`);
 		return (result.rows as Array<{ resource_id: string; source_content_hash: string; attempt: number }>).map((row) => ({
 			resourceId: row.resource_id,
@@ -112,26 +89,22 @@ async function markContentLocalization(
 	error?: string,
 	exhausted = false,
 ): Promise<boolean> {
-	const patch = JSON.stringify({
-		status,
-		attemptContentHash: sourceContentHash,
-		...(status === 'complete' ? { sourceContentHash } : {}),
-		completedAt: status === 'complete' ? new Date().toISOString() : null,
-		...(exhausted ? { attempts: MAX_LOCALIZATION_ATTEMPTS } : {}),
-		...(error ? { error: error.slice(0, 500) } : { error: null }),
-	});
 	return withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
-			UPDATE resources resource
-			SET platform_metadata = jsonb_set(
-				COALESCE(resource.platform_metadata, '{}'::jsonb),
-				'{contentLocalization}',
-				COALESCE(resource.platform_metadata->'contentLocalization', '{}'::jsonb) || ${patch}::jsonb,
-				true
-			)
-			WHERE resource.id = ${resourceId}::uuid
-			  AND resource.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' = ${sourceContentHash}
-			RETURNING resource.id::text AS id
+			UPDATE resource_localization_state state
+			SET status = ${status},
+				attempt_content_hash = ${sourceContentHash},
+				source_content_hash = CASE
+					WHEN ${status} = 'complete' THEN ${sourceContentHash}
+					ELSE state.source_content_hash
+				END,
+				completed_at = CASE WHEN ${status} = 'complete' THEN NOW() ELSE NULL END,
+				attempts = CASE WHEN ${exhausted} THEN ${MAX_LOCALIZATION_ATTEMPTS} ELSE state.attempts END,
+				error = ${error ? error.slice(0, 500) : null},
+				updated_at = NOW()
+			WHERE state.resource_id = ${resourceId}::uuid
+			  AND state.current_source_content_hash = ${sourceContentHash}
+			RETURNING state.resource_id::text AS id
 		`);
 		return result.rows.length > 0;
 	});
@@ -209,16 +182,25 @@ export function persistBackfilledZhHantContent(
 }
 
 export async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourceContentHash: string): Promise<void> {
-	await withCoreDb(env, async (db) => {
-		await db.execute(sql`
-			UPDATE resource_translations translation
-			SET content = NULL, updated_at = NOW()
-			FROM resources resource
-			WHERE translation.resource_id = ${resourceId}::uuid
-			  AND translation.lang = 'zh-Hant'
-			  AND translation.source = 'machine'
-			  AND resource.id = translation.resource_id
-			  AND resource.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' = ${sourceContentHash}
+	const isCurrent = await withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			WITH current_state AS (
+				SELECT resource_id
+				FROM resource_localization_state
+				WHERE resource_id = ${resourceId}::uuid
+				  AND current_source_content_hash = ${sourceContentHash}
+			), updated AS (
+				UPDATE resource_translations translation
+				SET content = NULL, updated_at = NOW()
+				FROM current_state
+				WHERE translation.resource_id = current_state.resource_id
+				  AND translation.lang = 'zh-Hant'
+				  AND translation.source = 'machine'
+				RETURNING translation.resource_id
+			)
+			SELECT EXISTS (SELECT 1 FROM current_state) AS is_current
 		`);
+		return (result.rows as Array<{ is_current: boolean }>)[0]?.is_current ?? false;
 	});
+	if (!isCurrent) throw new ContentLocalizationSourceChangedError(resourceId);
 }

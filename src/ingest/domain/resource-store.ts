@@ -95,7 +95,6 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 										OR ${resources.url} IS NULL
 										OR (
 											NULLIF(BTRIM(original.content), '') IS NOT NULL
-											AND original.content NOT ILIKE '%data:image/%'
 										)
 									  )
 								)`,
@@ -141,10 +140,7 @@ export async function claimResourcesForEnrichmentRecovery(env: CoreEnv, limit = 
 								FROM resource_translations original
 								WHERE original.resource_id = resources.id
 								  AND original.lang = resources.original_lang
-								  AND (
-									NULLIF(BTRIM(original.content), '') IS NULL
-									OR original.content ILIKE '%data:image/%'
-								  )
+								  AND NULLIF(BTRIM(original.content), '') IS NULL
 							)
 						)
 					)
@@ -181,10 +177,7 @@ export async function claimMissingOriginalContentRecovery(env: CoreEnv, limit = 
 				  AND r.url IS NOT NULL
 				  AND r.enrichment_status IN ('enriched', 'failed')
 				  AND (r.enrichment_status <> 'failed' OR r.updated_at < NOW() - INTERVAL '30 minutes')
-				  AND (
-					NULLIF(BTRIM(original.content), '') IS NULL
-					OR original.content ILIKE '%data:image/%'
-				  )
+				  AND NULLIF(BTRIM(original.content), '') IS NULL
 				  AND COALESCE((r.platform_metadata #>> '{contentAcquisition,attempts}')::integer, 0) < ${MAX_ORIGINAL_CONTENT_RECOVERY_ATTEMPTS}
 				  AND (
 					r.platform_metadata #>> '{contentAcquisition,lastAttemptAt}' IS NULL
@@ -232,7 +225,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
 			${shell ? sql`NULL::text` : sql`md5(rl.content)`} AS original_content_hash,
-			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0 AND rl.content NOT ILIKE '%data:image/%'` : sql`NULL::boolean`} AS has_content,
+			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0` : sql`NULL::boolean`} AS has_content,
 			${
 				shell
 					? sql`CASE
@@ -641,16 +634,6 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 			throw new Error(`Failed to sync ${translation.lang} translation for resource ${resourceId}`);
 		}
 	}
-	await db
-		.update(resourceTranslations)
-		.set({ source: 'machine', updatedAt: sql`now()` })
-		.where(
-			and(
-				eq(resourceTranslations.resourceId, resourceId),
-				not(eq(resourceTranslations.lang, record.originalLang)),
-				eq(resourceTranslations.source, 'original'),
-			),
-		);
 	await syncResourceContentLocalizationState(db, resourceId);
 }
 
@@ -668,12 +651,14 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 				(
 					NULLIF(BTRIM(original.title), '') IS NOT NULL
 					AND NULLIF(BTRIM(original.content), '') IS NOT NULL
-					AND original.content NOT ILIKE '%data:image/%'
 				) AS has_usable_content,
 				CASE
-					WHEN NULLIF(BTRIM(original.title), '') IS NOT NULL
+					WHEN resource.scope = 'corpus'
+					 AND resource.type IN ('rss', 'hackernews', 'web', 'twitter')
+					 AND resource.url IS NOT NULL
+					 AND resource.original_lang <> 'zh-Hant'
+					 AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 					 AND NULLIF(BTRIM(original.content), '') IS NOT NULL
-					 AND original.content NOT ILIKE '%data:image/%'
 						THEN md5(original.content)
 					ELSE NULL
 				END AS current_source_content_hash
@@ -683,31 +668,59 @@ async function syncResourceContentLocalizationState(db: CoreDb, resourceId: stri
 			 AND original.lang = resource.original_lang
 			WHERE resource.id = ${resourceId}::uuid
 		)
-		UPDATE resources resource
-		SET platform_metadata = jsonb_set(
-			COALESCE(resource.platform_metadata, '{}'::jsonb),
-			'{contentLocalization}',
-			COALESCE(resource.platform_metadata->'contentLocalization', '{}'::jsonb)
-				|| jsonb_build_object(
-					'currentSourceContentHash', source.current_source_content_hash,
-					'status', CASE
-						WHEN NOT source.requires_localization THEN 'not_required'
-						WHEN NOT source.has_usable_content THEN 'blocked_on_content'
-						WHEN resource.platform_metadata #>> '{contentLocalization,sourceContentHash}' = source.current_source_content_hash
-							THEN 'complete'
-						ELSE 'pending'
-					END,
-					'completedAt', CASE
-						WHEN resource.platform_metadata #>> '{contentLocalization,sourceContentHash}' = source.current_source_content_hash
-							THEN resource.platform_metadata #>> '{contentLocalization,completedAt}'
-						ELSE NULL
-					END,
-					'error', NULL
-				),
-			true
+		INSERT INTO resource_localization_state AS state (
+			resource_id,
+			status,
+			current_source_content_hash,
+			attempts,
+			created_at,
+			updated_at
 		)
+		SELECT
+			source.id,
+			CASE
+				WHEN NOT source.requires_localization THEN 'not_required'
+				WHEN NOT source.has_usable_content THEN 'blocked_on_content'
+				ELSE 'pending'
+			END,
+			source.current_source_content_hash,
+			0,
+			NOW(),
+			NOW()
 		FROM source
-		WHERE resource.id = source.id
+		ON CONFLICT (resource_id) DO UPDATE SET
+			status = CASE
+				WHEN excluded.status IN ('not_required', 'blocked_on_content') THEN excluded.status
+				WHEN state.source_content_hash = excluded.current_source_content_hash THEN 'complete'
+				WHEN state.current_source_content_hash IS NOT DISTINCT FROM excluded.current_source_content_hash THEN state.status
+				ELSE 'pending'
+			END,
+			current_source_content_hash = excluded.current_source_content_hash,
+			attempt_content_hash = CASE
+				WHEN excluded.status IN ('not_required', 'blocked_on_content')
+				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
+				ELSE state.attempt_content_hash
+			END,
+			attempts = CASE
+				WHEN excluded.status IN ('not_required', 'blocked_on_content')
+				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN 0
+				ELSE state.attempts
+			END,
+			last_attempt_at = CASE
+				WHEN excluded.status IN ('not_required', 'blocked_on_content')
+				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
+				ELSE state.last_attempt_at
+			END,
+			completed_at = CASE
+				WHEN state.source_content_hash = excluded.current_source_content_hash THEN state.completed_at
+				ELSE NULL
+			END,
+			error = CASE
+				WHEN excluded.status IN ('not_required', 'blocked_on_content')
+				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
+				ELSE state.error
+			END,
+			updated_at = NOW()
 	`);
 }
 

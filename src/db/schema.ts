@@ -14,7 +14,13 @@ import {
 	uuid,
 	varchar,
 } from 'drizzle-orm/pg-core';
-import { RESOURCE_CATEGORIES, RESOURCE_SCOPES, RESOURCE_TRANSLATION_SOURCES, RESOURCE_TYPES } from '../resources/types';
+import {
+	RESOURCE_CATEGORIES,
+	RESOURCE_LOCALIZATION_STATUSES,
+	RESOURCE_SCOPES,
+	RESOURCE_TRANSLATION_SOURCES,
+	RESOURCE_TYPES,
+} from '../resources/types';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
 	dataType() {
@@ -80,6 +86,26 @@ export const resourceTranslations = pgTable(
 		index('resource_translations_lang_idx').on(table.lang),
 		index('resource_translations_source_idx').on(table.source),
 	],
+);
+
+export const resourceLocalizationState = pgTable(
+	'resource_localization_state',
+	{
+		resourceId: uuid('resource_id')
+			.primaryKey()
+			.references(() => resources.id, { onDelete: 'cascade' }),
+		status: varchar('status', { length: 32, enum: RESOURCE_LOCALIZATION_STATUSES }).notNull(),
+		currentSourceContentHash: text('current_source_content_hash'),
+		sourceContentHash: text('source_content_hash'),
+		attemptContentHash: text('attempt_content_hash'),
+		attempts: integer('attempts').default(0).notNull(),
+		lastAttemptAt: timestamp('last_attempt_at', { mode: 'date' }),
+		completedAt: timestamp('completed_at', { mode: 'date' }),
+		error: text('error'),
+		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+	},
+	(table) => [index('resource_localization_state_status_attempt_idx').on(table.status, table.lastAttemptAt)],
 );
 
 export const library = pgTable(

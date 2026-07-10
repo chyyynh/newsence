@@ -1,21 +1,15 @@
 \set ON_ERROR_STOP on
-\if :{?seed_limit}
-\else
-\set seed_limit 2147483647
-\endif
 
-CREATE TEMP TABLE content_localization_state_seed AS
 WITH seedable AS (
 	SELECT
-		resource.id,
-		md5(original.content) AS source_content_hash,
+		resource.id AS resource_id,
+		md5(original.content) AS current_source_content_hash,
 		(
 			zh.source = 'human'
 			OR (
 				NULLIF(BTRIM(zh.title), '') IS NOT NULL
 				AND NULLIF(BTRIM(zh.summary), '') IS NOT NULL
 				AND NULLIF(BTRIM(zh.content), '') IS NOT NULL
-				AND zh.content NOT ILIKE '%data:image/%'
 				AND (
 					length(original.content) < 1000
 					OR length(zh.content)::numeric / GREATEST(length(original.content), 1) >= 0.2
@@ -36,74 +30,63 @@ WITH seedable AS (
 	  AND resource.original_lang <> 'zh-Hant'
 	  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 	  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
-	  AND original.content NOT ILIKE '%data:image/%'
-), numbered AS (
-	SELECT
-		id,
+), upserted AS (
+	INSERT INTO resource_localization_state AS state (
+		resource_id,
+		status,
+		current_source_content_hash,
 		source_content_hash,
-		is_complete,
-		(row_number() OVER (ORDER BY id) - 1) / 500 AS batch_number
+		attempt_content_hash,
+		attempts,
+		completed_at,
+		error,
+		created_at,
+		updated_at
+	)
+	SELECT
+		resource_id,
+		CASE WHEN is_complete THEN 'complete' ELSE 'pending' END,
+		current_source_content_hash,
+		CASE WHEN is_complete THEN current_source_content_hash ELSE NULL END,
+		CASE WHEN is_complete THEN current_source_content_hash ELSE NULL END,
+		0,
+		CASE WHEN is_complete THEN NOW() ELSE NULL END,
+		NULL,
+		NOW(),
+		NOW()
 	FROM seedable
+	ON CONFLICT (resource_id) DO UPDATE SET
+		status = CASE
+			WHEN state.source_content_hash = excluded.current_source_content_hash THEN 'complete'
+			WHEN state.current_source_content_hash IS NOT DISTINCT FROM excluded.current_source_content_hash THEN state.status
+			ELSE 'pending'
+		END,
+		current_source_content_hash = excluded.current_source_content_hash,
+		attempt_content_hash = CASE
+			WHEN state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
+			ELSE state.attempt_content_hash
+		END,
+		attempts = CASE
+			WHEN state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN 0
+			ELSE state.attempts
+		END,
+		last_attempt_at = CASE
+			WHEN state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
+			ELSE state.last_attempt_at
+		END,
+		completed_at = CASE
+			WHEN state.source_content_hash = excluded.current_source_content_hash THEN state.completed_at
+			ELSE NULL
+		END,
+		error = CASE
+			WHEN state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
+			ELSE state.error
+		END,
+		updated_at = NOW()
+	RETURNING status
 )
-SELECT id, source_content_hash, is_complete, batch_number
-FROM numbered
-LIMIT :seed_limit;
-
-CREATE INDEX content_localization_state_seed_batch_idx
-	ON content_localization_state_seed (batch_number);
-
-SELECT format(
-	$sql$
-	WITH candidates AS (
-		SELECT resource.id, seed.source_content_hash, seed.is_complete
-		FROM resources resource
-		JOIN content_localization_state_seed seed ON seed.id = resource.id
-		WHERE seed.batch_number = %s
-		  AND (
-			resource.platform_metadata #>> '{contentLocalization,currentSourceContentHash}' IS DISTINCT FROM seed.source_content_hash
-			OR (
-				seed.is_complete
-				AND resource.platform_metadata #>> '{contentLocalization,sourceContentHash}' IS DISTINCT FROM seed.source_content_hash
-			)
-		  )
-		FOR UPDATE OF resource SKIP LOCKED
-	)
-	UPDATE resources resource
-	SET platform_metadata = jsonb_set(
-		COALESCE(resource.platform_metadata, '{}'::jsonb),
-		'{contentLocalization}',
-		COALESCE(resource.platform_metadata->'contentLocalization', '{}'::jsonb)
-			|| jsonb_build_object(
-				'status', CASE WHEN candidates.is_complete THEN 'complete' ELSE 'pending' END,
-				'currentSourceContentHash', candidates.source_content_hash,
-				'completedAt', CASE
-					WHEN candidates.is_complete THEN COALESCE(
-						resource.platform_metadata #>> '{contentLocalization,completedAt}',
-						NOW()::text
-					)
-					ELSE NULL
-				END,
-				'error', NULL
-			)
-			|| CASE
-				WHEN candidates.is_complete THEN jsonb_build_object(
-					'sourceContentHash', candidates.source_content_hash,
-					'attemptContentHash', candidates.source_content_hash
-				)
-				ELSE '{}'::jsonb
-			END,
-		true
-	)
-	FROM candidates
-	WHERE resource.id = candidates.id;
-	$sql$,
-	batch_number
-)
-FROM (
-	SELECT DISTINCT batch_number
-	FROM content_localization_state_seed
-	ORDER BY batch_number
-) batches
-\gexec
-
-DROP TABLE content_localization_state_seed;
+SELECT
+	count(*) AS upserted_rows,
+	count(*) FILTER (WHERE status = 'complete') AS complete_rows,
+	count(*) FILTER (WHERE status = 'pending') AS pending_rows
+FROM upserted;

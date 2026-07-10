@@ -189,9 +189,6 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 		let resource = initial;
 		const initialContent = initial.content?.trim();
 		if (!initialContent) throw new Error(`Resource ${resourceId} has no persisted original content`);
-		if (initialContent.toLowerCase().includes('data:image/')) {
-			throw new Error(`Resource ${resourceId} original content has not passed acquisition sanitization`);
-		}
 
 		const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
 		const zhHantContent = zhHantTranslation?.source === 'human' ? null : zhHantTranslation?.content?.trim();
