@@ -52,9 +52,10 @@ function storedWorkflowId(resourceId: string): string {
 }
 
 function isPermanentlyUnavailableSource(error: unknown): boolean {
-	const status = acquisitionHttpStatus(error);
-	if (status !== undefined) return [400, 401, 403, 404, 405, 410, 451].includes(status);
 	const message = error instanceof Error ? error.message : String(error);
+	const permanentStatuses = new Set([400, 401, 403, 404, 405, 410, 451]);
+	const statuses = [...message.matchAll(/\bHTTP\s+(\d{3})\b/gi)].map((match) => Number.parseInt(match[1] ?? '', 10));
+	if (statuses.some((status) => permanentStatuses.has(status))) return true;
 	return /\bnot found\b|unsupported response content type|only http\(s\) urls are allowed|url must not include credentials/i.test(message);
 }
 
