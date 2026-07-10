@@ -27,19 +27,21 @@ export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10)
 				 AND zh_hant.lang = 'zh-Hant'
 				WHERE r.enrichment_status = 'enriched'
 				  AND r.scope = 'corpus'
-				  AND r.type IN ('rss', 'hackernews', 'web')
+				  AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
 				  AND r.url IS NOT NULL
 				  AND (
 					NULLIF(BTRIM(original.content), '') IS NULL
-						OR (
-							r.original_lang <> 'zh-Hant'
-							AND zh_hant.source IS DISTINCT FROM 'human'
-							AND (
-								NULLIF(BTRIM(zh_hant.content), '') IS NULL
-								OR length(zh_hant.content)::numeric / GREATEST(length(original.content), 1) < ${PARTIAL_TRANSLATION_RATIO}
-							)
+					OR original.content ILIKE '%data:image/%'
+					OR (
+						r.original_lang <> 'zh-Hant'
+						AND zh_hant.source IS DISTINCT FROM 'human'
+						AND (
+							NULLIF(BTRIM(zh_hant.content), '') IS NULL
+							OR zh_hant.content ILIKE '%data:image/%'
+							OR length(zh_hant.content)::numeric / GREATEST(length(original.content), 1) < ${PARTIAL_TRANSLATION_RATIO}
 						)
-					  )
+					)
+				  )
 				  AND COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) < ${MAX_LOCALIZATION_ATTEMPTS}
 				  AND (
 					r.platform_metadata #>> '{contentLocalization,lastAttemptAt}' IS NULL
@@ -119,14 +121,15 @@ export function exhaustContentLocalizationAttempts(env: CoreEnv, resourceId: str
 	return markContentLocalization(env, resourceId, 'failed', String(error), true);
 }
 
-export async function persistBackfilledOriginalContent(env: CoreEnv, resourceId: string, lang: string, content: string): Promise<void> {
+export async function persistRecoveredOriginalContent(env: CoreEnv, resourceId: string, lang: string, content: string): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		await db.execute(sql`
 			UPDATE resource_translations
 			SET content = ${content}, updated_at = NOW()
 			WHERE resource_id = ${resourceId}::uuid
 			  AND lang = ${lang}
-			  AND NULLIF(BTRIM(content), '') IS NULL
+			  AND source <> 'human'
+			  AND (NULLIF(BTRIM(content), '') IS NULL OR content ILIKE '%data:image/%')
 		`);
 	});
 }

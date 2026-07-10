@@ -1,6 +1,7 @@
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
 import { isResourceType } from '../resources/types';
+import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import {
@@ -34,23 +35,28 @@ export function validateAcquisitionUrl(url: string): string {
 	return normalizeUrl(parsed.toString());
 }
 
+function sanitizeAcquiredContent(acquired: AcquiredContent): AcquiredContent {
+	const markdown = sanitizeExtractedMarkdown(acquired.markdown);
+	return markdown === acquired.markdown ? acquired : { ...acquired, markdown };
+}
+
 export async function scrapeSavedUrl(url: string, env: CoreEnv, options: AcquisitionOptions = {}): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 
 	const videoId = extractYouTubeId(validatedUrl);
-	if (videoId) return scrapeYouTube(videoId, env.YOUTUBE_API_KEY);
+	if (videoId) return sanitizeAcquiredContent(await scrapeYouTube(videoId, env.YOUTUBE_API_KEY));
 
 	const tweetId = extractTweetId(validatedUrl);
-	if (tweetId) return scrapeTweet(tweetId, env.KAITO_API_KEY);
+	if (tweetId) return sanitizeAcquiredContent(await scrapeTweet(tweetId, env.KAITO_API_KEY));
 
 	const hackerNewsId = extractHackerNewsId(validatedUrl);
-	if (hackerNewsId) return scrapeHackerNews(hackerNewsId);
+	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId));
 
-	return scrapeGenericUrl(validatedUrl, env, options);
+	return sanitizeAcquiredContent(await scrapeGenericUrl(validatedUrl, env, options));
 }
 
-export function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<AcquiredContent> {
-	return scrapeWebBlob(input, env);
+export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<AcquiredContent> {
+	return sanitizeAcquiredContent(await scrapeWebBlob(input, env));
 }
 
 export async function scrapeSavedUrlArtifact(
