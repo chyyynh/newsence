@@ -1,7 +1,8 @@
 import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
 import { withCoreTx } from '@db/client';
 import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
-import { syncResourceEntities, updateResourceAfterProcessing } from '@ingest/domain/resource-store';
+import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
+import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { ResourceUpdateBuilder } from './domain/resource-update';
