@@ -1,3 +1,5 @@
+import { decodeHtmlEntities } from './html-entities';
+
 const READABLE_CONTENT_SELECTORS = [
 	'article',
 	'[itemprop="articleBody"]',
@@ -50,17 +52,6 @@ function normalizeText(value: string): string {
 		.replace(/[ \t]{2,}/g, ' ')
 		.replace(/\n{3,}/g, '\n\n')
 		.trim();
-}
-
-function decodeHtmlEntities(value: string): string {
-	return value
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-		.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
 }
 
 async function cleanContentHtml(html: string): Promise<string> {

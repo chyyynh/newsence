@@ -7,6 +7,7 @@ import {
 	type ResourceForProcessing,
 } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
+import { decodeHtmlEntities } from '@ingest/html-entities';
 import { generateResourceClassification, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
@@ -70,17 +71,6 @@ async function fetchHnItem(itemId: string): Promise<HnItem> {
 interface HnCollectedComment {
 	author?: string;
 	text: string;
-}
-
-function decodeHtmlEntities(str: string): string {
-	return str
-		.replace(/&quot;/g, '"')
-		.replace(/&#x27;|&#39;/g, "'")
-		.replace(/&#x2F;/g, '/')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&nbsp;/g, ' ')
-		.replace(/&amp;/g, '&');
 }
 
 function htmlToText(str: string): string {

@@ -1,6 +1,7 @@
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
+import { decodeHtmlEntities } from '@ingest/html-entities';
 import { canonicalizeOptionalResourceLang } from '../../resources/types';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 import { type RenderedWebContent, scrapeUrlWithRenderedContent } from './rendered-content';
@@ -101,17 +102,6 @@ function metaContentHandler(assign: (value: string) => void): HTMLRewriterElemen
 			if (content) assign(content);
 		},
 	};
-}
-
-function decodeHtmlEntities(value: string): string {
-	return value
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-		.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(Number.parseInt(code, 16)));
 }
 
 async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetadata> {
