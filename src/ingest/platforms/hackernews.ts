@@ -215,7 +215,7 @@ async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, 
 
 export async function processHackerNewsResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
 	const metadata = platformMetadataFor(resource, 'hackernews');
-	const itemId = metadata?.data.itemId || null;
+	const itemId = metadata?.data?.itemId || null;
 
 	const hnData: HnItem | null = itemId ? await fetchHnItem(itemId) : null;
 
