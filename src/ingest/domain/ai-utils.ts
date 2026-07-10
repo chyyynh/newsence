@@ -1,5 +1,5 @@
 import { generateObject, generateText } from '@core-ai/embedding';
-import { ENTITY_TYPES, type PlatformEnrichments, type ResourceForProcessing } from '@core-shared/types';
+import { ENTITY_TYPES, type PlatformEnrichments, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
@@ -72,16 +72,23 @@ const ResourceClassificationSchema = z.object({
 	category: z.enum(RESOURCE_CATEGORIES),
 });
 
-const ZH_HANT_METADATA_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的繁體中文結果。
+function zhHantMetadataTranslationSystemPrompt(resource: ResourceForProcessing): string {
+	const twitterMetadata = platformMetadataFor(resource, 'twitter');
+	const preservesSocialPost = resource.type === 'twitter' && twitterMetadata?.data.variant !== 'longform';
+	const summaryInstruction = preservesSocialPost
+		? '忠實完整翻譯原貼文或 thread，保留第一人稱、段落與語氣，不要摘要或改寫成新聞報導'
+		: '根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要';
+	return `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的繁體中文結果。
 
 任務：
 - title: 將標題翻譯成自然流暢的繁體中文
-- summary: 根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要
+- summary: ${summaryInstruction}
 
 規則：
 - 忠實保留原文語氣，不要新增資訊
 - 若原文已是繁體中文，保留自然表達；若是簡體中文，轉為自然繁體中文
 - 不要使用 Markdown。`;
+}
 
 const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文翻譯編輯。請將原文完整翻譯成自然流暢的繁體中文。
 
@@ -175,7 +182,8 @@ export async function generateZhHantMetadataTranslation(
 	env: CoreEnv,
 ): Promise<z.infer<typeof ZhHantMetadataTranslationSchema>> {
 	const prompt = `原文資訊：
-標題：${resource.title}
+	資源類型：${resource.type}
+	標題：${resource.title}
 摘要：${resource.summary || '無摘要'}
 內容：
 ${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_LENGTH)}`;
@@ -184,7 +192,7 @@ ${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_
 		task: 'resource-metadata-localization',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 700,
-		systemPrompt: ZH_HANT_METADATA_TRANSLATION_SYSTEM_PROMPT,
+		systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 	});
 	if (!translation) throw new Error('Resource metadata localization did not return valid output');
 	return translation;
