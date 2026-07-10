@@ -1,8 +1,10 @@
 import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
-import { withCoreTx } from '@db/client';
+import { withCoreDb, withCoreTx } from '@db/client';
+import { resources } from '@db/schema';
 import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
+import { eq, sql } from 'drizzle-orm';
 import { type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { ResourceUpdateBuilder } from './domain/resource-update';
@@ -21,6 +23,17 @@ export type PersistProcessedResourceInput = {
 	youtubeTranscript?: YoutubeTranscript;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 };
+
+export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		const updated = await db
+			.update(resources)
+			.set({ enrichmentStatus: 'failed', updatedAt: sql`NOW()` })
+			.where(eq(resources.id, resourceId))
+			.returning({ id: resources.id });
+		if (!updated.length) throw new Error(`Failed to mark resource ${resourceId} as failed: not found`);
+	});
+}
 
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {

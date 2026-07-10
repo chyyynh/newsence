@@ -17,7 +17,7 @@ import { ContentLocalizationWorkflow, scheduleContentLocalization } from '@inges
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, NewsenceMonitorWorkflow, recoverStalledResourceProcessing } from '@ingest/workflow';
+import { enqueueProcessing, NewsenceMonitorWorkflow } from '@ingest/workflow';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -135,11 +135,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 		if (event.cron === '*/5 * * * *') {
 			this.ctx.waitUntil(
-				Promise.allSettled([handleRSSCron(this.env), recoverStalledResourceProcessing(this.env)]).then((results) => {
-					for (const result of results) {
-						if (result.status === 'rejected') console.error({ tag: 'CORE', msg: 'Scheduled task failed', error: String(result.reason) });
-					}
-				}),
+				handleRSSCron(this.env).catch((error) => console.error({ tag: 'CORE', msg: 'RSS monitor failed', error: String(error) })),
 			);
 		} else if (event.cron === '* * * * *') {
 			this.ctx.waitUntil(

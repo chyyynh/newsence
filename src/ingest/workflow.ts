@@ -1,7 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { ResourceForProcessing } from '@core-shared/types';
-import { claimResourcesForEnrichmentRecovery, markResourceEnrichmentFailed } from '@ingest/domain/resource-recovery-store';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
@@ -21,42 +20,12 @@ import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/p
 import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterResource } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import { persistProcessedResource } from './resource-persistence';
+import { markResourceEnrichmentFailed, persistProcessedResource } from './resource-persistence';
 
 type WorkflowPayload = { resourceId: string };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
 	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
-}
-
-export async function recoverStalledResourceProcessing(env: CoreEnv): Promise<void> {
-	const resourceIds = await claimResourcesForEnrichmentRecovery(env);
-	await enqueueRecoveredResources(env, resourceIds);
-}
-
-async function enqueueRecoveredResources(env: CoreEnv, resourceIds: string[]): Promise<void> {
-	let queued = 0;
-	let failed = 0;
-
-	for (let index = 0; index < resourceIds.length; index += 10) {
-		const batch = resourceIds.slice(index, index + 10);
-		const results = await Promise.allSettled(batch.map((resourceId) => enqueueProcessing(env, resourceId)));
-		for (const [resultIndex, result] of results.entries()) {
-			if (result.status === 'fulfilled') {
-				queued++;
-				continue;
-			}
-
-			failed++;
-			const resourceId = batch[resultIndex]!;
-			console.error({ tag: 'RECOVERY', msg: 'Resource re-enqueue failed', resource_id: resourceId, error: String(result.reason) });
-			await markResourceEnrichmentFailed(env, resourceId).catch((error) =>
-				console.error({ tag: 'RECOVERY', msg: 'Failed to restore failed status', resource_id: resourceId, error: String(error) }),
-			);
-		}
-	}
-
-	if (resourceIds.length) console.info({ tag: 'RECOVERY', msg: 'Sweep completed', claimed: resourceIds.length, queued, failed });
 }
 
 function workflowIdPart(value: string): string {
