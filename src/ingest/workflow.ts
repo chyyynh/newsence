@@ -4,9 +4,9 @@ import type { ResourceForProcessing } from '@core-shared/types';
 import {
 	claimMissingOriginalContentRecovery,
 	claimResourcesForEnrichmentRecovery,
-	loadResourceForProcessing,
 	markResourceEnrichmentFailed,
-} from '@ingest/domain/resource-store';
+} from '@ingest/domain/resource-recovery-store';
+import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
 	EMPTY_OG_IMAGE_PATCH,

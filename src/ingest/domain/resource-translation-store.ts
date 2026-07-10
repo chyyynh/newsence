@@ -1,5 +1,6 @@
 import type { CoreDb } from '@db/client';
-import { type SQL, sql } from 'drizzle-orm';
+import { textArraySql } from '@db/sql';
+import { sql } from 'drizzle-orm';
 import type { ResourceTranslationSource } from '../../resources/types';
 
 export type ResourceTranslationWrite = {
@@ -12,13 +13,6 @@ export type ResourceTranslationWrite = {
 	source: ResourceTranslationSource;
 	expectedSourceContentHash?: string;
 };
-
-function textArraySql(values: string[]): SQL {
-	return sql`ARRAY[${sql.join(
-		values.map((value) => sql`${value}`),
-		sql`, `,
-	)}]::text[]`;
-}
 
 /**
  * Row ownership is human > original > machine. Within the winning owner,
