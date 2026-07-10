@@ -19,6 +19,22 @@ function canonicalPublishedDate(value: string | null): string | null {
 	return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function metadataRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+export function mergePlatformMetadata(current: unknown, incoming: unknown): PlatformMetadata | undefined {
+	const currentRecord = metadataRecord(current);
+	const incomingRecord = metadataRecord(incoming);
+	if (!currentRecord && !incomingRecord) return undefined;
+	const merged = { ...currentRecord, ...incomingRecord };
+	return {
+		...merged,
+		fetchedAt: typeof merged.fetchedAt === 'string' ? merged.fetchedAt : new Date().toISOString(),
+		data: ('data' in merged ? merged.data : null) as PlatformMetadata['data'],
+	};
+}
+
 export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
 	const acquiredTitle = acquired.title?.trim();
@@ -31,7 +47,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		original_lang: canonicalizeOptionalResourceLang(acquired.metadata.language) ?? resource.original_lang,
 		published_date: canonicalPublishedDate(acquired.metadata.publishedDate) ?? resource.published_date,
 		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
-		platform_metadata: acquired.platformMetadata ?? resource.platform_metadata,
+		platform_metadata: mergePlatformMetadata(resource.platform_metadata, acquired.platformMetadata),
 		file_type: acquired.type === 'pdf' ? PDF_MIME : resource.file_type,
 	};
 }

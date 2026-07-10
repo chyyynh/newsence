@@ -18,7 +18,7 @@ import {
 } from './acquisition';
 import { enqueueContentLocalization } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
-import { isPersistedResourceReadyForContentLocalization } from './domain/content-localization-store';
+import { getPersistedResourceContentHashForLocalization } from './domain/content-localization-store';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
@@ -278,17 +278,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			},
 		);
 
-		const localizationReady = await step.do(
+		const localizationSourceHash = await step.do(
 			'verify-persisted-original-content',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => isPersistedResourceReadyForContentLocalization(this.env, persistedResourceId),
+			() => getPersistedResourceContentHashForLocalization(this.env, persistedResourceId),
 		);
-		if (localizationReady) {
+		if (localizationSourceHash) {
 			await step
 				.do(
 					'enqueue-content-localization',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueContentLocalization(this.env, persistedResourceId),
+					() => enqueueContentLocalization(this.env, persistedResourceId, localizationSourceHash),
 				)
 				.catch((error) =>
 					console.error({

@@ -16,11 +16,12 @@ import {
 	type ResourceTranslationSource,
 	type ResourceType,
 } from '../../resources/types';
-import type { ResourceUpdate } from './resource-update';
+import { mergePlatformMetadata, type ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
+	original_content_hash?: string | null;
 };
 
 interface ResourceStoreRow {
@@ -42,6 +43,7 @@ interface ResourceStoreRow {
 	enrichment_status?: string;
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
+	original_content_hash?: string | null;
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;
@@ -228,6 +230,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.title AS title,
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
+			${shell ? sql`NULL::text` : sql`md5(rl.content)`} AS original_content_hash,
 			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0 AND rl.content NOT ILIKE '%data:image/%'` : sql`NULL::boolean`} AS has_content,
 			${
 				shell
@@ -302,6 +305,7 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
+	if ('original_content_hash' in row) resource.original_content_hash = row.original_content_hash ?? null;
 	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
 	if (row.file_type) resource.file_type = row.file_type;
 	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;
@@ -693,6 +697,64 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 				eq(resourceTranslations.source, 'original'),
 			),
 		);
+	await syncResourceContentLocalizationState(db, resourceId);
+}
+
+async function syncResourceContentLocalizationState(db: CoreDb, resourceId: string): Promise<void> {
+	await db.execute(sql`
+		WITH source AS (
+			SELECT
+				resource.id,
+				(
+					resource.scope = 'corpus'
+					AND resource.type IN ('rss', 'hackernews', 'web', 'twitter')
+					AND resource.url IS NOT NULL
+					AND resource.original_lang <> 'zh-Hant'
+				) AS requires_localization,
+				(
+					NULLIF(BTRIM(original.title), '') IS NOT NULL
+					AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+					AND original.content NOT ILIKE '%data:image/%'
+				) AS has_usable_content,
+				CASE
+					WHEN NULLIF(BTRIM(original.title), '') IS NOT NULL
+					 AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+					 AND original.content NOT ILIKE '%data:image/%'
+						THEN md5(original.content)
+					ELSE NULL
+				END AS current_source_content_hash
+			FROM resources resource
+			JOIN resource_translations original
+			  ON original.resource_id = resource.id
+			 AND original.lang = resource.original_lang
+			WHERE resource.id = ${resourceId}::uuid
+		)
+		UPDATE resources resource
+		SET platform_metadata = jsonb_set(
+			COALESCE(resource.platform_metadata, '{}'::jsonb),
+			'{contentLocalization}',
+			COALESCE(resource.platform_metadata->'contentLocalization', '{}'::jsonb)
+				|| jsonb_build_object(
+					'currentSourceContentHash', source.current_source_content_hash,
+					'status', CASE
+						WHEN NOT source.requires_localization THEN 'not_required'
+						WHEN NOT source.has_usable_content THEN 'blocked_on_content'
+						WHEN resource.platform_metadata #>> '{contentLocalization,sourceContentHash}' = source.current_source_content_hash
+							THEN 'complete'
+						ELSE 'pending'
+					END,
+					'completedAt', CASE
+						WHEN resource.platform_metadata #>> '{contentLocalization,sourceContentHash}' = source.current_source_content_hash
+							THEN resource.platform_metadata #>> '{contentLocalization,completedAt}'
+						ELSE NULL
+					END,
+					'error', NULL
+				),
+			true
+		)
+		FROM source
+		WHERE resource.id = source.id
+	`);
 }
 
 function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationRecord[] {
@@ -902,6 +964,7 @@ export async function reopenResourceForReprocessing(
 	const [resource] = await db
 		.select({
 			originalLang: resources.originalLang,
+			platformMetadata: resources.platformMetadata,
 			summary: resourceTranslations.summary,
 			content: resourceTranslations.content,
 		})
@@ -917,7 +980,7 @@ export async function reopenResourceForReprocessing(
 	await db
 		.update(resources)
 		.set({
-			platformMetadata: update.platformMetadata,
+			platformMetadata: mergePlatformMetadata(resource.platformMetadata, update.platformMetadata),
 			enrichmentStatus: 'pending',
 			embedding: null,
 			updatedAt: sql`NOW()`,
@@ -951,5 +1014,6 @@ export async function reopenResourceForReprocessing(
 				not(eq(resourceTranslations.source, 'human')),
 			),
 		);
+	await syncResourceContentLocalizationState(db, resourceId);
 	return true;
 }
