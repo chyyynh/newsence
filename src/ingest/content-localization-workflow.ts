@@ -24,7 +24,7 @@ type ContentLocalizationPayload = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TRANSLATION_STEP_CONCURRENCY = 3;
-const CONTENT_LOCALIZATION_WORKFLOW_REVISION = 'v2';
+const CONTENT_LOCALIZATION_WORKFLOW_REVISION = 'v3';
 
 function workflowId(resourceId: string): string {
 	return `content-localization-${CONTENT_LOCALIZATION_WORKFLOW_REVISION}-${resourceId}`;

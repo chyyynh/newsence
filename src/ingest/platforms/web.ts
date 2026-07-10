@@ -3,7 +3,7 @@ import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { canonicalizeOptionalResourceLang } from '../../resources/types';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
-import { scrapeUrlWithRenderedContent } from './rendered-content';
+import { type RenderedWebContent, scrapeUrlWithRenderedContent } from './rendered-content';
 
 export const PDF_MIME = 'application/pdf';
 
@@ -301,7 +301,7 @@ async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquire
 	return scrapePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
 }
 
-async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<WebAcquiredContent> {
+async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<RenderedWebContent> {
 	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableContentHtml(html)]);
 	const markdown = await markdownFromHtml(env, readable?.html ?? html, url);
 	const content = preferReadableContentText(markdown, readable);
@@ -409,6 +409,8 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAc
 	} catch (error) {
 		if (!options.allowRenderedFallback) throw error;
 		console.warn({ tag: 'WEB', msg: 'Using rendered content fallback after direct acquisition failed', url, error: String(error) });
-		return scrapeUrlWithRenderedContent(url, env);
+		return scrapeUrlWithRenderedContent(url, env, (html) =>
+			scrapeHtmlContent(env, html, url, fileNameFromUrl(url, `${urlHost(url)}.html`)),
+		);
 	}
 }

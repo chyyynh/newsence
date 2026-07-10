@@ -46,44 +46,16 @@ function readerUrl(url: string): string {
 	return `${READER_ENDPOINT}${source.toString()}`;
 }
 
-function titleFromMarkdown(markdown: string, url: string): string {
-	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || fallbackTitle(url);
-}
-
-function renderedContent(url: string, markdown: string): RenderedWebContent {
-	return {
-		type: 'web',
-		title: titleFromMarkdown(markdown, url),
-		markdown,
-		metadata: {
-			author: null,
-			language: null,
-			publishedDate: null,
-			siteName: sourceHost(url),
-			description: null,
-		},
-		platformMetadata: {
-			fetchedAt: new Date().toISOString(),
-			data: null,
-		},
-		ogImage: {
-			ogImageUrl: null,
-			ogImageWidth: null,
-			ogImageHeight: null,
-		},
-	};
-}
-
-function validatedMarkdown(value: unknown, provider: string): string {
-	const markdown = readString(value);
-	if (!markdown || markdown.length < MIN_RENDERED_CONTENT_LENGTH) {
+function validatedContent(value: unknown, provider: string): string {
+	const content = readString(value);
+	if (!content || content.length < MIN_RENDERED_CONTENT_LENGTH) {
 		throw new Error(`${provider} returned no usable content`);
 	}
-	return markdown;
+	return content;
 }
 
-async function scrapeUrlWithBrowserRun(url: string, env: CoreEnv): Promise<RenderedWebContent> {
-	const response = await env.BROWSER.quickAction('markdown', {
+async function renderUrlWithBrowserRun(url: string, env: CoreEnv): Promise<string> {
+	const response = await env.BROWSER.quickAction('content', {
 		url,
 		gotoOptions: { waitUntil: 'networkidle2', timeout: 30_000 },
 	});
@@ -94,7 +66,7 @@ async function scrapeUrlWithBrowserRun(url: string, env: CoreEnv): Promise<Rende
 
 	const payload = JSON.parse(await readTextWithLimit(response, RENDERED_CONTENT_MAX_BYTES)) as unknown;
 	const record = asRecord(payload);
-	return renderedContent(url, validatedMarkdown(record?.result, 'Browser Run'));
+	return validatedContent(record?.result, 'Browser Run');
 }
 
 async function scrapeUrlWithReader(url: string): Promise<RenderedWebContent> {
@@ -116,7 +88,7 @@ async function scrapeUrlWithReader(url: string): Promise<RenderedWebContent> {
 	const payload = JSON.parse(await readTextWithLimit(response, RENDERED_CONTENT_MAX_BYTES)) as unknown;
 	const data = asRecord(asRecord(payload)?.data);
 	const metadata = asRecord(data?.metadata);
-	const markdown = validatedMarkdown(data?.content, 'Reader fallback');
+	const markdown = validatedContent(data?.content, 'Reader fallback');
 
 	return {
 		type: 'web',
@@ -141,9 +113,13 @@ async function scrapeUrlWithReader(url: string): Promise<RenderedWebContent> {
 	};
 }
 
-export async function scrapeUrlWithRenderedContent(url: string, env: CoreEnv): Promise<RenderedWebContent> {
+export async function scrapeUrlWithRenderedContent(
+	url: string,
+	env: CoreEnv,
+	fromRenderedHtml: (html: string) => Promise<RenderedWebContent>,
+): Promise<RenderedWebContent> {
 	try {
-		return await scrapeUrlWithBrowserRun(url, env);
+		return await fromRenderedHtml(await renderUrlWithBrowserRun(url, env));
 	} catch (browserError) {
 		console.warn({
 			tag: 'WEB',
