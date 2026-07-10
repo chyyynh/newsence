@@ -2,6 +2,7 @@ import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/type
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { canonicalizeOptionalResourceLang } from '../../resources/types';
+import { scrapeOpenAiWithReader, supportsOpenAiReaderFallback } from './openai-reader';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -374,8 +375,13 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAc
 		GENERIC_FETCH_TIMEOUT_MS,
 	);
 	if (!response.ok) {
+		const status = response.status;
 		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		if (status === 403 && supportsOpenAiReaderFallback(url)) {
+			console.warn({ tag: 'WEB', msg: 'Using reader fallback after OpenAI rejected direct acquisition', url });
+			return scrapeOpenAiWithReader(url);
+		}
+		throw new Error(`HTTP ${status}: ${response.statusText}`);
 	}
 
 	const contentType = response.headers.get('content-type')?.toLowerCase() || '';
