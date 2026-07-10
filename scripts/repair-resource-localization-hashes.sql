@@ -60,4 +60,17 @@ SELECT
 	count(*) FILTER (WHERE status IN ('blocked_on_content', 'not_required')) AS terminal_rows
 FROM repaired;
 
+WITH normalized_attempts AS (
+	UPDATE resource_localization_state
+	SET attempts = 1,
+		last_attempt_at = COALESCE(last_attempt_at, updated_at),
+		updated_at = NOW()
+	WHERE status IN ('queued', 'running', 'failed')
+	  AND attempt_content_hash IS NOT NULL
+	  AND attempts < 1
+	RETURNING resource_id
+)
+SELECT count(*) AS normalized_attempt_rows
+FROM normalized_attempts;
+
 COMMIT;

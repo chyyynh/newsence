@@ -101,10 +101,13 @@ async function markContentLocalization(
 				completed_at = CASE WHEN ${status} = 'complete' THEN NOW() ELSE NULL END,
 				attempts = CASE
 					WHEN ${exhausted} THEN ${MAX_LOCALIZATION_ATTEMPTS}
-					WHEN ${status} = 'running' THEN GREATEST(state.attempts, 1)
+					WHEN ${status} IN ('running', 'failed') THEN GREATEST(state.attempts, 1)
 					ELSE state.attempts
 				END,
-				last_attempt_at = CASE WHEN ${status} = 'running' THEN NOW() ELSE state.last_attempt_at END,
+				last_attempt_at = CASE
+					WHEN ${status} IN ('running', 'failed') THEN NOW()
+					ELSE state.last_attempt_at
+				END,
 				error = ${error ? error.slice(0, 500) : null},
 				updated_at = NOW()
 			WHERE state.resource_id = ${resourceId}::uuid
