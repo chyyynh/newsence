@@ -284,7 +284,7 @@ function isPermanentlyUnavailable(error) {
 	) {
 		return true;
 	}
-	return /\bnot found\b|too many redirects|unsupported response content type|only http\(s\) urls are allowed|url must not include credentials|has no text to embed/i.test(
+	return /\bnot found\b|too many redirects|video not playable on any client|cannot build twitter thread resource from empty tweets|unsupported response content type|only http\(s\) urls are allowed|url must not include credentials|has no text to embed/i.test(
 		message,
 	);
 }
