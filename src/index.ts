@@ -18,12 +18,13 @@ import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, enqueueResourceResync, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { CorpusSearchBackfillWorkflow } from './ai-search-backfill-workflow';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
-export { AcquisitionWorkflow, ContentLocalizationWorkflow, NewsenceMonitorWorkflow };
+export { AcquisitionWorkflow, ContentLocalizationWorkflow, CorpusSearchBackfillWorkflow, NewsenceMonitorWorkflow };
 
 const REQUEST_JSON_MAX_BYTES = 16 * 1024;
 const AUTH_ENCODER = new TextEncoder();
@@ -159,6 +160,15 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Reacquire a URL-backed resource while preserving the current copy if the source fetch fails. */
 	async resyncResource(resourceId: string) {
 		return enqueueResourceResync(this.env, resourceId);
+	}
+
+	/** Start or resume the one-time public corpus AI Search backfill. */
+	async startCorpusSearchBackfill(cursor?: string) {
+		const instance = await this.env.CORPUS_SEARCH_BACKFILL_WORKFLOW.create({
+			id: `corpus-search-backfill-${Date.now()}`,
+			params: { ...(cursor?.trim() ? { cursor: cursor.trim() } : {}) },
+		});
+		return instance.id;
 	}
 
 	/** Synchronously acquire one URL without DB persistence. */

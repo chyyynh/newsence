@@ -5,6 +5,7 @@ import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
+import { deleteCorpusItem } from '../ai-search';
 import { type AcquiredContent, type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { ResourceUpdateBuilder } from './domain/resource-update';
@@ -15,7 +16,6 @@ export type PersistProcessedResourceInput = {
 	resourceId: string;
 	resource: ResourceForProcessing;
 	processorResult: ProcessorResult;
-	embedding: number[] | null;
 	pdfTextArtifact: PdfTextArtifact | null;
 	acquisitionExtraction?: PdfExtractionMetadata;
 	paperEnrichment: PaperMetadata | null;
@@ -36,10 +36,12 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 }
 
 export async function deleteResource(env: CoreEnv, resourceId: string): Promise<boolean> {
-	return withCoreDb(env, async (db) => {
+	const deleted = await withCoreDb(env, async (db) => {
 		const deleted = await db.delete(resources).where(eq(resources.id, resourceId)).returning({ id: resources.id });
 		return deleted.length > 0;
 	});
+	if (deleted) await deleteCorpusItem(env, resourceId);
+	return deleted;
 }
 
 export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {
@@ -66,7 +68,7 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 			.addExtractionMetadata(extraction)
 			.addOgMetadata(input.ogImagePatch)
 			.addPaperMetadata(input.paperEnrichment)
-			.applyProcessorResult(input.processorResult, input.embedding)
+			.applyProcessorResult(input.processorResult)
 			.applyOgFields(input.ogImagePatch)
 			.build();
 		const resourceType = updatePayload.type;

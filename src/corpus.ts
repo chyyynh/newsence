@@ -1,8 +1,8 @@
-import { generateResourceEmbedding } from '@core-ai/embedding';
 import { normalizeUrl } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
+import { searchCorpusRanks } from './ai-search';
 import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 
 export interface ResourceSummary {
@@ -47,9 +47,7 @@ export interface ReadContextResult {
 	error?: string;
 }
 
-type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
-type RankResourceOptions = { fromDate?: Date | null };
 
 interface ResourceContentRow {
 	id: string;
@@ -81,24 +79,15 @@ interface ResourceSearchRow {
 }
 
 type ResourceSummaryRow = Pick<ResourceContentRow, 'id' | 'title' | 'summary'>;
-const EMPTY_RANKS: SearchRanks = new Map();
-const SEARCH_LIMIT = 200;
-const SEARCH_RANK_LIMIT_MAX = 500;
 const RESULT_LIMIT = 10;
 const RESULT_LIMIT_MAX = 50;
 const RELATED_LIMIT_DEFAULT = 12;
 const RELATED_LIMIT_MAX = 500;
-const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
-const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
 const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
-const RRF_K = 60;
-const RECENCY_HALF_LIFE_DAYS = 30;
-const OVERFETCH_MULTIPLIER = 5;
-const OVERFETCH_CAP = 200;
 
 export async function searchCorpusResourceRanks(
 	env: CoreEnv,
@@ -106,12 +95,8 @@ export async function searchCorpusResourceRanks(
 ): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
-	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
-	const vector = await searchQueryVector(env, query);
-	return withCoreDb(env, async (db) => {
-		const ranks = await rankResources(db, query, limit, {}, vector);
-		return [...ranks].map(([id, score]) => ({ id, score }));
-	});
+	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
+	return (await searchCorpusRanks(env, query)).slice(0, limit);
 }
 
 export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
@@ -119,22 +104,22 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 	if (!seed.id) return [];
 	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
-	return withCoreDb(env, async (db) => {
-		const ids = await relatedResources(db, seed, limit, offset);
-		return [...new Set(ids)].filter((id) => id !== seed.id);
-	});
+	const seedText = await withCoreDb(env, (db) => relatedSeedText(db, seed.id));
+	if (!seedText) return [];
+	const ranks = await searchCorpusRanks(env, seedText);
+	return ranks
+		.map((rank) => rank.id)
+		.filter((id) => id !== seed.id)
+		.slice(offset, offset + limit);
 }
 
 export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	const vector = query ? await searchQueryVector(env, query) : null;
+	const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
+	const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
+	const ranks = query ? new Map((await searchCorpusRanks(env, query, fromDate)).map(({ id, score }) => [id, score])) : null;
 	return withCoreDb(env, async (db) => {
-		const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
-		const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
-		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = query ? await rankResources(db, query, rankLimit, { fromDate }, vector) : null;
-
 		if (ranks) {
 			if (ranks.size === 0) return [];
 			const candidateIds = [...ranks.keys()].filter(isValidUuid);
@@ -192,24 +177,22 @@ function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	};
 }
 
-async function relatedResources(db: CoreDb, seed: { id: string; type: 'resource' }, limit: number, offset: number): Promise<string[]> {
-	if (!isValidUuid(seed.id)) return [];
-	const rows = await queryRows<{ id: string }>(
+async function relatedSeedText(db: CoreDb, resourceId: string): Promise<string | null> {
+	if (!isValidUuid(resourceId)) return null;
+	const rows = await queryRows<{ title: string | null; summary: string | null; tags: string[] | null }>(
 		db,
 		sql`
-			WITH src AS (
-				SELECT embedding FROM resources WHERE id = ${seed.id}::uuid AND embedding IS NOT NULL LIMIT 1
-			)
-			SELECT r.id
-			FROM resources r, src
-			WHERE r.id <> ${seed.id}::uuid
-				AND ${corpusEnrichedSql()}
-				AND r.embedding IS NOT NULL
-			ORDER BY r.embedding <=> src.embedding
-			LIMIT ${limit} OFFSET ${offset}
+			SELECT rt.title, rt.summary, r.tags
+			FROM resources r
+			LEFT JOIN LATERAL (
+				SELECT title, summary FROM resources_localized WHERE id = r.id LIMIT 1
+			) rt ON TRUE
+			WHERE r.id = ${resourceId}::uuid AND ${corpusEnrichedSql()}
+			LIMIT 1
 		`,
 	);
-	return rows.map((r) => r.id);
+	const row = rows[0];
+	return row ? [row.title, row.summary, row.tags?.join(' ')].filter(Boolean).join('\n').slice(0, 4000) : null;
 }
 
 function recencySql(): SQL {
@@ -222,149 +205,6 @@ function corpusEnrichedSql(): SQL {
 
 function publishedSinceSql(fromDate: Date | null | undefined): SQL {
 	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
-}
-
-function keywordMatchSql(patternArray: SQL): SQL {
-	return sql`(
-		EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
-		OR EXISTS (
-			SELECT 1
-			FROM resource_translations rt
-			WHERE rt.resource_id = r.id
-				AND (
-					EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
-					OR rt.title ILIKE ANY(${patternArray})
-					OR rt.summary ILIKE ANY(${patternArray})
-				)
-		)
-		OR r.type ILIKE ANY(${patternArray})
-		OR r.url ILIKE ANY(${patternArray})
-	)`;
-}
-
-async function rankResources(
-	db: CoreDb,
-	query: string,
-	limit = 100,
-	options: RankResourceOptions = {},
-	vectorStr: string | null = null,
-): Promise<SearchRanks> {
-	const sanitized = sanitize(query);
-	if (!sanitized) return EMPTY_RANKS;
-
-	const tokens = tokenize(sanitized);
-	const patterns = tokens.length > 0 ? tokens.map(likePattern) : [likePattern(sanitized)];
-	const patternArray = textArraySql(patterns);
-
-	if (!vectorStr) return keywordOnly(db, patternArray, limit, options);
-	const overfetchLimit = Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP);
-
-	try {
-		const rows = await queryRows<{ id: string; score: number | string }>(
-			db,
-			sql`
-			WITH vec AS (
-				SELECT r.id, ROW_NUMBER() OVER (ORDER BY r.embedding <=> ${vectorStr}::vector) AS rank
-				FROM resources r
-				WHERE ${corpusEnrichedSql()}
-					AND r.embedding IS NOT NULL${publishedSinceSql(options.fromDate)}
-				ORDER BY r.embedding <=> ${vectorStr}::vector
-				LIMIT ${overfetchLimit}
-			),
-			kw AS (
-				SELECT r.id, ROW_NUMBER() OVER (ORDER BY ${recencySql()} DESC NULLS LAST) AS rank
-				FROM resources r
-				WHERE ${corpusEnrichedSql()}
-					AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
-				LIMIT ${overfetchLimit}
-			),
-			fused AS (
-				SELECT id, 1.0 / (${RRF_K} + rank) AS score FROM vec
-				UNION ALL
-				SELECT id, 1.0 / (${RRF_K} + rank) AS score FROM kw
-			),
-			scored AS (
-				SELECT id, SUM(score) AS s FROM fused GROUP BY id
-			)
-			SELECT
-				s.id::text,
-					s.s * (1.0 / (1 + GREATEST(EXTRACT(EPOCH FROM now() - ${recencySql()}), 0) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
-			FROM scored s
-			JOIN resources r ON s.id = r.id
-			ORDER BY score DESC
-			LIMIT ${limit}
-			`,
-		);
-		return new Map(rows.map((r) => [r.id, Number(r.score)]));
-	} catch (error) {
-		console.warn({ tag: 'CORPUS', msg: 'hybrid query failed, falling back to keyword search', error: String(error) });
-		return keywordOnly(db, patternArray, limit, options);
-	}
-}
-
-async function searchQueryVector(env: CoreEnv, query: string): Promise<string | null> {
-	const sanitized = sanitize(query);
-	if (!sanitized) return null;
-	const embedding = await generateResourceEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME);
-	return embedding?.length ? `[${embedding.join(',')}]` : null;
-}
-
-function likePattern(value: string): string {
-	return `%${value.replace(/[\\%_]/g, '\\$&')}%`;
-}
-
-async function keywordOnly(db: CoreDb, patternArray: SQL, limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
-	try {
-		const rows = await queryRows<{ id: string; match_count: number | string }>(
-			db,
-			sql`
-			SELECT r.id,
-				(
-					(SELECT COUNT(*) FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
-					+ CASE WHEN r.type ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-					+ CASE WHEN r.url ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-					+ (
-						SELECT COALESCE(SUM(
-							(SELECT COUNT(*) FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
-							+ CASE WHEN rt.title ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-							+ CASE WHEN rt.summary ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-						), 0)
-						FROM resource_translations rt
-						WHERE rt.resource_id = r.id
-					)
-				) AS match_count
-			FROM resources r
-			WHERE ${corpusEnrichedSql()}
-				AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
-			ORDER BY match_count DESC, ${recencySql()} DESC NULLS LAST
-			LIMIT ${limit}
-			`,
-		);
-		const max = Math.max(...rows.map((r) => Number(r.match_count)), 1);
-		return new Map(rows.map((r) => [r.id, Number(r.match_count) / max]));
-	} catch (error) {
-		console.warn({ tag: 'CORPUS', msg: 'keyword fallback failed', error: String(error) });
-		return EMPTY_RANKS;
-	}
-}
-
-function sanitize(query: string, maxLength = 200): string {
-	return query
-		.trim()
-		.replace(/['"\\;!&|():<>]/g, ' ')
-		.replace(/\s+/g, ' ')
-		.slice(0, maxLength);
-}
-
-function tokenize(sanitized: string): string[] {
-	const parts = sanitized.split(/[\s,，、。.;；!！?？/\\|]+/).filter(Boolean);
-	const tokens = new Set<string>();
-	for (const p of parts) {
-		if (/[㐀-鿿぀-ヿ]/.test(p) || p.length >= 2) {
-			tokens.add(p);
-		}
-	}
-	return [...tokens].slice(0, 8);
 }
 
 function corpusErrorMessage(error: unknown): string {

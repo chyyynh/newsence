@@ -11,6 +11,7 @@ import {
 	persistMachineZhHantTranslation,
 } from '@ingest/domain/content-localization-store';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
+import { syncCorpusItem } from '../ai-search';
 import { ZH_HANT_RESOURCE_LANG } from '../resources/types';
 import {
 	assembleZhHantContentTranslation,
@@ -280,6 +281,11 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 				timeout: '30 seconds',
 			},
 			() => markContentLocalizationComplete(this.env, resourceId, sourceContentHash),
+		);
+		await step.do(
+			'sync-localized-ai-search-item',
+			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => syncCorpusItem(this.env, resourceId),
 		);
 		console.info({
 			tag: 'CONTENT_LOCALIZATION',

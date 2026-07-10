@@ -76,7 +76,6 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 			await db
 				.select({
 					complete: sql<boolean>`${resources.enrichmentStatus} = 'enriched'
-								AND ${resources.embedding} IS NOT NULL
 								AND (
 									${resources.type} <> 'youtube'
 									OR EXISTS (

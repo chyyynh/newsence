@@ -1,8 +1,8 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
+import { syncCorpusItem } from '../ai-search';
 import {
 	type AcquiredContent,
 	acquisitionHttpStatus,
@@ -252,25 +252,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			},
 		);
 
-		const embedding = await step.do(
-			'generate-embedding',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			async () => {
-				const fullResource = await loadFull();
-				const text = prepareResourceTextForEmbedding({
-					title: fullResource.title,
-					summary: processorResult.updateData.summary ?? fullResource.summary,
-					content: processorResult.updateData.content ?? fullResource.content,
-					tags: processorResult.updateData.tags ?? fullResource.tags,
-					keywords: processorResult.updateData.keywords ?? fullResource.keywords,
-				});
-				if (!text) throw new Error(`Resource ${resourceId} has no text to embed`);
-				const generated = await generateResourceEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME);
-				if (!generated?.length) throw new Error(`Embedding generation failed for resource ${resourceId}`);
-				return generated;
-			},
-		);
-
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
 			resourceType === 'youtube'
@@ -289,7 +270,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					resourceId,
 					resource: resourceToPersist,
 					processorResult,
-					embedding,
 					pdfTextArtifact,
 					acquisitionExtraction: acquiredContent?.extraction,
 					paperEnrichment,
@@ -298,6 +278,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					youtubeHighlights,
 				});
 			},
+		);
+		await step.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+			syncCorpusItem(this.env, persistedResourceId),
 		);
 
 		const localizationSourceHash = await step.do(

@@ -1,11 +1,8 @@
-import type { ResourceForProcessing } from '@core-shared/types';
 import { type ZodType, z } from 'zod';
 
-const EMBEDDING_MODEL = '@cf/baai/bge-m3';
 const CORE_TEXT_MODEL = 'google/gemini-3.1-flash-lite';
 const CORE_TEXT_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
-const MAX_TEXT_LENGTH = 8000;
 const DEFAULT_AI_GATEWAY_ID = 'default';
 
 type AiBinding = Ai;
@@ -26,26 +23,6 @@ interface GenerateTextOptions {
 
 interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
-}
-
-// Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
-// translations dilutes the budget without adding recall.
-type EmbeddingInput = Pick<ResourceForProcessing, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
-
-export function prepareResourceTextForEmbedding(resource: EmbeddingInput): string {
-	const headerParts = [resource.title];
-	if (resource.summary) headerParts.push(resource.summary);
-	if (resource.tags.length) headerParts.push(resource.tags.join(' '));
-	if (resource.keywords.length) headerParts.push(resource.keywords.join(' '));
-
-	const headerText = headerParts.join(' ');
-	const contentBudget = MAX_TEXT_LENGTH - headerText.length - 1;
-
-	if (contentBudget <= 200 || !resource.content) {
-		return headerText.slice(0, MAX_TEXT_LENGTH);
-	}
-
-	return `${headerText} ${resource.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
 }
 
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
@@ -135,40 +112,6 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 			task,
 			error: String(error),
 		});
-		return null;
-	}
-}
-
-export async function generateResourceEmbedding(text: string, ai: Ai, gatewayName?: string): Promise<number[] | null> {
-	const sanitizedText = text?.trim();
-	if (!sanitizedText) return null;
-
-	try {
-		const result = await ai.run(
-			EMBEDDING_MODEL,
-			{ text: [sanitizedText.slice(0, MAX_TEXT_LENGTH)] },
-			{
-				gateway: {
-					id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
-					collectLog: true,
-					metadata: { app: 'newsence', task: 'resource-embedding' },
-				},
-			},
-		);
-		const record = typeof result === 'object' && result !== null && !Array.isArray(result) ? (result as Record<string, unknown>) : null;
-		const first = Array.isArray(record?.data) ? record.data[0] : null;
-		const embedding = Array.isArray(first) && first.every((value) => typeof value === 'number') ? first : null;
-
-		if (!embedding?.length) {
-			console.error({ tag: 'EMBEDDING', msg: 'Invalid response format' });
-			return null;
-		}
-
-		// bge-m3 output is stored/queried with pgvector cosine (`<=>`,
-		// vector_cosine_ops), which is scale-invariant — no L2 normalization needed.
-		return embedding;
-	} catch (error: unknown) {
-		console.error({ tag: 'EMBEDDING', msg: 'Workers AI error', error: (error as Error).message });
 		return null;
 	}
 }

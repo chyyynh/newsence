@@ -66,6 +66,11 @@
 			"binding": "CONTENT_LOCALIZATION_WORKFLOW",
 			"name": "newsence-content-localization-workflow",
 			"class_name": "ContentLocalizationWorkflow"
+		},
+		{
+			"binding": "CORPUS_SEARCH_BACKFILL_WORKFLOW",
+			"name": "newsence-corpus-search-backfill-workflow",
+			"class_name": "CorpusSearchBackfillWorkflow"
 		}
 	],
 	/**
@@ -75,6 +80,13 @@
 	"ai": {
 		"binding": "AI"
 	},
+	"ai_search_namespaces": [
+		{
+			"binding": "AI_SEARCH",
+			"namespace": "default",
+			"remote": true
+		}
+	],
 	/**
 	 * Browser Run quick actions render public pages that reject direct Worker
 	 * fetches before the acquisition pipeline falls back to an external reader.
