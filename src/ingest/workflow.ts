@@ -15,7 +15,8 @@ import {
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { generateResourceAnalysis, mergeResourceAnalysis } from './domain/ai-utils';
+import { enqueueContentLocalization } from './content-localization-workflow';
+import { generateResourceAnalysis, mergeResourceAnalysis, needsZhHantContentTranslation, type ProcessorResult } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
@@ -27,6 +28,22 @@ import { persistProcessedResource } from './resource-persistence';
 type WorkflowPayload = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
+const CONTENT_LOCALIZATION_TYPES = new Set(['rss', 'hackernews', 'web', 'twitter']);
+
+function needsDedicatedContentLocalization(resource: ResourceForProcessing, result: ProcessorResult): boolean {
+	if (resource.scope !== 'corpus' || !resource.url || !CONTENT_LOCALIZATION_TYPES.has(resource.type)) return false;
+
+	const translations = { ...resource.translations };
+	for (const [lang, patch] of Object.entries(result.updateData.translations ?? {})) {
+		translations[lang] = { ...(translations[lang] ?? {}), ...patch };
+	}
+	const finalResource = {
+		...resource,
+		content: result.updateData.content ?? resource.content,
+		translations,
+	};
+	return !finalResource.content?.trim() || needsZhHantContentTranslation(finalResource);
+}
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
 	const workflowId = storedWorkflowId(resourceId);
@@ -243,6 +260,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 						async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
 					)
 				: null;
+		const enqueueLocalization = needsDedicatedContentLocalization(resource, processorResult);
 		const persistedResourceId = await step.do(
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -267,6 +285,22 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		);
 
 		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
+		if (enqueueLocalization) {
+			await step
+				.do(
+					'enqueue-content-localization',
+					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+					() => enqueueContentLocalization(this.env, persistedResourceId),
+				)
+				.catch((error) =>
+					console.error({
+						tag: 'WORKFLOW',
+						msg: 'Failed to enqueue dedicated content localization',
+						resource_id: persistedResourceId,
+						error: String(error),
+					}),
+				);
+		}
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return { success: true, resource_id: persistedResourceId };

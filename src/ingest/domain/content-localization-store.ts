@@ -3,7 +3,6 @@ import { resourceTranslations } from '@db/schema';
 import { sql } from 'drizzle-orm';
 
 const MAX_LOCALIZATION_ATTEMPTS = 3;
-const LOCALIZATION_RETRY_DELAY = '6 hours';
 const PARTIAL_TRANSLATION_RATIO = 0.2;
 
 export type ContentLocalizationClaim = {
@@ -45,7 +44,11 @@ export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10)
 				  AND COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) < ${MAX_LOCALIZATION_ATTEMPTS}
 				  AND (
 					r.platform_metadata #>> '{contentLocalization,lastAttemptAt}' IS NULL
-					OR (r.platform_metadata #>> '{contentLocalization,lastAttemptAt}')::timestamptz < NOW() - ${LOCALIZATION_RETRY_DELAY}::interval
+					OR (r.platform_metadata #>> '{contentLocalization,lastAttemptAt}')::timestamptz < NOW() - CASE
+						WHEN COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) <= 1
+							THEN INTERVAL '15 minutes'
+						ELSE INTERVAL '1 hour'
+					END
 				  )
 				ORDER BY
 					EXISTS (SELECT 1 FROM library item WHERE item.resource_id = r.id) DESC,

@@ -32,6 +32,17 @@ function workflowId(resourceId: string): string {
 	return `content-localization-${CONTENT_LOCALIZATION_WORKFLOW_REVISION}-${resourceId}`;
 }
 
+export async function enqueueContentLocalization(env: CoreEnv, resourceId: string): Promise<string> {
+	const id = workflowId(resourceId);
+	const [created] = await env.CONTENT_LOCALIZATION_WORKFLOW.createBatch([{ id, params: { resourceId } }]);
+	if (created) return created.id;
+
+	const instance = await env.CONTENT_LOCALIZATION_WORKFLOW.get(id);
+	const { status } = await instance.status();
+	if (!ACTIVE_WORKFLOW_STATUSES.has(status)) await instance.restart();
+	return instance.id;
+}
+
 async function markClaimsFailed(env: CoreEnv, claims: Array<{ resourceId: string }>, error: unknown): Promise<void> {
 	await Promise.allSettled(claims.map(({ resourceId }) => markContentLocalizationFailed(env, resourceId, error)));
 }

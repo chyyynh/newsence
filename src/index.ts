@@ -135,17 +135,14 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 		if (event.cron === '*/5 * * * *') {
 			this.ctx.waitUntil(
-				Promise.allSettled([
-					handleRSSCron(this.env),
-					recoverStalledResourceProcessing(this.env),
-					scheduleContentLocalizationBackfill(this.env),
-				]).then((results) => {
+				Promise.allSettled([handleRSSCron(this.env), recoverStalledResourceProcessing(this.env)]).then((results) => {
 					for (const result of results) {
 						if (result.status === 'rejected') console.error({ tag: 'CORE', msg: 'Scheduled task failed', error: String(result.reason) });
 					}
 				}),
 			);
-		} else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
+		} else if (event.cron === '* * * * *') this.ctx.waitUntil(scheduleContentLocalizationBackfill(this.env));
+		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
 	}
 
