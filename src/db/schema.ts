@@ -1,4 +1,5 @@
 import type { TranscriptSegment } from '@core-shared/types';
+import { sql } from 'drizzle-orm';
 import {
 	bigint,
 	boolean,
@@ -104,7 +105,14 @@ export const resourceLocalizationState = pgTable(
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 	},
-	(table) => [index('resource_localization_state_status_attempt_idx').on(table.status, table.lastAttemptAt)],
+	(table) => [
+		index('resource_localization_state_status_attempt_idx').on(table.status, table.lastAttemptAt),
+		index('resource_localization_state_claim_idx')
+			.on(table.resourceId)
+			.where(
+				sql`${table.currentSourceContentHash} IS NOT NULL AND ${table.sourceContentHash} IS DISTINCT FROM ${table.currentSourceContentHash}`,
+			),
+	],
 );
 
 export const library = pgTable(

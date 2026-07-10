@@ -20,3 +20,8 @@ CREATE TABLE IF NOT EXISTS resource_localization_state (
 
 CREATE INDEX IF NOT EXISTS resource_localization_state_status_attempt_idx
 	ON resource_localization_state (status, last_attempt_at);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS resource_localization_state_claim_idx
+	ON resource_localization_state (resource_id)
+	WHERE current_source_content_hash IS NOT NULL
+	  AND source_content_hash IS DISTINCT FROM current_source_content_hash;
