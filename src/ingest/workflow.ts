@@ -1,11 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { ResourceForProcessing } from '@core-shared/types';
-import {
-	claimMissingOriginalContentRecovery,
-	claimResourcesForEnrichmentRecovery,
-	markResourceEnrichmentFailed,
-} from '@ingest/domain/resource-recovery-store';
+import { claimResourcesForEnrichmentRecovery, markResourceEnrichmentFailed } from '@ingest/domain/resource-recovery-store';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import {
 	type AcquiredContent,
@@ -35,15 +31,10 @@ export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<str
 
 export async function recoverStalledResourceProcessing(env: CoreEnv): Promise<void> {
 	const resourceIds = await claimResourcesForEnrichmentRecovery(env);
-	await enqueueRecoveredResources(env, resourceIds, 'RECOVERY');
+	await enqueueRecoveredResources(env, resourceIds);
 }
 
-export async function recoverMissingOriginalContent(env: CoreEnv): Promise<void> {
-	const resourceIds = await claimMissingOriginalContentRecovery(env);
-	await enqueueRecoveredResources(env, resourceIds, 'CONTENT_ACQUISITION');
-}
-
-async function enqueueRecoveredResources(env: CoreEnv, resourceIds: string[], tag: string): Promise<void> {
+async function enqueueRecoveredResources(env: CoreEnv, resourceIds: string[]): Promise<void> {
 	let queued = 0;
 	let failed = 0;
 
@@ -58,14 +49,14 @@ async function enqueueRecoveredResources(env: CoreEnv, resourceIds: string[], ta
 
 			failed++;
 			const resourceId = batch[resultIndex]!;
-			console.error({ tag, msg: 'Resource re-enqueue failed', resource_id: resourceId, error: String(result.reason) });
+			console.error({ tag: 'RECOVERY', msg: 'Resource re-enqueue failed', resource_id: resourceId, error: String(result.reason) });
 			await markResourceEnrichmentFailed(env, resourceId).catch((error) =>
-				console.error({ tag, msg: 'Failed to restore failed status', resource_id: resourceId, error: String(error) }),
+				console.error({ tag: 'RECOVERY', msg: 'Failed to restore failed status', resource_id: resourceId, error: String(error) }),
 			);
 		}
 	}
 
-	if (resourceIds.length) console.info({ tag, msg: 'Sweep completed', claimed: resourceIds.length, queued, failed });
+	if (resourceIds.length) console.info({ tag: 'RECOVERY', msg: 'Sweep completed', claimed: resourceIds.length, queued, failed });
 }
 
 function workflowIdPart(value: string): string {
