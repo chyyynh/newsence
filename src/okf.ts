@@ -65,7 +65,7 @@ type EntityLinkRow = {
 	translations: EntityTranslationRow[];
 };
 
-type EntityLinkQueryRow = Omit<EntityLinkRow, 'translations'> & { translations: unknown };
+type EntityLinkQueryRow = Omit<EntityLinkRow, 'name_cn' | 'translations'> & { translations: unknown };
 
 type EntityTranslationRow = {
 	lang: string;
@@ -240,7 +240,6 @@ async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Pr
 		   re.resource_id::text,
 		   e.id::text,
 		   e.name,
-		   e.name_cn,
 		   e.type,
 		   e.resource_count,
 		   jsonb_agg(
@@ -258,7 +257,14 @@ async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Pr
 		 GROUP BY re.resource_id, e.id
 		 ORDER BY e.resource_count DESC, e.name ASC`,
 	);
-	return rows.map((row) => ({ ...row, translations: normalizeEntityTranslations(row.translations) }));
+	return rows.map((row) => {
+		const translations = normalizeEntityTranslations(row.translations);
+		return {
+			...row,
+			name_cn: translations.find((translation) => translation.lang === 'zh-Hant')?.name ?? null,
+			translations,
+		};
+	});
 }
 
 function* renderOkfFiles(collection: CollectionRow, resources: ResourceRow[], links: EntityLinkRow[]): Iterable<OkfFile> {

@@ -52,12 +52,11 @@ async function upsertEntityIds(
 
 		const [row] = await db
 			.insert(entities)
-			.values({ canonicalName: canonical, name: entity.name, nameCn: entity.name_cn, type: entity.type })
+			.values({ canonicalName: canonical, name: entity.name, type: entity.type })
 			.onConflictDoUpdate({
 				target: entities.canonicalName,
 				set: {
 					name: entity.name,
-					nameCn: entity.name_cn,
 					type: entity.type,
 					updatedAt: sql`NOW()`,
 				},

@@ -158,7 +158,6 @@ export const entities = pgTable('entities', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	canonicalName: varchar('canonical_name', { length: 255 }).notNull().unique(),
 	name: varchar('name', { length: 255 }).notNull(),
-	nameCn: varchar('name_cn', { length: 255 }),
 	type: varchar('type', { length: 20 }).notNull(),
 	resourceCount: integer('resource_count').default(0).notNull(),
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
