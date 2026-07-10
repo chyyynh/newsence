@@ -2,9 +2,10 @@ import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
 import { platformMetadataFor, type ResourceForProcessing, type TranscriptSegment, type YoutubeTranscript } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { rssList, youtubeTranscripts } from '@db/schema';
+import { youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import { loadEnabledSources, markSourceScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -205,15 +206,12 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 		return;
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const channels = await withCoreDb(env, async (db) =>
-		db.select({ id: rssList.id, name: rssList.name, RSSLink: rssList.rssLink }).from(rssList).where(eq(rssList.type, 'youtube_channel')),
-	);
+	const channels = await loadEnabledSources(env, 'youtube');
 
 	let totalQueued = 0;
 	for (const channel of channels) {
 		try {
-			if (!channel.RSSLink) continue;
-			const res = await fetchWithTimeout(channel.RSSLink, { headers: { 'User-Agent': FEED_UA } });
+			const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': FEED_UA } });
 			if (!res.ok) {
 				await res.body?.cancel();
 				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
@@ -223,7 +221,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
 			if (videos.length === 0) {
 				console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-				await markChannelScraped(env, channel.id);
+				await markSourceScraped(env, channel.id);
 				continue;
 			}
 
@@ -255,16 +253,10 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 				if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
 			}
 
-			await markChannelScraped(env, channel.id);
+			await markSourceScraped(env, channel.id);
 		} catch (err) {
 			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
 		}
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
-}
-
-async function markChannelScraped(env: CoreEnv, channelId: number): Promise<void> {
-	await withCoreDb(env, async (db) => {
-		await db.update(rssList).set({ scrapedAt: new Date() }).where(eq(rssList.id, channelId));
-	});
 }

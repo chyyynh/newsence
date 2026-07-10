@@ -1,7 +1,6 @@
 import type { TranscriptSegment } from '@core-shared/types';
 import { sql } from 'drizzle-orm';
 import {
-	bigint,
 	boolean,
 	customType,
 	index,
@@ -21,6 +20,7 @@ import {
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
 	RESOURCE_TYPES,
+	SOURCE_PLATFORMS,
 } from '../resources/types';
 
 const vector1024 = customType<{ data: string; driverData: string }>({
@@ -140,15 +140,25 @@ export const library = pgTable(
 	],
 );
 
-export const rssList = pgTable('RssList', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	name: text('name').notNull(),
-	url: text('url'),
-	rssLink: text('RSSLink'),
-	type: text('type').notNull(),
-	isDefault: boolean('is_default').notNull(),
-	scrapedAt: timestamp('scraped_at', { mode: 'date' }).notNull(),
-});
+export const sources = pgTable(
+	'sources',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		platform: text('platform', { enum: SOURCE_PLATFORMS }).notNull(),
+		handle: text('handle').notNull(),
+		name: text('name').notNull(),
+		siteUrl: text('site_url'),
+		avatarUrl: text('avatar_url'),
+		category: text('category'),
+		displayGroup: text('display_group'),
+		enabled: boolean('enabled').default(true).notNull(),
+		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
+		scrapeState: jsonb('scrape_state').$type<unknown>(),
+		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+	},
+	(table) => [uniqueIndex('sources_platform_handle_key').on(table.platform, table.handle)],
+);
 
 export const youtubeTranscripts = pgTable('youtube_transcripts', {
 	id: uuid('id').defaultRandom().primaryKey(),

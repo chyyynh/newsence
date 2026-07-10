@@ -44,12 +44,6 @@ export function oneLine(value: string): string {
 	return value.replace(/\s+/g, ' ').trim();
 }
 
-export function toIso(value: Date | string | null): string | null {
-	if (!value) return null;
-	const date = value instanceof Date ? value : new Date(value);
-	return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
 export function assignPaths(items: Array<{ id: string; label: string }>, prefix: string): Map<string, string> {
 	const used = new Set<string>();
 	const paths = new Map<string, string>();

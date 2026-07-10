@@ -17,6 +17,7 @@ import {
 	type ResourceTranslationSource,
 	type ResourceType,
 } from '../../resources/types';
+import { syncResourceContentLocalizationState } from './content-localization-store';
 import { type ResourceTranslationWrite, upsertResourceTranslation } from './resource-translation-store';
 import { mergePlatformMetadata, type ResourceUpdate, ResourceUpdateBuilder } from './resource-update';
 
@@ -515,94 +516,6 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 		}
 	}
 	await syncResourceContentLocalizationState(db, resourceId);
-}
-
-async function syncResourceContentLocalizationState(db: CoreDb, resourceId: string, sourceContentOverride?: string | null): Promise<void> {
-	const sourceContentSql = sourceContentOverride === undefined ? sql`original.content` : sql`${sourceContentOverride}::text`;
-	await db.execute(sql`
-		WITH source AS (
-			SELECT
-				resource.id,
-				(
-					resource.scope = 'corpus'
-					AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
-					AND resource.url IS NOT NULL
-					AND resource.original_lang <> 'zh-Hant'
-				) AS requires_localization,
-				(
-					NULLIF(BTRIM(original.title), '') IS NOT NULL
-					AND NULLIF(BTRIM(${sourceContentSql}), '') IS NOT NULL
-				) AS has_usable_content,
-				CASE
-					WHEN resource.scope = 'corpus'
-					 AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
-					 AND resource.url IS NOT NULL
-					 AND resource.original_lang <> 'zh-Hant'
-					 AND NULLIF(BTRIM(original.title), '') IS NOT NULL
-					 AND NULLIF(BTRIM(${sourceContentSql}), '') IS NOT NULL
-						THEN md5(${sourceContentSql})
-					ELSE NULL
-				END AS current_source_content_hash
-			FROM resources resource
-			JOIN resource_translations original
-			  ON original.resource_id = resource.id
-			 AND original.lang = resource.original_lang
-			WHERE resource.id = ${resourceId}::uuid
-		)
-		INSERT INTO resource_localization_state AS state (
-			resource_id,
-			status,
-			current_source_content_hash,
-			attempts,
-			created_at,
-			updated_at
-		)
-		SELECT
-			source.id,
-			CASE
-				WHEN NOT source.requires_localization THEN 'not_required'
-				WHEN NOT source.has_usable_content THEN 'blocked_on_content'
-				ELSE 'pending'
-			END,
-			source.current_source_content_hash,
-			0,
-			NOW(),
-			NOW()
-		FROM source
-		ON CONFLICT (resource_id) DO UPDATE SET
-			status = CASE
-				WHEN excluded.status IN ('not_required', 'blocked_on_content') THEN excluded.status
-				WHEN state.source_content_hash = excluded.current_source_content_hash THEN 'complete'
-				WHEN state.current_source_content_hash IS NOT DISTINCT FROM excluded.current_source_content_hash THEN state.status
-				ELSE 'pending'
-			END,
-			current_source_content_hash = excluded.current_source_content_hash,
-			attempt_content_hash = CASE
-				WHEN excluded.status IN ('not_required', 'blocked_on_content')
-				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
-				ELSE state.attempt_content_hash
-			END,
-			attempts = CASE
-				WHEN excluded.status IN ('not_required', 'blocked_on_content')
-				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN 0
-				ELSE state.attempts
-			END,
-			last_attempt_at = CASE
-				WHEN excluded.status IN ('not_required', 'blocked_on_content')
-				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
-				ELSE state.last_attempt_at
-			END,
-			completed_at = CASE
-				WHEN state.source_content_hash = excluded.current_source_content_hash THEN state.completed_at
-				ELSE NULL
-			END,
-			error = CASE
-				WHEN excluded.status IN ('not_required', 'blocked_on_content')
-				  OR state.current_source_content_hash IS DISTINCT FROM excluded.current_source_content_hash THEN NULL
-				ELSE state.error
-			END,
-			updated_at = NOW()
-	`);
 }
 
 function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationWrite[] {

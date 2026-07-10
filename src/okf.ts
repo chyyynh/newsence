@@ -5,9 +5,10 @@
 // #219 backfill normalize before storage.
 
 import { type CoreDb, withCoreDb } from '@db/client';
-import { type SQL, sql } from 'drizzle-orm';
+import { isValidUuid, queryRows, toIsoString, uuidArraySql } from '@db/sql';
+import { sql } from 'drizzle-orm';
 import { type OkfFile, tarGzipStream } from './okf/archive';
-import { assignPaths, compactMarkdown, frontmatter, groupBy, markdownLink, oneLine, toIso, uniqueBy, uniqueSlug } from './okf/markdown';
+import { assignPaths, compactMarkdown, frontmatter, groupBy, markdownLink, oneLine, uniqueBy, uniqueSlug } from './okf/markdown';
 import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 import type { ResourceCategory, ResourceType } from './resources/types';
 
@@ -73,14 +74,13 @@ type EntityTranslationRow = {
 	source: 'original' | 'machine' | 'human';
 };
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BCP47_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 
 export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionOkfInput): Promise<Response> {
 	const collectionId = input.collectionId.trim();
 	const primaryLocale = normalizePrimaryLocale(input.primaryLocale);
 	const viewerId = input.userId?.trim() || null;
-	if (!collectionId || !UUID_RE.test(collectionId)) {
+	if (!collectionId || !isValidUuid(collectionId)) {
 		return Response.json({ code: 'BAD_REQUEST', message: 'Missing collectionId' }, { status: 400 });
 	}
 	if (primaryLocale === false) {
@@ -129,10 +129,6 @@ async function buildCollectionOkfBundle(
 			files: renderOkfFiles(collection, resources, links),
 		};
 	});
-}
-
-async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
-	return (await db.execute(statement)).rows as T[];
 }
 
 function normalizePrimaryLocale(value: string | null | undefined): string | null | false {
@@ -229,10 +225,7 @@ async function readCollectionResources(
 }
 
 async function readResourceEntityLinks(db: CoreDb, resources: ResourceRow[]): Promise<EntityLinkRow[]> {
-	const resourceIdArray = sql`ARRAY[${sql.join(
-		resources.map((resource) => sql`${resource.id}`),
-		sql`, `,
-	)}]::uuid[]`;
+	const resourceIdArray = uuidArraySql(resources.map((resource) => resource.id));
 	const rows = await queryRows<EntityLinkQueryRow>(
 		db,
 		sql`SELECT
@@ -355,7 +348,7 @@ function renderResource(resource: ResourceRow, links: EntityLinkRow[], entityPat
 			description: resource.summary,
 			resource: resource.url,
 			tags: resource.tags?.length ? resource.tags : undefined,
-			timestamp: toIso(resource.published_date),
+			timestamp: toIsoString(resource.published_date),
 			// extension keys (spec §frontmatter: consumers must tolerate unknown keys)
 			keywords: resource.keywords?.length ? resource.keywords : undefined,
 			category: resource.category,

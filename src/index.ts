@@ -13,7 +13,7 @@ import {
 	createAcquisitionJob as createAcquisitionWorkflowJob,
 	getAcquisitionJobStatus as readAcquisitionJobStatus,
 } from '@ingest/acquisition-workflow';
-import { ContentLocalizationWorkflow, scheduleContentLocalizationBackfill } from '@ingest/content-localization-workflow';
+import { ContentLocalizationWorkflow, scheduleContentLocalization } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
@@ -148,7 +148,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 			);
 		} else if (event.cron === '* * * * *') {
 			this.ctx.waitUntil(
-				Promise.allSettled([scheduleContentLocalizationBackfill(this.env), recoverMissingOriginalContent(this.env)]).then((results) => {
+				Promise.allSettled([scheduleContentLocalization(this.env), recoverMissingOriginalContent(this.env)]).then((results) => {
 					for (const result of results) {
 						if (result.status === 'rejected')
 							console.error({ tag: 'CORE', msg: 'Content repair task failed', error: String(result.reason) });

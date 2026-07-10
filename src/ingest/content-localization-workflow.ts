@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import {
 	ContentLocalizationSourceChangedError,
-	claimContentLocalizationBackfill,
+	claimContentLocalizationWork,
 	clearMachineZhHantContent,
 	exhaustContentLocalizationAttempts,
 	markContentLocalizationComplete,
@@ -35,15 +35,23 @@ function workflowId(resourceId: string, sourceContentHash: string): string {
 	return `content-localization-${CONTENT_LOCALIZATION_WORKFLOW_REVISION}-${sourceContentHash.slice(0, 12)}-${resourceId}`;
 }
 
-export async function enqueueContentLocalization(env: CoreEnv, resourceId: string, sourceContentHash: string): Promise<string> {
-	const id = workflowId(resourceId, sourceContentHash);
-	const [created] = await env.CONTENT_LOCALIZATION_WORKFLOW.createBatch([{ id, params: { resourceId, sourceContentHash } }]);
-	if (created) return created.id;
-
-	const instance = await env.CONTENT_LOCALIZATION_WORKFLOW.get(id);
+async function restartWorkflowIfInactive(workflow: Workflow, id: string): Promise<string> {
+	const instance = await workflow.get(id);
 	const { status } = await instance.status();
 	if (!ACTIVE_WORKFLOW_STATUSES.has(status)) await instance.restart();
 	return instance.id;
+}
+
+export async function enqueueOrRestartWorkflow<Params>(workflow: Workflow<Params>, id: string, params: Params): Promise<string> {
+	const [created] = await workflow.createBatch([{ id, params }]);
+	return created ? created.id : restartWorkflowIfInactive(workflow, id);
+}
+
+export function enqueueContentLocalization(env: CoreEnv, resourceId: string, sourceContentHash: string): Promise<string> {
+	return enqueueOrRestartWorkflow(env.CONTENT_LOCALIZATION_WORKFLOW, workflowId(resourceId, sourceContentHash), {
+		resourceId,
+		sourceContentHash,
+	});
 }
 
 async function markClaimsFailed(
@@ -56,8 +64,8 @@ async function markClaimsFailed(
 	);
 }
 
-export async function scheduleContentLocalizationBackfill(env: CoreEnv): Promise<void> {
-	const claims = await claimContentLocalizationBackfill(env);
+export async function scheduleContentLocalization(env: CoreEnv): Promise<void> {
+	const claims = await claimContentLocalizationWork(env);
 	if (!claims.length) return;
 
 	const created = await env.CONTENT_LOCALIZATION_WORKFLOW.createBatch(
@@ -72,11 +80,9 @@ export async function scheduleContentLocalizationBackfill(env: CoreEnv): Promise
 	const createdIds = new Set(created.map((instance) => instance.id));
 	const existingClaims = claims.filter(({ resourceId, sourceContentHash }) => !createdIds.has(workflowId(resourceId, sourceContentHash)));
 	const results = await Promise.allSettled(
-		existingClaims.map(async ({ resourceId, sourceContentHash }) => {
-			const instance = await env.CONTENT_LOCALIZATION_WORKFLOW.get(workflowId(resourceId, sourceContentHash));
-			const { status } = await instance.status();
-			if (!ACTIVE_WORKFLOW_STATUSES.has(status)) await instance.restart();
-		}),
+		existingClaims.map(({ resourceId, sourceContentHash }) =>
+			restartWorkflowIfInactive(env.CONTENT_LOCALIZATION_WORKFLOW, workflowId(resourceId, sourceContentHash)),
+		),
 	);
 	let queued = created.length;
 	let failed = 0;

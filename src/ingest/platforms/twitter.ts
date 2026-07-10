@@ -1,10 +1,9 @@
 import type { PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { withCoreDb } from '@db/client';
-import { rssList } from '@db/schema';
 import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import { loadEnabledSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { eq, inArray } from 'drizzle-orm';
 import { generateResourceClassification, isEmpty, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
@@ -173,11 +172,11 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
  * Global sinceTime = oldest effective watermark across all users minus a 1h
  * overlap. A missing or invalid per-user watermark falls back to 24h ago.
  */
-function calculateMonitoringSinceTime(users: Array<{ scraped_at?: Date | string | null }>): number {
+function calculateMonitoringSinceTime(users: Array<{ scrapedAt?: Date | string | null }>): number {
 	const fallback = Date.now() - TWITTER_INITIAL_LOOKBACK_MS;
 	let oldest = Number.POSITIVE_INFINITY;
 	for (const user of users) {
-		const timestamp = user.scraped_at ? new Date(user.scraped_at).getTime() : Number.NaN;
+		const timestamp = user.scrapedAt ? new Date(user.scrapedAt).getTime() : Number.NaN;
 		oldest = Math.min(oldest, Number.isFinite(timestamp) ? timestamp : fallback);
 	}
 	return Math.floor(((Number.isFinite(oldest) ? oldest : fallback) - TWITTER_WATERMARK_OVERLAP_MS) / 1000);
@@ -261,26 +260,11 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 	return [...groups.values(), ...orphanReplies.map((tweet) => [tweet])];
 }
 
-type TwitterSourceFeed = {
-	id: number;
-	RSSLink: string | null;
-	scraped_at: Date | null;
-};
+type MonitoredTwitterUser = MonitoredSource & { twitterUserName: string };
 
-type MonitoredTwitterUser = TwitterSourceFeed & { twitterUserName: string };
-
-async function loadTwitterSourceFeeds(env: CoreEnv): Promise<TwitterSourceFeed[]> {
-	return withCoreDb(env, async (db) =>
-		db
-			.select({ id: rssList.id, RSSLink: rssList.rssLink, scraped_at: rssList.scrapedAt })
-			.from(rssList)
-			.where(eq(rssList.type, 'twitter_user')),
-	);
-}
-
-function monitoredTwitterUsers(users: TwitterSourceFeed[]): MonitoredTwitterUser[] {
+function monitoredTwitterUsers(users: MonitoredSource[]): MonitoredTwitterUser[] {
 	return users.flatMap((user) => {
-		const twitterUserName = normalizeTwitterUserName(user.RSSLink);
+		const twitterUserName = normalizeTwitterUserName(user.handle);
 		return twitterUserName ? [{ ...user, twitterUserName }] : [];
 	});
 }
@@ -327,20 +311,6 @@ async function processTwitterBatches(
 	return { processed, allCompleted };
 }
 
-async function markTwitterFeedsScraped(env: CoreEnv, users: MonitoredTwitterUser[], scrapedAt: Date): Promise<void> {
-	await withCoreDb(env, async (db) => {
-		await db
-			.update(rssList)
-			.set({ scrapedAt })
-			.where(
-				inArray(
-					rssList.id,
-					users.map((u) => u.id),
-				),
-			);
-	});
-}
-
 export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	if (!env.KAITO_API_KEY) {
 		console.info({ tag: 'TWITTER', msg: 'Skipped - KAITO_API_KEY not configured' });
@@ -348,9 +318,9 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	}
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const runStartedAt = new Date();
-	const users = await loadTwitterSourceFeeds(env);
+	const users = await loadEnabledSources(env, 'twitter');
 	if (!users.length) {
-		console.info({ tag: 'TWITTER', msg: 'No twitter_user source feeds configured' });
+		console.info({ tag: 'TWITTER', msg: 'No twitter sources configured' });
 		return;
 	}
 
@@ -366,7 +336,12 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
 
 	const { processed, allCompleted } = await processTwitterBatches(env, batches, sinceTime);
-	if (allCompleted) await markTwitterFeedsScraped(env, monitoredUsers, runStartedAt);
+	if (allCompleted)
+		await markSourcesScraped(
+			env,
+			monitoredUsers.map((u) => u.id),
+			runStartedAt,
+		);
 
 	console.info({
 		tag: 'TWITTER',

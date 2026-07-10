@@ -15,5 +15,7 @@ export {
 	type ResourceScope,
 	type ResourceTranslationSource,
 	type ResourceType,
+	SOURCE_PLATFORMS,
+	type SourcePlatform,
 	ZH_HANT_RESOURCE_LANG,
 } from '../shared/resource-types';

@@ -1,21 +1,15 @@
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { withCoreDb } from '@db/client';
-import { rssList } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import { loadEnabledSources, type MonitoredSource, markSourceScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { and, eq } from 'drizzle-orm';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const FEED_CONCURRENCY = 4;
 const ITEM_CONCURRENCY = 5;
 
-type RssSource = {
-	id: number;
-	name: string;
-	RSSLink: string | null;
-	url: string | null;
-};
+type RssSource = MonitoredSource;
 
 const HTML_HREF_RE = /\bhref\s*=\s*["']([^"'#]+)["']/gi;
 
@@ -31,9 +25,9 @@ function titleFromDiscoveredUrl(url: string): string {
 }
 
 async function discoverOfficialBlogEntries(feed: RssSource): Promise<FeedEntry[]> {
-	if (!feed.url || !feed.RSSLink) return [];
-	const rssHost = new URL(feed.RSSLink).hostname.toLowerCase();
-	const blogUrl = new URL(feed.url);
+	if (!feed.siteUrl) return [];
+	const rssHost = new URL(feed.handle).hostname.toLowerCase();
+	const blogUrl = new URL(feed.siteUrl);
 	const pathPrefix = blogUrl.pathname.endsWith('/') ? blogUrl.pathname : `${blogUrl.pathname}/`;
 	if (rssHost !== 'rsshub.app' || pathPrefix === '/') return [];
 
@@ -65,14 +59,9 @@ async function discoverOfficialBlogEntries(feed: RssSource): Promise<FeedEntry[]
 }
 
 async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[] | null> {
-	if (!feed.RSSLink) {
-		console.warn({ tag: 'RSS', msg: 'Feed has no RSSLink', feed: feed.name });
-		return null;
-	}
-
 	let response: Response;
 	try {
-		response = await fetchWithTimeout(feed.RSSLink, {
+		response = await fetchWithTimeout(feed.handle, {
 			headers: {
 				'User-Agent': FEED_UA,
 				Accept: 'application/rss+xml, application/xml, text/xml, */*',
@@ -157,7 +146,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	if (!items) return;
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
-		await markFeedScraped(env, feed.id);
+		await markSourceScraped(env, feed.id);
 		return;
 	}
 
@@ -193,23 +182,12 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 		queued += results.filter(Boolean).length;
 	}
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
-	await markFeedScraped(env, feed.id);
-}
-
-async function markFeedScraped(env: CoreEnv, feedId: number): Promise<void> {
-	await withCoreDb(env, async (db) => {
-		await db.update(rssList).set({ scrapedAt: new Date() }).where(eq(rssList.id, feedId));
-	});
+	await markSourceScraped(env, feed.id);
 }
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const feeds = await withCoreDb(env, async (db) =>
-		db
-			.select({ id: rssList.id, name: rssList.name, RSSLink: rssList.rssLink, url: rssList.url })
-			.from(rssList)
-			.where(and(eq(rssList.isDefault, true), eq(rssList.type, 'rss'))),
-	);
+	const feeds = await loadEnabledSources(env, 'rss');
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);
 		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));

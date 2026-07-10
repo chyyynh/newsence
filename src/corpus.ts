@@ -1,6 +1,7 @@
 import { generateResourceEmbedding } from '@core-ai/embedding';
 import { normalizeUrl } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
+import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 
@@ -98,7 +99,6 @@ const RRF_K = 60;
 const RECENCY_HALF_LIFE_DAYS = 30;
 const OVERFETCH_MULTIPLIER = 5;
 const OVERFETCH_CAP = 200;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function searchCorpusResourceRanks(
 	env: CoreEnv,
@@ -139,20 +139,14 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 			if (ranks.size === 0) return [];
 			const candidateIds = [...ranks.keys()].filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
-			const candidateIdArray = sql`ARRAY[${sql.join(
-				candidateIds.map((id) => sql`${id}`),
-				sql`, `,
-			)}]::uuid[]`;
 			const rows = await queryRows<ResourceSearchRow>(
 				db,
 				sql`
 					SELECT ${resourceSearchSelect()}
 					FROM resources r
 					${resourceLocalizedJoin()}
-					WHERE r.id = ANY(${candidateIdArray})
-						AND r.scope = 'corpus'
-						AND r.enrichment_status = 'enriched'
-						${fromDate ? sql`AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${fromDate}` : sql``}
+					WHERE r.id = ANY(${uuidArraySql(candidateIds)})
+						AND ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
 				`,
 			);
 			return rows
@@ -167,10 +161,8 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 				SELECT ${resourceSearchSelect()}
 				FROM resources r
 				${resourceLocalizedJoin()}
-				WHERE r.scope = 'corpus'
-					AND r.enrichment_status = 'enriched'
-					${fromDate ? sql`AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${fromDate}` : sql``}
-				ORDER BY COALESCE(r.published_date, r.scraped_date, r.created_at) DESC
+				WHERE ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
+				ORDER BY ${recencySql()} DESC
 				LIMIT ${limit}
 			`,
 		);
@@ -182,20 +174,9 @@ export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], us
 	return withCoreDb(env, (db) => readItems(db, items, userId));
 }
 
-async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
-	const result = await db.execute(statement);
-	return result.rows as T[];
-}
-
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
 	return Math.min(Math.max(Math.trunc(value), min), max);
-}
-
-function toIsoString(value: Date | string | null): string | undefined {
-	if (value === null) return undefined;
-	const date = value instanceof Date ? value : new Date(value);
-	return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
@@ -222,14 +203,43 @@ async function relatedResources(db: CoreDb, seed: { id: string; type: 'resource'
 			SELECT r.id
 			FROM resources r, src
 			WHERE r.id <> ${seed.id}::uuid
-				AND r.scope = 'corpus'
-				AND r.enrichment_status = 'enriched'
+				AND ${corpusEnrichedSql()}
 				AND r.embedding IS NOT NULL
 			ORDER BY r.embedding <=> src.embedding
 			LIMIT ${limit} OFFSET ${offset}
 		`,
 	);
 	return rows.map((r) => r.id);
+}
+
+function recencySql(): SQL {
+	return sql`COALESCE(r.published_date, r.scraped_date, r.created_at)`;
+}
+
+function corpusEnrichedSql(): SQL {
+	return sql`r.scope = 'corpus' AND r.enrichment_status = 'enriched'`;
+}
+
+function publishedSinceSql(fromDate: Date | null | undefined): SQL {
+	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
+}
+
+function keywordMatchSql(patternArray: SQL): SQL {
+	return sql`(
+		EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
+		OR EXISTS (
+			SELECT 1
+			FROM resource_translations rt
+			WHERE rt.resource_id = r.id
+				AND (
+					EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
+					OR rt.title ILIKE ANY(${patternArray})
+					OR rt.summary ILIKE ANY(${patternArray})
+				)
+		)
+		OR r.type ILIKE ANY(${patternArray})
+		OR r.url ILIKE ANY(${patternArray})
+	)`;
 }
 
 async function rankResources(
@@ -244,15 +254,10 @@ async function rankResources(
 
 	const tokens = tokenize(sanitized);
 	const patterns = tokens.length > 0 ? tokens.map(likePattern) : [likePattern(sanitized)];
-	const patternArray = sql`ARRAY[${sql.join(
-		patterns.map((pattern) => sql`${pattern}`),
-		sql`, `,
-	)}]::text[]`;
+	const patternArray = textArraySql(patterns);
 
 	if (!vectorStr) return keywordOnly(db, patternArray, limit, options);
 	const overfetchLimit = Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP);
-	const dateFilter = () =>
-		options.fromDate ? sql` AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${options.fromDate}` : sql``;
 
 	try {
 		const rows = await queryRows<{ id: string; score: number | string }>(
@@ -261,32 +266,16 @@ async function rankResources(
 			WITH vec AS (
 				SELECT r.id, ROW_NUMBER() OVER (ORDER BY r.embedding <=> ${vectorStr}::vector) AS rank
 				FROM resources r
-				WHERE r.scope = 'corpus'
-					AND r.enrichment_status = 'enriched'
-					AND r.embedding IS NOT NULL${dateFilter()}
+				WHERE ${corpusEnrichedSql()}
+					AND r.embedding IS NOT NULL${publishedSinceSql(options.fromDate)}
 				ORDER BY r.embedding <=> ${vectorStr}::vector
 				LIMIT ${overfetchLimit}
 			),
 			kw AS (
-				SELECT r.id, ROW_NUMBER() OVER (ORDER BY COALESCE(r.published_date, r.scraped_date, r.created_at) DESC NULLS LAST) AS rank
+				SELECT r.id, ROW_NUMBER() OVER (ORDER BY ${recencySql()} DESC NULLS LAST) AS rank
 				FROM resources r
-				WHERE r.scope = 'corpus'
-					AND r.enrichment_status = 'enriched'
-					AND (
-					EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
-					OR EXISTS (
-						SELECT 1
-						FROM resource_translations rt
-						WHERE rt.resource_id = r.id
-							AND (
-								EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
-								OR rt.title ILIKE ANY(${patternArray})
-								OR rt.summary ILIKE ANY(${patternArray})
-							)
-					)
-					OR r.type ILIKE ANY(${patternArray})
-					OR r.url ILIKE ANY(${patternArray})
-				)${dateFilter()}
+				WHERE ${corpusEnrichedSql()}
+					AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
 				LIMIT ${overfetchLimit}
 			),
 			fused AS (
@@ -299,7 +288,7 @@ async function rankResources(
 			)
 			SELECT
 				s.id::text,
-					s.s * (1.0 / (1 + GREATEST(EXTRACT(EPOCH FROM now() - COALESCE(r.published_date, r.scraped_date, r.created_at)), 0) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
+					s.s * (1.0 / (1 + GREATEST(EXTRACT(EPOCH FROM now() - ${recencySql()}), 0) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
 			FROM scored s
 			JOIN resources r ON s.id = r.id
 			ORDER BY score DESC
@@ -325,8 +314,6 @@ function likePattern(value: string): string {
 }
 
 async function keywordOnly(db: CoreDb, patternArray: SQL, limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
-	const dateFilter = () =>
-		options.fromDate ? sql` AND COALESCE(r.published_date, r.scraped_date, r.created_at) >= ${options.fromDate}` : sql``;
 	try {
 		const rows = await queryRows<{ id: string; match_count: number | string }>(
 			db,
@@ -347,24 +334,9 @@ async function keywordOnly(db: CoreDb, patternArray: SQL, limit: number, options
 					)
 				) AS match_count
 			FROM resources r
-			WHERE r.scope = 'corpus'
-				AND r.enrichment_status = 'enriched'
-				AND (
-				EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
-				OR EXISTS (
-					SELECT 1
-					FROM resource_translations rt
-					WHERE rt.resource_id = r.id
-						AND (
-							EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
-							OR rt.title ILIKE ANY(${patternArray})
-							OR rt.summary ILIKE ANY(${patternArray})
-						)
-				)
-				OR r.type ILIKE ANY(${patternArray})
-				OR r.url ILIKE ANY(${patternArray})
-			)${dateFilter()}
-			ORDER BY match_count DESC, COALESCE(r.published_date, r.scraped_date, r.created_at) DESC NULLS LAST
+			WHERE ${corpusEnrichedSql()}
+				AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
+			ORDER BY match_count DESC, ${recencySql()} DESC NULLS LAST
 			LIMIT ${limit}
 			`,
 		);
@@ -393,10 +365,6 @@ function tokenize(sanitized: string): string[] {
 		}
 	}
 	return [...tokens].slice(0, 8);
-}
-
-function isValidUuid(id: string): boolean {
-	return UUID_RE.test(id);
 }
 
 function corpusErrorMessage(error: unknown): string {
@@ -481,7 +449,7 @@ function resourceSearchSelect(): SQL {
 		r.id::text,
 		rt.title AS title,
 		r.url,
-		COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_date,
+		${recencySql()} AS published_date,
 		r.type AS source,
 		rt.summary AS summary,
 		r.tags
@@ -527,17 +495,13 @@ function formatResourceReadResult(resource: ResourceContentRow): ReadContextResu
 async function readResources(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
-	const validIdArray = sql`ARRAY[${sql.join(
-		validIds.map((id) => sql`${id}`),
-		sql`, `,
-	)}]::uuid[]`;
 	const rows = await queryRows<ResourceContentRow>(
 		db,
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceLocalizedJoin()}
-				WHERE r.id = ANY(${validIdArray})
+				WHERE r.id = ANY(${uuidArraySql(validIds)})
 				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
@@ -548,17 +512,13 @@ async function readResources(db: CoreDb, ids: string[], userId: string): Promise
 async function readResourceSummaries(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ResourceSummaryRow>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
-	const validIdArray = sql`ARRAY[${sql.join(
-		validIds.map((id) => sql`${id}`),
-		sql`, `,
-	)}]::uuid[]`;
 	const rows = await queryRows<ResourceSummaryRow>(
 		db,
 		sql`
 			SELECT ${resourceSummarySelect()}
 			FROM resources r
 			${resourceLocalizedJoin()}
-				WHERE r.id = ANY(${validIdArray})
+				WHERE r.id = ANY(${uuidArraySql(validIds)})
 				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
@@ -568,14 +528,6 @@ async function readResourceSummaries(db: CoreDb, ids: string[], userId: string):
 async function readCollections(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
-	const validUuidArray = sql`ARRAY[${sql.join(
-		validIds.map((id) => sql`${id}`),
-		sql`, `,
-	)}]::uuid[]`;
-	const validTextArray = sql`ARRAY[${sql.join(
-		validIds.map((id) => sql`${id}`),
-		sql`, `,
-	)}]::text[]`;
 
 	const [collectionRows, citationRows] = await Promise.all([
 		queryRows<{ id: string; name: string; description: string | null }>(
@@ -583,7 +535,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 			sql`
 				SELECT id, name, description
 				FROM collections
-					WHERE id = ANY(${validUuidArray}) AND user_id = ${userId}
+					WHERE id = ANY(${uuidArraySql(validIds)}) AND user_id = ${userId}
 			`,
 		),
 		queryRows<{ from_id: string; to_id: string }>(
@@ -593,7 +545,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 				FROM citations
 				WHERE user_id = ${userId}
 					AND from_type = 'collection'
-						AND from_id = ANY(${validTextArray})
+						AND from_id = ANY(${textArraySql(validIds)})
 					AND to_type = 'resource'
 				ORDER BY created_at DESC
 			`,
@@ -654,10 +606,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
 	const candidateUrls = [...new Set(urlPairs.flat())];
-	const candidateUrlArray = sql`ARRAY[${sql.join(
-		candidateUrls.map((url) => sql`${url}`),
-		sql`, `,
-	)}]::text[]`;
+	const candidateUrlArray = textArraySql(candidateUrls);
 
 	const resourceRows = await queryRows<ResourceContentRow>(
 		db,

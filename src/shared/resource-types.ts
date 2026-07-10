@@ -14,6 +14,10 @@ export const RESOURCE_ENRICHMENT_TYPES = [
 
 export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const satisfies readonly ResourceType[];
 
+export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies readonly ResourceType[];
+
+export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
+
 export function isResourceType(value: unknown): value is ResourceType {
 	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
