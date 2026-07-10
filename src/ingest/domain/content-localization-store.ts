@@ -1,3 +1,4 @@
+import { NonRetryableError } from 'cloudflare:workflows';
 import { withCoreDb } from '@db/client';
 import { sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
@@ -10,10 +11,9 @@ export type ContentLocalizationClaim = {
 	attempt: number;
 };
 
-export class ContentLocalizationSourceChangedError extends Error {
+export class ContentLocalizationSourceChangedError extends NonRetryableError {
 	constructor(resourceId: string) {
-		super(`Resource ${resourceId} original content changed during localization`);
-		this.name = 'ContentLocalizationSourceChangedError';
+		super(`Resource ${resourceId} original content changed during localization`, 'ContentLocalizationSourceChangedError');
 	}
 }
 
@@ -99,7 +99,12 @@ async function markContentLocalization(
 					ELSE state.source_content_hash
 				END,
 				completed_at = CASE WHEN ${status} = 'complete' THEN NOW() ELSE NULL END,
-				attempts = CASE WHEN ${exhausted} THEN ${MAX_LOCALIZATION_ATTEMPTS} ELSE state.attempts END,
+				attempts = CASE
+					WHEN ${exhausted} THEN ${MAX_LOCALIZATION_ATTEMPTS}
+					WHEN ${status} = 'running' THEN GREATEST(state.attempts, 1)
+					ELSE state.attempts
+				END,
+				last_attempt_at = CASE WHEN ${status} = 'running' THEN NOW() ELSE state.last_attempt_at END,
 				error = ${error ? error.slice(0, 500) : null},
 				updated_at = NOW()
 			WHERE state.resource_id = ${resourceId}::uuid
