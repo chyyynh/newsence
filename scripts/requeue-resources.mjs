@@ -142,7 +142,14 @@ async function triggerWorkflowBatch(rows, credentials) {
 					Authorization: `Bearer ${credentials.apiToken}`,
 					'Content-Type': 'application/json',
 				},
-				body: JSON.stringify(rows.map((row) => ({ params: { resourceId: row.id } }))),
+				body: JSON.stringify(
+					rows.map((row) => ({
+						params: {
+							resourceId: row.id,
+							...(mode === 'missing-content' ? { operation: 'recovery' } : {}),
+						},
+					})),
+				),
 			},
 		);
 		const payload = await response.json().catch(() => undefined);

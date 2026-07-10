@@ -29,7 +29,7 @@ import {
 	persistUnchangedResourceResync,
 } from './resource-persistence';
 
-type WorkflowOperation = 'ingest' | 'resync';
+type WorkflowOperation = 'ingest' | 'recovery' | 'resync';
 type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
@@ -49,6 +49,13 @@ function workflowIdPart(value: string): string {
 
 function storedWorkflowId(resourceId: string): string {
 	return ['resource', workflowIdPart(resourceId)].join('-');
+}
+
+function isPermanentlyUnavailableSource(error: unknown): boolean {
+	const status = acquisitionHttpStatus(error);
+	if (status !== undefined) return [400, 401, 403, 404, 405, 410, 451].includes(status);
+	const message = error instanceof Error ? error.message : String(error);
+	return /\bnot found\b|unsupported response content type|only http\(s\) urls are allowed|url must not include credentials/i.test(message);
 }
 
 function shouldAcquireContent(
@@ -97,6 +104,79 @@ async function stageSavedUrlAcquisition(
 	}
 }
 
+type AcquisitionTerminalResult = {
+	resourceId: string;
+	deleted: boolean;
+	reason: 'acquisition_empty_content' | 'acquisition_http_403' | 'source_permanently_unavailable';
+};
+
+async function deleteResourceAfterAcquisition(
+	env: CoreEnv,
+	step: WorkflowStep,
+	resource: ResourceForProcessing,
+	input: {
+		stepName: string;
+		message: string;
+		reason: AcquisitionTerminalResult['reason'];
+		error?: unknown;
+	},
+): Promise<AcquisitionTerminalResult> {
+	const deleted = await step.do(
+		input.stepName,
+		{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+		() => deleteResource(env, resource.id),
+	);
+	console.info({
+		tag: 'WORKFLOW',
+		msg: input.message,
+		resource_id: resource.id,
+		url: resource.url,
+		deleted,
+		...(input.error === undefined ? {} : { error: String(input.error) }),
+	});
+	return { resourceId: resource.id, deleted, reason: input.reason };
+}
+
+async function acquireResourceForOperation(
+	env: CoreEnv,
+	step: WorkflowStep,
+	resource: ResourceForProcessing,
+	operation: WorkflowOperation,
+): Promise<{ acquiredContent?: AcquiredContent } | { terminal: AcquisitionTerminalResult }> {
+	if (!shouldAcquireContent(resource, operation === 'resync')) return {};
+
+	let acquiredContent: AcquiredContent | undefined;
+	try {
+		acquiredContent = await stageSavedUrlAcquisition(env, step, resource, operation === 'ingest');
+	} catch (error) {
+		if (operation === 'resync') throw error;
+		if (operation === 'recovery' && !isPermanentlyUnavailableSource(error)) throw error;
+		if (operation === 'ingest' && acquisitionHttpStatus(error) !== 403) throw error;
+		return {
+			terminal: await deleteResourceAfterAcquisition(env, step, resource, {
+				stepName: operation === 'recovery' ? 'delete-unavailable-resource' : 'delete-forbidden-resource',
+				message:
+					operation === 'recovery'
+						? 'Deleted unavailable resource during recovery'
+						: 'Deleted resource after forbidden acquisition response',
+				reason: operation === 'recovery' ? 'source_permanently_unavailable' : 'acquisition_http_403',
+				error,
+			}),
+		};
+	}
+
+	if (operation === 'recovery' && acquiredContent && !acquiredContent.markdown.trim()) {
+		return {
+			terminal: await deleteResourceAfterAcquisition(env, step, resource, {
+				stepName: 'delete-empty-recovery-resource',
+				message: 'Deleted resource after recovery returned empty content',
+				reason: 'acquisition_empty_content',
+			}),
+		};
+	}
+	return { acquiredContent };
+}
+
 async function stageOgImagePatch(
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
@@ -143,27 +223,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		if (operation === 'resync' && !initialResource.url) {
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
-		let acquiredContent: AcquiredContent | undefined;
-		if (shouldAcquireContent(initialResource, operation === 'resync')) {
-			try {
-				acquiredContent = await stageSavedUrlAcquisition(this.env, step, initialResource, operation !== 'resync');
-			} catch (error) {
-				if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
-				const deleted = await step.do(
-					'delete-forbidden-resource',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => deleteResource(this.env, resourceId),
-				);
-				console.info({
-					tag: 'WORKFLOW',
-					msg: 'Deleted resource after forbidden acquisition response',
-					resource_id: resourceId,
-					url: initialResource.url,
-					deleted,
-				});
-				return { resourceId, deleted, reason: 'acquisition_http_403' };
-			}
-		}
+		const acquisition = await acquireResourceForOperation(this.env, step, initialResource, operation);
+		if ('terminal' in acquisition) return acquisition.terminal;
+		const { acquiredContent } = acquisition;
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
@@ -287,7 +349,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		return {
 			success: true,
 			resource_id: persistedResourceId,
-			...(operation === 'resync' ? { operation, changed: true } : {}),
+			...(operation !== 'ingest' ? { operation, changed: true } : {}),
 		};
 	}
 }
