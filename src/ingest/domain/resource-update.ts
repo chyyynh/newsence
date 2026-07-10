@@ -3,13 +3,18 @@ import { canonicalizeOptionalResourceLang, type ResourceType } from '../../resou
 import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
-export type ResourceUpdate = ProcessorResult['updateData'] &
-	Partial<{
-		type: ResourceType;
-		og_image_url: string;
-		platform_metadata: PlatformMetadata | Record<string, unknown>;
-		embedding: string;
-	}>;
+export type ResourceUpdate = {
+	type: ResourceType;
+	title: string;
+	summary: string | null;
+	content: string | null;
+	tags: string[];
+	keywords: string[];
+	entities: ProcessorResult['updateData']['entities'];
+	og_image_url: string | null;
+	platform_metadata: PlatformMetadata | undefined;
+	embedding: string | null;
+};
 
 type ResourceMetadataPatch = Record<string, unknown>;
 
@@ -57,10 +62,23 @@ function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: R
 }
 
 export class ResourceUpdateBuilder {
-	private readonly update: ResourceUpdate = {};
+	private readonly update: ResourceUpdate;
 	private readonly metadataPatches: ResourceMetadataPatch[] = [];
 
-	constructor(private readonly resource: ResourceForProcessing) {}
+	constructor(private readonly resource: ResourceForProcessing) {
+		this.update = {
+			type: resource.type,
+			title: resource.title,
+			summary: resource.summary,
+			content: resource.content,
+			tags: [...resource.tags],
+			keywords: [...resource.keywords],
+			entities: undefined,
+			og_image_url: resource.og_image_url ?? null,
+			platform_metadata: resource.platform_metadata,
+			embedding: null,
+		};
+	}
 
 	addExtractionMetadata(extraction: PdfExtractionMetadata | undefined): this {
 		return extraction ? this.addMetadataPatch({ extraction }) : this;
@@ -79,18 +97,24 @@ export class ResourceUpdateBuilder {
 	}
 
 	applyProcessorResult(result: ProcessorResult, embedding?: number[] | null): this {
-		Object.assign(this.update, result.updateData);
+		const { updateData } = result;
+		if (updateData.summary !== undefined) this.update.summary = updateData.summary;
+		if (updateData.content !== undefined) this.update.content = updateData.content;
+		if (updateData.tags !== undefined) this.update.tags = updateData.tags;
+		if (updateData.keywords !== undefined) this.update.keywords = updateData.keywords;
+		if (updateData.entities !== undefined) this.update.entities = updateData.entities;
 		const category = result.classificationCategory;
 		const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-		let mergedMetadata: PlatformMetadata | null = this.resource.platform_metadata ?? null;
-		if (hasEnrichments && mergedMetadata) {
+		let mergedMetadata = this.update.platform_metadata;
+		if (hasEnrichments) {
+			const base = mergedMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
 			mergedMetadata = {
-				...mergedMetadata,
-				enrichments: { ...(mergedMetadata.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
+				...base,
+				enrichments: { ...(base.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
 			};
 		}
 		if (category) {
-			const base = mergedMetadata ?? this.resource.platform_metadata ?? { fetchedAt: new Date().toISOString(), data: null };
+			const base = mergedMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
 			mergedMetadata = {
 				...base,
 				classification: {
@@ -100,10 +124,7 @@ export class ResourceUpdateBuilder {
 				},
 			};
 		}
-
-		const metadataPatch = this.mergedMetadataPatch();
-		if (metadataPatch) this.update.platform_metadata = { ...(mergedMetadata ?? this.resource.platform_metadata ?? {}), ...metadataPatch };
-		else if (mergedMetadata) this.update.platform_metadata = mergedMetadata;
+		this.update.platform_metadata = mergedMetadata;
 		if (embedding?.length) this.update.embedding = `[${embedding.join(',')}]`;
 		return this;
 	}
@@ -114,7 +135,16 @@ export class ResourceUpdateBuilder {
 	}
 
 	build(): ResourceUpdate {
-		return { ...this.update };
+		const platformMetadata = platformMetadataWithSourceName(
+			mergePlatformMetadata(this.update.platform_metadata, this.mergedMetadataPatch()),
+			this.resource.source,
+		);
+		return {
+			...this.update,
+			tags: [...this.update.tags],
+			keywords: [...this.update.keywords],
+			platform_metadata: platformMetadata,
+		};
 	}
 
 	private addMetadataPatch(patch: unknown): this {
@@ -125,4 +155,13 @@ export class ResourceUpdateBuilder {
 	private mergedMetadataPatch(): ResourceMetadataPatch | undefined {
 		return this.metadataPatches.length ? Object.assign({}, ...this.metadataPatches) : undefined;
 	}
+}
+
+function platformMetadataWithSourceName(
+	platformMetadata: PlatformMetadata | undefined,
+	source: string | null | undefined,
+): PlatformMetadata | undefined {
+	const sourceName = source?.trim();
+	if (!sourceName) return platformMetadata;
+	return platformMetadata ? { ...platformMetadata, sourceName } : { fetchedAt: new Date().toISOString(), data: null, sourceName };
 }

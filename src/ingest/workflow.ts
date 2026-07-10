@@ -138,16 +138,9 @@ async function loadFullResource(
 	env: CoreEnv,
 	resourceId: string,
 	pdfTextArtifact: PdfTextArtifact | null,
-	acquiredContent?: AcquiredContent,
 	baseResource?: ResourceForProcessing,
 ): Promise<ResourceForProcessing> {
-	let resource: ResourceForProcessing;
-	if (baseResource) {
-		resource = baseResource;
-	} else {
-		resource = await loadResourceForProcessing(env, resourceId);
-	}
-	resource = applyAcquiredContent(resource, acquiredContent);
+	const resource = baseResource ?? (await loadResourceForProcessing(env, resourceId));
 	const extractedPdfText = pdfTextArtifact?.text?.trim();
 	return extractedPdfText ? { ...resource, content: extractedPdfText } : resource;
 }
@@ -200,7 +193,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource, {
 			hasStagedText: !!pdfTextArtifact?.text,
 			loadContent: async () =>
-				(await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)).content,
+				(await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent ? resource : undefined)).content,
 		});
 		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent);
 
@@ -208,13 +201,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			'ai-analysis',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
-				const fullResource = await loadFullResource(
-					this.env,
-					resourceId,
-					pdfTextArtifact,
-					acquiredContent,
-					acquiredContent ? resource : undefined,
-				);
+				const fullResource = await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent ? resource : undefined);
 				if (resourceType === 'hackernews') return processHackerNewsResource(fullResource, this.env);
 				if (resourceType === 'twitter') return processTwitterResource(fullResource, this.env);
 				return mergeResourceClassification(fullResource, await generateResourceClassification(fullResource, this.env));
@@ -225,13 +212,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			'generate-embedding',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			async () => {
-				const fullResource = await loadFullResource(
-					this.env,
-					resourceId,
-					pdfTextArtifact,
-					acquiredContent,
-					acquiredContent ? resource : undefined,
-				);
+				const fullResource = await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent ? resource : undefined);
 				const text = prepareResourceTextForEmbedding({
 					title: fullResource.title,
 					summary: processorResult.updateData.summary ?? fullResource.summary,
@@ -261,7 +242,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			async () => {
 				const resourceToPersist =
 					pdfTextArtifact?.text || acquiredContent
-						? await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent, acquiredContent ? resource : undefined)
+						? await loadFullResource(this.env, resourceId, pdfTextArtifact, acquiredContent ? resource : undefined)
 						: resource;
 				return persistProcessedResource(this.env, {
 					resourceId,

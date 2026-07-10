@@ -17,7 +17,7 @@ import {
 	type ResourceType,
 } from '../../resources/types';
 import { type ResourceTranslationWrite, upsertResourceTranslation } from './resource-translation-store';
-import { mergePlatformMetadata, type ResourceUpdate } from './resource-update';
+import { mergePlatformMetadata, type ResourceUpdate, ResourceUpdateBuilder } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
@@ -465,7 +465,8 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 }
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
-	const record = resourceMirrorRecord('source', crypto.randomUUID(), preparedRecordToResource(base), {}, 'pending');
+	const resource = preparedRecordToResource(base);
+	const record = resourceMirrorRecord('source', crypto.randomUUID(), resource, new ResourceUpdateBuilder(resource).build(), 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
 	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
 	const resourceId = row?.id;
@@ -481,20 +482,19 @@ function resourceMirrorRecord(
 	updatePayload: ResourceUpdate,
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
-	const platformMetadata = updatePayload.platform_metadata ?? resource.platform_metadata ?? null;
-	const storedPlatformMetadata = platformMetadataWithSourceName(platformMetadata, resource.source);
+	const storedPlatformMetadata = updatePayload.platform_metadata;
 	const fileType = stringOrNull(resource.file_type);
 	const url = cleanString(resource.url);
 	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url ?? resource.url) : url;
-	const tags = stringArrayValue(updatePayload.tags ?? resource.tags ?? [], 'tags');
-	const keywords = stringArrayValue(updatePayload.keywords ?? resource.keywords ?? [], 'keywords');
-	const title = cleanString(resource.title);
-	const summary = cleanString(updatePayload.summary ?? resource.summary);
-	const content = cleanString(updatePayload.content ?? resource.content);
+	const tags = stringArrayValue(updatePayload.tags, 'tags');
+	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
+	const title = cleanString(updatePayload.title);
+	const summary = cleanString(updatePayload.summary);
+	const content = cleanString(updatePayload.content);
 	const translations: ResourceTranslationMap = { ...(resource.translations ?? {}) };
 	return {
 		id: resourceId,
-		type: parseResourceType(updatePayload.type ?? resource.type),
+		type: parseResourceType(updatePayload.type),
 		scope: origin === 'source' ? 'corpus' : resource.scope,
 		url,
 		normalizedUrl,
@@ -511,20 +511,11 @@ function resourceMirrorRecord(
 		tags,
 		category: deriveResourceCategory(storedPlatformMetadata, tags),
 		entitiesJson: jsonbParam(updatePayload.entities ?? null),
-		ogImageUrl: cleanString(updatePayload.og_image_url ?? resource.og_image_url),
+		ogImageUrl: cleanString(updatePayload.og_image_url),
 		platformMetadataJson: jsonbParam(storedPlatformMetadata),
 		embedding: nullableVector(updatePayload.embedding, 'embedding'),
 		enrichmentStatus,
 	};
-}
-
-function platformMetadataWithSourceName(platformMetadata: unknown, source: string | null | undefined): unknown {
-	const sourceName = cleanString(source);
-	if (!sourceName) return platformMetadata;
-	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
-		return { ...(platformMetadata as Record<string, unknown>), sourceName };
-	}
-	return { fetchedAt: new Date().toISOString(), data: null, sourceName };
 }
 
 function compactLocaleText(value: ResourceLocaleText): ResourceLocaleText | null {

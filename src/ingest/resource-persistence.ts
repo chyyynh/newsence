@@ -23,23 +23,16 @@ export type PersistProcessedResourceInput = {
 
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {
-		const finalResult =
-			input.pdfTextArtifact?.text && input.resource.content
-				? {
-						...input.processorResult,
-						updateData: { ...input.processorResult.updateData, content: input.resource.content },
-					}
-				: input.processorResult;
 		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;
 		const updatePayload = new ResourceUpdateBuilder(input.resource)
 			.addExtractionMetadata(extraction)
 			.addOgMetadata(input.ogImagePatch)
 			.addPaperMetadata(input.paperEnrichment)
-			.applyProcessorResult(finalResult, input.embedding)
+			.applyProcessorResult(input.processorResult, input.embedding)
 			.applyOgFields(input.ogImagePatch)
 			.build();
-		const resourceType = updatePayload.type ?? input.resource.type;
-		const platformMetadata = updatePayload.platform_metadata ?? input.resource.platform_metadata;
+		const resourceType = updatePayload.type;
+		const platformMetadata = updatePayload.platform_metadata;
 		const resourceEntities = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
 		const resourceId = await updateResourceAfterProcessing(db, input.resourceId, input.resource, updatePayload);
 		if (resourceEntities) {
