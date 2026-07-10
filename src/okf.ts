@@ -6,6 +6,8 @@
 
 import { type CoreDb, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
+import { type OkfFile, tarGzipStream } from './okf/archive';
+import { assignPaths, compactMarkdown, frontmatter, groupBy, markdownLink, oneLine, toIso, uniqueBy, uniqueSlug } from './okf/markdown';
 import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 import type { ResourceCategory, ResourceType } from './resources/types';
 
@@ -14,8 +16,6 @@ export type ExportCollectionOkfInput = {
 	primaryLocale?: string | null;
 	userId?: string | null;
 };
-
-type OkfFile = { path: string; content: string };
 
 type CollectionRow = {
 	id: string;
@@ -75,7 +75,6 @@ type EntityTranslationRow = {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BCP47_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
-const encoder = new TextEncoder();
 
 export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionOkfInput): Promise<Response> {
 	const collectionId = input.collectionId.trim();
@@ -494,175 +493,4 @@ function indexEntry(title: string, path: string, description: string | null | un
 	const summary = description ? oneLine(description) : '';
 	const clipped = summary.length > INDEX_DESCRIPTION_MAX ? `${summary.slice(0, INDEX_DESCRIPTION_MAX)}…` : summary;
 	return `* ${markdownLink(title, path)}${clipped ? ` - ${clipped}` : ''}`;
-}
-
-function markdownLink(label: string, target: string): string {
-	return `[${escapeMarkdownLinkText(oneLine(label))}](${escapeMarkdownLinkTarget(target)})`;
-}
-
-function escapeMarkdownLinkText(value: string): string {
-	return value.replace(/([\\[\]])/g, '\\$1');
-}
-
-function escapeMarkdownLinkTarget(value: string): string {
-	return value.startsWith('/') ? value : `<${value.replace(/[\s<>]/g, (ch) => encodeURIComponent(ch))}>`;
-}
-
-function frontmatter(fields: Record<string, unknown>): string {
-	const lines = ['---'];
-	for (const [key, value] of Object.entries(fields)) {
-		const yaml = yamlValue(value);
-		if (yaml !== null) lines.push(`${key}: ${yaml}`);
-	}
-	lines.push('---');
-	return lines.join('\n');
-}
-
-function yamlValue(value: unknown): string | null {
-	if (value === null || value === undefined || value === '') return null;
-	if (Array.isArray(value)) {
-		const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-		return items.length ? `[${items.map((item) => JSON.stringify(item)).join(', ')}]` : null;
-	}
-	if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
-	if (typeof value === 'string') return JSON.stringify(value);
-	if (typeof value === 'boolean') return String(value);
-	return JSON.stringify(value);
-}
-
-function compactMarkdown(parts: string[]): string {
-	return parts
-		.map((part) => part.trim())
-		.filter(Boolean)
-		.join('\n\n')
-		.concat('\n');
-}
-
-function oneLine(value: string): string {
-	return value.replace(/\s+/g, ' ').trim();
-}
-
-function toIso(value: Date | string | null): string | null {
-	if (!value) return null;
-	const date = value instanceof Date ? value : new Date(value);
-	return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-function assignPaths(items: Array<{ id: string; label: string }>, prefix: string): Map<string, string> {
-	const used = new Set<string>();
-	const paths = new Map<string, string>();
-	for (const item of items) {
-		const base = slugify(item.label) || slugify(item.id) || 'item';
-		let slug = base;
-		for (let i = 2; used.has(slug); i++) slug = `${base}-${i}`;
-		used.add(slug);
-		paths.set(item.id, `${prefix}/${slug}.md`);
-	}
-	return paths;
-}
-
-function uniqueSlug(label: string, id: string): string {
-	return `${slugify(label) || 'collection'}-${slugify(id) || 'item'}`;
-}
-
-function slugify(value: string): string {
-	return value
-		.toLowerCase()
-		.normalize('NFKD')
-		.replace(/[\u0300-\u036f]/g, '')
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 72);
-}
-
-function groupBy<T, K>(items: T[], key: (item: T) => K): Map<K, T[]> {
-	const map = new Map<K, T[]>();
-	for (const item of items) {
-		const k = key(item);
-		const values = map.get(k) ?? [];
-		values.push(item);
-		map.set(k, values);
-	}
-	return map;
-}
-
-function uniqueBy<T, K>(items: T[], key: (item: T) => K): T[] {
-	const seen = new Set<K>();
-	return items.filter((item) => {
-		const k = key(item);
-		if (seen.has(k)) return false;
-		seen.add(k);
-		return true;
-	});
-}
-
-function tarGzipStream(files: Iterable<OkfFile>): ReadableStream<Uint8Array> {
-	const iterator = files[Symbol.iterator]();
-	let closed = false;
-	const tarStream = new ReadableStream<Uint8Array>({
-		pull(controller) {
-			if (closed) return;
-			const next = iterator.next();
-			if (!next.done) {
-				enqueueTarFile(controller, next.value);
-				return;
-			}
-			closed = true;
-			controller.enqueue(new Uint8Array(1024));
-			controller.close();
-		},
-	});
-	const compression = new CompressionStream('gzip');
-	const gzip: ReadableWritablePair<Uint8Array, Uint8Array> = {
-		readable: compression.readable as ReadableStream<Uint8Array>,
-		writable: compression.writable as WritableStream<Uint8Array>,
-	};
-	return tarStream.pipeThrough(gzip);
-}
-
-function enqueueTarFile(controller: ReadableStreamDefaultController<Uint8Array>, file: OkfFile): void {
-	const body = encoder.encode(file.content);
-	controller.enqueue(tarHeader(file.path, body.byteLength));
-	controller.enqueue(body);
-	const remainder = body.byteLength % 512;
-	if (remainder) controller.enqueue(new Uint8Array(512 - remainder));
-}
-
-function tarHeader(path: string, size: number): Uint8Array {
-	const header = new Uint8Array(512);
-	writeTarString(header, 0, 100, path);
-	writeTarOctal(header, 100, 8, 0o644);
-	writeTarOctal(header, 108, 8, 0);
-	writeTarOctal(header, 116, 8, 0);
-	writeTarOctal(header, 124, 12, size);
-	writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
-	header.fill(0x20, 148, 156);
-	header[156] = '0'.charCodeAt(0);
-	writeTarString(header, 257, 6, 'ustar');
-	writeTarString(header, 263, 2, '00');
-	let checksum = 0;
-	for (const byte of header) checksum += byte;
-	writeTarChecksum(header, checksum);
-	return header;
-}
-
-function writeTarString(header: Uint8Array, offset: number, length: number, value: string): void {
-	const bytes = encoder.encode(value);
-	header.set(bytes.slice(0, length), offset);
-}
-
-function writeTarOctal(header: Uint8Array, offset: number, length: number, value: number): void {
-	const octal = value
-		.toString(8)
-		.padStart(length - 1, '0')
-		.slice(0, length - 1);
-	writeTarString(header, offset, length, octal);
-	header[offset + length - 1] = 0;
-}
-
-function writeTarChecksum(header: Uint8Array, value: number): void {
-	const octal = value.toString(8).padStart(6, '0').slice(0, 6);
-	writeTarString(header, 148, 6, octal);
-	header[154] = 0;
-	header[155] = 0x20;
 }
