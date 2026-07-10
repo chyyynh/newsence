@@ -75,6 +75,13 @@
 		"binding": "AI"
 	},
 	/**
+	 * Browser Run quick actions render public pages that reject direct Worker
+	 * fetches before the acquisition pipeline falls back to an external reader.
+	 */
+	"browser": {
+		"binding": "BROWSER"
+	},
+	/**
 	 * Hyperdrive — PlanetScale PostgreSQL connection pooling
 	 * https://developers.cloudflare.com/hyperdrive/
 	 */

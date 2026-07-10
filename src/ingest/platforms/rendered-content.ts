@@ -3,10 +3,10 @@ import { FEED_UA, fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
 const READER_ENDPOINT = 'https://r.jina.ai/';
 const READER_FETCH_TIMEOUT_MS = 30_000;
-const READER_MAX_BYTES = 5 * 1024 * 1024;
-const MIN_READER_CONTENT_LENGTH = 200;
+const RENDERED_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
+const MIN_RENDERED_CONTENT_LENGTH = 200;
 
-export type ReaderAcquiredContent = NormalizedContent<'web'> & {
+export type RenderedWebContent = NormalizedContent<'web'> & {
 	ogImage: {
 		ogImageUrl: string | null;
 		ogImageWidth: number | null;
@@ -46,7 +46,58 @@ function readerUrl(url: string): string {
 	return `${READER_ENDPOINT}${source.toString()}`;
 }
 
-export async function scrapeUrlWithReader(url: string): Promise<ReaderAcquiredContent> {
+function titleFromMarkdown(markdown: string, url: string): string {
+	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || fallbackTitle(url);
+}
+
+function renderedContent(url: string, markdown: string): RenderedWebContent {
+	return {
+		type: 'web',
+		title: titleFromMarkdown(markdown, url),
+		markdown,
+		metadata: {
+			author: null,
+			language: null,
+			publishedDate: null,
+			siteName: sourceHost(url),
+			description: null,
+		},
+		platformMetadata: {
+			fetchedAt: new Date().toISOString(),
+			data: null,
+		},
+		ogImage: {
+			ogImageUrl: null,
+			ogImageWidth: null,
+			ogImageHeight: null,
+		},
+	};
+}
+
+function validatedMarkdown(value: unknown, provider: string): string {
+	const markdown = readString(value);
+	if (!markdown || markdown.length < MIN_RENDERED_CONTENT_LENGTH) {
+		throw new Error(`${provider} returned no usable content`);
+	}
+	return markdown;
+}
+
+async function scrapeUrlWithBrowserRun(url: string, env: CoreEnv): Promise<RenderedWebContent> {
+	const response = await env.BROWSER.quickAction('markdown', {
+		url,
+		gotoOptions: { waitUntil: 'networkidle2', timeout: 30_000 },
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`Browser Run returned HTTP ${response.status}`);
+	}
+
+	const payload = JSON.parse(await readTextWithLimit(response, RENDERED_CONTENT_MAX_BYTES)) as unknown;
+	const record = asRecord(payload);
+	return renderedContent(url, validatedMarkdown(record?.result, 'Browser Run'));
+}
+
+async function scrapeUrlWithReader(url: string): Promise<RenderedWebContent> {
 	const response = await fetchWithTimeout(
 		readerUrl(url),
 		{
@@ -62,13 +113,10 @@ export async function scrapeUrlWithReader(url: string): Promise<ReaderAcquiredCo
 		throw new Error(`Reader fallback returned HTTP ${response.status}`);
 	}
 
-	const payload = JSON.parse(await readTextWithLimit(response, READER_MAX_BYTES)) as unknown;
+	const payload = JSON.parse(await readTextWithLimit(response, RENDERED_CONTENT_MAX_BYTES)) as unknown;
 	const data = asRecord(asRecord(payload)?.data);
 	const metadata = asRecord(data?.metadata);
-	const markdown = readString(data?.content);
-	if (!markdown || markdown.length < MIN_READER_CONTENT_LENGTH) {
-		throw new Error('Reader fallback returned no usable content');
-	}
+	const markdown = validatedMarkdown(data?.content, 'Reader fallback');
 
 	return {
 		type: 'web',
@@ -91,4 +139,22 @@ export async function scrapeUrlWithReader(url: string): Promise<ReaderAcquiredCo
 			ogImageHeight: readPositiveInt(metadata?.['og:image:height']),
 		},
 	};
+}
+
+export async function scrapeUrlWithRenderedContent(url: string, env: CoreEnv): Promise<RenderedWebContent> {
+	try {
+		return await scrapeUrlWithBrowserRun(url, env);
+	} catch (browserError) {
+		console.warn({
+			tag: 'WEB',
+			msg: 'Browser Run acquisition failed; trying external reader',
+			url,
+			error: String(browserError),
+		});
+		try {
+			return await scrapeUrlWithReader(url);
+		} catch (readerError) {
+			throw new Error(`Rendered acquisition failed: ${String(browserError)}; ${String(readerError)}`);
+		}
+	}
 }

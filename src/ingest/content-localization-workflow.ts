@@ -24,9 +24,10 @@ type ContentLocalizationPayload = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TRANSLATION_STEP_CONCURRENCY = 3;
+const CONTENT_LOCALIZATION_WORKFLOW_REVISION = 'v2';
 
 function workflowId(resourceId: string): string {
-	return `content-localization-${resourceId}`;
+	return `content-localization-${CONTENT_LOCALIZATION_WORKFLOW_REVISION}-${resourceId}`;
 }
 
 async function markClaimsFailed(env: CoreEnv, claims: Array<{ resourceId: string }>, error: unknown): Promise<void> {
@@ -173,7 +174,7 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 				},
 				() =>
 					scrapeSavedUrlArtifact(resource.url, this.env, {
-						allowExternalReader: resource.scope === 'corpus',
+						allowRenderedFallback: resource.scope === 'corpus',
 					}),
 			);
 			const acquired = await readAcquiredContentArtifact(artifact);

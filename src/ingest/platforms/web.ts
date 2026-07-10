@@ -3,7 +3,7 @@ import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { canonicalizeOptionalResourceLang } from '../../resources/types';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
-import { scrapeUrlWithReader } from './reader-fallback';
+import { scrapeUrlWithRenderedContent } from './rendered-content';
 
 export const PDF_MIME = 'application/pdf';
 
@@ -32,7 +32,7 @@ export type BlobAcquisitionInput = {
 };
 
 export type WebAcquisitionOptions = {
-	allowExternalReader?: boolean;
+	allowRenderedFallback?: boolean;
 };
 
 export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
@@ -407,8 +407,8 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAc
 	try {
 		return await scrapeGenericUrlDirect(url, env);
 	} catch (error) {
-		if (!options.allowExternalReader) throw error;
-		console.warn({ tag: 'WEB', msg: 'Using external reader after direct acquisition failed', url, error: String(error) });
-		return scrapeUrlWithReader(url);
+		if (!options.allowRenderedFallback) throw error;
+		console.warn({ tag: 'WEB', msg: 'Using rendered content fallback after direct acquisition failed', url, error: String(error) });
+		return scrapeUrlWithRenderedContent(url, env);
 	}
 }

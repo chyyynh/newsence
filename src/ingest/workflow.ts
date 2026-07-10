@@ -92,7 +92,7 @@ async function stageSavedUrlAcquisition(
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 			() =>
 				scrapeSavedUrlArtifact(resource.url, env, {
-					allowExternalReader: resource.scope === 'corpus' && resource.type === 'rss',
+					allowRenderedFallback: resource.scope === 'corpus' && resource.type === 'rss',
 				}),
 		);
 		return readAcquiredContentArtifact(artifact);
