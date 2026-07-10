@@ -29,7 +29,7 @@ import {
 	persistUnchangedResourceResync,
 } from './resource-persistence';
 
-type WorkflowOperation = 'ingest' | 'recovery' | 'resync';
+type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
@@ -49,20 +49,6 @@ function workflowIdPart(value: string): string {
 
 function storedWorkflowId(resourceId: string): string {
 	return ['resource', workflowIdPart(resourceId)].join('-');
-}
-
-function isPermanentlyUnavailableSource(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	const transientClientStatuses = new Set([408, 409, 423, 424, 425, 429]);
-	const statuses = [...message.matchAll(/\bHTTP\s+(\d{3})\b/gi)].map((match) => Number.parseInt(match[1] ?? '', 10));
-	if (
-		statuses.some((status) => (status >= 400 && status < 500 && !transientClientStatuses.has(status)) || status === 525 || status === 526)
-	) {
-		return true;
-	}
-	return /\bnot found\b|too many redirects|unsupported response content type|only http\(s\) urls are allowed|url must not include credentials/i.test(
-		message,
-	);
 }
 
 function shouldAcquireContent(
@@ -114,7 +100,7 @@ async function stageSavedUrlAcquisition(
 type AcquisitionTerminalResult = {
 	resourceId: string;
 	deleted: boolean;
-	reason: 'acquisition_empty_content' | 'acquisition_http_403' | 'source_permanently_unavailable';
+	reason: 'acquisition_http_403';
 };
 
 async function deleteResourceAfterAcquisition(
@@ -156,28 +142,13 @@ async function acquireResourceForOperation(
 	try {
 		acquiredContent = await stageSavedUrlAcquisition(env, step, resource, operation === 'ingest');
 	} catch (error) {
-		if (operation === 'resync') throw error;
-		if (operation === 'recovery' && !isPermanentlyUnavailableSource(error)) throw error;
-		if (operation === 'ingest' && acquisitionHttpStatus(error) !== 403) throw error;
+		if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
 		return {
 			terminal: await deleteResourceAfterAcquisition(env, step, resource, {
-				stepName: operation === 'recovery' ? 'delete-unavailable-resource' : 'delete-forbidden-resource',
-				message:
-					operation === 'recovery'
-						? 'Deleted unavailable resource during recovery'
-						: 'Deleted resource after forbidden acquisition response',
-				reason: operation === 'recovery' ? 'source_permanently_unavailable' : 'acquisition_http_403',
+				stepName: 'delete-forbidden-resource',
+				message: 'Deleted resource after forbidden acquisition response',
+				reason: 'acquisition_http_403',
 				error,
-			}),
-		};
-	}
-
-	if (operation === 'recovery' && acquiredContent && !acquiredContent.markdown.trim()) {
-		return {
-			terminal: await deleteResourceAfterAcquisition(env, step, resource, {
-				stepName: 'delete-empty-recovery-resource',
-				message: 'Deleted resource after recovery returned empty content',
-				reason: 'acquisition_empty_content',
 			}),
 		};
 	}

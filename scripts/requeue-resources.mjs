@@ -8,7 +8,7 @@ import { Pool } from 'pg';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const WRANGLER = resolve(ROOT, 'node_modules/.bin/wrangler');
 const WORKFLOW_NAME = 'newsence-monitor-workflow';
-const MODES = new Set(['stalled', 'missing-content']);
+const MODES = new Set(['stalled']);
 const WORKFLOW_BATCH_SIZE = 100;
 
 function option(name, fallback) {
@@ -53,9 +53,8 @@ if (!databaseUrl) throw new Error('DATABASE_URL is required');
 if (dryRun && all) throw new Error('--dry-run and --all cannot be used together');
 
 const candidates = {
-	stalled: {
-		from: 'resources r',
-		where: `
+	from: 'resources r',
+	where: `
 			r.type IN ('web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf', 'paper')
 			AND (
 				r.enrichment_status = 'pending' AND r.updated_at < NOW() - INTERVAL '15 minutes'
@@ -76,26 +75,8 @@ const candidates = {
 					)
 				)
 			)`,
-		orderBy: 'r.updated_at ASC, r.id ASC',
-	},
-	'missing-content': {
-		from: `resources r
-			JOIN resource_translations original
-			  ON original.resource_id = r.id
-			 AND original.lang = r.original_lang`,
-		where: `
-			r.scope = 'corpus'
-			AND r.type IN ('web', 'rss', 'twitter', 'hackernews')
-			AND r.url IS NOT NULL
-			AND r.enrichment_status IN ('enriched', 'failed')
-			AND r.updated_at < NOW() - INTERVAL '15 minutes'
-			AND (original.content IS NULL OR original.content = '')`,
-		orderBy: `
-			EXISTS (SELECT 1 FROM library item WHERE item.resource_id = r.id) DESC,
-			COALESCE(r.published_date, r.created_at) DESC,
-			r.id DESC`,
-	},
-}[mode];
+	orderBy: 'r.updated_at ASC, r.id ASC',
+};
 
 function wranglerJson(args) {
 	const result = spawnSync(WRANGLER, args, {
@@ -146,7 +127,6 @@ async function triggerWorkflowBatch(rows, credentials) {
 					rows.map((row) => ({
 						params: {
 							resourceId: row.id,
-							...(mode === 'missing-content' ? { operation: 'recovery' } : {}),
 						},
 					})),
 				),
