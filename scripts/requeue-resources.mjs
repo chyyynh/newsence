@@ -280,6 +280,39 @@ async function restoreFailures(client, failures) {
 	);
 }
 
+async function claimAndQueueSelectedRows(client, rows, credentials) {
+	const batches = Array.from({ length: Math.ceil(rows.length / WORKFLOW_BATCH_SIZE) }, (_, index) =>
+		rows.slice(index * WORKFLOW_BATCH_SIZE, (index + 1) * WORKFLOW_BATCH_SIZE),
+	);
+	const totals = { claimed: 0, queued: 0, failed: 0, skipped: 0 };
+	let nextIndex = 0;
+	await Promise.all(
+		Array.from({ length: Math.min(concurrency, batches.length) }, async () => {
+			while (nextIndex < batches.length) {
+				const index = nextIndex++;
+				const selected = batches[index];
+				const claimed = await claimSnapshotRows(client, selected);
+				let failures = [];
+				if (claimed.length) {
+					try {
+						await triggerWorkflowBatch(claimed, credentials);
+						process.stdout.write(`[${index + 1}/${batches.length}] queued ${claimed.length} resources\n`);
+					} catch (error) {
+						failures = claimed;
+						process.stderr.write(`[${index + 1}/${batches.length}] failed ${claimed.length} resources: ${String(error)}\n`);
+					}
+				}
+				await restoreFailures(client, failures);
+				totals.claimed += claimed.length;
+				totals.queued += claimed.length - failures.length;
+				totals.failed += failures.length;
+				totals.skipped += selected.length - claimed.length;
+			}
+		}),
+	);
+	return totals;
+}
+
 const pool = new Pool({
 	connectionString: databaseConnectionUrl(databaseUrl),
 	max: 1,
@@ -307,15 +340,26 @@ try {
 				totals.selected += selected.length;
 				cursor = selected.at(-1).id;
 			}
-			const claimed = selected ? await claimSnapshotRows(database, selected) : await claimRows(pool);
-			const failures = await runPool(claimed, credentials);
-			await restoreFailures(database, failures);
-			totals.claimed += claimed.length;
-			totals.queued += claimed.length - failures.length;
-			totals.failed += failures.length;
-			totals.skipped += (selected?.length ?? claimed.length) - claimed.length;
-			process.stdout.write(`${JSON.stringify({ mode, batch: claimed.length, ...totals })}\n`);
-			if (!selected || failures.length || selected.length < limit) break;
+			let page;
+			if (selected) {
+				page = await claimAndQueueSelectedRows(database, selected, credentials);
+			} else {
+				const claimed = await claimRows(pool);
+				const failures = await runPool(claimed, credentials);
+				await restoreFailures(database, failures);
+				page = {
+					claimed: claimed.length,
+					queued: claimed.length - failures.length,
+					failed: failures.length,
+					skipped: 0,
+				};
+			}
+			totals.claimed += page.claimed;
+			totals.queued += page.queued;
+			totals.failed += page.failed;
+			totals.skipped += page.skipped;
+			process.stdout.write(`${JSON.stringify({ mode, batch: page.claimed, ...totals })}\n`);
+			if (!selected || page.failed || selected.length < limit) break;
 			if (delaySeconds) {
 				process.stdout.write(`Waiting ${delaySeconds}s before the next database batch\n`);
 				await new Promise((resolvePromise) => setTimeout(resolvePromise, delaySeconds * 1000));
