@@ -8,11 +8,9 @@ import {
 	markContentLocalizationRunning,
 	persistBackfilledZhHantContent,
 	persistMachineZhHantTranslation,
-	persistRecoveredOriginalContent,
 } from '@ingest/domain/content-localization-store';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import { ZH_HANT_RESOURCE_LANG } from '../resources/types';
-import { readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
 import {
 	assembleZhHantContentTranslation,
 	ContentTranslationLimitError,
@@ -25,13 +23,12 @@ import {
 	translateZhHantContentChunk,
 } from './domain/ai-utils';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
-import { applyAcquiredContent } from './domain/resource-update';
 
 type ContentLocalizationPayload = { resourceId: string };
 
 const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TRANSLATION_STEP_CONCURRENCY = 3;
-const CONTENT_LOCALIZATION_WORKFLOW_REVISION = 'v3';
+const CONTENT_LOCALIZATION_WORKFLOW_REVISION = 'v4';
 
 function workflowId(resourceId: string): string {
 	return `content-localization-${CONTENT_LOCALIZATION_WORKFLOW_REVISION}-${resourceId}`;
@@ -179,18 +176,9 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 
 		let resource = initial;
 		const initialContent = initial.content?.trim();
-		if (initialContent) {
-			const sanitizedContent = sanitizeExtractedMarkdown(initialContent);
-			if (sanitizedContent !== initialContent) {
-				resource = { ...resource, content: sanitizedContent || null };
-				if (sanitizedContent) {
-					await step.do(
-						'persist-sanitized-original-content',
-						{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-						() => persistRecoveredOriginalContent(this.env, resourceId, resource.original_lang, sanitizedContent),
-					);
-				}
-			}
+		if (!initialContent) throw new Error(`Resource ${resourceId} has no persisted original content`);
+		if (initialContent.toLowerCase().includes('data:image/')) {
+			throw new Error(`Resource ${resourceId} original content has not passed acquisition sanitization`);
 		}
 
 		const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
@@ -224,46 +212,6 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 					() => persistBackfilledZhHantContent(this.env, resourceId, sanitizedContent),
 				);
 			}
-		}
-
-		if (!resource.content?.trim()) {
-			if (!resource.url) throw new Error(`Resource ${resourceId} has no URL to acquire`);
-			const artifact = await step.do(
-				'acquire-missing-original-content',
-				{
-					retries: {
-						limit: 3,
-						delay: '15 seconds',
-						backoff: 'exponential',
-					},
-					timeout: '180 seconds',
-				},
-				() =>
-					scrapeSavedUrlArtifact(resource.url, this.env, {
-						allowRenderedFallback: resource.scope === 'corpus',
-					}),
-			);
-			const acquired = await readAcquiredContentArtifact(artifact);
-			resource = {
-				...applyAcquiredContent(resource, acquired),
-				original_lang: initial.original_lang,
-			};
-			const originalContent = resource.content?.trim();
-			if (!originalContent) {
-				throw new Error(`Resource ${resourceId} acquisition returned no content`);
-			}
-			await step.do(
-				'persist-backfilled-original-content',
-				{
-					retries: {
-						limit: 3,
-						delay: '5 seconds',
-						backoff: 'exponential',
-					},
-					timeout: '30 seconds',
-				},
-				() => persistRecoveredOriginalContent(this.env, resourceId, resource.original_lang, originalContent),
-			);
 		}
 
 		if (needsZhHantMetadataTranslation(resource)) {

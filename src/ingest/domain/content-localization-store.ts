@@ -28,22 +28,25 @@ export async function claimContentLocalizationBackfill(env: CoreEnv, limit = 10)
 				  AND r.scope = 'corpus'
 				  AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
 				  AND r.url IS NOT NULL
+				  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+				  AND original.content NOT ILIKE '%data:image/%'
+				  AND r.original_lang <> 'zh-Hant'
+				  AND zh_hant.source IS DISTINCT FROM 'human'
 				  AND (
-					NULLIF(BTRIM(original.content), '') IS NULL
-					OR original.content ILIKE '%data:image/%'
+					NULLIF(BTRIM(zh_hant.title), '') IS NULL
+					OR NULLIF(BTRIM(zh_hant.summary), '') IS NULL
 					OR (
-						r.original_lang <> 'zh-Hant'
-						AND zh_hant.source IS DISTINCT FROM 'human'
+						NULLIF(BTRIM(regexp_replace(original.content, 'https?://[^[:space:]]+', '', 'gi')), '') IS NOT NULL
 						AND (
 							NULLIF(BTRIM(zh_hant.content), '') IS NULL
 							OR zh_hant.content ILIKE '%data:image/%'
-							OR (
-								zh_hant.source = 'machine'
-								AND NULLIF(BTRIM(regexp_replace(original.content, 'https?://[^[:space:]]+', '', 'gi')), '') IS NULL
-								AND NULLIF(BTRIM(zh_hant.content), '') IS NOT NULL
-							)
 							OR length(zh_hant.content)::numeric / GREATEST(length(original.content), 1) < ${PARTIAL_TRANSLATION_RATIO}
 						)
+					)
+					OR (
+						zh_hant.source = 'machine'
+						AND NULLIF(BTRIM(regexp_replace(original.content, 'https?://[^[:space:]]+', '', 'gi')), '') IS NULL
+						AND NULLIF(BTRIM(zh_hant.content), '') IS NOT NULL
 					)
 				  )
 				  AND COALESCE((r.platform_metadata #>> '{contentLocalization,attempts}')::integer, 0) < ${MAX_LOCALIZATION_ATTEMPTS}
@@ -127,19 +130,6 @@ export function markContentLocalizationFailed(env: CoreEnv, resourceId: string, 
 
 export function exhaustContentLocalizationAttempts(env: CoreEnv, resourceId: string, error: unknown): Promise<void> {
 	return markContentLocalization(env, resourceId, 'failed', String(error), true);
-}
-
-export async function persistRecoveredOriginalContent(env: CoreEnv, resourceId: string, lang: string, content: string): Promise<void> {
-	await withCoreDb(env, async (db) => {
-		await db.execute(sql`
-			UPDATE resource_translations
-			SET content = ${content}, updated_at = NOW()
-			WHERE resource_id = ${resourceId}::uuid
-			  AND lang = ${lang}
-			  AND source <> 'human'
-			  AND (NULLIF(BTRIM(content), '') IS NULL OR content ILIKE '%data:image/%')
-		`);
-	});
 }
 
 export type MachineTranslationPatch = {

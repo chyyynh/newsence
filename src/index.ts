@@ -17,7 +17,12 @@ import { ContentLocalizationWorkflow, scheduleContentLocalizationBackfill } from
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, NewsenceMonitorWorkflow, recoverStalledResourceProcessing } from '@ingest/workflow';
+import {
+	enqueueProcessing,
+	NewsenceMonitorWorkflow,
+	recoverMissingOriginalContent,
+	recoverStalledResourceProcessing,
+} from '@ingest/workflow';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -141,8 +146,16 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 					}
 				}),
 			);
-		} else if (event.cron === '* * * * *') this.ctx.waitUntil(scheduleContentLocalizationBackfill(this.env));
-		else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
+		} else if (event.cron === '* * * * *') {
+			this.ctx.waitUntil(
+				Promise.allSettled([scheduleContentLocalizationBackfill(this.env), recoverMissingOriginalContent(this.env)]).then((results) => {
+					for (const result of results) {
+						if (result.status === 'rejected')
+							console.error({ tag: 'CORE', msg: 'Content repair task failed', error: String(result.reason) });
+					}
+				}),
+			);
+		} else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
 	}
 

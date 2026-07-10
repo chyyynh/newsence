@@ -118,7 +118,25 @@ export async function claimResourcesForEnrichmentRecovery(env: CoreEnv, limit = 
 				WHERE type IN ('web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf', 'paper')
 				  AND (
 					enrichment_status = 'pending' AND updated_at < NOW() - INTERVAL '15 minutes'
-					OR enrichment_status = 'failed' AND updated_at < NOW() - INTERVAL '30 minutes'
+					OR (
+						enrichment_status = 'failed'
+						AND updated_at < NOW() - INTERVAL '30 minutes'
+						AND NOT (
+							scope = 'corpus'
+							AND type IN ('rss', 'hackernews', 'web', 'twitter')
+							AND url IS NOT NULL
+							AND EXISTS (
+								SELECT 1
+								FROM resource_translations original
+								WHERE original.resource_id = resources.id
+								  AND original.lang = resources.original_lang
+								  AND (
+									NULLIF(BTRIM(original.content), '') IS NULL
+									OR original.content ILIKE '%data:image/%'
+								  )
+							)
+						)
+					)
 				  )
 				ORDER BY updated_at ASC
 				LIMIT ${Math.max(1, Math.min(Math.trunc(limit), 100))}
@@ -134,6 +152,67 @@ export async function claimResourcesForEnrichmentRecovery(env: CoreEnv, limit = 
 	});
 }
 
+const MAX_ORIGINAL_CONTENT_RECOVERY_ATTEMPTS = 3;
+
+export async function claimMissingOriginalContentRecovery(env: CoreEnv, limit = 10): Promise<string[]> {
+	return withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			WITH candidates AS (
+				SELECT
+					r.id,
+					COALESCE((r.platform_metadata #>> '{contentAcquisition,attempts}')::integer, 0) + 1 AS attempt
+				FROM resources r
+				JOIN resource_translations original
+				  ON original.resource_id = r.id
+				 AND original.lang = r.original_lang
+				WHERE r.scope = 'corpus'
+				  AND r.type IN ('rss', 'hackernews', 'web', 'twitter')
+				  AND r.url IS NOT NULL
+				  AND r.enrichment_status IN ('enriched', 'failed')
+				  AND (r.enrichment_status <> 'failed' OR r.updated_at < NOW() - INTERVAL '30 minutes')
+				  AND (
+					NULLIF(BTRIM(original.content), '') IS NULL
+					OR original.content ILIKE '%data:image/%'
+				  )
+				  AND COALESCE((r.platform_metadata #>> '{contentAcquisition,attempts}')::integer, 0) < ${MAX_ORIGINAL_CONTENT_RECOVERY_ATTEMPTS}
+				  AND (
+					r.platform_metadata #>> '{contentAcquisition,lastAttemptAt}' IS NULL
+					OR (r.platform_metadata #>> '{contentAcquisition,lastAttemptAt}')::timestamptz < NOW() - CASE
+						WHEN COALESCE((r.platform_metadata #>> '{contentAcquisition,attempts}')::integer, 0) <= 1
+							THEN INTERVAL '15 minutes'
+						ELSE INTERVAL '1 hour'
+					END
+				  )
+				ORDER BY
+					EXISTS (SELECT 1 FROM library item WHERE item.resource_id = r.id) DESC,
+					COALESCE(r.published_date, r.created_at) DESC,
+					r.id DESC
+				LIMIT ${Math.max(1, Math.min(Math.trunc(limit), 50))}
+				FOR UPDATE OF r SKIP LOCKED
+			)
+			UPDATE resources resource
+			SET enrichment_status = 'pending',
+				updated_at = NOW(),
+				platform_metadata = jsonb_set(
+					COALESCE(resource.platform_metadata, '{}'::jsonb),
+					'{contentAcquisition}',
+					COALESCE(resource.platform_metadata->'contentAcquisition', '{}'::jsonb)
+						|| jsonb_build_object(
+							'status', 'queued',
+							'attempts', candidates.attempt,
+							'lastAttemptAt', NOW(),
+							'error', NULL
+						),
+					true
+				)
+			FROM candidates
+			WHERE resource.id = candidates.id
+			RETURNING resource.id::text AS id
+		`);
+		return (result.rows as Array<{ id: string }>).map((row) => row.id);
+	});
+}
+
 async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing | undefined> {
 	const result = await db.execute(sql`
 		SELECT
@@ -141,7 +220,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.title AS title,
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
-			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0` : sql`NULL::boolean`} AS has_content,
+			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0 AND rl.content NOT ILIKE '%data:image/%'` : sql`NULL::boolean`} AS has_content,
 			${
 				shell
 					? sql`CASE
