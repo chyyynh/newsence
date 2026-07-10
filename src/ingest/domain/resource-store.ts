@@ -15,7 +15,6 @@ import {
 	type ResourceScope,
 	type ResourceTranslationSource,
 	type ResourceType,
-	ZH_HANT_RESOURCE_LANG,
 } from '../../resources/types';
 import type { ResourceUpdate } from './resource-update';
 
@@ -82,12 +81,21 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 									)
 								)
 								AND EXISTS (
-								SELECT 1
-								FROM ${resourceTranslations}
-								WHERE ${resourceTranslations.resourceId} = ${resources.id}
-									AND ${resourceTranslations.lang} = ${ZH_HANT_RESOURCE_LANG}
-									AND NULLIF(${resourceTranslations.summary}, '') IS NOT NULL
-							)`,
+									SELECT 1
+									FROM ${resourceTranslations} original
+									WHERE original.resource_id = ${resources.id}
+									  AND original.lang = ${resources.originalLang}
+									  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
+									  AND (
+										${resources.scope} <> 'corpus'
+										OR ${resources.type} NOT IN ('rss', 'hackernews', 'web', 'twitter')
+										OR ${resources.url} IS NULL
+										OR (
+											NULLIF(BTRIM(original.content), '') IS NOT NULL
+											AND original.content NOT ILIKE '%data:image/%'
+										)
+									  )
+								)`,
 				})
 				.from(resources)
 				.where(eq(resources.id, resourceId))
