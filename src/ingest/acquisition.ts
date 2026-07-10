@@ -12,6 +12,7 @@ import {
 	pdfExtractionMetadata,
 	scrapeGenericUrl,
 	scrapeBlob as scrapeWebBlob,
+	type WebAcquisitionOptions,
 } from './platforms/web';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 
@@ -19,6 +20,7 @@ export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
 export type { BlobAcquisitionInput };
 export type { PdfExtractionMetadata } from '@core-shared/types';
 export type { OgImagePatch };
+export type AcquisitionOptions = WebAcquisitionOptions;
 
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
@@ -32,7 +34,7 @@ export function validateAcquisitionUrl(url: string): string {
 	return normalizeUrl(parsed.toString());
 }
 
-export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
+export async function scrapeSavedUrl(url: string, env: CoreEnv, options: AcquisitionOptions = {}): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 
 	const videoId = extractYouTubeId(validatedUrl);
@@ -44,15 +46,19 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<Acquire
 	const hackerNewsId = extractHackerNewsId(validatedUrl);
 	if (hackerNewsId) return scrapeHackerNews(hackerNewsId);
 
-	return scrapeGenericUrl(validatedUrl, env);
+	return scrapeGenericUrl(validatedUrl, env, options);
 }
 
 export function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<AcquiredContent> {
 	return scrapeWebBlob(input, env);
 }
 
-export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(url, env);
+export async function scrapeSavedUrlArtifact(
+	url: string,
+	env: CoreEnv,
+	options: AcquisitionOptions = {},
+): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(url, env, options);
 	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
 	return new Blob([bytes], { type: 'application/json' }).stream();
 }

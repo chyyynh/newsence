@@ -2,8 +2,8 @@ import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/type
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { canonicalizeOptionalResourceLang } from '../../resources/types';
-import { scrapeOpenAiWithReader, supportsOpenAiReaderFallback } from './openai-reader';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
+import { scrapeUrlWithReader } from './reader-fallback';
 
 export const PDF_MIME = 'application/pdf';
 
@@ -29,6 +29,10 @@ export type BlobAcquisitionInput = {
 	fileName?: string | null;
 	mimeType?: string | null;
 	sourceUrl?: string | null;
+};
+
+export type WebAcquisitionOptions = {
+	allowExternalReader?: boolean;
 };
 
 export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
@@ -362,7 +366,7 @@ export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Pro
 	throw new Error(`Unsupported blob content type: ${mimeType ?? 'unknown'}`);
 }
 
-export async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
+async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
 	const response = await fetchWithTimeout(
 		url,
 		{
@@ -375,13 +379,8 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAc
 		GENERIC_FETCH_TIMEOUT_MS,
 	);
 	if (!response.ok) {
-		const status = response.status;
 		await response.body?.cancel();
-		if (status === 403 && supportsOpenAiReaderFallback(url)) {
-			console.warn({ tag: 'WEB', msg: 'Using reader fallback after OpenAI rejected direct acquisition', url });
-			return scrapeOpenAiWithReader(url);
-		}
-		throw new Error(`HTTP ${status}: ${response.statusText}`);
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
 
 	const contentType = response.headers.get('content-type')?.toLowerCase() || '';
@@ -402,4 +401,14 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAc
 	const finalUrl = response.url || url;
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
 	return scrapeHtmlContent(env, html, finalUrl, fileNameFromUrl(finalUrl, `${urlHost(finalUrl)}.html`));
+}
+
+export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAcquisitionOptions = {}): Promise<WebAcquiredContent> {
+	try {
+		return await scrapeGenericUrlDirect(url, env);
+	} catch (error) {
+		if (!options.allowExternalReader) throw error;
+		console.warn({ tag: 'WEB', msg: 'Using external reader after direct acquisition failed', url, error: String(error) });
+		return scrapeUrlWithReader(url);
+	}
 }

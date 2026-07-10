@@ -90,7 +90,10 @@ async function stageSavedUrlAcquisition(
 		const artifact = await step.do(
 			'acquire-content',
 			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => scrapeSavedUrlArtifact(resource.url, env),
+			() =>
+				scrapeSavedUrlArtifact(resource.url, env, {
+					allowExternalReader: resource.scope === 'corpus' && resource.type === 'rss',
+				}),
 		);
 		return readAcquiredContentArtifact(artifact);
 	} catch (error) {

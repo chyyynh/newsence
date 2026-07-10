@@ -6,7 +6,7 @@ const READER_FETCH_TIMEOUT_MS = 30_000;
 const READER_MAX_BYTES = 5 * 1024 * 1024;
 const MIN_READER_CONTENT_LENGTH = 200;
 
-type OpenAiReaderContent = NormalizedContent<'web'> & {
+export type ReaderAcquiredContent = NormalizedContent<'web'> & {
 	ogImage: {
 		ogImageUrl: string | null;
 		ogImageWidth: number | null;
@@ -27,31 +27,26 @@ function readPositiveInt(value: unknown): number | null {
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function sourceHost(url: string): string {
+	return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+}
+
 function fallbackTitle(url: string): string {
-	const encoded = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? 'OpenAI';
+	const encoded = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? sourceHost(url);
 	try {
-		return decodeURIComponent(encoded).replace(/[-_]+/g, ' ').trim() || 'OpenAI';
+		return decodeURIComponent(encoded).replace(/[-_]+/g, ' ').trim() || sourceHost(url);
 	} catch {
-		return encoded.replace(/[-_]+/g, ' ').trim() || 'OpenAI';
+		return encoded.replace(/[-_]+/g, ' ').trim() || sourceHost(url);
 	}
 }
 
 function readerUrl(url: string): string {
 	const source = new URL(url);
-	source.protocol = 'http:';
 	source.hash = '';
 	return `${READER_ENDPOINT}${source.toString()}`;
 }
 
-export function supportsOpenAiReaderFallback(url: string): boolean {
-	try {
-		return new URL(url).hostname.toLowerCase().replace(/^www\./, '') === 'openai.com';
-	} catch {
-		return false;
-	}
-}
-
-export async function scrapeOpenAiWithReader(url: string): Promise<OpenAiReaderContent> {
+export async function scrapeUrlWithReader(url: string): Promise<ReaderAcquiredContent> {
 	const response = await fetchWithTimeout(
 		readerUrl(url),
 		{
@@ -64,7 +59,7 @@ export async function scrapeOpenAiWithReader(url: string): Promise<OpenAiReaderC
 	);
 	if (!response.ok) {
 		await response.body?.cancel();
-		throw new Error(`OpenAI reader fallback returned HTTP ${response.status}`);
+		throw new Error(`Reader fallback returned HTTP ${response.status}`);
 	}
 
 	const payload = JSON.parse(await readTextWithLimit(response, READER_MAX_BYTES)) as unknown;
@@ -72,7 +67,7 @@ export async function scrapeOpenAiWithReader(url: string): Promise<OpenAiReaderC
 	const metadata = asRecord(data?.metadata);
 	const markdown = readString(data?.content);
 	if (!markdown || markdown.length < MIN_READER_CONTENT_LENGTH) {
-		throw new Error('OpenAI reader fallback returned no usable content');
+		throw new Error('Reader fallback returned no usable content');
 	}
 
 	return {
@@ -83,7 +78,7 @@ export async function scrapeOpenAiWithReader(url: string): Promise<OpenAiReaderC
 			author: readString(metadata?.author),
 			language: readString(metadata?.lang),
 			publishedDate: readString(data?.publishedTime),
-			siteName: readString(metadata?.['og:site_name']) ?? 'OpenAI',
+			siteName: readString(metadata?.['og:site_name']) ?? sourceHost(url),
 			description: readString(data?.description) ?? readString(metadata?.description),
 		},
 		platformMetadata: {
