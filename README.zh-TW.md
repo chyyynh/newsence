@@ -20,7 +20,7 @@
 
 ## newsence 是什麼？
 
-[**newsence.app**](https://www.newsence.app) 的引擎。支援 RSS、Twitter/X、YouTube、Hacker News、一般網頁與用戶檔案，自動中英雙語 AI 分析、Embedding 還有知識圖譜。遵循 [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 模式 — 每個來源讀一次就整合進一個持續成品（摘要、實體、embeddings、交叉引用），不是 query time 才做 RAG。
+[**newsence.app**](https://www.newsence.app) 的引擎。支援 RSS、Twitter/X、YouTube、Hacker News、一般網頁與上傳檔案，自動中英雙語 AI 分析、Embedding 還有知識圖譜。遵循 [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 模式 — 每個來源讀一次就整合進一個持續成品（摘要、實體、embeddings、交叉引用），不是 query time 才做 RAG。
 
 ## 支援平台
 
@@ -36,36 +36,36 @@
 | **YouTube**     | 監控   | 每 30 分鐘 | Atom feed → 影片資訊、字幕、章節、AI 精華段落    |
 | **Hacker News** | 處理器 | 經由 RSS   | 偵測 HN 連結 → Algolia 取評論 → 生成編輯筆記     |
 | **網頁**        | 爬蟲   | saved URL  | 全文擷取（Readability + Cheerio）、OG metadata   |
-| **用戶檔案**    | 入口   | 即時       | App service-binding RPC — saved URL scrape + enrichment；blob 生命週期由 app 擁有 |
+| **App 輸入**    | 入口   | 即時       | Service-binding RPC — saved URL/blob acquisition + enrichment；membership 由 app 擁有 |
 
 所有平台輸出統一的 `NormalizedContent` 格式 → 進入同一個 AI 管線。
 
 ## 運作流程
 
-每篇文章經過自動化 workflow，各步驟獨立重試：
+每個 resource 經過自動化 workflow，各步驟獨立重試：
 
 ```
-內容進入（source monitor / saved URL / retry）
+內容進入（source monitor / saved URL / uploaded blob / retry）
   │
-  ├─ 1. 讀取內容 ─────────── source draft payload，或 upload/retry 的 user_file/article row
+  ├─ 1. 讀取 Resource ───── canonical resources row；抓取 URL 內容或抽取上傳 PDF 文字
   ├─ 2. AI 分析 ──────────── AI Gateway text/JSON calls → 中英標題、摘要、標籤、關鍵字、實體
-  ├─ 3. 存入資料庫 ────────── source 單次 final INSERT；row-based 單次 final UPDATE
-  ├─    同步實體 ─────────── （條件性）將實體寫入正規化表格，建立關聯
+  ├─ 3. 存入資料庫 ────────── 更新 resources + resource_translations
+  ├─    同步實體 ─────────── 將實體寫入正規化表格，透過 resource_entities 建立關聯
   ├─ 4. YouTube 精華 ─────── （僅 YouTube）從字幕生成 AI 精華段落
   └─ 5. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文 + 實體名稱）
 ```
 
-每篇約 30 秒完成。每步獨立重試，指數退避。
+每個 resource 約 30 秒完成。每步獨立重試，指數退避。
 
 ## AI 管線
 
 | 階段         | 模型              | 說明                                                        |
 | ------------ | ----------------- | ----------------------------------------------------------- |
-| **分析**     | AI Gateway text model | 文章 → 中英標題、摘要、標籤、關鍵字、分類                   |
-| **實體提取** | AI Gateway JSON model | 文章 → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
+| **分析**     | AI Gateway text model | Resource → 中英標題、摘要、標籤、關鍵字、分類               |
+| **實體提取** | AI Gateway JSON model | Resource → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
 | **向量生成** | BGE-M3（1024 維）     | 標題 + 摘要 + 全文 + 實體名稱 → 語意向量（HNSW 索引）       |
 
-翻譯/摘要與分類/實體是分開的 structured calls，避免其中一個 schema 失敗就讓整篇文章落入 fallback。
+翻譯/摘要與分類/實體是分開的 structured calls，避免其中一個 schema 失敗就讓整個 resource 落入 fallback。
 
 ## 技術棧
 
@@ -86,7 +86,7 @@
 
 需要一個裝了 pgvector 的 PostgreSQL。目前跑在 PlanetScale Postgres（透過 Cloudflare Hyperdrive）；任何 Postgres ≥ 15 + `vector` extension 都行。
 
-需要的表：`articles`、`user_articles`、`RssList`、`youtube_transcripts`，以及 entity / citation 相關表格。完整 schema 定義在上層 monorepo 的 `web-tanstack/prisma/schema.prisma` — 獨立的 `schema.sql` 還在 roadmap。目前可以參考 Prisma models，或在 Issues 聯絡我。
+需要的表：`resources`、`resource_translations`、`library`、`rss_list`、`youtube_transcripts`，以及 entity / citation / paper 相關表格。完整 schema 定義在 `web-tanstack/prisma/schema.prisma`，並在 worker 的 `src/db/schema.ts` 中同步。目前可以參考這兩份 schema，或在 Issues 聯絡我。
 
 ### 2. Hyperdrive binding
 
@@ -122,35 +122,17 @@ pnpm run deploy
 
 或本地跑 `pnpm dev`（用 `wrangler dev --test-scheduled`，可以 curl `/__scheduled?cron=*/5+*+*+*+*` 手動觸發 RSS cron）。
 
-## API
+## API Surface
 
-```bash
-# 健康檢查
-curl https://your-worker.workers.dev/health
-```
-
-<details>
-<summary>回應範例</summary>
-
-```json
-{
-  "status": "ok",
-  "worker": "newsence-core",
-  "timestamp": "2026-07-08T00:00:00.000Z"
-}
-```
-
-</details>
-
-App/chat 整合走 Cloudflare service-binding RPC。用戶 ingest 的驗證與限流由 app Worker 在呼叫 core Worker 前處理。
+這個 Worker 提供一小組給內部呼叫的 acquisition HTTP surface：`POST /scrape` 同步回傳單一 `NormalizedContent`，`POST /acquisition` + `GET /acquisition/:id` 則提供可輪詢的 durable job。App/chat 整合主要走 Cloudflare service-binding RPC，cron 監控則走 scheduled triggers。用戶 ingest 的驗證與限流由 app Worker 在呼叫 core Worker 前處理。
 
 ## CLI 與 MCP 伺服器
 
 也可以透過獨立的 [`newsence`](https://www.npmjs.com/package/newsence) npm 套件當 CLI 和 [MCP](https://modelcontextprotocol.io) server 使用：
 
 ```bash
-npx newsence search "AI agents"       # 搜尋文章
-npx newsence recent --hours 6         # 最近幾小時的文章
+npx newsence search "AI agents"       # 搜尋 resources
+npx newsence recent --hours 6         # 最近幾小時的 resources
 
 claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
 # 遠端 MCP：https://www.newsence.app/api/mcp
@@ -164,9 +146,9 @@ src/
 ├── ai/                   # Workers AI / AI Gateway helpers
 ├── entities/             # entity normalization + graph sync
 ├── shared/               # 小型跨子系統 primitives
-│   ├── types.ts          # Article、NormalizedContent、YoutubeTranscript
+│   ├── types.ts          # ResourceForProcessing、NormalizedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits
-├── ingest/               # ── 文章入庫 pipeline（開源核心）──
+├── ingest/               # ── resource 入庫 pipeline（開源核心）──
 │   ├── workflow.ts       # Workflow class + enqueueProcessing
 │   ├── domain/           # sink、AI merge helpers
 │   └── platforms/        # 每個來源或 stage 一個檔案
@@ -187,7 +169,7 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | ------------------ | ------------------------------------------- |
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
-| `R2`               | 讀取 app-owned `user_files` blob，供 PDF extraction 使用 |
+| `R2`               | 讀取 app-owned uploaded blob，供 PDF extraction 使用 |
 | `AI`               | Workers AI binding（AI Gateway 文字呼叫 + BGE-M3 向量生成） |
 
 Secrets（透過 `wrangler secret put` 設定）：
@@ -200,7 +182,7 @@ Secrets（透過 `wrangler secret put` 設定）：
 
 ## 新增平台
 
-平台是來源 adapter。每個平台集中在一個 `ingest/platforms/*.ts` 檔案裡，只放它真正需要的 discovery / scrape / process 邏輯。App-owned saved URL 和 upload 進來時已經是 `user_files` row ID；cron 來源才 enqueue source draft。SQL 寫入留在 `ingest/domain/article-store.ts`。
+平台是來源 adapter。每個平台集中在一個 `ingest/platforms/*.ts` 檔案裡，只放它真正需要的 discovery / scrape / process 邏輯。App-owned saved URL 和 upload 由 app 先寫成 `resources`/`library` rows；workflow 收到的是 `resourceId`。SQL 寫入留在 `ingest/domain/resource-store.ts`。
 
 三個軸要分開：platform（`rss`、`web`、`youtube`、`twitter`、`hackernews`）不是 content shape（`pdf`、academic paper），也不是 origin（`upload`、`saved_url`、`generated`）。PDF 解析和 Semantic Scholar paper enrichment 是 workflow stage，根據 row 內容或 metadata 觸發，不是 platform adapter。
 
@@ -211,7 +193,7 @@ Secrets（透過 `wrangler secret put` 設定）：
 3. **Monitor**（可選）— 如果來源可以輪詢，從 `src/index.ts` 接上 cron handler。
 4. **Workflow hook**（可選）— 只有在來源需要不同於預設 AI merge 的行為時才加。
 
-新文章一樣走 Workflow pipeline，AI 步驟你不用動。
+新 resource 一樣走 Workflow pipeline，AI 步驟你不用動。
 
 ## 授權
 

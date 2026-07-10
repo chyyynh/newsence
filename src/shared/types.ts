@@ -1,43 +1,40 @@
-export interface Article {
+import type { ResourceCategory, ResourceScope, ResourceTranslationSource, ResourceType } from '../resources/types';
+
+export type ResourceLocaleText = {
+	title?: string | null;
+	summary?: string | null;
+	content?: string | null;
+	keywords?: string[] | null;
+	source?: ResourceTranslationSource;
+};
+
+export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefined>;
+
+export interface ResourceForProcessing {
 	id: string;
+	type: ResourceType;
+	scope: ResourceScope;
+	original_lang: string;
 	title: string;
-	title_cn?: string | null;
 	summary: string | null;
-	summary_cn?: string | null;
 	content: string | null;
-	content_cn?: string | null;
+	translations?: ResourceTranslationMap;
 	url: string;
+	og_image_url?: string | null;
 	source: string;
 	published_date: string;
 	tags: string[];
 	keywords: string[];
-	source_type?: string;
 	platform_metadata?: PlatformMetadata;
-	// user_files-only raw columns (undefined for articles path).
+	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;
 	file_type?: string;
+	normalized_source_url?: string | null;
+	origin_type?: string;
 }
 
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
-
-interface ExtractedEntity {
-	name: string;
-	name_cn: string;
-	type: EntityType;
-}
-
-export interface AIAnalysisResult {
-	tags?: string[];
-	keywords?: string[];
-	summary_en?: string;
-	summary_cn?: string;
-	content?: string;
-	content_cn?: string;
-	title_cn?: string;
-	category?: ArticleCategory;
-	entities?: ExtractedEntity[];
-}
 
 export interface TranscriptSegment {
 	startTime: number;
@@ -59,17 +56,19 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent {
+export interface NormalizedContent<T extends ResourceType = ResourceType> {
+	type: T;
 	title: string | null;
-	/** Platform APIs return markdown or plain text for source article drafts. */
+	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
 	metadata: {
 		author: string | null;
+		language: string | null;
 		publishedDate: string | null;
 		siteName: string | null;
 		description: string | null;
 	};
-	platformMetadata?: PlatformMetadata;
+	platformMetadata?: PlatformMetadata<T>;
 	youtubeTranscript?: YoutubeTranscript;
 }
 
@@ -106,8 +105,9 @@ export interface RetweetedByData {
 }
 
 interface TwitterMetadata extends TwitterAuthorFields {
-	variant?: 'shared' | 'article';
+	variant?: 'shared' | 'longform';
 	tweetId?: string;
+	threadTweetCount?: number;
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
@@ -183,10 +183,8 @@ export interface PlatformEnrichments {
 	processedAt?: string;
 }
 
-export type ArticleCategory = 'AI' | 'Tech' | 'Finance' | 'Research' | 'Business' | 'Other';
-
 interface ClassificationMetadata {
-	category?: ArticleCategory;
+	category?: ResourceCategory;
 	classifiedAt?: string;
 }
 
@@ -194,10 +192,44 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-export type PlatformMetadata =
-	| ({ type: 'twitter'; fetchedAt: string; data: TwitterMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'youtube'; fetchedAt: string; data: YouTubeMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'hackernews'; fetchedAt: string; data: HackerNewsMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'pdf'; fetchedAt: string; data: PdfMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'paper'; fetchedAt: string; data: PaperMetadata; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope)
-	| ({ type: 'default'; fetchedAt: string; data: null; enrichments?: PlatformEnrichments | null } & ClassificationEnvelope);
+interface OgImageDimensions {
+	ogImageWidth?: number | null;
+	ogImageHeight?: number | null;
+}
+
+export interface PlatformMetadataDataByResourceType {
+	web: null;
+	rss: null;
+	twitter: TwitterMetadata;
+	youtube: YouTubeMetadata;
+	hackernews: HackerNewsMetadata;
+	pdf: PdfMetadata;
+	paper: PaperMetadata;
+	image: null;
+	file: null;
+}
+
+export interface PdfExtractionMetadata {
+	status: 'ok' | 'needs_ocr';
+	parser: 'liteparse';
+	chars: number;
+	pages: number;
+}
+
+export type PlatformMetadata<T extends ResourceType = ResourceType> = {
+	fetchedAt: string;
+	data: PlatformMetadataDataByResourceType[T];
+	/** Hash of normalized source fields used to skip unchanged resync runs. */
+	sourceSnapshotHash?: string;
+	enrichments?: PlatformEnrichments | null;
+	sourceName?: string;
+	extraction?: PdfExtractionMetadata;
+} & ClassificationEnvelope &
+	OgImageDimensions;
+
+export function platformMetadataFor<T extends ResourceType>(
+	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
+	type: T,
+): PlatformMetadata<T> | null {
+	return resource.type === type && resource.platform_metadata ? (resource.platform_metadata as PlatformMetadata<T>) : null;
+}

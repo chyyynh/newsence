@@ -1,8 +1,9 @@
-import type { Article } from '@core-shared/types';
+import type { ResourceForProcessing } from '@core-shared/types';
 import { type ZodType, z } from 'zod';
 
 const EMBEDDING_MODEL = '@cf/baai/bge-m3';
-const CORE_TEXT_MODEL = 'google/gemini-3-flash';
+const CORE_TEXT_MODEL = 'google/gemini-3.1-flash-lite';
+const CORE_TEXT_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 const MAX_TEXT_LENGTH = 8000;
 const DEFAULT_AI_GATEWAY_ID = 'default';
@@ -29,52 +30,62 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 
 // Original language only — BGE-M3 is cross-lingual, so embedding `_cn`
 // translations dilutes the budget without adding recall.
-type EmbeddingInput = Pick<Article, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
+type EmbeddingInput = Pick<ResourceForProcessing, 'title' | 'summary' | 'content' | 'tags' | 'keywords'>;
 
-export function prepareArticleTextForEmbedding(article: EmbeddingInput): string {
-	const headerParts = [article.title];
-	if (article.summary) headerParts.push(article.summary);
-	if (article.tags.length) headerParts.push(article.tags.join(' '));
-	if (article.keywords.length) headerParts.push(article.keywords.join(' '));
+export function prepareResourceTextForEmbedding(resource: EmbeddingInput): string {
+	const headerParts = [resource.title];
+	if (resource.summary) headerParts.push(resource.summary);
+	if (resource.tags.length) headerParts.push(resource.tags.join(' '));
+	if (resource.keywords.length) headerParts.push(resource.keywords.join(' '));
 
 	const headerText = headerParts.join(' ');
 	const contentBudget = MAX_TEXT_LENGTH - headerText.length - 1;
 
-	if (contentBudget <= 200 || !article.content) {
+	if (contentBudget <= 200 || !resource.content) {
 		return headerText.slice(0, MAX_TEXT_LENGTH);
 	}
 
-	return `${headerText} ${article.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
+	return `${headerText} ${resource.content.slice(0, contentBudget)}`.slice(0, MAX_TEXT_LENGTH);
 }
 
 export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
+	const inputs = {
+		contents: [{ role: 'user', parts: [{ text: prompt }] }],
+		...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
+		generationConfig: {
+			...(options.maxTokens != null && { maxOutputTokens: options.maxTokens }),
+			temperature: options.temperature ?? 0.3,
+		},
+	};
+	const aiOptions = {
+		gateway: {
+			id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
+			collectLog: true,
+			...(task && { metadata: { app: 'newsence', task } }),
+		},
+	};
 
-	try {
-		const response = await (ai as GatewayAi).run<GeminiTextResponse>(
-			CORE_TEXT_MODEL,
-			{
-				contents: [{ role: 'user', parts: [{ text: prompt }] }],
-				...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
-				generationConfig: {
-					...(options.maxTokens != null && { maxOutputTokens: options.maxTokens }),
-					temperature: options.temperature ?? 0.3,
-				},
-			},
-			{
-				gateway: {
-					id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
-					collectLog: true,
-					...(task && { metadata: { app: 'newsence', task } }),
-				},
-			},
-		);
-		const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
-		return text?.trim() || null;
-	} catch (error) {
-		console.error({ tag: 'AI', msg: 'AI Gateway text generation failed', model: CORE_TEXT_MODEL, task, error: String(error) });
-		return null;
+	for (const model of [CORE_TEXT_MODEL, CORE_TEXT_FALLBACK_MODEL]) {
+		try {
+			const response = await (ai as GatewayAi).run<GeminiTextResponse>(model, inputs, aiOptions);
+			const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
+			if (text?.trim()) return text.trim();
+			throw new Error('No text content found in model response');
+		} catch (error) {
+			const isFallback = model === CORE_TEXT_FALLBACK_MODEL;
+			const log = {
+				tag: 'AI',
+				msg: isFallback ? 'AI Gateway text generation failed' : 'AI Gateway text generation failed; trying fallback',
+				model,
+				task,
+				error: String(error),
+			};
+			if (isFallback) console.error(log);
+			else console.warn(log);
+		}
 	}
+	return null;
 }
 
 export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
@@ -128,7 +139,7 @@ export async function generateObject<T>(ai: AiBinding, prompt: string, options: 
 	}
 }
 
-export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName?: string): Promise<number[] | null> {
+export async function generateResourceEmbedding(text: string, ai: Ai, gatewayName?: string): Promise<number[] | null> {
 	const sanitizedText = text?.trim();
 	if (!sanitizedText) return null;
 
@@ -140,7 +151,7 @@ export async function generateArticleEmbedding(text: string, ai: Ai, gatewayName
 				gateway: {
 					id: gatewayName?.trim() || DEFAULT_AI_GATEWAY_ID,
 					collectLog: true,
-					metadata: { app: 'newsence', task: 'article-embedding' },
+					metadata: { app: 'newsence', task: 'resource-embedding' },
 				},
 			},
 		);

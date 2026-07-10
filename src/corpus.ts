@@ -1,10 +1,11 @@
-import { generateArticleEmbedding } from '@core-ai/embedding';
-import type { TranscriptSegment } from '@core-shared/types';
+import { generateResourceEmbedding } from '@core-ai/embedding';
 import { normalizeUrl } from '@core-shared/web';
-import type { Client } from 'pg';
-import { Client as PgClient } from 'pg';
+import { type CoreDb, withCoreDb } from '@db/client';
+import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
+import { type SQL, sql } from 'drizzle-orm';
+import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 
-export interface ArticleSummary {
+export interface ResourceSummary {
 	id: string;
 	title: string;
 	url: string;
@@ -14,64 +15,72 @@ export interface ArticleSummary {
 	tags?: string[] | null;
 }
 
-export type ArticleSearchInput = {
+export type ResourceSearchInput = {
 	query: string;
 	daysAgo?: number;
 	limit?: number;
 };
 
-export type ArticleRankSearchInput = {
+export type ResourceRankSearchInput = {
 	query: string;
 	limit?: number;
 };
 
-export type RelatedArticleSearchInput = {
-	seed: { id: string; type: 'article' | 'user_file' };
+export type RelatedResourceSearchInput = {
+	seed: { id: string; type: 'resource' };
 	limit?: number;
 	offset?: number;
 };
 
 export interface ReadContextItem {
-	type: 'article' | 'collection' | 'url';
+	type: 'collection' | 'resource' | 'url';
 	id: string;
 }
 
 export interface ReadContextResult {
-	type: 'article' | 'collection' | 'url' | 'document' | 'error';
+	type: 'collection' | 'resource' | 'url' | 'document' | 'error';
 	id: string;
 	title?: string;
 	content?: string;
-	articles?: Array<{ id: string; title: string; summary: string | null }>;
+	resources?: Array<{ id: string; title: string; summary: string | null }>;
 	metadata?: Record<string, unknown>;
 	error?: string;
 }
 
 type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
-type RankArticleOptions = { fromDate?: Date | null };
+type RankResourceOptions = { fromDate?: Date | null };
 
-interface ArticleSummaryRow {
+interface ResourceContentRow {
 	id: string;
-	title: string;
-	title_cn: string | null;
-	url: string;
+	type: string;
+	url: string | null;
+	normalized_url: string | null;
+	scope: string;
+	storage_key: string | null;
+	file_type: string | null;
+	original_lang: string;
+	published_date: Date | string | null;
+	scraped_date: Date | string | null;
+	tags: string[] | null;
+	title: string | null;
+	summary: string | null;
+	content: string | null;
+	keywords: string[] | null;
+	translation_lang: string | null;
+}
+
+interface ResourceSearchRow {
+	id: string;
+	title: string | null;
+	url: string | null;
 	published_date: Date | string | null;
 	source: string | null;
 	summary: string | null;
-	summary_cn: string | null;
 	tags: string[] | null;
 }
 
-interface ArticleContentRow extends ArticleSummaryRow {
-	content: string | null;
-	content_cn: string | null;
-	source_type: string | null;
-}
-
-type TranscriptHighlight = { title: string; startTime: number; endTime: number; summary: string };
-
-const ARTICLE_SUMMARY_COLS = 'id, title, title_cn, url, published_date, source, summary, summary_cn, tags';
-const ARTICLE_CONTENT_COLS = `${ARTICLE_SUMMARY_COLS}, content, content_cn, source_type`;
+type ResourceSummaryRow = Pick<ResourceContentRow, 'id' | 'title' | 'summary'>;
 const EMPTY_RANKS: SearchRanks = new Map();
 const SEARCH_LIMIT = 200;
 const SEARCH_RANK_LIMIT_MAX = 500;
@@ -83,105 +92,86 @@ const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
 const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
+const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
+const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
 const RRF_K = 60;
 const RECENCY_HALF_LIFE_DAYS = 30;
 const OVERFETCH_MULTIPLIER = 5;
 const OVERFETCH_CAP = 200;
-const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/(?:embed|shorts|live)\/)([a-zA-Z0-9_-]{11})/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function searchCorpusArticleRanks(env: CoreEnv, input: ArticleRankSearchInput): Promise<Array<{ id: string; score: number }>> {
+export async function searchCorpusResourceRanks(
+	env: CoreEnv,
+	input: ResourceRankSearchInput,
+): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
-	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await client.connect();
-		const ranks = await rankArticles(client, env, query, limit);
+	const vector = await searchQueryVector(env, query);
+	return withCoreDb(env, async (db) => {
+		const ranks = await rankResources(db, query, limit, {}, vector);
 		return [...ranks].map(([id, score]) => ({ id, score }));
-	} finally {
-		await closeCorpusClient(client);
-	}
+	});
 }
 
-export async function relatedCorpusArticleIds(env: CoreEnv, input: RelatedArticleSearchInput): Promise<string[]> {
+export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
 	const seed = { id: input.seed.id.trim(), type: input.seed.type };
 	if (!seed.id) return [];
 	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
-	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await client.connect();
-		const ids = await relatedArticles(client, seed, limit, offset);
+	return withCoreDb(env, async (db) => {
+		const ids = await relatedResources(db, seed, limit, offset);
 		return [...new Set(ids)].filter((id) => id !== seed.id);
-	} finally {
-		await closeCorpusClient(client);
-	}
+	});
 }
 
-export async function searchCorpusArticles(env: CoreEnv, input: ArticleSearchInput): Promise<ArticleSummary[]> {
+export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await client.connect();
-		const fromDate = input.daysAgo ? new Date(Date.now() - input.daysAgo * 86_400_000) : null;
+	const vector = query ? await searchQueryVector(env, query) : null;
+	return withCoreDb(env, async (db) => {
+		const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
+		const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
 		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = query ? await rankArticles(client, env, query, rankLimit, { fromDate }) : null;
+		const ranks = query ? await rankResources(db, query, rankLimit, { fromDate }, vector) : null;
 
 		if (ranks) {
 			if (ranks.size === 0) return [];
 			const candidateIds = [...ranks.keys()].filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
-			const params: unknown[] = [candidateIds];
-			let where = `id = ANY($1::uuid[])`;
-			if (fromDate) {
-				params.push(fromDate);
-				where += ` AND published_date >= $${params.length}`;
-			}
-			const result = await client.query<ArticleSummaryRow>(`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where}`, params);
-			return result.rows
+			const rows = await queryRows<ResourceSearchRow>(
+				db,
+				sql`
+					SELECT ${resourceSearchSelect()}
+					FROM resources r
+					${resourceLocalizedJoin()}
+					WHERE r.id = ANY(${uuidArraySql(candidateIds)})
+						AND ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
+				`,
+			);
+			return rows
 				.sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0))
 				.slice(0, limit)
 				.map(formatSummary);
 		}
 
-		const params: unknown[] = [];
-		let where = 'TRUE';
-		if (fromDate) {
-			params.push(fromDate);
-			where = `published_date >= $${params.length}`;
-		}
-		params.push(limit);
-		const result = await client.query<ArticleSummaryRow>(
-			`SELECT ${ARTICLE_SUMMARY_COLS} FROM articles WHERE ${where} ORDER BY published_date DESC LIMIT $${params.length}`,
-			params,
+		const rows = await queryRows<ResourceSearchRow>(
+			db,
+			sql`
+				SELECT ${resourceSearchSelect()}
+				FROM resources r
+				${resourceLocalizedJoin()}
+				WHERE ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
+				ORDER BY ${recencySql()} DESC
+				LIMIT ${limit}
+			`,
 		);
-		return result.rows.map(formatSummary);
-	} finally {
-		await closeCorpusClient(client);
-	}
+		return rows.map(formatSummary);
+	});
 }
 
 export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
-	const client = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await client.connect();
-		return readItems(client, items, userId);
-	} finally {
-		await closeCorpusClient(client);
-	}
-}
-
-async function closeCorpusClient(client: Client): Promise<void> {
-	await client.end().catch((error) =>
-		console.warn({
-			tag: 'CORPUS',
-			msg: 'client close failed',
-			error: String(error),
-		}),
-	);
+	return withCoreDb(env, (db) => readItems(db, items, userId));
 }
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
@@ -189,139 +179,169 @@ function clampInt(value: number | undefined, min: number, max: number, fallback:
 	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
-function toIsoString(value: Date | string | null): string | undefined {
-	if (value === null) return undefined;
-	const date = value instanceof Date ? value : new Date(value);
-	return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
-function formatSummary(a: ArticleSummaryRow): ArticleSummary {
-	const summary = a.summary_cn ?? a.summary ?? undefined;
+function formatSummary(resource: ResourceSearchRow): ResourceSummary {
+	const summary = resource.summary ?? undefined;
 	return {
-		id: a.id,
-		title: a.title_cn || a.title,
-		url: a.url,
-		publishedDate: toIsoString(a.published_date),
-		source: a.source ?? undefined,
+		id: resource.id,
+		title: resource.title || resource.url || 'Untitled resource',
+		url: resource.url ?? '',
+		publishedDate: toIsoString(resource.published_date),
+		source: resource.source ?? undefined,
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
-		tags: a.tags ?? undefined,
+		tags: resource.tags ?? undefined,
 	};
 }
 
-async function relatedArticles(
-	client: Client,
-	seed: { id: string; type: 'article' | 'user_file' },
-	limit: number,
-	offset: number,
-): Promise<string[]> {
+async function relatedResources(db: CoreDb, seed: { id: string; type: 'resource' }, limit: number, offset: number): Promise<string[]> {
 	if (!isValidUuid(seed.id)) return [];
-	const seedTable = seed.type === 'user_file' ? 'user_files' : 'articles';
-	const rows = await client.query<{ id: string }>(
-		`WITH src AS (
-			SELECT embedding FROM ${seedTable} WHERE id = $1::uuid AND embedding IS NOT NULL LIMIT 1
-		)
-		SELECT a.id
-		FROM articles a, src
-		WHERE a.id <> $1::uuid AND a.embedding IS NOT NULL
-		ORDER BY a.embedding <=> src.embedding
-		LIMIT $2 OFFSET $3`,
-		[seed.id, limit, offset],
+	const rows = await queryRows<{ id: string }>(
+		db,
+		sql`
+			WITH src AS (
+				SELECT embedding FROM resources WHERE id = ${seed.id}::uuid AND embedding IS NOT NULL LIMIT 1
+			)
+			SELECT r.id
+			FROM resources r, src
+			WHERE r.id <> ${seed.id}::uuid
+				AND ${corpusEnrichedSql()}
+				AND r.embedding IS NOT NULL
+			ORDER BY r.embedding <=> src.embedding
+			LIMIT ${limit} OFFSET ${offset}
+		`,
 	);
-	return rows.rows.map((r) => r.id);
+	return rows.map((r) => r.id);
 }
 
-async function rankArticles(
-	client: Client,
-	env: CoreEnv,
+function recencySql(): SQL {
+	return sql`COALESCE(r.published_date, r.scraped_date, r.created_at)`;
+}
+
+function corpusEnrichedSql(): SQL {
+	return sql`r.scope = 'corpus' AND r.enrichment_status = 'enriched'`;
+}
+
+function publishedSinceSql(fromDate: Date | null | undefined): SQL {
+	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
+}
+
+function keywordMatchSql(patternArray: SQL): SQL {
+	return sql`(
+		EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
+		OR EXISTS (
+			SELECT 1
+			FROM resource_translations rt
+			WHERE rt.resource_id = r.id
+				AND (
+					EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
+					OR rt.title ILIKE ANY(${patternArray})
+					OR rt.summary ILIKE ANY(${patternArray})
+				)
+		)
+		OR r.type ILIKE ANY(${patternArray})
+		OR r.url ILIKE ANY(${patternArray})
+	)`;
+}
+
+async function rankResources(
+	db: CoreDb,
 	query: string,
 	limit = 100,
-	options: RankArticleOptions = {},
+	options: RankResourceOptions = {},
+	vectorStr: string | null = null,
 ): Promise<SearchRanks> {
 	const sanitized = sanitize(query);
 	if (!sanitized) return EMPTY_RANKS;
 
 	const tokens = tokenize(sanitized);
-	const patterns = tokens.length > 0 ? tokens.map((t) => `%${t}%`) : [`%${sanitized}%`];
+	const patterns = tokens.length > 0 ? tokens.map(likePattern) : [likePattern(sanitized)];
+	const patternArray = textArraySql(patterns);
 
-	const embedding = await generateArticleEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME).catch(() => null);
-	if (!embedding) return keywordOnly(client, patterns, limit, options);
-	const vectorStr = `[${embedding.join(',')}]`;
-	const params: unknown[] = [
-		vectorStr,
-		Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP),
-		patterns,
-		RRF_K,
-		RECENCY_HALF_LIFE_DAYS,
-		limit,
-	];
-	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
+	if (!vectorStr) return keywordOnly(db, patternArray, limit, options);
+	const overfetchLimit = Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP);
 
 	try {
-		const result = await client.query<{ id: string; score: number | string }>(
-			`
+		const rows = await queryRows<{ id: string; score: number | string }>(
+			db,
+			sql`
 			WITH vec AS (
-				SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
-				FROM articles
-				WHERE embedding IS NOT NULL${dateFilter}
-				ORDER BY embedding <=> $1::vector
-				LIMIT $2
+				SELECT r.id, ROW_NUMBER() OVER (ORDER BY r.embedding <=> ${vectorStr}::vector) AS rank
+				FROM resources r
+				WHERE ${corpusEnrichedSql()}
+					AND r.embedding IS NOT NULL${publishedSinceSql(options.fromDate)}
+				ORDER BY r.embedding <=> ${vectorStr}::vector
+				LIMIT ${overfetchLimit}
 			),
 			kw AS (
-				SELECT id, ROW_NUMBER() OVER (ORDER BY published_date DESC NULLS LAST) AS rank
-				FROM articles
-				WHERE (
-					EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($3::text[]))
-					OR title ILIKE ANY($3::text[])
-					OR title_cn ILIKE ANY($3::text[])
-				)${dateFilter}
-				LIMIT $2
+				SELECT r.id, ROW_NUMBER() OVER (ORDER BY ${recencySql()} DESC NULLS LAST) AS rank
+				FROM resources r
+				WHERE ${corpusEnrichedSql()}
+					AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
+				LIMIT ${overfetchLimit}
 			),
 			fused AS (
-				SELECT id, 1.0 / ($4 + rank) AS score FROM vec
+				SELECT id, 1.0 / (${RRF_K} + rank) AS score FROM vec
 				UNION ALL
-				SELECT id, 1.0 / ($4 + rank) AS score FROM kw
+				SELECT id, 1.0 / (${RRF_K} + rank) AS score FROM kw
 			),
 			scored AS (
 				SELECT id, SUM(score) AS s FROM fused GROUP BY id
 			)
 			SELECT
 				s.id::text,
-				s.s * (1.0 / (1 + EXTRACT(EPOCH FROM now() - a.published_date) / 86400.0 / $5)) AS score
+					s.s * (1.0 / (1 + GREATEST(EXTRACT(EPOCH FROM now() - ${recencySql()}), 0) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
 			FROM scored s
-			JOIN articles a ON s.id = a.id
+			JOIN resources r ON s.id = r.id
 			ORDER BY score DESC
-			LIMIT $6
+			LIMIT ${limit}
 			`,
-			params,
 		);
-		return new Map(result.rows.map((r) => [r.id, Number(r.score)]));
+		return new Map(rows.map((r) => [r.id, Number(r.score)]));
 	} catch (error) {
 		console.warn({ tag: 'CORPUS', msg: 'hybrid query failed, falling back to keyword search', error: String(error) });
-		return keywordOnly(client, patterns, limit, options);
+		return keywordOnly(db, patternArray, limit, options);
 	}
 }
 
-async function keywordOnly(client: Client, patterns: string[], limit: number, options: RankArticleOptions = {}): Promise<SearchRanks> {
-	const params: unknown[] = [patterns, limit];
-	const dateFilter = options.fromDate ? ` AND published_date >= $${params.push(options.fromDate)}` : '';
+async function searchQueryVector(env: CoreEnv, query: string): Promise<string | null> {
+	const sanitized = sanitize(query);
+	if (!sanitized) return null;
+	const embedding = await generateResourceEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME);
+	return embedding?.length ? `[${embedding.join(',')}]` : null;
+}
+
+function likePattern(value: string): string {
+	return `%${value.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
+async function keywordOnly(db: CoreDb, patternArray: SQL, limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
 	try {
-		const result = await client.query<{ id: string; match_count: number | string }>(
-			`
-			SELECT id,
-				(SELECT COUNT(*) FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[])) AS match_count
-			FROM articles
-			WHERE (
-				EXISTS (SELECT 1 FROM unnest(keywords) k WHERE k ILIKE ANY($1::text[]))
-				OR title ILIKE ANY($1::text[])
-				OR title_cn ILIKE ANY($1::text[])
-			)${dateFilter}
-			ORDER BY match_count DESC, published_date DESC NULLS LAST
-			LIMIT $2
+		const rows = await queryRows<{ id: string; match_count: number | string }>(
+			db,
+			sql`
+			SELECT r.id,
+				(
+					(SELECT COUNT(*) FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
+					+ CASE WHEN r.type ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
+					+ CASE WHEN r.url ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
+					+ (
+						SELECT COALESCE(SUM(
+							(SELECT COUNT(*) FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
+							+ CASE WHEN rt.title ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
+							+ CASE WHEN rt.summary ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
+						), 0)
+						FROM resource_translations rt
+						WHERE rt.resource_id = r.id
+					)
+				) AS match_count
+			FROM resources r
+			WHERE ${corpusEnrichedSql()}
+				AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
+			ORDER BY match_count DESC, ${recencySql()} DESC NULLS LAST
+			LIMIT ${limit}
 			`,
-			params,
 		);
-		const max = Math.max(...result.rows.map((r) => Number(r.match_count)), 1);
-		return new Map(result.rows.map((r) => [r.id, Number(r.match_count) / max]));
+		const max = Math.max(...rows.map((r) => Number(r.match_count)), 1);
+		return new Map(rows.map((r) => [r.id, Number(r.match_count) / max]));
 	} catch (error) {
 		console.warn({ tag: 'CORPUS', msg: 'keyword fallback failed', error: String(error) });
 		return EMPTY_RANKS;
@@ -347,12 +367,8 @@ function tokenize(sanitized: string): string[] {
 	return [...tokens].slice(0, 8);
 }
 
-function isValidUuid(id: string): boolean {
-	return UUID_RE.test(id);
-}
-
-function extractVideoId(url: string | null): string | null {
-	return url?.match(YT_RE)?.[1] ?? null;
+function corpusErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function truncate(content: string | null | undefined, max: number): string {
@@ -360,122 +376,218 @@ function truncate(content: string | null | undefined, max: number): string {
 	return content.length > max ? `${content.slice(0, max)}\n\n[Content truncated]` : content;
 }
 
-function formatArticleReadResult(
-	article: ArticleContentRow,
-	transcript?: { segments: TranscriptSegment[]; highlights?: TranscriptHighlight[] } | null,
-): ReadContextResult {
-	const meta: Record<string, unknown> = {
-		url: article.url,
-		source: article.source,
-		publishedDate: article.published_date,
-		tags: article.tags,
-	};
-	if (transcript) {
-		meta.videoId = extractVideoId(article.url);
-		meta.transcript = transcript.segments;
-		if (transcript.highlights) meta.aiHighlights = transcript.highlights;
-	}
-	return {
-		type: 'article',
-		id: article.id,
-		title: article.title,
-		content: truncate(article.content || article.summary || article.content_cn || article.summary_cn, CONTENT_MAX),
-		metadata: meta,
-	};
-}
+function capReadContextContent(results: ReadContextResult[]): ReadContextResult[] {
+	const contentCount = results.filter((r) => r.content).length;
+	if (contentCount === 0) return results;
 
-async function attachTranscripts(client: Client, articles: ArticleContentRow[]): Promise<ReadContextResult[]> {
-	const videoIds = articles
-		.filter((a) => a.source_type === 'youtube')
-		.map((a) => extractVideoId(a.url))
-		.filter((v): v is string => !!v);
-
-	let transcriptMap = new Map<string, { transcript: unknown; aiHighlights: unknown }>();
-	if (videoIds.length > 0) {
-		const result = await client.query<{ video_id: string; transcript: unknown; ai_highlights: unknown }>(
-			`SELECT video_id, transcript, ai_highlights FROM youtube_transcripts WHERE video_id = ANY($1::text[])`,
-			[videoIds],
-		);
-		transcriptMap = new Map(result.rows.map((r) => [r.video_id, { transcript: r.transcript, aiHighlights: r.ai_highlights }]));
-	}
-
-	return articles.map((a) => {
-		const vid = a.source_type === 'youtube' ? extractVideoId(a.url) : null;
-		const row = vid ? transcriptMap.get(vid) : null;
-		const transcript = row
-			? {
-					segments: Array.isArray(row.transcript) ? (row.transcript as TranscriptSegment[]) : [],
-					highlights: (row.aiHighlights as TranscriptHighlight[] | null) ?? undefined,
-				}
-			: null;
-		return formatArticleReadResult(a, transcript);
+	const perItemMax = Math.min(
+		CONTENT_MAX,
+		Math.max(READ_CONTEXT_MIN_ITEM_CONTENT_MAX, Math.floor(READ_CONTEXT_TOTAL_CONTENT_MAX / contentCount)),
+	);
+	return results.map((result) => {
+		const content = result.content;
+		if (!content || content.length <= perItemMax) return result;
+		return { ...result, content: truncate(content, perItemMax) };
 	});
 }
 
-async function readArticles(client: Client, ids: string[]): Promise<Map<string, ReadContextResult>> {
+function resourceLocalizedJoin(): SQL {
+	return sql`
+		LEFT JOIN LATERAL (
+			SELECT lang, title, summary, content, keywords, translation_source
+			FROM resources_localized
+			WHERE id = r.id
+			ORDER BY ${resourceTranslationOrderSql({ lang: sql`lang`, originalLang: sql`r.original_lang` })}
+			LIMIT 1
+		) rt ON TRUE
+	`;
+}
+
+function resourceReadSelect(userId: string): SQL {
+	const canReadContent = resourceContentAccessSql('ai-tools', {
+		hasViewer: sql`TRUE`,
+		inViewerLibrary: sql`EXISTS (
+			SELECT 1
+			FROM library content_library
+			WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
+		)`,
+		scope: sql`r.scope`,
+	});
+	return sql`
+		r.id::text,
+		r.type,
+		r.url,
+		r.normalized_url,
+		r.scope,
+		r.storage_key,
+		r.file_type,
+		r.original_lang,
+		r.published_date,
+		r.scraped_date,
+		r.tags,
+		rt.title AS title,
+		rt.summary AS summary,
+		CASE WHEN ${canReadContent}
+		THEN rt.content
+		ELSE NULL
+		END AS content,
+		rt.keywords AS keywords,
+		rt.lang AS translation_lang
+	`;
+}
+
+function resourceSummarySelect(): SQL {
+	return sql`
+		r.id::text,
+		rt.title AS title,
+		rt.summary AS summary
+	`;
+}
+
+function resourceSearchSelect(): SQL {
+	return sql`
+		r.id::text,
+		rt.title AS title,
+		r.url,
+		${recencySql()} AS published_date,
+		r.type AS source,
+		rt.summary AS summary,
+		r.tags
+	`;
+}
+
+function resourceAccessPredicate(userId: string): SQL {
+	return sql`
+		(
+			r.scope = 'corpus'
+			OR EXISTS (
+				SELECT 1
+				FROM library l
+				WHERE l.resource_id = r.id AND l.user_id = ${userId}
+			)
+		)
+	`;
+}
+
+function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {
+	const title = resource.title || resource.url || 'Untitled resource';
+	const publishedDate = resource.published_date ?? resource.scraped_date;
+	return {
+		type: 'resource',
+		id: resource.id,
+		title,
+		content: truncate(resource.content || resource.summary, CONTENT_MAX),
+		metadata: {
+			url: resource.url,
+			source: resource.type,
+			publishedDate,
+			tags: resource.tags,
+			keywords: resource.keywords,
+			scope: resource.scope,
+			originalLang: resource.original_lang,
+			translationLang: resource.translation_lang,
+			storageKey: resource.storage_key,
+			fileType: resource.file_type,
+		},
+	};
+}
+
+async function readResources(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
-	const result = await client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE id = ANY($1::uuid[])`, [
-		validIds,
-	]);
-	const formatted = await attachTranscripts(client, result.rows);
+	const rows = await queryRows<ResourceContentRow>(
+		db,
+		sql`
+			SELECT ${resourceReadSelect(userId)}
+			FROM resources r
+			${resourceLocalizedJoin()}
+				WHERE r.id = ANY(${uuidArraySql(validIds)})
+				AND ${resourceAccessPredicate(userId)}
+		`,
+	);
+	const formatted = rows.map(formatResourceReadResult);
 	return new Map(formatted.map((r) => [r.id, r]));
 }
 
-async function readCollections(client: Client, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
+async function readResourceSummaries(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ResourceSummaryRow>> {
+	const validIds = ids.filter(isValidUuid);
+	if (validIds.length === 0) return new Map();
+	const rows = await queryRows<ResourceSummaryRow>(
+		db,
+		sql`
+			SELECT ${resourceSummarySelect()}
+			FROM resources r
+			${resourceLocalizedJoin()}
+				WHERE r.id = ANY(${uuidArraySql(validIds)})
+				AND ${resourceAccessPredicate(userId)}
+		`,
+	);
+	return new Map(rows.map((resource) => [resource.id, resource]));
+}
+
+async function readCollections(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
-	const [collectionsResult, citationsResult] = await Promise.all([
-		client.query<{ id: string; name: string; description: string | null }>(
-			`SELECT id, name, description FROM collections WHERE id = ANY($1::uuid[]) AND user_id = $2`,
-			[validIds, userId],
+	const [collectionRows, citationRows] = await Promise.all([
+		queryRows<{ id: string; name: string; description: string | null }>(
+			db,
+			sql`
+				SELECT id, name, description
+				FROM collections
+					WHERE id = ANY(${uuidArraySql(validIds)}) AND user_id = ${userId}
+			`,
 		),
-		client.query<{ from_id: string; to_id: string }>(
-			`SELECT from_id, to_id FROM citations
-			 WHERE user_id = $1 AND from_type = 'collection' AND from_id = ANY($2::text[]) AND to_type = 'article'`,
-			[userId, validIds],
+		queryRows<{ from_id: string; to_id: string }>(
+			db,
+			sql`
+				SELECT from_id, to_id
+				FROM citations
+				WHERE user_id = ${userId}
+					AND from_type = 'collection'
+						AND from_id = ANY(${textArraySql(validIds)})
+					AND to_type = 'resource'
+				ORDER BY created_at DESC
+			`,
 		),
 	]);
 
-	const articleIdsByCollection = new Map<string, string[]>();
-	for (const row of citationsResult.rows) {
-		const list = articleIdsByCollection.get(row.from_id) ?? [];
+	const resourceIdsByCollection = new Map<string, string[]>();
+	for (const row of citationRows) {
+		const list = resourceIdsByCollection.get(row.from_id) ?? [];
 		if (list.length < COLLECTION_LIMIT) list.push(row.to_id);
-		articleIdsByCollection.set(row.from_id, list);
+		resourceIdsByCollection.set(row.from_id, list);
 	}
 
-	const allArticleIds = [...new Set(citationsResult.rows.map((r) => r.to_id).filter(isValidUuid))];
-	if (allArticleIds.length === 0) {
+	const allResourceIds = [...new Set(citationRows.map((r) => r.to_id).filter(isValidUuid))];
+	if (allResourceIds.length === 0) {
 		return new Map(
-			collectionsResult.rows.map((col) => [
+			collectionRows.map((col) => [
 				col.id,
 				{
 					type: 'collection' as const,
 					id: col.id,
 					title: col.name,
 					content: col.description || undefined,
-					articles: [],
-					metadata: { articleCount: 0 },
+					resources: [],
+					metadata: { resourceCount: 0 },
 				},
 			]),
 		);
 	}
 
-	const articlesResult = await client.query<{
-		id: string;
-		title: string;
-		title_cn: string | null;
-		summary: string | null;
-		summary_cn: string | null;
-	}>(`SELECT id, title, title_cn, summary, summary_cn FROM articles WHERE id = ANY($1::uuid[])`, [allArticleIds]);
-	const articleMap = new Map(articlesResult.rows.map((a) => [a.id, a] as const));
+	const resourceMap = await readResourceSummaries(db, allResourceIds, userId);
 
 	return new Map(
-		collectionsResult.rows.map((col) => {
-			const colArticles = (articleIdsByCollection.get(col.id) ?? [])
-				.map((aid) => articleMap.get(aid))
-				.filter((a): a is NonNullable<typeof a> => !!a);
+		collectionRows.map((col) => {
+			const colResources = (resourceIdsByCollection.get(col.id) ?? [])
+				.map((rid) => resourceMap.get(rid))
+				.filter((resource): resource is ResourceSummaryRow => !!resource);
+			const entries = colResources.map((resource) => ({
+				id: resource.id,
+				title: resource.title || 'Untitled resource',
+				summary: resource.summary ? truncate(resource.summary, SUMMARY_MAX) : null,
+			}));
 			return [
 				col.id,
 				{
@@ -483,42 +595,41 @@ async function readCollections(client: Client, ids: string[], userId: string): P
 					id: col.id,
 					title: col.name,
 					content: col.description || undefined,
-					articles: colArticles.map((a) => {
-						const summarySrc = a.summary || a.summary_cn;
-						return {
-							id: a.id,
-							title: a.title,
-							summary: summarySrc ? truncate(summarySrc, SUMMARY_MAX) : null,
-						};
-					}),
-					metadata: { articleCount: colArticles.length },
+					resources: entries,
+					metadata: { resourceCount: entries.length },
 				},
 			];
 		}),
 	);
 }
 
-async function readUrls(client: Client, urls: string[]): Promise<Map<string, ReadContextResult>> {
+async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
 	const candidateUrls = [...new Set(urlPairs.flat())];
+	const candidateUrlArray = textArraySql(candidateUrls);
 
-	const result = await client.query<ArticleContentRow>(`SELECT ${ARTICLE_CONTENT_COLS} FROM articles WHERE url = ANY($1::text[])`, [
-		candidateUrls,
-	]);
-	const dbMap = new Map(result.rows.map((a) => [a.url, a] as const));
-	const matches = urlPairs
-		.map(([url, norm]) => ({ url, article: dbMap.get(url) ?? dbMap.get(norm) }))
-		.filter((m): m is { url: string; article: ArticleContentRow } => !!m.article);
-
-	const formatted = await attachTranscripts(
-		client,
-		matches.map((m) => m.article),
+	const resourceRows = await queryRows<ResourceContentRow>(
+		db,
+		sql`
+			SELECT ${resourceReadSelect(userId)}
+			FROM resources r
+			${resourceLocalizedJoin()}
+				WHERE (r.url = ANY(${candidateUrlArray}) OR r.normalized_url = ANY(${candidateUrlArray}))
+				AND ${resourceAccessPredicate(userId)}
+		`,
 	);
-	const formattedById = new Map(formatted.map((r) => [r.id, r] as const));
-	return new Map(matches.map((m) => [m.url, formattedById.get(m.article.id)!] as const));
+	const resourceMap = new Map<string, ResourceContentRow>();
+	for (const resource of resourceRows) {
+		if (resource.url) resourceMap.set(resource.url, resource);
+		if (resource.normalized_url) resourceMap.set(resource.normalized_url, resource);
+	}
+	const resourceMatches = urlPairs
+		.map(([url, norm]) => ({ url, resource: resourceMap.get(url) ?? resourceMap.get(norm) }))
+		.filter((m): m is { url: string; resource: ResourceContentRow } => !!m.resource);
+	return new Map(resourceMatches.map((m) => [m.url, formatResourceReadResult(m.resource)] as const));
 }
 
-async function readItems(client: Client, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
+async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	const groups = new Map<ResourceType, string[]>();
 	for (const item of items) {
 		const list = groups.get(item.type) ?? [];
@@ -527,20 +638,34 @@ async function readItems(client: Client, items: ReadContextItem[], userId: strin
 	}
 
 	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>();
-	await Promise.all(
-		[...groups.entries()].map(async ([type, ids]) => {
+	const entries = [...groups.entries()];
+	const settled = await Promise.allSettled(
+		entries.map(async ([type, ids]) => {
 			const results =
-				type === 'article'
-					? await readArticles(client, ids)
-					: type === 'collection'
-						? await readCollections(client, ids, userId)
-						: await readUrls(client, ids);
-			resultMaps.set(type, results);
+				type === 'collection'
+					? await readCollections(db, ids, userId)
+					: type === 'resource'
+						? await readResources(db, ids, userId)
+						: await readUrls(db, ids, userId);
+			return [type, results] as const;
 		}),
 	);
+	for (const [index, settledResult] of settled.entries()) {
+		const [type, ids] = entries[index];
+		if (settledResult.status === 'fulfilled') {
+			resultMaps.set(settledResult.value[0], settledResult.value[1]);
+			continue;
+		}
 
-	return items.map(
-		(item) =>
-			resultMaps.get(item.type)?.get(item.id) ?? { type: 'error' as const, id: item.id, error: `${item.type} not found: ${item.id}` },
+		const error = corpusErrorMessage(settledResult.reason);
+		console.warn({ tag: 'CORPUS', msg: 'read group failed', type, count: ids.length, error });
+		resultMaps.set(type, new Map(ids.map((id) => [id, { type: 'error' as const, id, error: `${type} read failed: ${error}` }])));
+	}
+
+	return capReadContextContent(
+		items.map(
+			(item) =>
+				resultMaps.get(item.type)?.get(item.id) ?? { type: 'error' as const, id: item.id, error: `${item.type} not found: ${item.id}` },
+		),
 	);
 }

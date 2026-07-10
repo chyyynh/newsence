@@ -6,6 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "newsence-core",
 	"main": "src/index.ts",
+	"workers_dev": false,
 	"compatibility_date": "2026-07-07",
 	/**
 	 * Keep request abort signals available to fetch-heavy ingest endpoints and
@@ -20,7 +21,19 @@
 	 */
 	"rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }],
 	"observability": {
-		"enabled": true
+		"enabled": true,
+		"head_sampling_rate": 1,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"persist": true,
+			"invocation_logs": true
+		},
+		"traces": {
+			"enabled": true,
+			"persist": true,
+			"head_sampling_rate": 0.05
+		}
 	},
 	/**
 	 * Schedule Triggers
@@ -28,6 +41,7 @@
 	 */
 	"triggers": {
 		"crons": [
+			"* * * * *", // Content localization repair sweep (every minute)
 			"*/5 * * * *", // RSS monitor (every 5 minutes)
 			"0 */6 * * *", // Twitter monitor (every 6 hours)
 			"*/30 * * * *" // YouTube channel monitor (every 30 minutes)
@@ -42,6 +56,16 @@
 			"binding": "MONITOR_WORKFLOW",
 			"name": "newsence-monitor-workflow",
 			"class_name": "NewsenceMonitorWorkflow"
+		},
+		{
+			"binding": "ACQUISITION_WORKFLOW",
+			"name": "newsence-acquisition-workflow",
+			"class_name": "AcquisitionWorkflow"
+		},
+		{
+			"binding": "CONTENT_LOCALIZATION_WORKFLOW",
+			"name": "newsence-content-localization-workflow",
+			"class_name": "ContentLocalizationWorkflow"
 		}
 	],
 	/**
@@ -50,6 +74,13 @@
 	 */
 	"ai": {
 		"binding": "AI"
+	},
+	/**
+	 * Browser Run quick actions render public pages that reject direct Worker
+	 * fetches before the acquisition pipeline falls back to an external reader.
+	 */
+	"browser": {
+		"binding": "BROWSER"
 	},
 	/**
 	 * Hyperdrive — PlanetScale PostgreSQL connection pooling
@@ -64,7 +95,7 @@
 	/**
 	 * R2 buckets.
 	 *
-	 * `R2` — user_file blob storage (PDF/image uploads + chat-generated images).
+	 * `R2` — uploaded blob storage (PDF/image uploads + chat-generated images).
 	 *   Also written by the app worker; the core worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 */
@@ -85,12 +116,13 @@
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *
 	 * Required secrets:
+	 * - CORE_WORKER_INTERNAL_TOKEN authenticates the external HTTP engine surface.
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
 	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
 	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
 	 */
 	"secrets": {
-		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
+		"required": ["CORE_WORKER_INTERNAL_TOKEN", "KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
 		"AI_GATEWAY_NAME": "default"

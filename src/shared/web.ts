@@ -1,49 +1,7 @@
 export const FEED_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
 const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
-const TRACKING_PARAMS = [
-	'utm_source',
-	'utm_medium',
-	'utm_campaign',
-	'utm_content',
-	'utm_term',
-	'ref',
-	'fbclid',
-	'gclid',
-	'mc_eid',
-	'mc_cid',
-	'access_token',
-	'token',
-	'auth_token',
-	'api_key',
-	'_',
-	'__',
-	'nc',
-	'cachebust',
-	'noCache',
-	'cache',
-	'rand',
-	'random',
-	'_rnd',
-	'_refresh',
-	'_t',
-	'_ts',
-	'_dc',
-	'_q',
-	'_nocache',
-	'timestamp',
-	'ts',
-	'time',
-	'cb',
-	'r',
-	'sid',
-	'ttl',
-	'vfff',
-	'ttt',
-	'triedRedirect',
-	's',
-	'ssr',
-];
+const TRACKING_PARAMS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'gclid', 'mc_eid', 'mc_cid'];
 
 const DOMAIN_ALIASES: Record<string, string> = {
 	'twitter.com': 'x.com',
@@ -94,7 +52,10 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
 
 export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_TEXT_MAX_BYTES): Promise<string> {
 	const contentLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
-	if (contentLength > maxBytes) throw new Error(`Response too large: ${contentLength} bytes`);
+	if (contentLength > maxBytes) {
+		await response.body?.cancel();
+		throw new Error(`Response too large: ${contentLength} bytes`);
+	}
 	if (!response.body) return '';
 
 	const reader = response.body.getReader();
@@ -117,7 +78,10 @@ export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_T
 
 export async function readBytesWithLimit(response: Response, maxBytes: number): Promise<Uint8Array> {
 	const contentLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
-	if (contentLength > maxBytes) throw new Error(`Response too large: ${contentLength} bytes`);
+	if (contentLength > maxBytes) {
+		await response.body?.cancel();
+		throw new Error(`Response too large: ${contentLength} bytes`);
+	}
 	if (!response.body) return new Uint8Array();
 
 	const reader = response.body.getReader();

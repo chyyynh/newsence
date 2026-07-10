@@ -17,6 +17,7 @@
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
 			"@core-ai/*": ["./src/ai/*"],
+			"@db/*": ["./src/db/*"],
 			"@core-shared/*": ["./src/shared/*"],
 			"@entities/*": ["./src/entities/*"],
 			"@ingest/*": ["./src/ingest/*"]
@@ -46,6 +47,5 @@
 		"skipLibCheck": true,
 		"types": ["./worker-configuration.d.ts"]
 	},
-	"exclude": ["test"],
 	"include": ["src/**/*.ts", "worker-configuration.d.ts"]
 }

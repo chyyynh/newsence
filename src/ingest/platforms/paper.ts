@@ -4,12 +4,14 @@
 
 import type { WorkflowStep } from 'cloudflare:workers';
 import type { PaperMetadata, PaperReference } from '@core-shared/types';
-import { fetchWithTimeout } from '@core-shared/web';
-import type { Client } from 'pg';
-import { Client as PgClient } from 'pg';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
+import { type CoreDb, withCoreTx } from '@db/client';
+import { paperReferences, papers } from '@db/schema';
+import { sql } from 'drizzle-orm';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
+const RESPONSE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_REFERENCES = 50;
 const MAX_EDGES = 50;
 const PDF_MIME = 'application/pdf';
@@ -71,7 +73,7 @@ interface S2MatchResponse {
 type PaperRow = {
 	openAlexId: string;
 	doi: string | null;
-	articleId: string | null;
+	resourceId: string | null;
 	title: string | null;
 	authors: string[];
 	venue: string | null;
@@ -155,22 +157,30 @@ async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
 			const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
-			if (res.ok) return (await res.json()) as T;
-			if (res.status === 429 && attempt < 2) {
+			if (res.ok) return JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)) as T;
+			if (res.status === 404) {
+				await res.body?.cancel();
+				return null;
+			}
+			if ((res.status === 429 || res.status >= 500) && attempt < 2) {
 				const retryAfter = Math.min(Number.parseInt(res.headers.get('retry-after') ?? '', 10) || 2, 5);
 				await res.body?.cancel();
 				await scheduler.wait(retryAfter * 1000);
 				continue;
 			}
-			console.warn({ tag: 'S2', msg: 'non-ok', status: res.status, path: path.slice(0, 80) });
 			await res.body?.cancel();
-			return null;
+			if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+				console.warn({ tag: 'S2', msg: 'request rejected', status: res.status, path: path.slice(0, 80) });
+				return null;
+			}
+			throw new Error(`Semantic Scholar request failed with HTTP ${res.status}`);
 		} catch (error) {
-			console.warn({ tag: 'S2', msg: 'fetch threw', error: String(error) });
-			return null;
+			if (attempt >= 2) throw error;
+			console.warn({ tag: 'S2', msg: 'request failed, retrying', attempt: attempt + 1, error: String(error) });
+			await scheduler.wait(2 ** attempt * 1000);
 		}
 	}
-	return null;
+	throw new Error('Semantic Scholar request exhausted retries');
 }
 
 function authorNames(authors: S2Author[] | undefined): string[] {
@@ -222,56 +232,75 @@ function normalizePaper(paper: S2Paper, arxivHint?: string): PaperMetadata {
 	};
 }
 
-async function upsertIngestedPaper(db: Client, row: PaperRow): Promise<string> {
-	const result = await db.query<{ id: string }>(
-		`INSERT INTO papers (openalex_id, doi, article_id, title, authors, venue, year, abstract, cited_by_count, oa_pdf_url)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 ON CONFLICT (openalex_id) DO UPDATE SET
-		   doi = COALESCE(EXCLUDED.doi, papers.doi),
-		   article_id = COALESCE(EXCLUDED.article_id, papers.article_id),
-		   title = COALESCE(EXCLUDED.title, papers.title),
-		   authors = CASE WHEN cardinality(EXCLUDED.authors) > 0 THEN EXCLUDED.authors ELSE papers.authors END,
-		   venue = COALESCE(EXCLUDED.venue, papers.venue),
-		   year = COALESCE(EXCLUDED.year, papers.year),
-		   abstract = COALESCE(EXCLUDED.abstract, papers.abstract),
-		   cited_by_count = COALESCE(EXCLUDED.cited_by_count, papers.cited_by_count),
-		   oa_pdf_url = COALESCE(EXCLUDED.oa_pdf_url, papers.oa_pdf_url),
-		   updated_at = NOW()
-		 RETURNING id`,
-		[row.openAlexId, row.doi, row.articleId, row.title, row.authors, row.venue, row.year, row.abstract, row.citedByCount, row.oaPdfUrl],
-	);
-	const id = result.rows[0]?.id;
+async function upsertIngestedPaper(db: CoreDb, row: PaperRow): Promise<string> {
+	const [result] = await db
+		.insert(papers)
+		.values({
+			openAlexId: row.openAlexId,
+			doi: row.doi,
+			resourceId: row.resourceId,
+			title: row.title,
+			authors: row.authors,
+			venue: row.venue,
+			year: row.year,
+			abstract: row.abstract,
+			citedByCount: row.citedByCount,
+			oaPdfUrl: row.oaPdfUrl,
+		})
+		.onConflictDoUpdate({
+			target: papers.openAlexId,
+			set: {
+				doi: sql`COALESCE(excluded.doi, ${papers.doi})`,
+				resourceId: sql`COALESCE(excluded.resource_id, ${papers.resourceId})`,
+				title: sql`COALESCE(excluded.title, ${papers.title})`,
+				authors: sql`CASE WHEN cardinality(excluded.authors) > 0 THEN excluded.authors ELSE ${papers.authors} END`,
+				venue: sql`COALESCE(excluded.venue, ${papers.venue})`,
+				year: sql`COALESCE(excluded.year, ${papers.year})`,
+				abstract: sql`COALESCE(excluded.abstract, ${papers.abstract})`,
+				citedByCount: sql`COALESCE(excluded.cited_by_count, ${papers.citedByCount})`,
+				oaPdfUrl: sql`COALESCE(excluded.oa_pdf_url, ${papers.oaPdfUrl})`,
+				updatedAt: sql`NOW()`,
+			},
+		})
+		.returning({ id: papers.id });
+	const id = result?.id;
 	if (!id) throw new Error(`Failed to upsert paper ${row.openAlexId}`);
 	return id;
 }
 
-async function upsertReferenceNode(db: Client, ref: PaperReference): Promise<string | null> {
+async function upsertReferenceNode(db: CoreDb, ref: PaperReference): Promise<string | null> {
 	if (!ref.openAlexId) return null;
-	const result = await db.query<{ id: string }>(
-		`INSERT INTO papers (openalex_id, doi, title, authors, year)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (openalex_id) DO UPDATE SET
-		   doi = COALESCE(EXCLUDED.doi, papers.doi),
-		   title = COALESCE(papers.title, EXCLUDED.title),
-		   year = COALESCE(papers.year, EXCLUDED.year),
-		   updated_at = NOW()
-		 RETURNING id`,
-		[ref.openAlexId, ref.doi ?? null, ref.title ?? null, ref.author ? [ref.author] : [], ref.year ?? null],
-	);
-	return result.rows[0]?.id ?? null;
+	const [result] = await db
+		.insert(papers)
+		.values({
+			openAlexId: ref.openAlexId,
+			doi: ref.doi ?? null,
+			title: ref.title ?? null,
+			authors: ref.author ? [ref.author] : [],
+			year: ref.year ?? null,
+		})
+		.onConflictDoUpdate({
+			target: papers.openAlexId,
+			set: {
+				doi: sql`COALESCE(excluded.doi, ${papers.doi})`,
+				title: sql`COALESCE(${papers.title}, excluded.title)`,
+				year: sql`COALESCE(${papers.year}, excluded.year)`,
+				updatedAt: sql`NOW()`,
+			},
+		})
+		.returning({ id: papers.id });
+	return result?.id ?? null;
 }
 
-async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
-	if (!paper.openAlexId) return null;
+async function syncPaperGraph(env: CoreEnv, resourceId: string, paper: PaperMetadata): Promise<{ edges: number } | null> {
+	const openAlexId = paper.openAlexId;
+	if (!openAlexId) return null;
 
-	const db = new PgClient({ connectionString: env.HYPERDRIVE.connectionString });
-	await db.connect();
-	await db.query('BEGIN');
-	try {
+	return withCoreTx(env, async (db) => {
 		const fromId = await upsertIngestedPaper(db, {
-			openAlexId: paper.openAlexId,
+			openAlexId,
 			doi: paper.doi ?? null,
-			articleId,
+			resourceId,
 			title: paper.title ?? null,
 			authors: paper.authors ?? [],
 			venue: paper.venue ?? null,
@@ -286,21 +315,11 @@ async function syncPaperGraph(env: CoreEnv, articleId: string, paper: PaperMetad
 		for (let ordinal = 0; ordinal < refs.length; ordinal++) {
 			const toId = await upsertReferenceNode(db, refs[ordinal]);
 			if (!toId || toId === fromId) continue;
-			await db.query(
-				`INSERT INTO paper_references (from_paper_id, to_paper_id, ordinal)
-				 VALUES ($1, $2, $3) ON CONFLICT (from_paper_id, to_paper_id) DO NOTHING`,
-				[fromId, toId, ordinal],
-			);
+			await db.insert(paperReferences).values({ fromPaperId: fromId, toPaperId: toId, ordinal }).onConflictDoNothing();
 			edges++;
 		}
-		await db.query('COMMIT');
 		return { edges };
-	} catch (error) {
-		await db
-			.query('ROLLBACK')
-			.catch((rollbackError) => console.error({ tag: 'DB', msg: 'paper graph rollback failed', error: String(rollbackError) }));
-		throw error;
-	}
+	});
 }
 
 function idPath(id: PaperId): string {
@@ -363,37 +382,28 @@ export async function stagePaperEnrichment(
 ): Promise<PaperMetadata | null> {
 	if (!input.hasStagedText && candidate.file_type !== PDF_MIME && !detectPaperId(candidate.url, null, false).hasAcademicMarker) return null;
 
-	try {
-		return await step.do(
-			'enrich-paper-metadata',
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () =>
-				enrichPaperMetadata(
-					{ url: candidate.url, title: candidate.title, fileType: candidate.file_type, content: await input.loadContent() },
-					env.S2_API_KEY,
-				),
-		);
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper enrichment failed, continuing', url: candidate.url, error: String(error) });
-		return null;
-	}
+	return step.do(
+		'enrich-paper-metadata',
+		{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+		async () =>
+			enrichPaperMetadata(
+				{ url: candidate.url, title: candidate.title, fileType: candidate.file_type, content: await input.loadContent() },
+				env.S2_API_KEY,
+			),
+	);
 }
 
 export async function syncPaperGraphForEnrichment(
 	env: CoreEnv,
 	step: WorkflowStep,
-	articleId: string,
+	resourceId: string,
 	paperEnrichment: PaperMetadata | null,
 ): Promise<void> {
 	if (!paperEnrichment?.openAlexId) return;
-	try {
-		const summary = await step.do(
-			'sync-paper-graph',
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => syncPaperGraph(env, articleId, paperEnrichment),
-		);
-		console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', article_id: articleId, edges: summary?.edges ?? 0 });
-	} catch (error) {
-		console.warn({ tag: 'WORKFLOW', msg: 'Paper graph sync failed, continuing', article_id: articleId, error: String(error) });
-	}
+	const summary = await step.do(
+		'sync-paper-graph',
+		{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => syncPaperGraph(env, resourceId, paperEnrichment),
+	);
+	console.info({ tag: 'WORKFLOW', msg: 'Paper graph synced', resource_id: resourceId, edges: summary?.edges ?? 0 });
 }
