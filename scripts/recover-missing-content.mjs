@@ -122,6 +122,19 @@ function retryDelay(attempt) {
 	return Math.min(60_000, 5_000 * 2 ** attempt);
 }
 
+async function databaseQuery(pool, text, values) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await pool.query(text, values);
+		} catch (error) {
+			if (attempt >= 8) throw error;
+			const delayMs = retryDelay(attempt);
+			process.stderr.write(`Database unavailable; retrying in ${delayMs / 1000}s: ${error.message}\n`);
+			await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+		}
+	}
+}
+
 async function cloudflareRequest(credentials, path, init = {}) {
 	for (let attempt = 0; attempt <= 8; attempt++) {
 		const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${credentials.accountId}${path}`, {
@@ -145,8 +158,9 @@ async function cloudflareRequest(credentials, path, init = {}) {
 	}
 }
 
-async function claimRows(pool, count) {
+async function claimRowsOnce(pool, count) {
 	const client = await pool.connect();
+	let connectionError;
 	try {
 		await client.query('RESET statement_timeout');
 		await client.query('BEGIN');
@@ -169,10 +183,24 @@ async function claimRows(pool, count) {
 		await client.query('COMMIT');
 		return result.rows;
 	} catch (error) {
+		connectionError = error;
 		await client.query('ROLLBACK').catch(() => undefined);
 		throw error;
 	} finally {
-		client.release();
+		client.release(connectionError);
+	}
+}
+
+async function claimRows(pool, count) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await claimRowsOnce(pool, count);
+		} catch (error) {
+			if (attempt >= 8) throw error;
+			const delayMs = retryDelay(attempt);
+			process.stderr.write(`Database claim failed; retrying in ${delayMs / 1000}s: ${error.message}\n`);
+			await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+		}
 	}
 }
 
@@ -183,7 +211,8 @@ async function restoreRows(pool, rows) {
 		values.push(row.id, row.status);
 		return `($${index * 2 + 1}::uuid, $${index * 2 + 2}::text)`;
 	});
-	await pool.query(
+	await databaseQuery(
+		pool,
 		`UPDATE resources resource
 		 SET enrichment_status = restored.status, updated_at = NOW()
 		 FROM (VALUES ${placeholders.join(', ')}) AS restored(id, status)
@@ -291,13 +320,14 @@ function isPermanentlyUnavailable(error) {
 
 async function deleteResources(pool, ids) {
 	if (!ids.length) return 0;
-	const result = await pool.query('DELETE FROM resources WHERE id = ANY($1::uuid[]) RETURNING id', [ids]);
+	const result = await databaseQuery(pool, 'DELETE FROM resources WHERE id = ANY($1::uuid[]) RETURNING id', [ids]);
 	return result.rowCount;
 }
 
 async function completedResourcesStillMissingContent(pool, ids) {
 	if (!ids.length) return [];
-	const result = await pool.query(
+	const result = await databaseQuery(
+		pool,
 		`SELECT r.id::text AS id
 		 FROM resources r
 		 JOIN resource_translations original
@@ -312,7 +342,8 @@ async function completedResourcesStillMissingContent(pool, ids) {
 
 async function markTerminatedRowsFailed(pool, ids) {
 	if (!ids.length) return 0;
-	const result = await pool.query(
+	const result = await databaseQuery(
+		pool,
 		`UPDATE resources
 		 SET enrichment_status = 'failed', updated_at = NOW()
 		 WHERE id = ANY($1::uuid[])
@@ -366,10 +397,12 @@ const pool = new Pool({
 	max: 2,
 	idleTimeoutMillis: 10_000,
 });
+pool.on('error', (error) => process.stderr.write(`Idle database connection closed: ${error.message}\n`));
 
 try {
 	if (dryRun) {
-		const preview = await pool.query(
+		const preview = await databaseQuery(
+			pool,
 			`SELECT r.id::text AS id, r.type, r.url, r.enrichment_status AS status
 			 FROM ${CANDIDATE_FROM}
 			 WHERE ${CANDIDATE_WHERE}
