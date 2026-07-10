@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 const INSTANCE_NAME = 'newsence-corpus';
 const ITEM_PREFIX = 'resources/';
 const ITEM_SUFFIX = '.md';
-const MAX_ITEM_BYTES = 4 * 1024 * 1024;
+const CONTENT_MAX_CHARS = 8_000;
 const MAX_RESULTS = 50;
 
 type CorpusDocumentRow = {
@@ -60,49 +60,36 @@ function markdownSection(label: string, value: string | null | undefined): strin
 	return value?.trim() ? `\n## ${label}\n\n${value.trim()}\n` : '';
 }
 
+function sourceDomain(url: string | null): string {
+	if (!url) return '';
+	try {
+		return new URL(url).hostname.replace(/^www\./, '');
+	} catch {
+		return '';
+	}
+}
+
+function localizedSection(row: CorpusDocumentRow, lang: 'en' | 'zh-Hant'): string {
+	const translation = row.translations.find((item) => item.lang === lang);
+	if (!translation) return '';
+	const lines = [`## ${lang}`, translation.title?.trim() ?? '', translation.summary?.trim() ?? ''];
+	if (translation.keywords?.length) lines.push(`Keywords: ${translation.keywords.join(', ')}`);
+	return lines.filter(Boolean).join('\n');
+}
+
 function serializeDocument(row: CorpusDocumentRow): string {
-	const header = [
-		`# ${row.translations.find((translation) => translation.lang === row.original_lang)?.title ?? row.url ?? 'Untitled resource'}`,
-		`URL: ${row.url ?? ''}`,
-		`Type: ${row.type}`,
-		`Published: ${new Date(row.published_at).toISOString()}`,
+	const original = row.translations.find((item) => item.lang === row.original_lang);
+	const displaySource = [row.source?.trim(), sourceDomain(row.url)].filter(Boolean).join(' · ');
+	return [
+		`# ${original?.title ?? row.url ?? 'Untitled resource'}`,
+		displaySource,
 		row.tags?.length ? `Tags: ${row.tags.join(', ')}` : '',
+		localizedSection(row, 'en'),
+		localizedSection(row, 'zh-Hant'),
+		markdownSection('Content', original?.content?.slice(0, CONTENT_MAX_CHARS)),
 	]
 		.filter(Boolean)
-		.join('\n');
-	const translations = row.translations
-		.map((translation) => {
-			const keywords = translation.keywords?.length ? `\nKeywords: ${translation.keywords.join(', ')}\n` : '';
-			return [
-				`\n# Language: ${translation.lang}`,
-				markdownSection('Title', translation.title),
-				markdownSection('Summary', translation.summary),
-				keywords,
-				markdownSection('Content', translation.content),
-			].join('');
-		})
-		.join('\n');
-	const document = `${header}\n${translations}`;
-	if (new TextEncoder().encode(document).byteLength <= MAX_ITEM_BYTES) return document;
-
-	// Keep metadata and every translation's title/summary/keywords, then spend
-	// the remaining byte budget on content in canonical language order.
-	const compact = `${header}\n${row.translations
-		.map(
-			(translation) =>
-				`\n# Language: ${translation.lang}${markdownSection('Title', translation.title)}${markdownSection('Summary', translation.summary)}${
-					translation.keywords?.length ? `\nKeywords: ${translation.keywords.join(', ')}\n` : ''
-				}`,
-		)
-		.join('\n')}`;
-	const encoder = new TextEncoder();
-	const remaining = Math.max(0, MAX_ITEM_BYTES - encoder.encode(compact).byteLength - 64);
-	const originalContent = row.translations.find((translation) => translation.lang === row.original_lang)?.content ?? '';
-	let content = originalContent.slice(0, remaining);
-	while (content && encoder.encode(`${compact}\n## Content\n\n${content}`).byteLength > MAX_ITEM_BYTES) {
-		content = content.slice(0, Math.floor(content.length * 0.9));
-	}
-	return `${compact}${markdownSection('Content', content)}`;
+		.join('\n\n');
 }
 
 async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocumentRow | null> {
@@ -121,12 +108,14 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 			         'lang', rt.lang,
 			         'title', rt.title,
 			         'summary', rt.summary,
-			         'content', rt.content,
+			         'content', CASE WHEN rt.lang = r.original_lang THEN rt.content ELSE NULL END,
 			         'keywords', rt.keywords
 			       ) ORDER BY CASE WHEN rt.lang = r.original_lang THEN 0 ELSE 1 END, rt.lang)
 			       FILTER (WHERE rt.resource_id IS NOT NULL), '[]'::json) AS translations
 			FROM resources r
-			LEFT JOIN resource_translations rt ON rt.resource_id = r.id
+			LEFT JOIN resource_translations rt
+			  ON rt.resource_id = r.id
+			 AND rt.lang IN (r.original_lang, 'en', 'zh-Hant')
 			WHERE r.id = ${resourceId}::uuid
 			  AND r.scope = 'corpus'
 			  AND r.enrichment_status = 'enriched'
