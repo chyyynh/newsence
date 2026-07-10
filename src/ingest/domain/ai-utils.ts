@@ -93,8 +93,8 @@ const MAX_CONTENT_LENGTH = 10000;
 const MAX_CONTENT_CLEANUP_LENGTH = 12000;
 const MIN_CONTENT_CLEANUP_LENGTH = 800;
 const CONTENT_TRANSLATION_CHUNK_LENGTH = 6000;
-const CONTENT_TRANSLATION_MAX_CHUNKS = 24;
-const MAX_CONTENT_TRANSLATION_LENGTH = CONTENT_TRANSLATION_CHUNK_LENGTH * CONTENT_TRANSLATION_MAX_CHUNKS;
+const INLINE_CONTENT_TRANSLATION_MAX_CHUNKS = 24;
+export const DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS = 96;
 const CONTENT_TRANSLATION_CONCURRENCY = 3;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
@@ -203,7 +203,7 @@ function cjkRatio(text: string): number {
 	return cjk / letters;
 }
 
-function shouldTranslateResourceContent(resource: ResourceForProcessing): boolean {
+export function needsZhHantContentTranslation(resource: ResourceForProcessing): boolean {
 	const content = resource.content?.trim();
 	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
@@ -212,7 +212,9 @@ function shouldTranslateResourceContent(resource: ResourceForProcessing): boolea
 }
 
 function shouldWriteResourceContentTranslation(resource: ResourceForProcessing): boolean {
-	const zhHantContent = resource.translations?.[ZH_HANT_RESOURCE_LANG]?.content;
+	const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	if (zhHantTranslation?.source === 'human') return false;
+	const zhHantContent = zhHantTranslation?.content;
 	if (isEmpty(zhHantContent)) return true;
 	const content = resource.content?.trim();
 	const translated = zhHantContent?.trim();
@@ -308,45 +310,49 @@ function contentTranslationPrompt(chunk: string, index: number, total: number): 
 	return `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`;
 }
 
-async function generateResourceContentTranslation(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
-	const content = resource.content?.trim();
-	if (!content || !shouldTranslateResourceContent(resource)) return null;
-
-	const source = content.length > MAX_CONTENT_TRANSLATION_LENGTH ? content.slice(0, MAX_CONTENT_TRANSLATION_LENGTH) : content;
-	if (source.length < content.length) {
-		console.warn({
-			tag: 'AI',
-			msg: 'Resource content translation truncated to max chunks',
-			title: resource.title.substring(0, 80),
-			contentLength: content.length,
-			translatedSourceLength: source.length,
-		});
+export class ContentTranslationLimitError extends Error {
+	constructor(contentLength: number, chunks: number, maxChunks: number) {
+		super(`Content translation requires ${chunks} chunks for ${contentLength} characters; limit is ${maxChunks} chunks`);
+		this.name = 'ContentTranslationLimitError';
 	}
+}
 
-	const chunks = splitContentForTranslation(source).slice(0, CONTENT_TRANSLATION_MAX_CHUNKS);
-	const translatedChunks = await mapWithConcurrency(chunks, CONTENT_TRANSLATION_CONCURRENCY, async (chunk, index) =>
-		generateText(env.AI, contentTranslationPrompt(chunk, index, chunks.length), {
-			task: 'resource-content-translation',
-			gatewayId: env.AI_GATEWAY_NAME,
-			maxTokens: 8000,
-			temperature: 0.2,
-			systemPrompt: RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
-		}),
-	);
-	if (translatedChunks.some((chunk) => !chunk?.trim())) return null;
+export function createZhHantContentTranslationChunks(content: string, maxChunks: number): string[] {
+	const source = content.trim();
+	const chunks = splitContentForTranslation(source);
+	if (chunks.length > maxChunks) throw new ContentTranslationLimitError(source.length, chunks.length, maxChunks);
+	return chunks;
+}
 
-	const translated = validateTranslatedContent(source, translatedChunks.join('\n\n'));
-	if (!translated) {
-		console.error({
-			tag: 'AI',
-			msg: 'Resource content translation rejected',
-			title: resource.title.substring(0, 80),
-			sourceLength: source.length,
-			translatedLength: translatedChunks.join('\n\n').trim().length,
-			chunks: chunks.length,
-		});
-	}
+export async function translateZhHantContentChunk(chunk: string, index: number, total: number, env: CoreEnv): Promise<string> {
+	const translated = await generateText(env.AI, contentTranslationPrompt(chunk, index, total), {
+		task: 'resource-content-translation',
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 8000,
+		temperature: 0.2,
+		systemPrompt: RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
+	});
+	const validated = validateTranslatedContent(chunk, translated);
+	if (!validated) throw new Error(`Content translation chunk ${index + 1}/${total} did not return valid output`);
+	return validated;
+}
+
+export function assembleZhHantContentTranslation(original: string, translatedChunks: string[]): string {
+	const translated = validateTranslatedContent(original.trim(), translatedChunks.join('\n\n'));
+	if (!translated) throw new Error('Assembled content translation did not pass validation');
 	return translated;
+}
+
+export async function generateZhHantContentTranslation(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
+	const content = resource.content?.trim();
+	if (!content || !needsZhHantContentTranslation(resource)) return null;
+
+	const chunks = createZhHantContentTranslationChunks(content, INLINE_CONTENT_TRANSLATION_MAX_CHUNKS);
+	const translatedChunks = await mapWithConcurrency(chunks, CONTENT_TRANSLATION_CONCURRENCY, async (chunk, index) =>
+		translateZhHantContentChunk(chunk, index, chunks.length, env),
+	);
+
+	return assembleZhHantContentTranslation(content, translatedChunks);
 }
 
 async function generateResourceContentCleanup(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
@@ -373,7 +379,6 @@ export async function generateResourceAnalysis(resource: ResourceForProcessing, 
 		});
 		const resourceForAnalysis = cleanedContent ? { ...resource, content: cleanedContent } : resource;
 		const resourcePrompt = buildResourceContextPrompt(resourceForAnalysis);
-		const contentTranslationRequired = shouldTranslateResourceContent(resourceForAnalysis);
 		const [translation, classification, contentTranslation] = await Promise.all([
 			generateObject(env.AI, resourcePrompt, {
 				schema: ResourceTranslationSchema,
@@ -395,21 +400,15 @@ export async function generateResourceAnalysis(resource: ResourceForProcessing, 
 				console.error({ tag: 'AI', msg: 'Resource classification failed', error: String(error) });
 				return null;
 			}),
-			generateResourceContentTranslation(resourceForAnalysis, env).catch((error) => {
+			generateZhHantContentTranslation(resource, env).catch((error) => {
 				console.error({ tag: 'AI', msg: 'Resource content translation failed', error: String(error) });
 				return null;
 			}),
 		]);
 		if (!translation) throw new Error('Resource translation did not return valid output');
 		if (!classification) throw new Error('Resource classification did not return valid output');
-		if (contentTranslationRequired && !contentTranslation?.trim()) {
-			throw new Error('Resource content translation did not return valid output');
-		}
 
 		const analysis: AIAnalysisResult = {};
-		if (cleanedContent) {
-			analysis.content = cleanedContent;
-		}
 		if (translation) {
 			analysis.summary_en = translation.summary_en;
 			analysis.translations = {

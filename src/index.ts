@@ -13,6 +13,7 @@ import {
 	createAcquisitionJob as createAcquisitionWorkflowJob,
 	getAcquisitionJobStatus as readAcquisitionJobStatus,
 } from '@ingest/acquisition-workflow';
+import { ContentLocalizationWorkflow, scheduleContentLocalizationBackfill } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
@@ -22,7 +23,7 @@ import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, s
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
-export { AcquisitionWorkflow, NewsenceMonitorWorkflow };
+export { AcquisitionWorkflow, ContentLocalizationWorkflow, NewsenceMonitorWorkflow };
 
 const REQUEST_JSON_MAX_BYTES = 16 * 1024;
 const AUTH_ENCODER = new TextEncoder();
@@ -134,7 +135,11 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 		if (event.cron === '*/5 * * * *') {
 			this.ctx.waitUntil(
-				Promise.allSettled([handleRSSCron(this.env), recoverStalledResourceProcessing(this.env)]).then((results) => {
+				Promise.allSettled([
+					handleRSSCron(this.env),
+					recoverStalledResourceProcessing(this.env),
+					scheduleContentLocalizationBackfill(this.env),
+				]).then((results) => {
 					for (const result of results) {
 						if (result.status === 'rejected') console.error({ tag: 'CORE', msg: 'Scheduled task failed', error: String(result.reason) });
 					}

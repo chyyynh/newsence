@@ -60,6 +60,11 @@
 			"binding": "ACQUISITION_WORKFLOW",
 			"name": "newsence-acquisition-workflow",
 			"class_name": "AcquisitionWorkflow"
+		},
+		{
+			"binding": "CONTENT_LOCALIZATION_WORKFLOW",
+			"name": "newsence-content-localization-workflow",
+			"class_name": "ContentLocalizationWorkflow"
 		}
 	],
 	/**
