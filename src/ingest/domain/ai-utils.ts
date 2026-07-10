@@ -112,6 +112,11 @@ const ResourceTranslationSchema = z.object({
 	summary: z.string().min(1),
 });
 
+const ZhHantMetadataTranslationSchema = z.object({
+	title: z.string().min(1),
+	summary: z.string().min(1),
+});
+
 const ResourceClassificationSchema = z.object({
 	tags: z.array(z.string().min(1)).min(1),
 	keywords: z.array(z.string().min(1)).min(1),
@@ -131,6 +136,17 @@ const RESOURCE_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要
 - summary: 用繁體中文寫 1-2 句摘要；若原文是第一人稱或直接語氣，保持原文語氣，不要改寫成第三人稱描述
 - 如果原文已是目標語言，保留自然表達，不要硬改寫
 - 所有文字都不要使用 Markdown。`;
+
+const ZH_HANT_METADATA_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的繁體中文結果。
+
+任務：
+- title: 將標題翻譯成自然流暢的繁體中文
+- summary: 根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要
+
+規則：
+- 忠實保留原文語氣，不要新增資訊
+- 若原文已是繁體中文，保留自然表達；若是簡體中文，轉為自然繁體中文
+- 不要使用 Markdown。`;
 
 const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文翻譯編輯。請將原文完整翻譯成自然流暢的繁體中文。
 
@@ -211,6 +227,33 @@ export function needsZhHantContentTranslation(resource: ResourceForProcessing): 
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	if (!shouldWriteResourceContentTranslation(resource)) return false;
 	return true;
+}
+
+export function needsZhHantMetadataTranslation(resource: ResourceForProcessing): boolean {
+	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
+	const translation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	if (translation?.source === 'human') return false;
+	return isEmpty(translation?.title) || isEmpty(translation?.summary);
+}
+
+export async function generateZhHantMetadataTranslation(
+	resource: ResourceForProcessing,
+	env: CoreEnv,
+): Promise<z.infer<typeof ZhHantMetadataTranslationSchema>> {
+	const prompt = `原文資訊：
+標題：${resource.title}
+摘要：${resource.summary || '無摘要'}
+內容：
+${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_LENGTH)}`;
+	const translation = await generateObject(env.AI, prompt, {
+		schema: ZhHantMetadataTranslationSchema,
+		task: 'resource-metadata-localization',
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 700,
+		systemPrompt: ZH_HANT_METADATA_TRANSLATION_SYSTEM_PROMPT,
+	});
+	if (!translation) throw new Error('Resource metadata localization did not return valid output');
+	return translation;
 }
 
 export function hasTranslatableContent(content: string): boolean {

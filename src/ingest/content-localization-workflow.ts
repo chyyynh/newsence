@@ -7,6 +7,7 @@ import {
 	markContentLocalizationFailed,
 	markContentLocalizationRunning,
 	persistBackfilledZhHantContent,
+	persistMachineZhHantTranslation,
 	persistRecoveredOriginalContent,
 } from '@ingest/domain/content-localization-store';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
@@ -17,8 +18,10 @@ import {
 	ContentTranslationLimitError,
 	createZhHantContentTranslationChunks,
 	DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS,
+	generateZhHantMetadataTranslation,
 	hasTranslatableContent,
 	needsZhHantContentTranslation,
+	needsZhHantMetadataTranslation,
 	translateZhHantContentChunk,
 } from './domain/ai-utils';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
@@ -261,6 +264,33 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 				},
 				() => persistRecoveredOriginalContent(this.env, resourceId, resource.original_lang, originalContent),
 			);
+		}
+
+		if (needsZhHantMetadataTranslation(resource)) {
+			const translatedMetadata = await step.do(
+				'localize-zh-hant-title-summary',
+				{
+					retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' },
+					timeout: '180 seconds',
+				},
+				() => generateZhHantMetadataTranslation(resource, this.env),
+			);
+			await step.do(
+				'persist-zh-hant-title-summary',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => persistMachineZhHantTranslation(this.env, resourceId, translatedMetadata),
+			);
+			resource = {
+				...resource,
+				translations: {
+					...resource.translations,
+					[ZH_HANT_RESOURCE_LANG]: {
+						...resource.translations?.[ZH_HANT_RESOURCE_LANG],
+						...translatedMetadata,
+						source: 'machine',
+					},
+				},
+			};
 		}
 
 		if (needsZhHantContentTranslation(resource)) {

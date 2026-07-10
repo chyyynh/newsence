@@ -142,23 +142,39 @@ export async function persistRecoveredOriginalContent(env: CoreEnv, resourceId: 
 	});
 }
 
-export async function persistBackfilledZhHantContent(env: CoreEnv, resourceId: string, content: string): Promise<void> {
+export type MachineTranslationPatch = {
+	title?: string;
+	summary?: string;
+	content?: string;
+};
+
+export async function persistMachineZhHantTranslation(env: CoreEnv, resourceId: string, patch: MachineTranslationPatch): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		await db
 			.insert(resourceTranslations)
 			.values({
 				resourceId,
 				lang: 'zh-Hant',
-				content,
+				title: patch.title,
+				summary: patch.summary,
+				content: patch.content,
 				keywords: [],
 				source: 'machine',
 			})
 			.onConflictDoUpdate({
 				target: [resourceTranslations.resourceId, resourceTranslations.lang],
 				set: {
+					title: sql`CASE
+						WHEN ${resourceTranslations.source} = 'human' THEN ${resourceTranslations.title}
+						ELSE COALESCE(NULLIF(${resourceTranslations.title}, ''), excluded.title)
+					END`,
+					summary: sql`CASE
+						WHEN ${resourceTranslations.source} = 'human' THEN ${resourceTranslations.summary}
+						ELSE COALESCE(NULLIF(${resourceTranslations.summary}, ''), excluded.summary)
+					END`,
 					content: sql`CASE
 						WHEN ${resourceTranslations.source} = 'human' THEN ${resourceTranslations.content}
-						ELSE excluded.content
+						ELSE COALESCE(NULLIF(excluded.content, ''), ${resourceTranslations.content})
 					END`,
 					source: sql`CASE
 						WHEN ${resourceTranslations.source} = 'human' THEN ${resourceTranslations.source}
@@ -168,6 +184,10 @@ export async function persistBackfilledZhHantContent(env: CoreEnv, resourceId: s
 				},
 			});
 	});
+}
+
+export function persistBackfilledZhHantContent(env: CoreEnv, resourceId: string, content: string): Promise<void> {
+	return persistMachineZhHantTranslation(env, resourceId, { content });
 }
 
 export async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Promise<void> {
