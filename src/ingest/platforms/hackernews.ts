@@ -2,7 +2,7 @@ import { generateText } from '@core-ai/generation';
 import { type HackerNewsMetadata, type NormalizedContent, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { decode } from 'html-entities';
-import { scrapeGenericUrl, type WebAcquiredContent } from './web';
+import { type AcquiredWebContent, acquireWebResource } from './web';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const HN_ITEM_MAX_BYTES = 5 * 1024 * 1024;
@@ -95,14 +95,14 @@ export async function scrapeHackerNews(
 	env: CoreEnv,
 ): Promise<
 	NormalizedContent<'hackernews'> &
-		Pick<WebAcquiredContent, 'extraction' | 'ogImage'> & {
+		Pick<AcquiredWebContent, 'extraction' | 'ogImage'> & {
 			hackerNewsItem: HackerNewsItem;
 		}
 > {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
 	const title = item.title || `HN Item ${itemId}`;
-	const target: WebAcquiredContent | null = item.url ? await scrapeGenericUrl(item.url, env) : null;
+	const target: AcquiredWebContent | null = item.url ? await acquireWebResource(item.url, env) : null;
 	const hnText = item.text ? htmlToText(item.text) : '';
 	const summary = target?.metadata.description ?? (hnText.slice(0, 280) || title);
 	console.info({

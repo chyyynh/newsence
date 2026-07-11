@@ -4,7 +4,14 @@ import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
-import { EMPTY_OG_IMAGE_PATCH, fetchOgImage, type OgImagePatch, PDF_MIME, pdfExtractionMetadata, scrapeGenericUrl } from './platforms/web';
+import {
+	acquireWebResource,
+	EMPTY_OG_IMAGE_PATCH,
+	fetchOgImage,
+	type OgImagePatch,
+	PDF_MIME,
+	pdfExtractionMetadata,
+} from './platforms/web';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 
 export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
@@ -66,7 +73,7 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<Acquire
 	const hackerNewsId = extractHackerNewsId(validatedUrl);
 	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId, env));
 
-	return sanitizeAcquiredContent(await scrapeGenericUrl(validatedUrl, env));
+	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env));
 }
 
 export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {

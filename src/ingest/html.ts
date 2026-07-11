@@ -1,148 +1,63 @@
+import { canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
+import { extractFromHtml } from '@extractus/article-extractor';
 import { decode } from 'html-entities';
 
-const READABLE_CONTENT_SELECTORS = [
-	'article',
-	'[itemprop="articleBody"]',
-	'.entry-content',
-	'.post-content',
-	'.article-content',
-	'.article__content',
-	'.story-content',
-	'.post__content',
-	'.content__article-body',
-	'.article-body',
-	'[role="main"]',
-	'main',
-] as const;
+const MIN_ARTICLE_TEXT_CHARS = 180;
 
-const JUNK_SELECTORS = [
-	'script',
-	'style',
-	'noscript',
-	'template',
-	'svg',
-	'form',
-	'iframe',
-	'nav',
-	'aside',
-	'.ad-unit',
-	'.advertisement',
-	'.newsletter',
-	'.related-posts',
-] as const;
-
-const TEXT_BLOCK_SELECTORS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'pre'] as const;
-const START_MARKER = '<!--newsence-resource-content-start-->';
-const END_MARKER = '<!--newsence-resource-content-end-->';
-const GOOD_CONTENT_TEXT_CHARS = 400;
-const MIN_CONTENT_TEXT_CHARS = 180;
-const READABLE_TEXT_FALLBACK_RATIO = 1.8;
-
-export type ReadableContentHtml = {
+export type ExtractedHtmlArticle = {
 	html: string;
-	text: string;
-	selector: string;
+	title: string | null;
+	author: string | null;
+	language: string | null;
+	publishedDate: string | null;
+	siteName: string | null;
+	description: string | null;
 };
 
-function normalizeText(value: string): string {
-	return decode(value)
-		.replace(/\u00a0/g, ' ')
-		.replace(/[ \t]+\n/g, '\n')
-		.replace(/\n[ \t]+/g, '\n')
-		.replace(/[ \t]{2,}/g, ' ')
-		.replace(/\n{3,}/g, '\n\n')
-		.trim();
+function optionalText(value: string | undefined): string | null {
+	return value?.trim() || null;
 }
 
-async function cleanContentHtml(html: string): Promise<string> {
-	let rewriter = new HTMLRewriter();
-	for (const selector of JUNK_SELECTORS) {
-		rewriter = rewriter.on(selector, {
+async function extractSupplementalMetadata(html: string): Promise<{ language: string | null; siteName: string | null }> {
+	let language: string | null = null;
+	let siteName: string | null = null;
+	await new HTMLRewriter()
+		.on('html[lang]', {
 			element(element) {
-				element.remove();
-			},
-		});
-	}
-	return (await rewriter.transform(new Response(html)).text()).trim();
-}
-
-async function extractFirstElementHtml(html: string, selector: string): Promise<string | null> {
-	let found = false;
-	const marked = await new HTMLRewriter()
-		.on(selector, {
-			element(element) {
-				if (found) return;
-				found = true;
-				element.before(START_MARKER, { html: true });
-				element.onEndTag((endTag) => {
-					endTag.after(END_MARKER, { html: true });
-				});
+				language ??= canonicalizeOptionalResourceLang(element.getAttribute('lang'));
 			},
 		})
-		.transform(new Response(html))
-		.text();
-	if (!found) return null;
-
-	const start = marked.indexOf(START_MARKER);
-	const end = marked.indexOf(END_MARKER, start + START_MARKER.length);
-	if (start < 0 || end < 0) return null;
-	const extracted = marked.slice(start + START_MARKER.length, end).trim();
-	return extracted || null;
-}
-
-async function extractBlockText(html: string): Promise<string> {
-	const chunks: string[] = [];
-	let foundBlock = false;
-	const handler: HTMLRewriterElementContentHandlers = {
-		element(element) {
-			foundBlock = true;
-			element.onEndTag(() => {
-				chunks.push('\n\n');
-			});
-		},
-		text(text) {
-			if (text.text) chunks.push(text.text);
-		},
-	};
-	let rewriter = new HTMLRewriter();
-	for (const selector of TEXT_BLOCK_SELECTORS) rewriter = rewriter.on(selector, handler);
-	await rewriter.transform(new Response(html)).arrayBuffer();
-	if (foundBlock) return normalizeText(chunks.join(''));
-
-	const fallbackChunks: string[] = [];
-	await new HTMLRewriter()
-		.onDocument({
-			text(text) {
-				if (text.text) fallbackChunks.push(text.text);
+		.on('meta[property="og:locale"]', {
+			element(element) {
+				language ??= canonicalizeOptionalResourceLang(element.getAttribute('content'));
+			},
+		})
+		.on('meta[property="og:site_name"]', {
+			element(element) {
+				const content = element.getAttribute('content')?.trim();
+				if (!siteName && content) siteName = decode(content).trim() || null;
 			},
 		})
 		.transform(new Response(html))
 		.arrayBuffer();
-	return normalizeText(fallbackChunks.join(' '));
+	return { language, siteName };
 }
 
-export async function extractReadableContentHtml(html: string): Promise<ReadableContentHtml | null> {
-	let best: ReadableContentHtml | null = null;
-	for (const selector of READABLE_CONTENT_SELECTORS) {
-		const extracted = await extractFirstElementHtml(html, selector);
-		if (!extracted) continue;
+export async function extractHtmlArticle(html: string, url: string): Promise<ExtractedHtmlArticle | null> {
+	const [article, supplementalMetadata] = await Promise.all([
+		extractFromHtml(html, url, { contentLengthThreshold: MIN_ARTICLE_TEXT_CHARS }),
+		extractSupplementalMetadata(html),
+	]);
+	if (!article?.content?.trim()) return null;
+	const articleHtml = article.content.trim();
 
-		const cleanHtml = await cleanContentHtml(extracted);
-		const text = await extractBlockText(cleanHtml);
-		if (text.length < MIN_CONTENT_TEXT_CHARS) continue;
-
-		const candidate = { html: cleanHtml, text, selector };
-		if (text.length >= GOOD_CONTENT_TEXT_CHARS) return candidate;
-		if (!best || text.length > best.text.length) best = candidate;
-	}
-	return best;
-}
-
-export function preferReadableContentText(markdown: string, readable: ReadableContentHtml | null): string {
-	const trimmedMarkdown = decode(markdown).trim();
-	const readableText = normalizeText(readable?.text ?? '');
-	if (readableText.length >= GOOD_CONTENT_TEXT_CHARS && readableText.length > trimmedMarkdown.length * READABLE_TEXT_FALLBACK_RATIO) {
-		return readableText;
-	}
-	return trimmedMarkdown;
+	return {
+		html: articleHtml,
+		title: optionalText(article.title),
+		author: optionalText(article.author),
+		language: supplementalMetadata.language,
+		publishedDate: optionalText(article.published),
+		siteName: supplementalMetadata.siteName ?? optionalText(article.source),
+		description: optionalText(article.description),
+	};
 }

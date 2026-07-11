@@ -1,7 +1,6 @@
-import { canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
-import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html';
+import { extractHtmlArticle } from '@ingest/html';
 import { decode } from 'html-entities';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 
@@ -20,7 +19,7 @@ export type OgImagePatch = {
 	ogImageHeight: number | null;
 };
 
-export type WebAcquiredContent = NormalizedContent<'web' | 'pdf'> & {
+export type AcquiredWebContent = NormalizedContent<'web' | 'pdf'> & {
 	extraction?: PdfExtractionMetadata;
 	ogImage?: OgImagePatch;
 };
@@ -30,8 +29,6 @@ export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
 	ogImageWidth: null,
 	ogImageHeight: null,
 };
-
-type HtmlMetadata = NormalizedContent['metadata'] & { title: string | null };
 
 function urlHost(url: string): string {
 	return new URL(url).hostname.replace(/^www\./, '');
@@ -54,76 +51,6 @@ function titleFromFileName(fileName: string): string {
 
 export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
 	return { status: pdf.status, parser: 'liteparse', chars: pdf.chars, pages: pdf.pages };
-}
-
-function metaContentHandler(assign: (value: string) => void): HTMLRewriterElementContentHandlers {
-	return {
-		element(element) {
-			const content = element.getAttribute('content')?.trim();
-			if (content) assign(content);
-		},
-	};
-}
-
-async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetadata> {
-	let titleText = '';
-	let title: string | null = null;
-	let description: string | null = null;
-	let siteName: string | null = null;
-	let author: string | null = null;
-	let language: string | null = null;
-	let publishedDate: string | null = null;
-	const setOnce = (set: (value: string) => void, current: () => string | null) => (value: string) => {
-		if (!current()) set(value);
-	};
-
-	let rewriter = new HTMLRewriter()
-		.on('html[lang]', {
-			element(element) {
-				if (!language) language = canonicalizeOptionalResourceLang(element.getAttribute('lang'));
-			},
-		})
-		.on('title', {
-			text(text) {
-				titleText += text.text;
-			},
-		});
-	for (const [selector, assign, current] of [
-		['meta[property="og:title"]', (value: string) => (title = value), () => title],
-		['meta[name="twitter:title"]', (value: string) => (title = value), () => title],
-		['meta[property="og:description"]', (value: string) => (description = value), () => description],
-		['meta[name="description"]', (value: string) => (description = value), () => description],
-		['meta[property="og:site_name"]', (value: string) => (siteName = value), () => siteName],
-		['meta[property="og:locale"]', (value: string) => (language = canonicalizeOptionalResourceLang(value)), () => language],
-		['meta[name="author"]', (value: string) => (author = value), () => author],
-		['meta[property="article:author"]', (value: string) => (author = value), () => author],
-		['meta[property="article:published_time"]', (value: string) => (publishedDate = value), () => publishedDate],
-	] as const) {
-		rewriter = rewriter.on(selector, metaContentHandler(setOnce(assign, current)));
-	}
-
-	await rewriter
-		.on('time[datetime]', {
-			element(element) {
-				if (!publishedDate) publishedDate = element.getAttribute('datetime')?.trim() || null;
-			},
-		})
-		.transform(new Response(html))
-		.arrayBuffer();
-
-	const clean = (value: string | null): string | null => {
-		const decoded = value ? decode(value).trim() : '';
-		return decoded || null;
-	};
-
-	return {
-		title: clean(title) ?? clean(titleText),
-		author: clean(author),
-		language,
-		publishedDate: clean(publishedDate),
-		siteName: clean(siteName) ?? urlHost(url),
-		description: clean(description),
-	};
 }
 
 function parsePositiveInt(raw: string | null): number | null {
@@ -220,15 +147,20 @@ function stripLeadingFrontmatter(markdown: string): string {
 }
 
 async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
-	const result = await env.AI.toMarkdown({
-		name: fileNameFromUrl(url, `${urlHost(url)}.html`),
-		blob: new Blob([html], { type: 'text/html' }),
-	});
+	const result = await env.AI.toMarkdown(
+		{
+			name: fileNameFromUrl(url, `${urlHost(url)}.html`),
+			blob: new Blob([html], { type: 'text/html' }),
+		},
+		{
+			conversionOptions: { html: { hostname: new URL(url).hostname } },
+		},
+	);
 	if (result.format === 'error') throw new Error(`Workers AI toMarkdown failed: ${result.error}`);
 	return result.data.trim();
 }
 
-async function scrapePdfBytes(bytes: Uint8Array, url: string, fileName: string): Promise<WebAcquiredContent> {
+async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string): Promise<AcquiredWebContent> {
 	const parsed = await parsePdfBytes(bytes);
 	const title = titleFromFileName(fileName) || 'PDF document';
 	return {
@@ -250,37 +182,39 @@ async function scrapePdfBytes(bytes: Uint8Array, url: string, fileName: string):
 	};
 }
 
-async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquiredContent> {
+async function acquirePdfResponse(url: string, response: Response): Promise<AcquiredWebContent> {
 	const finalUrl = response.url || url;
 	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
-	return scrapePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
+	return acquirePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
 }
 
-async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<WebAcquiredContent> {
-	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableContentHtml(html)]);
-	const markdown = await markdownFromHtml(env, readable?.html ?? html, url);
-	const content = stripLeadingFrontmatter(preferReadableContentText(markdown, readable));
+async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, fileName: string): Promise<AcquiredWebContent> {
+	const article = await extractHtmlArticle(html, url);
+	if (!article) throw new Error(`No readable article content found: ${url}`);
+
+	const markdown = await markdownFromHtml(env, article.html, url);
+	const content = stripLeadingFrontmatter(markdown);
 	if (content.length < MIN_HTML_CONTENT_CHARS) {
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
-	const title = metadata.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
+	const title = article.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
 	return {
 		type: 'web',
 		title,
 		markdown: content,
 		metadata: {
-			author: metadata.author,
-			language: metadata.language,
-			publishedDate: metadata.publishedDate,
-			siteName: metadata.siteName,
-			description: metadata.description,
+			author: article.author,
+			language: article.language,
+			publishedDate: article.publishedDate,
+			siteName: article.siteName ?? urlHost(url),
+			description: article.description,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
 		ogImage: extractOgImageFromHtml(html, url),
 	};
 }
 
-async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
+export async function acquireWebResource(url: string, env: CoreEnv): Promise<AcquiredWebContent> {
 	const response = await fetchWithTimeout(
 		url,
 		{
@@ -299,7 +233,7 @@ async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcq
 
 	const contentType = response.headers.get('content-type')?.toLowerCase() || '';
 	if (contentType.includes(PDF_MIME) || new URL(response.url || url).pathname.toLowerCase().endsWith('.pdf')) {
-		return scrapePdfUrl(url, response);
+		return acquirePdfResponse(url, response);
 	}
 	if (
 		contentType &&
@@ -314,9 +248,5 @@ async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcq
 
 	const finalUrl = response.url || url;
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-	return scrapeHtmlContent(env, html, finalUrl, fileNameFromUrl(finalUrl, `${urlHost(finalUrl)}.html`));
-}
-
-export function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
-	return scrapeGenericUrlDirect(url, env);
+	return acquireHtmlArticle(env, html, finalUrl, fileNameFromUrl(finalUrl, `${urlHost(finalUrl)}.html`));
 }
