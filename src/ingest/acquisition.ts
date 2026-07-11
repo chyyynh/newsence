@@ -1,6 +1,7 @@
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { isResourceType } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
-import { isResourceType } from '../resources/types';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
@@ -122,4 +123,31 @@ export async function readAcquiredContentArtifact(artifact: ReadableStream<Uint8
 	const acquired: unknown = await new Response(artifact).json();
 	if (!isAcquiredContent(acquired)) throw new Error('Acquisition artifact did not contain valid content');
 	return acquired;
+}
+
+export type AcquisitionWorkflowParams = { url: string };
+
+export async function createAcquisitionJob(env: CoreEnv, url: string) {
+	const validatedUrl = validateAcquisitionUrl(url);
+	const instance = await env.ACQUISITION_WORKFLOW.create({
+		id: `acquisition-${crypto.randomUUID()}`,
+		params: { url: validatedUrl },
+	});
+	return { id: instance.id, details: await instance.status() };
+}
+
+export async function getAcquisitionJobStatus(env: CoreEnv, instanceId: string) {
+	const instance = await env.ACQUISITION_WORKFLOW.get(instanceId);
+	return instance.status();
+}
+
+export class AcquisitionWorkflow extends WorkflowEntrypoint<CoreEnv, AcquisitionWorkflowParams> {
+	async run(event: WorkflowEvent<AcquisitionWorkflowParams>, step: WorkflowStep): Promise<AcquiredContent> {
+		const artifact = await step.do(
+			'acquire',
+			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => scrapeSavedUrlArtifact(event.payload.url, this.env),
+		);
+		return readAcquiredContentArtifact(artifact);
+	}
 }

@@ -1,7 +1,7 @@
+import type { SourcePlatform } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { sources } from '@db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
-import type { SourcePlatform } from '../../resources/types';
 
 export type MonitoredSource = {
 	id: string;

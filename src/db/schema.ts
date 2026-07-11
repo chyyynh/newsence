@@ -1,6 +1,12 @@
+import {
+	RESOURCE_CATEGORIES,
+	RESOURCE_SCOPES,
+	RESOURCE_TRANSLATION_SOURCES,
+	RESOURCE_TYPES,
+	SOURCE_PLATFORMS,
+} from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
 import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
-import { RESOURCE_CATEGORIES, RESOURCE_SCOPES, RESOURCE_TRANSLATION_SOURCES, RESOURCE_TYPES, SOURCE_PLATFORMS } from '../resources/types';
 
 export const resources = pgTable(
 	'resources',

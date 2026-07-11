@@ -3,22 +3,20 @@ import { timingSafeEqual } from 'node:crypto';
 import { readTextWithLimit } from '@core-shared/web';
 import {
 	type AcquiredContent,
+	AcquisitionWorkflow,
 	type BlobAcquisitionInput,
+	createAcquisitionJob as createAcquisitionWorkflowJob,
+	getAcquisitionJobStatus as readAcquisitionJobStatus,
 	scrapeBlob as scrapeBlobContent,
 	scrapeSavedUrl,
 	validateAcquisitionUrl,
 } from '@ingest/acquisition';
-import {
-	AcquisitionWorkflow,
-	createAcquisitionJob as createAcquisitionWorkflowJob,
-	getAcquisitionJobStatus as readAcquisitionJobStatus,
-} from '@ingest/acquisition-workflow';
 import { ContentLocalizationWorkflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, enqueueResourceResync, NewsenceMonitorWorkflow } from '@ingest/workflow';
-import { CorpusSearchReindexWorkflow, startCorpusSearchReindex } from './ai-search-reindex-workflow';
+import { CorpusSearchReindexWorkflow, startCorpusSearchReindex } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';

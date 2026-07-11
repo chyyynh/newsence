@@ -1,4 +1,4 @@
-import type { ResourceCategory, ResourceScope, ResourceTranslationSource, ResourceType } from '../resources/types';
+import type { ResourceCategory, ResourceScope, ResourceTranslationSource, ResourceType } from '@core-shared/resource-types';
 
 export type ResourceLocaleText = {
 	title?: string | null;

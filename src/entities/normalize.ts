@@ -4,8 +4,8 @@
 // storing and under WHAT canonical key. Consumed by the ingest
 // pipeline (persistence + prompt exclusion lists).
 
+import type { ResourceType } from '@core-shared/resource-types';
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
-import type { ResourceType } from '../resources/types';
 
 export type ResourceEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedResourceEntity = { name: string; name_cn: string; type: EntityType };

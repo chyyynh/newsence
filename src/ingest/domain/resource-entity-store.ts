@@ -1,8 +1,8 @@
+import type { ResourceTranslationSource, ResourceType } from '@core-shared/resource-types';
 import type { CoreDb } from '@db/client';
 import { entities, entityTranslations, resourceEntities } from '@db/schema';
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
-import type { ResourceTranslationSource, ResourceType } from '../../resources/types';
 
 export async function syncResourceEntities(
 	db: CoreDb,

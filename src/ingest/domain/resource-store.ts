@@ -1,8 +1,3 @@
-import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
-import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
-import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
-import { textArraySql } from '@db/sql';
-import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import {
 	canonicalizeOptionalResourceLang,
 	canonicalizeResourceLang,
@@ -16,7 +11,12 @@ import {
 	type ResourceScope,
 	type ResourceTranslationSource,
 	type ResourceType,
-} from '../../resources/types';
+} from '@core-shared/resource-types';
+import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
+import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
+import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
+import { textArraySql } from '@db/sql';
+import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import { type ResourceTranslationWrite, upsertResourceTranslation } from './resource-translation-store';
 import { mergePlatformMetadata, type ResourceUpdate, ResourceUpdateBuilder } from './resource-update';
 

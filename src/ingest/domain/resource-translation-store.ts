@@ -1,7 +1,7 @@
+import type { ResourceTranslationSource } from '@core-shared/resource-types';
 import type { CoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
-import type { ResourceTranslationSource } from '../../resources/types';
 
 export type ResourceTranslationWrite = {
 	resourceId: string;

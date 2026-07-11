@@ -1,5 +1,5 @@
+import { canonicalizeOptionalResourceLang, type ResourceType } from '@core-shared/resource-types';
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import { canonicalizeOptionalResourceLang, type ResourceType } from '../../resources/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 

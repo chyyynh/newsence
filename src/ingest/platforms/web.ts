@@ -1,8 +1,8 @@
+import { canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
 import { decodeHtmlEntities } from '@ingest/html-entities';
-import { canonicalizeOptionalResourceLang } from '../../resources/types';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 import { type RenderedWebContent, scrapeUrlWithRenderedContent } from './rendered-content';
 

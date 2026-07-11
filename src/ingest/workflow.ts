@@ -14,9 +14,8 @@ import {
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { enqueueContentLocalization } from './content-localization-workflow';
+import { enqueueContentLocalization, getPersistedResourceContentHashForLocalization } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
-import { getPersistedResourceContentHashForLocalization } from './domain/content-localization-store';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
 import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';

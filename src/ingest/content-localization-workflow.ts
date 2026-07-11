@@ -1,11 +1,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import {
-	clearMachineZhHantContent,
-	persistMachineZhHantContent,
-	persistMachineZhHantTranslation,
-} from '@ingest/domain/content-localization-store';
+import { RESOURCE_ORIGINAL_CONTENT_TYPES, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
+import { withCoreDb } from '@db/client';
+import { textArraySql } from '@db/sql';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
-import { ZH_HANT_RESOURCE_LANG } from '../resources/types';
+import { upsertResourceTranslation } from '@ingest/domain/resource-translation-store';
+import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	assembleZhHantContentTranslation,
@@ -18,6 +17,62 @@ import {
 	translateZhHantContentChunk,
 } from './domain/ai-utils';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
+
+export async function getPersistedResourceContentHashForLocalization(env: CoreEnv, resourceId: string): Promise<string | null> {
+	return withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			SELECT md5(original.content) AS source_content_hash
+			FROM resources resource
+			JOIN resource_translations original
+			  ON original.resource_id = resource.id
+			 AND original.lang = resource.original_lang
+			WHERE resource.id = ${resourceId}::uuid
+			  AND resource.scope = 'corpus'
+			  AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
+			  AND resource.url IS NOT NULL
+			  AND resource.original_lang <> 'zh-Hant'
+			  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
+			  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+			LIMIT 1
+		`);
+		return (result.rows as Array<{ source_content_hash: string }>)[0]?.source_content_hash ?? null;
+	});
+}
+
+type MachineTranslationPatch = {
+	title?: string;
+	summary?: string;
+	content?: string;
+};
+
+async function persistMachineZhHantTranslation(env: CoreEnv, resourceId: string, patch: MachineTranslationPatch): Promise<void> {
+	const persisted = await withCoreDb(env, (db) =>
+		upsertResourceTranslation(db, {
+			resourceId,
+			lang: ZH_HANT_RESOURCE_LANG,
+			...patch,
+			keywords: [],
+			source: 'machine',
+		}),
+	);
+	if (!persisted) throw new Error(`Failed to persist machine translation for resource ${resourceId}`);
+}
+
+function persistMachineZhHantContent(env: CoreEnv, resourceId: string, content: string): Promise<void> {
+	return persistMachineZhHantTranslation(env, resourceId, { content });
+}
+
+async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		await db.execute(sql`
+			UPDATE resource_translations
+			SET content = NULL, updated_at = NOW()
+			WHERE resource_id = ${resourceId}::uuid
+			  AND lang = ${ZH_HANT_RESOURCE_LANG}
+			  AND source = 'machine'
+		`);
+	});
+}
 
 type ContentLocalizationPayload = { resourceId: string };
 

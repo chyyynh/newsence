@@ -1,6 +1,8 @@
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows } from '@db/sql';
 import { sql } from 'drizzle-orm';
+import { enqueueOrRestartWorkflow } from './workflow-control';
 
 const INSTANCE_NAME = 'newsence-corpus';
 const ITEM_PREFIX = 'resources/';
@@ -168,4 +170,54 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, fromDate?: 
 		scores.set(id, Math.max(scores.get(id) ?? 0, chunk.score));
 	}
 	return [...scores].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score);
+}
+
+type CorpusSearchReindexPayload = { revision: string };
+
+const CORPUS_SEARCH_INDEX_REVISION = 'v1';
+const REINDEX_PAGE_SIZE = 50;
+const REINDEX_UPLOAD_CONCURRENCY = 10;
+
+export function startCorpusSearchReindex(env: CoreEnv): Promise<string> {
+	return enqueueOrRestartWorkflow(env.CORPUS_SEARCH_REINDEX_WORKFLOW, `corpus-search-reindex-${CORPUS_SEARCH_INDEX_REVISION}`, {
+		revision: CORPUS_SEARCH_INDEX_REVISION,
+	});
+}
+
+export class CorpusSearchReindexWorkflow extends WorkflowEntrypoint<CoreEnv, CorpusSearchReindexPayload> {
+	async run(event: WorkflowEvent<CorpusSearchReindexPayload>, step: WorkflowStep) {
+		let cursor: string | null = null;
+		let uploaded = 0;
+		let page = 0;
+
+		while (true) {
+			const ids = await step.do(
+				`load-corpus-page-${page}`,
+				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+				() => listCorpusIdsAfter(this.env, cursor, REINDEX_PAGE_SIZE),
+			);
+			if (!ids.length) break;
+
+			const pageUploaded = await step.do(
+				`upload-corpus-page-${page}`,
+				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
+				async () => {
+					let count = 0;
+					for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
+						const batch = ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY);
+						const synced = await Promise.all(batch.map((id) => syncCorpusItem(this.env, id)));
+						count += synced.filter((result) => result === 'uploaded').length;
+					}
+					return count;
+				},
+			);
+			uploaded += pageUploaded;
+
+			cursor = ids.at(-1)!;
+			page++;
+			console.info({ tag: 'AI_SEARCH', msg: 'Reindex page complete', revision: event.payload.revision, page, cursor, uploaded });
+		}
+
+		return { revision: event.payload.revision, uploaded, pages: page, cursor };
+	}
 }

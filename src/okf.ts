@@ -4,13 +4,13 @@
 // Entity links are read from resource_entities, which the ingest pipeline and
 // #219 backfill normalize before storage.
 
+import type { ResourceCategory, ResourceType } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, toIsoString, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { type OkfFile, tarGzipStream } from './okf/archive';
 import { assignPaths, compactMarkdown, frontmatter, groupBy, markdownLink, oneLine, uniqueBy, uniqueSlug } from './okf/markdown';
 import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
-import type { ResourceCategory, ResourceType } from './resources/types';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;

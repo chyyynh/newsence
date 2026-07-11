@@ -1,8 +1,8 @@
 import { generateObject, generateText } from '@core-ai/generation';
+import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { ENTITY_TYPES, type PlatformEnrichments, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 
 export interface ProcessorResult {
 	updateData: {
