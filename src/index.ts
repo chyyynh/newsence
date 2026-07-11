@@ -4,10 +4,8 @@ import { readTextWithLimit } from '@core-shared/web';
 import {
 	type AcquiredContent,
 	AcquisitionWorkflow,
-	type BlobAcquisitionInput,
 	createAcquisitionJob as createAcquisitionWorkflowJob,
 	getAcquisitionJobStatus as readAcquisitionJobStatus,
-	scrapeBlob as scrapeBlobContent,
 	scrapeSavedUrl,
 	validateAcquisitionUrl,
 } from '@ingest/acquisition';
@@ -162,11 +160,6 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Synchronously acquire one URL without DB persistence. */
 	scrapeUrl(url: string): Promise<AcquiredContent> {
 		return scrapeSavedUrl(url, this.env);
-	}
-
-	/** Synchronously acquire one uploaded blob without DB persistence. */
-	scrapeBlob(input: BlobAcquisitionInput): Promise<AcquiredContent> {
-		return scrapeBlobContent(input, this.env);
 	}
 
 	/** Start a durable acquisition job for external pollers. */

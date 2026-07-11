@@ -5,20 +5,10 @@ import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
-import {
-	type BlobAcquisitionInput,
-	EMPTY_OG_IMAGE_PATCH,
-	fetchOgImage,
-	type OgImagePatch,
-	PDF_MIME,
-	pdfExtractionMetadata,
-	scrapeGenericUrl,
-	scrapeBlob as scrapeWebBlob,
-} from './platforms/web';
+import { EMPTY_OG_IMAGE_PATCH, fetchOgImage, type OgImagePatch, PDF_MIME, pdfExtractionMetadata, scrapeGenericUrl } from './platforms/web';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 
 export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
-export type { BlobAcquisitionInput };
 export type { PdfExtractionMetadata } from '@core-shared/types';
 export type { OgImagePatch };
 
@@ -77,10 +67,6 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<Acquire
 	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId));
 
 	return sanitizeAcquiredContent(await scrapeGenericUrl(validatedUrl, env));
-}
-
-export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<AcquiredContent> {
-	return sanitizeAcquiredContent(await scrapeWebBlob(input, env));
 }
 
 export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {

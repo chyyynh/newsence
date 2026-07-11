@@ -19,16 +19,9 @@ export type OgImagePatch = {
 	ogImageHeight: number | null;
 };
 
-export type WebAcquiredContent = NormalizedContent<'web' | 'pdf' | 'file'> & {
+export type WebAcquiredContent = NormalizedContent<'web' | 'pdf'> & {
 	extraction?: PdfExtractionMetadata;
 	ogImage?: OgImagePatch;
-};
-
-export type BlobAcquisitionInput = {
-	bytes: ArrayBuffer | Uint8Array;
-	fileName?: string | null;
-	mimeType?: string | null;
-	sourceUrl?: string | null;
 };
 
 export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
@@ -56,34 +49,6 @@ function fileNameFromUrl(url: string, fallback: string): string {
 
 function titleFromFileName(fileName: string): string {
 	return fileName.replace(/\.[a-z0-9]+$/i, '').trim() || fileName;
-}
-
-function fallbackBlobUrl(fileName: string): string {
-	return `https://blob.newsence.local/${encodeURIComponent(fileName)}`;
-}
-
-function normalizeBlobSourceUrl(raw: string | null | undefined, fileName: string): string {
-	if (raw) {
-		try {
-			const parsed = new URL(raw);
-			if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.toString();
-		} catch {
-			// Fall through to a deterministic synthetic URL.
-		}
-	}
-	return fallbackBlobUrl(fileName);
-}
-
-function normalizeBlobBytes(bytes: ArrayBuffer | Uint8Array): Uint8Array {
-	return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-}
-
-function isPdfBytes(bytes: Uint8Array): boolean {
-	return bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
-}
-
-function isHtmlLike(text: string): boolean {
-	return /<!doctype\s+html|<html[\s>]|<article[\s>]|<body[\s>]/i.test(text.slice(0, 2048));
 }
 
 export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
@@ -305,50 +270,6 @@ async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileNa
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
 		ogImage: extractOgImageFromHtml(html, url),
 	};
-}
-
-function scrapeTextBlob(text: string, fileName: string): WebAcquiredContent {
-	const title = titleFromMarkdown(text) ?? titleFromFileName(fileName);
-	return {
-		type: 'file',
-		title,
-		markdown: text.trim(),
-		metadata: {
-			author: null,
-			language: null,
-			publishedDate: null,
-			siteName: null,
-			description: text.trim().slice(0, 500) || null,
-		},
-		platformMetadata: {
-			fetchedAt: new Date().toISOString(),
-			data: null,
-		},
-	};
-}
-
-export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<WebAcquiredContent> {
-	const bytes = normalizeBlobBytes(input.bytes);
-	const mimeType = input.mimeType?.toLowerCase().split(';')[0]?.trim() || null;
-	const fileName = input.fileName?.trim() || (mimeType === PDF_MIME || isPdfBytes(bytes) ? 'document.pdf' : 'document.html');
-	const sourceUrl = normalizeBlobSourceUrl(input.sourceUrl?.trim(), fileName);
-	const isPdf = mimeType === PDF_MIME || /\.pdf$/i.test(fileName) || isPdfBytes(bytes);
-	const maxBytes = isPdf ? GENERIC_PDF_MAX_BYTES : GENERIC_HTML_MAX_BYTES;
-	if (bytes.byteLength > maxBytes) throw new Error(`Blob exceeded ${maxBytes} bytes`);
-
-	if (isPdf) {
-		return scrapePdfBytes(bytes, sourceUrl, fileName);
-	}
-
-	const text = new TextDecoder().decode(bytes);
-	if (mimeType?.includes('html') || /\.html?$/i.test(fileName) || isHtmlLike(text)) {
-		return scrapeHtmlContent(env, text, sourceUrl, fileName);
-	}
-	if (mimeType?.startsWith('text/') || /\.(md|markdown|txt)$/i.test(fileName)) {
-		return scrapeTextBlob(text, fileName);
-	}
-
-	throw new Error(`Unsupported blob content type: ${mimeType ?? 'unknown'}`);
 }
 
 async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
