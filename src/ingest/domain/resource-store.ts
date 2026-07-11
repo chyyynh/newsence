@@ -263,7 +263,6 @@ interface ResourceMirrorRecord {
 	category: ResourceCategory | null;
 	ogImageUrl: string | null;
 	platformMetadataJson: string | null;
-	embedding: string | null;
 	enrichmentStatus: ResourceEnrichmentStatus;
 }
 
@@ -278,12 +277,6 @@ function dateValue(value: unknown, field: string): Date {
 	const date = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
 	if (!date || Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}: expected date`);
 	return date;
-}
-
-function nullableVector(value: unknown, field: string): string | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value !== 'string') throw new Error(`Invalid ${field}: expected vector string`);
-	return value;
 }
 
 /**
@@ -315,7 +308,6 @@ export async function updateResourceAfterProcessing(
 		       category = COALESCE(${record.category}, resources.category),
 		       og_image_url = COALESCE(NULLIF(${record.ogImageUrl}, ''), resources.og_image_url),
 		       platform_metadata = COALESCE(${record.platformMetadataJson}::jsonb, resources.platform_metadata),
-		       embedding = COALESCE(${record.embedding}::vector, resources.embedding),
 		       enrichment_status = 'enriched',
 		       updated_at = now()
 		 WHERE id = ${resourceId}::uuid
@@ -395,7 +387,6 @@ function resourceMirrorRecord(
 		category: deriveResourceCategory(storedPlatformMetadata, tags),
 		ogImageUrl: cleanString(updatePayload.og_image_url),
 		platformMetadataJson: jsonbParam(storedPlatformMetadata),
-		embedding: nullableVector(updatePayload.embedding, 'embedding'),
 		enrichmentStatus,
 	};
 }
@@ -437,7 +428,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 		INSERT INTO resources (
 			id, type, scope, url, normalized_url, storage_key, file_type,
 			original_lang, published_date, scraped_date, tags, category,
-			og_image_url, platform_metadata, embedding, enrichment_status,
+			og_image_url, platform_metadata, enrichment_status,
 			created_at, updated_at
 		)
 		VALUES (
@@ -455,7 +446,6 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			${record.category},
 			${record.ogImageUrl},
 			${record.platformMetadataJson}::jsonb,
-			${record.embedding}::vector,
 			${record.enrichmentStatus},
 			now(),
 			now()
@@ -499,7 +489,6 @@ function resourceConflictSetSql(): SQL {
 			WHEN ${preserveEnriched} THEN resources.platform_metadata
 			ELSE COALESCE(excluded.platform_metadata, resources.platform_metadata)
 		END,
-		embedding = CASE WHEN ${preserveEnriched} THEN resources.embedding ELSE COALESCE(excluded.embedding, resources.embedding) END,
 		enrichment_status = CASE
 			WHEN ${preserveEnriched} THEN resources.enrichment_status
 			ELSE excluded.enrichment_status
@@ -663,7 +652,6 @@ export async function reopenResourceForReprocessing(
 			.set({
 				platformMetadata: mergePlatformMetadata(resource.platform_metadata, update.platformMetadata),
 				enrichmentStatus: 'pending',
-				embedding: null,
 				updatedAt: sql`NOW()`,
 			})
 			.where(eq(resources.id, resourceId));

@@ -191,7 +191,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return readAcquisitionJobStatus(this.env, instanceId);
 	}
 
-	/** Hybrid resource search (embeddings + keywords) for the chat search-news tool. */
+	/** Hybrid AI Search retrieval for the chat search-news tool. */
 	searchResources(input: ResourceSearchInput) {
 		return searchCorpusResources(this.env, input);
 	}

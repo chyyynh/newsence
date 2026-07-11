@@ -20,7 +20,7 @@
 
 ## newsence 是什麼？
 
-[**newsence.app**](https://www.newsence.app) 的引擎。支援 RSS、Twitter/X、YouTube、Hacker News、一般網頁與上傳檔案，自動中英雙語 AI 分析、Embedding 還有知識圖譜。遵循 [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 模式 — 每個來源讀一次就整合進一個持續成品（摘要、實體、embeddings、交叉引用），不是 query time 才做 RAG。
+[**newsence.app**](https://www.newsence.app) 的引擎。支援 RSS、Twitter/X、YouTube、Hacker News、一般網頁與上傳檔案，自動中英雙語 AI 分析與知識圖譜，並將完成 enrichment 的 corpus resource 同步到 Cloudflare AI Search。
 
 ## 支援平台
 
@@ -45,14 +45,14 @@
 每個 resource 經過自動化 workflow，各步驟獨立重試：
 
 ```
-內容進入（source monitor / saved URL / uploaded blob / retry）
+內容進入（source monitor / saved URL / uploaded blob / resync）
   │
   ├─ 1. 讀取 Resource ───── canonical resources row；抓取 URL 內容或抽取上傳 PDF 文字
   ├─ 2. AI 分析 ──────────── AI Gateway text/JSON calls → 中英標題、摘要、標籤、關鍵字、實體
   ├─ 3. 存入資料庫 ────────── 更新 resources + resource_translations
   ├─    同步實體 ─────────── 將實體寫入正規化表格，透過 resource_entities 建立關聯
   ├─ 4. YouTube 精華 ─────── （僅 YouTube）從字幕生成 AI 精華段落
-  └─ 5. 生成 Embedding ──── BGE-M3 → 1024 維向量（標題 + 摘要 + 全文 + 實體名稱）
+  └─ 5. 同步 AI Search ───── 將完成 enrichment 的 corpus 文件上傳到 Cloudflare AI Search
 ```
 
 每個 resource 約 30 秒完成。每步獨立重試，指數退避。
@@ -63,7 +63,7 @@
 | ------------ | ----------------- | ----------------------------------------------------------- |
 | **分析**     | AI Gateway text model | Resource → 中英標題、摘要、標籤、關鍵字、分類               |
 | **實體提取** | AI Gateway JSON model | Resource → 具名實體（人物、組織、產品、技術、事件），含中英名稱 |
-| **向量生成** | BGE-M3（1024 維）     | 標題 + 摘要 + 全文 + 實體名稱 → 語意向量（HNSW 索引）       |
+| **搜尋索引** | Cloudflare AI Search  | 對完成 enrichment 的 corpus 文件提供 hybrid retrieval       |
 
 翻譯/摘要與分類/實體是分開的 structured calls，避免其中一個 schema 失敗就讓整個 resource 落入 fallback。
 
@@ -73,9 +73,9 @@
 | ------------ | --------------------------------------------------- |
 | 運行環境     | Cloudflare Workers（V8 isolates）                   |
 | 任務編排     | Cloudflare Workflows                                |
-| 資料庫       | PostgreSQL + pgvector（透過 Cloudflare Hyperdrive） |
+| 資料庫       | PostgreSQL（透過 Cloudflare Hyperdrive）            |
 | 大語言模型   | Cloudflare AI Gateway                               |
-| 向量生成     | Cloudflare Workers AI → BGE-M3                      |
+| 搜尋         | Cloudflare AI Search                                |
 | Twitter 數據 | Kaito API（第三方）                                 |
 
 ## 自行部署
@@ -84,7 +84,7 @@
 
 ### 1. 資料庫
 
-需要一個裝了 pgvector 的 PostgreSQL。目前跑在 PlanetScale Postgres（透過 Cloudflare Hyperdrive）；任何 Postgres ≥ 15 + `vector` extension 都行。
+需要一個 PostgreSQL。正式環境目前透過 Cloudflare Hyperdrive 連到 PlanetScale Postgres。
 
 需要的表：`resources`、`resource_translations`、`library`、`rss_list`、`youtube_transcripts`，以及 entity / citation / paper 相關表格。完整 schema 定義在 `web-tanstack/prisma/schema.prisma`，並在 worker 的 `src/db/schema.ts` 中同步。目前可以參考這兩份 schema，或在 Issues 聯絡我。
 
@@ -105,7 +105,7 @@ Workflows 會在第一次 deploy 時透過 `wrangler.jsonc` 裡的 `workflows` b
 
 ### 4. Secrets
 
-AI 分析與向量生成都走 Workers AI binding，不需要外部 LLM secret。平台/API secrets 由 Wrangler config 設為必填：
+AI 分析透過 Workers AI binding 與 AI Gateway 執行，不需要外部 LLM secret。平台/API secrets 由 Wrangler config 設為必填：
 
 ```bash
 wrangler secret put KAITO_API_KEY            # Twitter 監控
@@ -170,7 +170,8 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
 | `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
 | `R2`               | 讀取 app-owned uploaded blob，供 PDF extraction 使用 |
-| `AI`               | Workers AI binding（AI Gateway 文字呼叫 + BGE-M3 向量生成） |
+| `AI`               | Workers AI binding（AI Gateway 文字呼叫）   |
+| `AI_SEARCH`        | Cloudflare AI Search corpus namespace       |
 
 Secrets（透過 `wrangler secret put` 設定）：
 

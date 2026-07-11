@@ -1,4 +1,4 @@
-import { generateText } from '@core-ai/embedding';
+import { generateText } from '@core-ai/generation';
 import {
 	type HackerNewsMetadata,
 	type NormalizedContent,

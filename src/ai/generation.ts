@@ -5,7 +5,7 @@ const CORE_TEXT_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 const DEFAULT_AI_GATEWAY_ID = 'default';
 
-type AiBinding = Ai;
+type GenerationAiBinding = Ai;
 type AiMessage = { role: 'system' | 'user'; content: string };
 // Generated Worker types strongly type Workers AI catalog models, while AI
 // Gateway also accepts third-party `{provider}/{model}` names from docs.
@@ -25,7 +25,7 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
 }
 
-export async function generateText(ai: AiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
+export async function generateText(ai: GenerationAiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string | null> {
 	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
 	const inputs = {
 		contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -65,7 +65,7 @@ export async function generateText(ai: AiBinding, prompt: string, options: Gener
 	return null;
 }
 
-export async function generateObject<T>(ai: AiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
+export async function generateObject<T>(ai: GenerationAiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T | null> {
 	const { gatewayId: gatewayIdValue, schema, systemPrompt, task } = options;
 	const schemaName = (task ?? 'structured-output').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'structured_output';
 	const messages: AiMessage[] = [

@@ -13,7 +13,6 @@ export type ResourceUpdate = {
 	entities: ProcessorResult['updateData']['entities'];
 	og_image_url: string | null;
 	platform_metadata: PlatformMetadata | undefined;
-	embedding: string | null;
 };
 
 type ResourceMetadataPatch = Record<string, unknown>;
@@ -76,7 +75,6 @@ export class ResourceUpdateBuilder {
 			entities: undefined,
 			og_image_url: resource.og_image_url ?? null,
 			platform_metadata: resource.platform_metadata,
-			embedding: null,
 		};
 	}
 
@@ -96,7 +94,7 @@ export class ResourceUpdateBuilder {
 		return this.addMetadataPatch({ data: paperEnrichment });
 	}
 
-	applyProcessorResult(result: ProcessorResult, embedding?: number[] | null): this {
+	applyProcessorResult(result: ProcessorResult): this {
 		const { updateData } = result;
 		if (updateData.summary !== undefined) this.update.summary = updateData.summary;
 		if (updateData.content !== undefined) this.update.content = updateData.content;
@@ -125,7 +123,6 @@ export class ResourceUpdateBuilder {
 			};
 		}
 		this.update.platform_metadata = mergedMetadata;
-		if (embedding?.length) this.update.embedding = `[${embedding.join(',')}]`;
 		return this;
 	}
 

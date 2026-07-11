@@ -1,19 +1,6 @@
 import type { TranscriptSegment } from '@core-shared/types';
 import { sql } from 'drizzle-orm';
-import {
-	boolean,
-	customType,
-	index,
-	integer,
-	jsonb,
-	pgTable,
-	primaryKey,
-	text,
-	timestamp,
-	uniqueIndex,
-	uuid,
-	varchar,
-} from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import {
 	RESOURCE_CATEGORIES,
 	RESOURCE_LOCALIZATION_STATUSES,
@@ -22,18 +9,6 @@ import {
 	RESOURCE_TYPES,
 	SOURCE_PLATFORMS,
 } from '../resources/types';
-
-const vector1024 = customType<{ data: string; driverData: string }>({
-	dataType() {
-		return 'vector(1024)';
-	},
-});
-
-const tsvector = customType<{ data: string; driverData: string }>({
-	dataType() {
-		return 'tsvector';
-	},
-});
 
 export const resources = pgTable(
 	'resources',
@@ -52,8 +27,6 @@ export const resources = pgTable(
 		category: text('category', { enum: RESOURCE_CATEGORIES }),
 		ogImageUrl: text('og_image_url'),
 		platformMetadata: jsonb('platform_metadata').$type<unknown>(),
-		searchVector: tsvector('search_vector'),
-		embedding: vector1024('embedding'),
 		enrichmentStatus: text('enrichment_status', { enum: ['pending', 'enriched', 'failed'] })
 			.default('pending')
 			.notNull(),

@@ -1,4 +1,4 @@
-import { CORE_JSON_MODEL, generateObject } from '@core-ai/embedding';
+import { CORE_JSON_MODEL, generateObject } from '@core-ai/generation';
 import { platformMetadataFor, type ResourceForProcessing, type TranscriptSegment, type YoutubeTranscript } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';

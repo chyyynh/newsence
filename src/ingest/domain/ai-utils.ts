@@ -1,4 +1,4 @@
-import { generateObject, generateText } from '@core-ai/embedding';
+import { generateObject, generateText } from '@core-ai/generation';
 import { ENTITY_TYPES, type PlatformEnrichments, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
