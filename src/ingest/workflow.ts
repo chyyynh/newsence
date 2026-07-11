@@ -3,6 +3,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import { syncCorpusItem } from '../ai-search';
+import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
 	acquisitionHttpStatus,
@@ -13,7 +14,7 @@ import {
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { enqueueContentLocalization, enqueueOrRestartWorkflow } from './content-localization-workflow';
+import { enqueueContentLocalization } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { getPersistedResourceContentHashForLocalization } from './domain/content-localization-store';
 import { applyAcquiredContent } from './domain/resource-update';

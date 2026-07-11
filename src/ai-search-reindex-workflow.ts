@@ -1,14 +1,22 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { listCorpusIdsAfter, syncCorpusItem } from './ai-search';
+import { enqueueOrRestartWorkflow } from './workflow-control';
 
-type CorpusSearchBackfillPayload = { cursor?: string };
+type CorpusSearchReindexPayload = { revision: string };
 
+const CORPUS_SEARCH_INDEX_REVISION = 'v1';
 const PAGE_SIZE = 50;
 const UPLOAD_CONCURRENCY = 10;
 
-export class CorpusSearchBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, CorpusSearchBackfillPayload> {
-	async run(event: WorkflowEvent<CorpusSearchBackfillPayload>, step: WorkflowStep) {
-		let cursor = event.payload.cursor?.trim() || null;
+export function startCorpusSearchReindex(env: CoreEnv): Promise<string> {
+	return enqueueOrRestartWorkflow(env.CORPUS_SEARCH_REINDEX_WORKFLOW, `corpus-search-reindex-${CORPUS_SEARCH_INDEX_REVISION}`, {
+		revision: CORPUS_SEARCH_INDEX_REVISION,
+	});
+}
+
+export class CorpusSearchReindexWorkflow extends WorkflowEntrypoint<CoreEnv, CorpusSearchReindexPayload> {
+	async run(event: WorkflowEvent<CorpusSearchReindexPayload>, step: WorkflowStep) {
+		let cursor: string | null = null;
 		let uploaded = 0;
 		let page = 0;
 
@@ -37,9 +45,9 @@ export class CorpusSearchBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, Co
 
 			cursor = ids.at(-1)!;
 			page++;
-			console.info({ tag: 'AI_SEARCH', msg: 'Backfill page complete', page, cursor, uploaded });
+			console.info({ tag: 'AI_SEARCH', msg: 'Reindex page complete', revision: event.payload.revision, page, cursor, uploaded });
 		}
 
-		return { uploaded, pages: page, cursor };
+		return { revision: event.payload.revision, uploaded, pages: page, cursor };
 	}
 }

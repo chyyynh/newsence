@@ -68,9 +68,9 @@
 			"class_name": "ContentLocalizationWorkflow"
 		},
 		{
-			"binding": "CORPUS_SEARCH_BACKFILL_WORKFLOW",
-			"name": "newsence-corpus-search-backfill-workflow",
-			"class_name": "CorpusSearchBackfillWorkflow"
+			"binding": "CORPUS_SEARCH_REINDEX_WORKFLOW",
+			"name": "newsence-corpus-search-reindex-workflow",
+			"class_name": "CorpusSearchReindexWorkflow"
 		}
 	],
 	/**

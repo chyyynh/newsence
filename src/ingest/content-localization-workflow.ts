@@ -13,6 +13,7 @@ import {
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import { syncCorpusItem } from '../ai-search';
 import { ZH_HANT_RESOURCE_LANG } from '../resources/types';
+import { enqueueOrRestartWorkflow, restartWorkflowIfInactive } from '../workflow-control';
 import {
 	assembleZhHantContentTranslation,
 	ContentTranslationLimitError,
@@ -28,24 +29,11 @@ import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 
 type ContentLocalizationPayload = { resourceId: string; sourceContentHash: string };
 
-const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
 const TRANSLATION_STEP_CONCURRENCY = 3;
 const CONTENT_LOCALIZATION_WORKFLOW_REVISION = 'v5';
 
 function workflowId(resourceId: string, sourceContentHash: string): string {
 	return `content-localization-${CONTENT_LOCALIZATION_WORKFLOW_REVISION}-${sourceContentHash.slice(0, 12)}-${resourceId}`;
-}
-
-async function restartWorkflowIfInactive(workflow: Workflow, id: string): Promise<string> {
-	const instance = await workflow.get(id);
-	const { status } = await instance.status();
-	if (!ACTIVE_WORKFLOW_STATUSES.has(status)) await instance.restart();
-	return instance.id;
-}
-
-export async function enqueueOrRestartWorkflow<Params>(workflow: Workflow<Params>, id: string, params: Params): Promise<string> {
-	const [created] = await workflow.createBatch([{ id, params }]);
-	return created ? created.id : restartWorkflowIfInactive(workflow, id);
 }
 
 export function enqueueContentLocalization(env: CoreEnv, resourceId: string, sourceContentHash: string): Promise<string> {
