@@ -1,11 +1,5 @@
 import { generateText } from '@core-ai/generation';
-import {
-	type HackerNewsMetadata,
-	type NormalizedContent,
-	type PlatformEnrichments,
-	platformMetadataFor,
-	type ResourceForProcessing,
-} from '@core-shared/types';
+import { type HackerNewsMetadata, type NormalizedContent, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { decode } from 'html-entities';
 import { scrapeGenericUrl, type WebAcquiredContent } from './web';
@@ -53,21 +47,7 @@ function hnItemTypeForMetadata(type: HackerNewsItem['type'] | undefined): Hacker
 	return 'story';
 }
 
-function webTargetMetadata(url: string, target: WebAcquiredContent | null): NonNullable<HackerNewsMetadata['target']> {
-	if (!target) return { url, status: 'unavailable' };
-	const pdfData = target.type === 'pdf' && target.platformMetadata?.data ? target.platformMetadata.data : null;
-	return {
-		url,
-		status: target.markdown.trim() ? 'fetched' : 'unavailable',
-		type: target.type,
-		title: target.title,
-		siteName: target.metadata.siteName,
-		description: target.metadata.description,
-		...(pdfData ? { fileName: pdfData.fileName, fileSize: pdfData.fileSize } : {}),
-	};
-}
-
-function buildHnMetadata(item: HackerNewsItem, target: WebAcquiredContent | null): HackerNewsMetadata {
+function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author ?? '',
@@ -75,7 +55,6 @@ function buildHnMetadata(item: HackerNewsItem, target: WebAcquiredContent | null
 		commentCount: item.descendants ?? 0,
 		itemType: hnItemTypeForMetadata(item.type),
 		storyUrl: item.url ?? null,
-		...(item.url ? { target: webTargetMetadata(item.url, target) } : {}),
 	};
 }
 
@@ -99,18 +78,15 @@ function htmlToText(str: string): string {
 		.trim();
 }
 
-function buildHnMarkdown(item: HackerNewsItem): string {
+function buildHnPostMarkdown(item: HackerNewsItem): string {
 	const title = item.title || `HN Item ${item.id}`;
-	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
 	const parts: string[] = [`# ${title}\n`];
 	const metaParts: string[] = [];
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
 	if (item.author) metaParts.push(`by ${item.author}`);
 	if (item.descendants !== undefined) metaParts.push(`${item.descendants} comments`);
 	if (metaParts.length) parts.push(`*${metaParts.join(' | ')}*\n`);
-	if (item.url) parts.push(`**Original:** [${item.url}](${item.url})\n`);
 	if (item.text) parts.push(`---\n\n${htmlToText(item.text)}\n`);
-	parts.push(`\n---\n\n[View Discussion on Hacker News](${discussionUrl})`);
 	return parts.join('\n');
 }
 
@@ -146,7 +122,7 @@ export async function scrapeHackerNews(
 	return {
 		type: 'hackernews',
 		title,
-		markdown: target?.markdown.trim() || buildHnMarkdown(item),
+		markdown: target?.markdown.trim() || buildHnPostMarkdown(item),
 		metadata: {
 			author: target?.metadata.author ?? item.author ?? null,
 			language: target?.metadata.language ?? null,
@@ -154,7 +130,7 @@ export async function scrapeHackerNews(
 			siteName: target?.metadata.siteName ?? 'Hacker News',
 			description: summary,
 		},
-		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item, target) },
+		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 		...(target?.extraction?.status === 'ok' ? { extraction: target.extraction } : {}),
 		...(target?.ogImage ? { ogImage: target.ogImage } : {}),
 		hackerNewsItem: item,
@@ -173,30 +149,11 @@ function collectAllComments(children: HnComment[]): HnCollectedComment[] {
 	return comments;
 }
 
-function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | null): string[] {
-	const seen = new Set<string>();
-	const urls: string[] = [];
-	if (externalUrl) {
-		seen.add(externalUrl);
-		urls.push(externalUrl);
-	}
-	if (hnTextHtml) {
-		const hrefMatches = hnTextHtml.match(/href="([^"]+)"/g);
-		for (const match of hrefMatches ?? []) {
-			const raw = decode(match.slice(6, -1));
-			if (!seen.has(raw) && raw.startsWith('http')) {
-				seen.add(raw);
-				urls.push(raw);
-			}
-		}
-	}
-	return urls;
-}
+const HN_DISCUSSION_HEADING = '## Hacker News community perspectives';
+const HN_DISCUSSION_SYSTEM =
+	'You are a professional tech news editor. Synthesize Hacker News comments into concise community perspectives. Use only the provided material. Output Markdown directly.';
 
-const HN_EDITORIAL_SYSTEM =
-	'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
-
-function buildEditorialPrompt(title: string, articleContent: string, hnText: string, commentInput: string, commentCount: number): string {
+function buildDiscussionPrompt(title: string, articleContent: string, hnText: string, commentInput: string, commentCount: number): string {
 	return `Title: ${title}
 Linked article or document:
 ${articleContent.slice(0, 8000) || 'N/A'}
@@ -207,18 +164,20 @@ ${htmlToText(hnText).slice(0, 1200) || 'N/A'}
 HN comments (${commentCount} total):
 ${commentInput}
 
-Write a 180-280 word discussion digest in English using 2-4 flowing paragraphs. Do not use headings or bullet points. Briefly establish the linked material's context, then focus on the major arguments for and against, supplementary perspectives, and notable debates or consensus. Mention valuable resources from the comments only when they materially help the reader.
+Write a 220-360 word community digest in English using 3-5 short paragraphs. Each paragraph should synthesize one distinct perspective found in the comments. Prioritize the strongest recurring viewpoints, meaningful disagreements, useful context, and genuine areas of agreement. Include supporting, skeptical, and supplementary perspectives only when the comments contain them.
 
 Rules:
 - Write in English
-- Do not use any emoji
-- Focus on how the community reacted, not restating the resource
-- Synthesize and paraphrase commenter opinions; do not translate verbatim
-- Maintain a neutral, objective but engaging tone
-- Output Markdown directly, do not wrap in a code block`;
+- Do not add a heading, bullets, numbering, usernames, or emoji
+- Focus on how the community interpreted or challenged the material instead of restating it
+- Synthesize and paraphrase; do not quote comments verbatim
+- Do not invent consensus or force opposing sides when the discussion does not support them
+- Keep claims from commenters clearly separate from facts established by the linked material
+- Maintain a neutral, objective tone
+- Output only the paragraphs, without a code block`;
 }
 
-async function generateHnEditorial(
+async function generateHnDiscussionDigest(
 	env: CoreEnv,
 	title: string,
 	articleContent: string,
@@ -232,35 +191,35 @@ async function generateHnEditorial(
 		.join('\n')
 		.slice(0, 30000);
 
-	return generateText(env.AI, buildEditorialPrompt(title, articleContent, hnText, commentInput, comments.length), {
-		systemPrompt: HN_EDITORIAL_SYSTEM,
-		task: 'hn-editorial-en',
+	return generateText(env.AI, buildDiscussionPrompt(title, articleContent, hnText, commentInput, comments.length), {
+		systemPrompt: HN_DISCUSSION_SYSTEM,
+		task: 'hn-discussion-digest-en',
 		gatewayId: env.AI_GATEWAY_NAME,
 	});
 }
 
-export async function generateHackerNewsEnrichments(
+function withoutPreviousDiscussion(content: string): string {
+	return content.split(`\n\n---\n\n${HN_DISCUSSION_HEADING}`)[0]?.trim() ?? '';
+}
+
+export async function buildHackerNewsContent(
 	resource: ResourceForProcessing,
 	env: CoreEnv,
 	acquiredItem?: HackerNewsItem,
-): Promise<PlatformEnrichments> {
+): Promise<string> {
 	const metadata = platformMetadataFor(resource, 'hackernews');
 	const itemId = metadata?.data?.itemId || null;
+	const item = acquiredItem ?? (itemId ? await fetchHnItem(itemId) : null);
+	if (!item) return resource.content ?? '';
 
-	const hnData = acquiredItem ?? (itemId ? await fetchHnItem(itemId) : null);
+	const articleContent = withoutPreviousDiscussion(resource.content ?? '');
+	const comments = item.children?.length ? collectAllComments(item.children) : [];
+	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text || '', comments);
+	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
+	const stats = [`${item.points ?? 0} points`, `${item.descendants ?? comments.length} comments`].join(' | ');
+	const links = [item.url ? `[Linked article](${item.url})` : null, `[View the full discussion](${discussionUrl})`]
+		.filter(Boolean)
+		.join(' | ');
 
-	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
-
-	const editorial = hnData ? await generateHnEditorial(env, resource.title, resource.content ?? '', hnData.text || '', comments) : null;
-
-	return hnData
-		? {
-				hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
-				externalUrl: hnData.url || null,
-				hnText: hnData.text || null,
-				editorial,
-				commentCount: comments.length,
-				links: extractPostLinks(hnData.url, hnData.text),
-			}
-		: {};
+	return [articleContent, '---', HN_DISCUSSION_HEADING, `*${stats}*`, links, digest].filter(Boolean).join('\n\n');
 }

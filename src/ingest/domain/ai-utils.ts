@@ -75,12 +75,9 @@ const ResourceClassificationSchema = z.object({
 function zhHantMetadataTranslationSystemPrompt(resource: ResourceForProcessing): string {
 	const twitterMetadata = platformMetadataFor(resource, 'twitter');
 	const preservesSocialPost = resource.type === 'twitter' && twitterMetadata?.data.variant !== 'longform';
-	const preservesHackerNewsDiscussion = resource.type === 'hackernews' && !!resource.platform_metadata?.enrichments?.editorial?.trim();
 	const summaryInstruction = preservesSocialPost
 		? '忠實完整翻譯原貼文或 thread，保留第一人稱、段落與語氣，不要摘要或改寫成新聞報導'
-		: preservesHackerNewsDiscussion
-			? '忠實翻譯 Hacker News 社群觀點摘要，保留主要正反論點與共識，不要改寫成原文摘要'
-			: '根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要';
+		: '根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要';
 	return `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的繁體中文結果。
 
 任務：
