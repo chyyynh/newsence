@@ -17,7 +17,7 @@ import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { textArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
-import { type ResourceTranslationWrite, upsertResourceTranslation } from './resource-translation-store';
+import { upsertResourceTranslation } from './resource-translation-store';
 import { mergePlatformMetadata, type ResourceUpdate, ResourceUpdateBuilder } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
@@ -250,7 +250,6 @@ interface ResourceMirrorRecord {
 	title: string | null;
 	summary: string | null;
 	content: string | null;
-	translations: ResourceTranslationMap;
 	publishedDate: Date | null;
 	scrapedDate: Date;
 	keywords: string[];
@@ -310,7 +309,7 @@ export async function updateResourceAfterProcessing(
 	`);
 	const updatedId = (result.rows as Array<{ id?: string }>)[0]?.id;
 	if (!updatedId) throw new Error(`Failed to update resource ${resourceId}: no rows matched`);
-	await syncResourceTranslations(db, updatedId, record);
+	await syncOriginalResourceTranslation(db, updatedId, record);
 	return updatedId;
 }
 
@@ -341,7 +340,7 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
 	const resourceId = row?.id;
 	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
-	if (row.enrichment_status !== 'enriched') await syncResourceTranslations(db, resourceId, record);
+	if (row.enrichment_status !== 'enriched') await syncOriginalResourceTranslation(db, resourceId, record);
 	return resourceId;
 }
 
@@ -361,7 +360,6 @@ function resourceMirrorRecord(
 	const title = cleanString(updatePayload.title);
 	const summary = cleanString(updatePayload.summary);
 	const content = cleanString(updatePayload.content);
-	const translations: ResourceTranslationMap = { ...(resource.translations ?? {}) };
 	return {
 		id: resourceId,
 		type: parseResourceType(updatePayload.type),
@@ -374,7 +372,6 @@ function resourceMirrorRecord(
 		title,
 		summary,
 		content,
-		translations,
 		publishedDate: optionalDateValue(resource.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
@@ -492,27 +489,20 @@ function resourceConflictSetSql(): SQL {
 	`;
 }
 
-async function syncResourceTranslations(db: CoreDb, resourceId: string, record: ResourceMirrorRecord): Promise<void> {
-	for (const translation of resourceTranslationRecords(resourceId, record)) {
-		if (!(await upsertResourceTranslation(db, translation))) {
-			throw new Error(`Failed to sync ${translation.lang} translation for resource ${resourceId}`);
-		}
-	}
-}
-
-function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationWrite[] {
-	const originalTranslation = record.translations[record.originalLang];
-	return [
-		{
+async function syncOriginalResourceTranslation(db: CoreDb, resourceId: string, record: ResourceMirrorRecord): Promise<void> {
+	if (
+		!(await upsertResourceTranslation(db, {
 			resourceId,
 			lang: record.originalLang,
-			title: record.title ?? cleanString(originalTranslation?.title),
-			summary: record.summary ?? cleanString(originalTranslation?.summary),
-			content: record.content ?? cleanString(originalTranslation?.content),
-			keywords: originalTranslation?.keywords?.length ? originalTranslation.keywords : record.keywords,
+			title: record.title,
+			summary: record.summary,
+			content: record.content,
+			keywords: record.keywords,
 			source: 'original',
-		},
-	];
+		}))
+	) {
+		throw new Error(`Failed to sync original translation for resource ${resourceId}`);
+	}
 }
 
 function cleanString(value: unknown): string | null {
