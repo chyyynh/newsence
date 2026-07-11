@@ -1,6 +1,6 @@
 import { type ZodType, z } from 'zod';
 
-const CORE_TEXT_MODEL = 'google/gemini-2.5-flash-lite';
+const CORE_TEXT_MODEL = 'google/gemini-3.5-flash';
 const CORE_TEXT_FALLBACK_MODEL = 'google/gemini-3-flash';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 const DEFAULT_AI_GATEWAY_ID = 'default';
