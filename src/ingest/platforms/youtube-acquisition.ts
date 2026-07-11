@@ -1,5 +1,5 @@
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
-import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
 const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;

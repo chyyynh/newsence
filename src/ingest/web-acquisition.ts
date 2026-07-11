@@ -1,17 +1,75 @@
+import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
+import { canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
-import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
-import { extractHtmlArticle } from '@ingest/html';
+import { extractFromHtml } from '@extractus/article-extractor';
 import { decode } from 'html-entities';
-import { type PdfTextArtifact, parsePdfBytes } from './pdf';
+import { type PdfTextArtifact, parsePdfBytes } from './platforms/pdf';
 
 export const PDF_MIME = 'application/pdf';
 
 const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
-const MIN_HTML_CONTENT_CHARS = 180;
+const MIN_ARTICLE_CONTENT_CHARS = 180;
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
+
+type ExtractedHtmlArticle = {
+	html: string;
+	title: string | null;
+	author: string | null;
+	language: string | null;
+	publishedDate: string | null;
+	siteName: string | null;
+	description: string | null;
+};
+
+function optionalText(value: string | undefined): string | null {
+	return value?.trim() || null;
+}
+
+async function extractSupplementalMetadata(html: string): Promise<{ language: string | null; siteName: string | null }> {
+	let language: string | null = null;
+	let siteName: string | null = null;
+	await new HTMLRewriter()
+		.on('html[lang]', {
+			element(element) {
+				language ??= canonicalizeOptionalResourceLang(element.getAttribute('lang'));
+			},
+		})
+		.on('meta[property="og:locale"]', {
+			element(element) {
+				language ??= canonicalizeOptionalResourceLang(element.getAttribute('content'));
+			},
+		})
+		.on('meta[property="og:site_name"]', {
+			element(element) {
+				const content = element.getAttribute('content')?.trim();
+				if (!siteName && content) siteName = decode(content).trim() || null;
+			},
+		})
+		.transform(new Response(html))
+		.arrayBuffer();
+	return { language, siteName };
+}
+
+async function extractHtmlArticle(html: string, url: string): Promise<ExtractedHtmlArticle | null> {
+	const [article, supplementalMetadata] = await Promise.all([
+		extractFromHtml(html, url, { contentLengthThreshold: MIN_ARTICLE_CONTENT_CHARS }),
+		extractSupplementalMetadata(html),
+	]);
+	if (!article?.content?.trim()) return null;
+
+	return {
+		html: article.content.trim(),
+		title: optionalText(article.title),
+		author: optionalText(article.author),
+		language: supplementalMetadata.language,
+		publishedDate: optionalText(article.published),
+		siteName: supplementalMetadata.siteName ?? optionalText(article.source),
+		description: optionalText(article.description),
+	};
+}
 
 export type OgImagePatch = {
 	ogImageUrl: string | null;
@@ -107,7 +165,7 @@ export async function fetchOgImage(url: string): Promise<OgImagePatch> {
 			url,
 			{
 				headers: {
-					'User-Agent': FEED_UA,
+					'User-Agent': WEB_FETCH_USER_AGENT,
 					Accept: 'text/html,application/xhtml+xml',
 				},
 			},
@@ -194,7 +252,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, fileN
 
 	const markdown = await markdownFromHtml(env, article.html, url);
 	const content = stripLeadingFrontmatter(markdown);
-	if (content.length < MIN_HTML_CONTENT_CHARS) {
+	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
 	const title = article.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
@@ -219,7 +277,7 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 		url,
 		{
 			headers: {
-				'User-Agent': FEED_UA,
+				'User-Agent': WEB_FETCH_USER_AGENT,
 				Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.5',
 				'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
 			},

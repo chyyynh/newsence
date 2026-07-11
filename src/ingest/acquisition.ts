@@ -1,9 +1,10 @@
 import { isContentResourceType } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
-import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
+import { extractYouTubeId, normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
+import { scrapeYouTube } from './platforms/youtube-acquisition';
 import {
 	acquireWebResource,
 	EMPTY_OG_IMAGE_PATCH,
@@ -11,8 +12,7 @@ import {
 	type OgImagePatch,
 	PDF_MIME,
 	pdfExtractionMetadata,
-} from './platforms/web';
-import { scrapeYouTube } from './platforms/youtube-acquisition';
+} from './web-acquisition';
 
 export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
 export type { PdfExtractionMetadata } from '@core-shared/types';

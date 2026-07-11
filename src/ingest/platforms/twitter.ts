@@ -1,5 +1,6 @@
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import { fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
 import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { loadEnabledSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';

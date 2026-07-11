@@ -1,5 +1,5 @@
 import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
-import { normalizeUrl } from '@core-shared/web';
+import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';

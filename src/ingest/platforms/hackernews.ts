@@ -1,8 +1,8 @@
 import { generateText } from '@core-ai/generation';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import { type HackerNewsMetadata, type NormalizedContent, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
-import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { decode } from 'html-entities';
-import { type AcquiredWebContent, acquireWebResource } from './web';
+import { type AcquiredWebContent, acquireWebResource } from '../web-acquisition';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const HN_ITEM_MAX_BYTES = 5 * 1024 * 1024;

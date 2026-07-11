@@ -3,8 +3,8 @@
 // returns reference metadata (DOI + author) in a single call.
 
 import type { WorkflowStep } from 'cloudflare:workers';
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PaperMetadata, PaperReference } from '@core-shared/types';
-import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;

@@ -1,3 +1,4 @@
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type {
 	NormalizedContent,
 	PlatformMetadata,
@@ -6,7 +7,6 @@ import type {
 	TwitterAuthorFields,
 	TwitterMedia,
 } from '@core-shared/types';
-import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
 // twitterapi.io tweet response shape used inside the Twitter platform only.
 export interface Tweet {

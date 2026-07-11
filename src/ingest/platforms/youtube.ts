@@ -1,6 +1,7 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/generation';
+import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import { platformMetadataFor, type ResourceForProcessing, type TranscriptSegment, type YoutubeTranscript } from '@core-shared/types';
-import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
@@ -203,7 +204,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 	let totalQueued = 0;
 	for (const channel of channels) {
 		try {
-			const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': FEED_UA } });
+			const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': WEB_FETCH_USER_AGENT } });
 			if (!res.ok) {
 				await res.body?.cancel();
 				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });

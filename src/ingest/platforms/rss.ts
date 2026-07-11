@@ -1,4 +1,5 @@
-import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
+import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
 import { extractFromJson, extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
@@ -18,7 +19,7 @@ async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[] | null> {
 	try {
 		response = await fetchWithTimeout(feed.handle, {
 			headers: {
-				'User-Agent': FEED_UA,
+				'User-Agent': WEB_FETCH_USER_AGENT,
 				Accept: 'application/rss+xml, application/xml, text/xml, */*',
 			},
 		});
