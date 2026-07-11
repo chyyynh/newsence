@@ -1,16 +1,16 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { ContentLocalizationWorkflow } from '@ingest/content-localization-workflow';
+import { ResourceTranslationWorkflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, enqueueResourceResync, ResourceEnrichmentWorkflow } from '@ingest/workflow';
-import { CorpusSearchReindexWorkflow, startCorpusSearchReindex } from './ai-search';
+import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
+import { SearchIndexRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
-export { ContentLocalizationWorkflow, CorpusSearchReindexWorkflow, ResourceEnrichmentWorkflow };
+export { ResourceProcessingWorkflow, ResourceTranslationWorkflow, SearchIndexRebuildWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {
@@ -46,8 +46,8 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	}
 
 	/** Start or resume the revision-scoped public corpus AI Search rebuild. */
-	startCorpusSearchReindex() {
-		return startCorpusSearchReindex(this.env);
+	startSearchIndexRebuild() {
+		return startSearchIndexRebuild(this.env);
 	}
 
 	/** Hybrid AI Search retrieval for the chat search-news tool. */
@@ -72,7 +72,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read workflow status for app-side polling. */
 	async getWorkflowStatus(instanceId: string) {
-		const instance = await this.env.RESOURCE_ENRICHMENT_WORKFLOW.get(instanceId);
+		const instance = await this.env.RESOURCE_PROCESSING_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 

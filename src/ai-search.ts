@@ -175,20 +175,20 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, fromDate?: 
 	return [...scores].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score);
 }
 
-type CorpusSearchReindexPayload = { revision: string };
+type SearchIndexRebuildPayload = { revision: string };
 
-const CORPUS_SEARCH_INDEX_REVISION = 'v1';
+const SEARCH_INDEX_REVISION = 'v2';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 
-export function startCorpusSearchReindex(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.CORPUS_SEARCH_REINDEX_WORKFLOW, `corpus-search-reindex-${CORPUS_SEARCH_INDEX_REVISION}`, {
-		revision: CORPUS_SEARCH_INDEX_REVISION,
+export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_REVISION}`, {
+		revision: SEARCH_INDEX_REVISION,
 	});
 }
 
-export class CorpusSearchReindexWorkflow extends WorkflowEntrypoint<CoreEnv, CorpusSearchReindexPayload> {
-	async run(event: WorkflowEvent<CorpusSearchReindexPayload>, step: WorkflowStep) {
+export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
+	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
 		let cursor: string | null = null;
 		let uploaded = 0;
 		let page = 0;
@@ -218,7 +218,7 @@ export class CorpusSearchReindexWorkflow extends WorkflowEntrypoint<CoreEnv, Cor
 
 			cursor = ids.at(-1)!;
 			page++;
-			console.info({ tag: 'AI_SEARCH', msg: 'Reindex page complete', revision: event.payload.revision, page, cursor, uploaded });
+			console.info({ tag: 'AI_SEARCH', msg: 'Index rebuild page complete', revision: event.payload.revision, page, cursor, uploaded });
 		}
 
 		return { revision: event.payload.revision, uploaded, pages: page, cursor };

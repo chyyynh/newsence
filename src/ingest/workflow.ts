@@ -14,7 +14,7 @@ import {
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { enqueueContentLocalization, getPersistedResourceContentHashForLocalization } from './content-localization-workflow';
+import { enqueueResourceTranslation, getPersistedResourceContentHashForTranslation } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
@@ -33,11 +33,11 @@ type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_ENRICHMENT_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
 }
 
 export function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_ENRICHMENT_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
 		resourceId,
 		operation: 'resync',
 	});
@@ -140,7 +140,7 @@ async function stageOgImagePatch(
 	);
 }
 
-export class ResourceEnrichmentWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
+export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId } = event.payload;
 		const operation = event.payload.operation ?? 'ingest';
@@ -262,32 +262,32 @@ export class ResourceEnrichmentWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
-		const localizationSourceHash = await step
+		const translationSourceHash = await step
 			.do(
-				'verify-persisted-original-content',
+				'load-resource-translation-source-hash',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => getPersistedResourceContentHashForLocalization(this.env, persistedResourceId),
+				() => getPersistedResourceContentHashForTranslation(this.env, persistedResourceId),
 			)
 			.catch((error) => {
 				console.error({
-					tag: 'CONTENT_LOCALIZATION',
-					msg: 'Failed to inspect persisted resource for localization',
+					tag: 'RESOURCE_TRANSLATION',
+					msg: 'Failed to inspect persisted resource for translation',
 					resource_id: persistedResourceId,
 					error: String(error),
 				});
 				return null;
 			});
-		if (localizationSourceHash) {
+		if (translationSourceHash) {
 			await step
 				.do(
-					'enqueue-content-localization',
+					'enqueue-resource-translation',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueContentLocalization(this.env, persistedResourceId, localizationSourceHash),
+					() => enqueueResourceTranslation(this.env, persistedResourceId, translationSourceHash),
 				)
 				.catch((error) =>
 					console.error({
 						tag: 'WORKFLOW',
-						msg: 'Failed to enqueue dedicated content localization',
+						msg: 'Failed to enqueue resource translation',
 						resource_id: persistedResourceId,
 						error: String(error),
 					}),

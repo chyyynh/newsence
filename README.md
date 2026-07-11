@@ -176,7 +176,9 @@ Bindings (in `wrangler.jsonc`):
 | Binding            | Purpose                                      |
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
-| `RESOURCE_ENRICHMENT_WORKFLOW` | `ResourceEnrichmentWorkflow` instance creator |
+| `RESOURCE_PROCESSING_WORKFLOW` | Fetch, parse, classify, and persist a resource |
+| `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
+| `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
 | `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |

@@ -52,19 +52,19 @@
 	 */
 	"workflows": [
 		{
-			"binding": "RESOURCE_ENRICHMENT_WORKFLOW",
-			"name": "newsence-resource-enrichment-workflow",
-			"class_name": "ResourceEnrichmentWorkflow"
+			"binding": "RESOURCE_PROCESSING_WORKFLOW",
+			"name": "newsence-resource-processing",
+			"class_name": "ResourceProcessingWorkflow"
 		},
 		{
-			"binding": "CONTENT_LOCALIZATION_WORKFLOW",
-			"name": "newsence-content-localization-workflow",
-			"class_name": "ContentLocalizationWorkflow"
+			"binding": "RESOURCE_TRANSLATION_WORKFLOW",
+			"name": "newsence-resource-translation",
+			"class_name": "ResourceTranslationWorkflow"
 		},
 		{
-			"binding": "CORPUS_SEARCH_REINDEX_WORKFLOW",
-			"name": "newsence-corpus-search-reindex-workflow",
-			"class_name": "CorpusSearchReindexWorkflow"
+			"binding": "SEARCH_INDEX_REBUILD_WORKFLOW",
+			"name": "newsence-search-index-rebuild",
+			"class_name": "SearchIndexRebuildWorkflow"
 		}
 	],
 	/**
