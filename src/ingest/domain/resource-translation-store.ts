@@ -11,6 +11,7 @@ type ResourceTranslationWrite = {
 	content?: string | null;
 	keywords?: string[];
 	source: ResourceTranslationSource;
+	expectedOriginalContentHash?: string;
 };
 
 /**
@@ -25,6 +26,17 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 			FROM resources resource
 			WHERE resource.id = ${input.resourceId}::uuid
 			  AND (${input.source} <> 'original' OR resource.original_lang = ${input.lang})
+			  AND (
+				${input.expectedOriginalContentHash ?? null}::text IS NULL
+				OR EXISTS (
+					SELECT 1
+					FROM resource_translations original
+					WHERE original.resource_id = resource.id
+					  AND original.lang = resource.original_lang
+					  AND md5(original.content) = ${input.expectedOriginalContentHash ?? null}
+					FOR SHARE
+				)
+			  )
 		), demoted_originals AS (
 			UPDATE resource_translations translation
 			SET source = 'machine', updated_at = NOW()
