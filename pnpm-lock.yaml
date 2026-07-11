@@ -17,6 +17,9 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260131.0)(@types/pg@8.18.0)(pg@8.20.0)
+      html-entities:
+        specifier: ^2.6.0
+        version: 2.6.0
       pg:
         specifier: ^8.20.0
         version: 8.20.0

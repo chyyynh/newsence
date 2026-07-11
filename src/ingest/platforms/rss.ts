@@ -4,6 +4,7 @@ import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { loadEnabledSources, type MonitoredSource, markSourceScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
+import { hackerNewsDiscussionUrl } from './hackernews';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const FEED_CONCURRENCY = 4;
@@ -112,6 +113,10 @@ function normalizeFeedItemUrl(value: string | undefined): string | null {
 	}
 }
 
+function canonicalFeedItemUrl(item: FeedEntry): string | null {
+	return normalizeFeedItemUrl(hackerNewsDiscussionUrl(item.id) ?? item.link);
+}
+
 function feedPublishedDate(value: string | undefined): Date {
 	if (!value) return new Date();
 	const date = new Date(value);
@@ -152,7 +157,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 	const itemUrlsByUrl = new Map<string, { item: FeedEntry; url: string }>();
 	for (const item of items) {
-		const url = normalizeFeedItemUrl(item.link);
+		const url = canonicalFeedItemUrl(item);
 		if (url && !itemUrlsByUrl.has(url)) itemUrlsByUrl.set(url, { item, url });
 	}
 	const itemUrls = [...itemUrlsByUrl.values()];

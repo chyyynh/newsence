@@ -7,7 +7,7 @@ import {
 	type ResourceForProcessing,
 } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
-import { decodeHtmlEntities } from '@ingest/html-entities';
+import { decode } from 'html-entities';
 import { generateResourceClassification, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
@@ -43,6 +43,11 @@ export function extractHackerNewsId(url: string): string | null {
 	}
 }
 
+export function hackerNewsDiscussionUrl(value: string): string | null {
+	const itemId = extractHackerNewsId(value);
+	return itemId ? `https://news.ycombinator.com/item?id=${itemId}` : null;
+}
+
 function hnItemTypeForMetadata(type: HnItem['type'] | undefined): HackerNewsMetadata['itemType'] {
 	if (type === 'ask' || type === 'show' || type === 'job') return type;
 	return 'story';
@@ -74,13 +79,14 @@ interface HnCollectedComment {
 }
 
 function htmlToText(str: string): string {
-	return decodeHtmlEntities(str.replace(/<[^>]*>/g, ' '))
+	return decode(str.replace(/<[^>]*>/g, ' '))
 		.replace(/\s+/g, ' ')
 		.trim();
 }
 
 function buildHnMarkdown(item: HnItem): string {
 	const title = item.title || `HN Item ${item.id}`;
+	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
 	const parts: string[] = [`# ${title}\n`];
 	const metaParts: string[] = [];
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
@@ -89,7 +95,7 @@ function buildHnMarkdown(item: HnItem): string {
 	if (metaParts.length) parts.push(`*${metaParts.join(' | ')}*\n`);
 	if (item.url) parts.push(`**Original:** [${item.url}](${item.url})\n`);
 	if (item.text) parts.push(`---\n\n${htmlToText(item.text)}\n`);
-	parts.push(`\n---\n\n[View Discussion on Hacker News](https://news.ycombinator.com/item?id=${item.id})`);
+	parts.push(`\n---\n\n[View Discussion on Hacker News](${discussionUrl})`);
 	return parts.join('\n');
 }
 
@@ -136,7 +142,7 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 	if (hnTextHtml) {
 		const hrefMatches = hnTextHtml.match(/href="([^"]+)"/g);
 		for (const match of hrefMatches ?? []) {
-			const raw = decodeHtmlEntities(match.slice(6, -1));
+			const raw = decode(match.slice(6, -1));
 			if (!seen.has(raw) && raw.startsWith('http')) {
 				seen.add(raw);
 				urls.push(raw);

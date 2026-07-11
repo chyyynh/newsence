@@ -1,8 +1,8 @@
 import { canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from '@core-shared/web';
-import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html-content';
-import { decodeHtmlEntities } from '@ingest/html-entities';
+import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html';
+import { decode } from 'html-entities';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
 import { type RenderedWebContent, scrapeUrlWithRenderedContent } from './rendered-content';
 
@@ -151,7 +151,7 @@ async function extractHtmlMetadata(html: string, url: string): Promise<HtmlMetad
 		.arrayBuffer();
 
 	const clean = (value: string | null): string | null => {
-		const decoded = value ? decodeHtmlEntities(value).trim() : '';
+		const decoded = value ? decode(value).trim() : '';
 		return decoded || null;
 	};
 
@@ -185,14 +185,14 @@ function extractMeta(html: string, property: string): string | null {
 	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
 	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+	return raw ? decode(raw).trim() || null : null;
 }
 
 function extractMetaName(html: string, name: string): string | null {
 	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
 	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
 	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decodeHtmlEntities(raw).trim() || null : null;
+	return raw ? decode(raw).trim() || null : null;
 }
 
 export function extractOgImageFromHtml(html: string, url: string): OgImagePatch {
@@ -399,8 +399,6 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAc
 	} catch (error) {
 		if (!options.allowRenderedFallback) throw error;
 		console.warn({ tag: 'WEB', msg: 'Using rendered content fallback after direct acquisition failed', url, error: String(error) });
-		return scrapeUrlWithRenderedContent(url, env, (html) =>
-			scrapeHtmlContent(env, html, url, fileNameFromUrl(url, `${urlHost(url)}.html`)),
-		);
+		return scrapeUrlWithRenderedContent(url, env);
 	}
 }

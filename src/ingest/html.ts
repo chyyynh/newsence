@@ -1,4 +1,4 @@
-import { decodeHtmlEntities } from './html-entities';
+import { decode } from 'html-entities';
 
 const READABLE_CONTENT_SELECTORS = [
 	'article',
@@ -45,7 +45,7 @@ export type ReadableContentHtml = {
 };
 
 function normalizeText(value: string): string {
-	return decodeHtmlEntities(value)
+	return decode(value)
 		.replace(/\u00a0/g, ' ')
 		.replace(/[ \t]+\n/g, '\n')
 		.replace(/\n[ \t]+/g, '\n')
@@ -139,7 +139,7 @@ export async function extractReadableContentHtml(html: string): Promise<Readable
 }
 
 export function preferReadableContentText(markdown: string, readable: ReadableContentHtml | null): string {
-	const trimmedMarkdown = decodeHtmlEntities(markdown).trim();
+	const trimmedMarkdown = decode(markdown).trim();
 	const readableText = normalizeText(readable?.text ?? '');
 	if (readableText.length >= GOOD_CONTENT_TEXT_CHARS && readableText.length > trimmedMarkdown.length * READABLE_TEXT_FALLBACK_RATIO) {
 		return readableText;

@@ -162,7 +162,9 @@ async function stageOgImagePatch(
 	force = false,
 ): Promise<OgImagePatch> {
 	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
-	if ((!force && resource.og_image_url) || !resource.url || resource.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
+	if ((!force && resource.og_image_url) || !resource.url || resource.file_type === PDF_MIME || resource.type === 'hackernews') {
+		return EMPTY_OG_IMAGE_PATCH;
+	}
 	return step.do('resolve-og-image', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
 		fetchOgImage(resource.url),
 	);

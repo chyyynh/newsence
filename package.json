@@ -20,6 +20,7 @@
 		"@extractus/feed-extractor": "^7.2.1",
 		"@llamaindex/liteparse-wasm": "^2.1.1",
 		"drizzle-orm": "^0.45.2",
+		"html-entities": "^2.6.0",
 		"pg": "^8.20.0",
 		"youtube-caption-extractor": "1.10.2",
 		"zod": "^4.0.0"
