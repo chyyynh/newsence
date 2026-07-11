@@ -162,40 +162,6 @@ export const resourceEntities = pgTable(
 	],
 );
 
-export const papers = pgTable(
-	'papers',
-	{
-		id: uuid('id').defaultRandom().primaryKey(),
-		openAlexId: varchar('provider_paper_id', { length: 64 }).notNull().unique(),
-		doi: text('doi').unique(),
-		resourceId: uuid('resource_id').references(() => resources.id, { onDelete: 'set null' }),
-		title: text('title'),
-		authors: text('authors').array().notNull(),
-		venue: text('venue'),
-		year: integer('year'),
-		abstract: text('abstract'),
-		citedByCount: integer('cited_by_count'),
-		oaPdfUrl: text('oa_pdf_url'),
-		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-	},
-	(table) => [index('papers_resource_id_idx').on(table.resourceId)],
-);
-
-export const paperReferences = pgTable(
-	'paper_references',
-	{
-		id: uuid('id').defaultRandom().primaryKey(),
-		fromPaperId: uuid('from_paper_id').notNull(),
-		toPaperId: uuid('to_paper_id').notNull(),
-		ordinal: integer('ordinal'),
-	},
-	(table) => [
-		uniqueIndex('paper_references_from_paper_id_to_paper_id_key').on(table.fromPaperId, table.toPaperId),
-		index('paper_references_to_paper_id_idx').on(table.toPaperId),
-	],
-);
-
 export const collections = pgTable('collections', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	userId: text('user_id'),

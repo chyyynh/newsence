@@ -18,7 +18,7 @@ import { enqueueContentLocalization, getPersistedResourceContentHashForLocalizat
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
 import { processHackerNewsResource } from './platforms/hackernews';
-import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
+import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterResource } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
@@ -254,11 +254,21 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 				});
 			},
 		);
-		const localizationSourceHash = await step.do(
-			'verify-persisted-original-content',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => getPersistedResourceContentHashForLocalization(this.env, persistedResourceId),
-		);
+		const localizationSourceHash = await step
+			.do(
+				'verify-persisted-original-content',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => getPersistedResourceContentHashForLocalization(this.env, persistedResourceId),
+			)
+			.catch((error) => {
+				console.error({
+					tag: 'CONTENT_LOCALIZATION',
+					msg: 'Failed to inspect persisted resource for localization',
+					resource_id: persistedResourceId,
+					error: String(error),
+				});
+				return null;
+			});
 		if (localizationSourceHash) {
 			await step
 				.do(
@@ -275,10 +285,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					}),
 				);
 		}
-		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
-		await step.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-			syncCorpusItem(this.env, persistedResourceId),
-		);
+		await step
+			.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+				syncCorpusItem(this.env, persistedResourceId),
+			)
+			.catch((error) =>
+				console.error({
+					tag: 'AI_SEARCH',
+					msg: 'Failed to sync enriched resource; reindex can repair it',
+					resource_id: persistedResourceId,
+					error: String(error),
+				}),
+			);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return {
