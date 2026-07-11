@@ -17,7 +17,7 @@ import { enqueueProcessing, enqueueResourceResync, NewsenceMonitorWorkflow } fro
 import { CorpusSearchReindexWorkflow, startCorpusSearchReindex } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
-import { isResourceEnrichmentComplete } from './ingest/domain/resource-store';
+import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
 export { AcquisitionWorkflow, ContentLocalizationWorkflow, CorpusSearchReindexWorkflow, NewsenceMonitorWorkflow };
@@ -149,6 +149,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Reacquire a URL-backed resource while preserving the current copy if the source fetch fails. */
 	async resyncResource(resourceId: string) {
+		await assertResourceProcessable(this.env, resourceId);
 		return enqueueResourceResync(this.env, resourceId);
 	}
 

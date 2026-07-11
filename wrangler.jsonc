@@ -99,7 +99,7 @@
 	/**
 	 * R2 buckets.
 	 *
-	 * `R2` — uploaded blob storage (PDF/image uploads + chat-generated images).
+	 * `R2` — uploaded PDF storage used for text extraction.
 	 *   Also written by the app worker; the core worker reads
 	 *   uploaded PDFs here for LiteParse WASM text extraction.
 	 */

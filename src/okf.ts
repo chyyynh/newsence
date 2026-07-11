@@ -1,8 +1,8 @@
 // OKF v0.1 export: one collection index and one Markdown file per resource.
 
-import type { ResourceCategory, ResourceType } from '@core-shared/resource-types';
+import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, toIsoString } from '@db/sql';
+import { isValidUuid, queryRows, textArraySql, toIsoString } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
 
@@ -20,7 +20,7 @@ type CollectionRow = {
 
 type ResourceRow = {
 	id: string;
-	type: ResourceType;
+	type: ContentResourceType;
 	lang: string | null;
 	title: string | null;
 	url: string | null;
@@ -139,9 +139,10 @@ async function readCollectionResources(
 					})}
 		     LIMIT 1
 		   ) localized ON TRUE
-		   WHERE link.from_type = 'collection'
-		     AND link.from_id = ${collectionId}::text
-		     AND (r.scope = 'corpus' OR viewer_library.id IS NOT NULL)
+			   WHERE link.from_type = 'collection'
+			     AND link.from_id = ${collectionId}::text
+			     AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+			     AND (r.scope = 'corpus' OR viewer_library.id IS NOT NULL)
 		   ORDER BY link.created_at ASC`,
 	);
 }

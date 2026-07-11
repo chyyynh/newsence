@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows } from '@db/sql';
+import { isValidUuid, queryRows, textArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
@@ -34,8 +35,9 @@ async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null, limit = 5
 			sql`
 				SELECT id::text
 				FROM resources
-				WHERE scope = 'corpus'
-				  AND enrichment_status = 'enriched'
+					WHERE scope = 'corpus'
+					  AND enrichment_status = 'enriched'
+					  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 				  AND (${cursor}::uuid IS NULL OR id > ${cursor}::uuid)
 				ORDER BY id
 				LIMIT ${Math.min(Math.max(limit, 1), 50)}
@@ -103,8 +105,9 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 				  ON rt.resource_id = r.id
 				 AND rt.lang = r.original_lang
 				WHERE r.id = ${resourceId}::uuid
-				  AND r.scope = 'corpus'
-				  AND r.enrichment_status = 'enriched'
+					  AND r.scope = 'corpus'
+					  AND r.enrichment_status = 'enriched'
+					  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 			`,
 	);
 	return rows[0] ?? null;

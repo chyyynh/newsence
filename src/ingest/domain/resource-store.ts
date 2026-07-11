@@ -1,8 +1,10 @@
 import {
+	CONTENT_RESOURCE_TYPES,
+	type ContentResourceType,
 	canonicalizeOptionalResourceLang,
 	canonicalizeResourceLang,
 	DEFAULT_RESOURCE_LANG,
-	isResourceType,
+	isContentResourceType,
 	RESOURCE_CATEGORIES,
 	RESOURCE_ORIGINAL_CONTENT_TYPES,
 	RESOURCE_SCOPES,
@@ -10,7 +12,6 @@ import {
 	type ResourceCategory,
 	type ResourceScope,
 	type ResourceTranslationSource,
-	type ResourceType,
 } from '@core-shared/resource-types';
 import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
@@ -71,6 +72,7 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 		const row = (
 			await db
 				.select({
+					type: resources.type,
 					complete: sql<boolean>`${resources.enrichmentStatus} = 'enriched'
 								AND (
 									${resources.type} <> 'youtube'
@@ -101,7 +103,16 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 				.limit(1)
 		)[0];
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
+		parseResourceType(row.type);
 		return row.complete;
+	});
+}
+
+export async function assertResourceProcessable(env: CoreEnv, resourceId: string): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		const row = (await db.select({ type: resources.type }).from(resources).where(eq(resources.id, resourceId)).limit(1))[0];
+		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
+		parseResourceType(row.type);
 	});
 }
 
@@ -225,7 +236,7 @@ export interface SourceResourceDraft {
 	source: string;
 	publishedDate: Date | string;
 	summary: string;
-	type: ResourceType;
+	type: ContentResourceType;
 	originalLang?: string;
 	content: string | null;
 	platformMetadata: unknown | null;
@@ -238,7 +249,7 @@ type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
 interface ResourceMirrorRecord {
 	id: string;
-	type: ResourceType;
+	type: ContentResourceType;
 	scope: ResourceScope;
 	url: string | null;
 	normalizedUrl: string | null;
@@ -534,8 +545,8 @@ function deriveResourceCategory(platformMetadata: unknown, tags: string[]): Reso
 	return tags.find(isResourceCategory) ?? null;
 }
 
-function parseResourceType(value: unknown): ResourceType {
-	if (!isResourceType(value)) throw new Error(`Invalid resource type: ${String(value)}`);
+function parseResourceType(value: unknown): ContentResourceType {
+	if (!isContentResourceType(value)) throw new Error(`Resource type is not processable by core: ${String(value)}`);
 	return value;
 }
 
@@ -565,7 +576,7 @@ function isResourceCategory(value: unknown): value is ResourceCategory {
 type ExistingResourceRecord = {
 	id: string;
 	url: string;
-	type: ResourceType;
+	type: ContentResourceType;
 	shouldRetryEnrichment: boolean;
 };
 
@@ -585,8 +596,8 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 				OR (r.enrichment_status = 'failed' AND r.updated_at < NOW() - INTERVAL '30 minutes')
 			) AS "shouldRetryEnrichment"
 		FROM resources r
-		WHERE r.normalized_url = ANY(${urlArray})
-		   OR r.url = ANY(${urlArray})
+			WHERE (r.normalized_url = ANY(${urlArray}) OR r.url = ANY(${urlArray}))
+			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 	`);
 	return result.rows as unknown as ExistingResourceRecord[];
 }

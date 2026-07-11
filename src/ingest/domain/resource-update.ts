@@ -1,10 +1,10 @@
-import { canonicalizeOptionalResourceLang, type ResourceType } from '@core-shared/resource-types';
+import { type ContentResourceType, canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
 export type ResourceUpdate = {
-	type: ResourceType;
+	type: ContentResourceType;
 	title: string;
 	summary: string | null;
 	content: string | null;
@@ -56,7 +56,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 	};
 }
 
-function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: ResourceType): ResourceType {
+function resourceTypeAfterAcquisition(currentType: ContentResourceType, acquiredType: ContentResourceType): ContentResourceType {
 	return acquiredType === 'web' && currentType !== 'web' ? currentType : acquiredType;
 }
 

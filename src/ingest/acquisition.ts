@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { isResourceType } from '@core-shared/resource-types';
+import { isContentResourceType } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
@@ -82,7 +82,7 @@ function isNullableString(value: unknown): value is string | null {
 function isAcquiredContent(value: unknown): value is AcquiredContent {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const content = value as Record<string, unknown>;
-	if (!isResourceType(content.type) || !isNullableString(content.title) || typeof content.markdown !== 'string') return false;
+	if (!isContentResourceType(content.type) || !isNullableString(content.title) || typeof content.markdown !== 'string') return false;
 	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
 	const metadata = content.metadata as Record<string, unknown>;
 	return (

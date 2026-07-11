@@ -1,8 +1,8 @@
 import {
+	CONTENT_RESOURCE_TYPES,
 	RESOURCE_CATEGORIES,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
-	RESOURCE_TYPES,
 	SOURCE_PLATFORMS,
 } from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
@@ -12,7 +12,7 @@ export const resources = pgTable(
 	'resources',
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
-		type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
+		type: text('type', { enum: CONTENT_RESOURCE_TYPES }).default('web').notNull(),
 		scope: text('scope', { enum: RESOURCE_SCOPES }).default('private').notNull(),
 		url: text('url'),
 		normalizedUrl: text('normalized_url'),

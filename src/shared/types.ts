@@ -1,4 +1,4 @@
-import type { ResourceCategory, ResourceScope, ResourceTranslationSource, ResourceType } from '@core-shared/resource-types';
+import type { ContentResourceType, ResourceCategory, ResourceScope, ResourceTranslationSource } from '@core-shared/resource-types';
 
 export type ResourceLocaleText = {
 	title?: string | null;
@@ -12,7 +12,7 @@ export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefin
 
 export interface ResourceForProcessing {
 	id: string;
-	type: ResourceType;
+	type: ContentResourceType;
 	scope: ResourceScope;
 	original_lang: string;
 	title: string;
@@ -56,7 +56,7 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent<T extends ResourceType = ResourceType> {
+export interface NormalizedContent<T extends ContentResourceType = ContentResourceType> {
 	type: T;
 	title: string | null;
 	/** Platform APIs return markdown or plain text for resource drafts. */
@@ -206,8 +206,6 @@ export interface PlatformMetadataDataByResourceType {
 	hackernews: HackerNewsMetadata;
 	pdf: PdfMetadata;
 	paper: PaperMetadata;
-	image: null;
-	file: null;
 }
 
 export interface PdfExtractionMetadata {
@@ -217,7 +215,7 @@ export interface PdfExtractionMetadata {
 	pages: number;
 }
 
-export type PlatformMetadata<T extends ResourceType = ResourceType> = {
+export type PlatformMetadata<T extends ContentResourceType = ContentResourceType> = {
 	fetchedAt: string;
 	data: PlatformMetadataDataByResourceType[T];
 	/** Hash of normalized source fields used to skip unchanged resync runs. */
@@ -228,7 +226,7 @@ export type PlatformMetadata<T extends ResourceType = ResourceType> = {
 } & ClassificationEnvelope &
 	OgImageDimensions;
 
-export function platformMetadataFor<T extends ResourceType>(
+export function platformMetadataFor<T extends ContentResourceType>(
 	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
 	type: T,
 ): PlatformMetadata<T> | null {

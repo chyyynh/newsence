@@ -1,3 +1,4 @@
+import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/web';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
@@ -200,7 +201,9 @@ function recencySql(): SQL {
 }
 
 function corpusEnrichedSql(): SQL {
-	return sql`r.scope = 'corpus' AND r.enrichment_status = 'enriched'`;
+	return sql`r.scope = 'corpus'
+		AND r.enrichment_status = 'enriched'
+		AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})`;
 }
 
 function publishedSinceSql(fromDate: Date | null | undefined): SQL {
@@ -298,7 +301,8 @@ function resourceSearchSelect(): SQL {
 
 function resourceAccessPredicate(userId: string): SQL {
 	return sql`
-		(
+		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+		AND (
 			r.scope = 'corpus'
 			OR EXISTS (
 				SELECT 1
