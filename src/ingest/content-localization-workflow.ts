@@ -11,7 +11,6 @@ import {
 	persistMachineZhHantTranslation,
 } from '@ingest/domain/content-localization-store';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
-import { syncCorpusItem } from '../ai-search';
 import { ZH_HANT_RESOURCE_LANG } from '../resources/types';
 import { enqueueOrRestartWorkflow, restartWorkflowIfInactive } from '../workflow-control';
 import {
@@ -93,7 +92,7 @@ export async function scheduleContentLocalization(env: CoreEnv): Promise<void> {
 	}
 	console.info({
 		tag: 'CONTENT_LOCALIZATION',
-		msg: 'Backfill sweep queued',
+		msg: 'Sweep queued',
 		claimed: claims.length,
 		queued,
 		failed,
@@ -269,11 +268,6 @@ export class ContentLocalizationWorkflow extends WorkflowEntrypoint<CoreEnv, Con
 				timeout: '30 seconds',
 			},
 			() => markContentLocalizationComplete(this.env, resourceId, sourceContentHash),
-		);
-		await step.do(
-			'sync-localized-ai-search-item',
-			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => syncCorpusItem(this.env, resourceId),
 		);
 		console.info({
 			tag: 'CONTENT_LOCALIZATION',

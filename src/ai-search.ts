@@ -17,13 +17,10 @@ type CorpusDocumentRow = {
 	tags: string[] | null;
 	category: string | null;
 	source: string | null;
-	translations: Array<{
-		lang: string;
-		title: string | null;
-		summary: string | null;
-		content: string | null;
-		keywords: string[] | null;
-	}>;
+	title: string | null;
+	summary: string | null;
+	content: string | null;
+	keywords: string[] | null;
 };
 
 export type AiSearchRank = { id: string; score: number };
@@ -69,24 +66,15 @@ function sourceDomain(url: string | null): string {
 	}
 }
 
-function localizedSection(row: CorpusDocumentRow, lang: 'en' | 'zh-Hant'): string {
-	const translation = row.translations.find((item) => item.lang === lang);
-	if (!translation) return '';
-	const lines = [`## ${lang}`, translation.title?.trim() ?? '', translation.summary?.trim() ?? ''];
-	if (translation.keywords?.length) lines.push(`Keywords: ${translation.keywords.join(', ')}`);
-	return lines.filter(Boolean).join('\n');
-}
-
 function serializeDocument(row: CorpusDocumentRow): string {
-	const original = row.translations.find((item) => item.lang === row.original_lang);
 	const displaySource = [row.source?.trim(), sourceDomain(row.url)].filter(Boolean).join(' · ');
 	return [
-		`# ${original?.title ?? row.url ?? 'Untitled resource'}`,
+		`# ${row.title ?? row.url ?? 'Untitled resource'}`,
 		displaySource,
 		row.tags?.length ? `Tags: ${row.tags.join(', ')}` : '',
-		localizedSection(row, 'en'),
-		localizedSection(row, 'zh-Hant'),
-		markdownSection('Content', original?.content?.slice(0, CONTENT_MAX_CHARS)),
+		row.keywords?.length ? `Keywords: ${row.keywords.join(', ')}` : '',
+		markdownSection('Summary', row.summary),
+		markdownSection('Content', row.content?.slice(0, CONTENT_MAX_CHARS)),
 	]
 		.filter(Boolean)
 		.join('\n\n');
@@ -96,31 +84,26 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 	const rows = await queryRows<CorpusDocumentRow>(
 		db,
 		sql`
-			SELECT r.id::text,
-			       r.type,
-			       r.url,
-			       r.original_lang,
-			       COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_at,
-			       r.tags,
-			       r.category,
-			       COALESCE(r.platform_metadata->>'sourceName', r.type) AS source,
-			       COALESCE(json_agg(json_build_object(
-			         'lang', rt.lang,
-			         'title', rt.title,
-			         'summary', rt.summary,
-			         'content', CASE WHEN rt.lang = r.original_lang THEN rt.content ELSE NULL END,
-			         'keywords', rt.keywords
-			       ) ORDER BY CASE WHEN rt.lang = r.original_lang THEN 0 ELSE 1 END, rt.lang)
-			       FILTER (WHERE rt.resource_id IS NOT NULL), '[]'::json) AS translations
-			FROM resources r
-			LEFT JOIN resource_translations rt
-			  ON rt.resource_id = r.id
-			 AND rt.lang IN (r.original_lang, 'en', 'zh-Hant')
-			WHERE r.id = ${resourceId}::uuid
-			  AND r.scope = 'corpus'
-			  AND r.enrichment_status = 'enriched'
-			GROUP BY r.id
-		`,
+				SELECT r.id::text,
+				       r.type,
+				       r.url,
+				       r.original_lang,
+				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_at,
+				       r.tags,
+				       r.category,
+				       COALESCE(r.platform_metadata->>'sourceName', r.type) AS source,
+				       rt.title,
+				       rt.summary,
+				       rt.content,
+				       rt.keywords
+				FROM resources r
+				JOIN resource_translations rt
+				  ON rt.resource_id = r.id
+				 AND rt.lang = r.original_lang
+				WHERE r.id = ${resourceId}::uuid
+				  AND r.scope = 'corpus'
+				  AND r.enrichment_status = 'enriched'
+			`,
 	);
 	return rows[0] ?? null;
 }

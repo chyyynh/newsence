@@ -280,10 +280,6 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 				});
 			},
 		);
-		await step.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-			syncCorpusItem(this.env, persistedResourceId),
-		);
-
 		const localizationSourceHash = await step.do(
 			'verify-persisted-original-content',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
@@ -306,6 +302,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 				);
 		}
 		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
+		await step.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+			syncCorpusItem(this.env, persistedResourceId),
+		);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return {
