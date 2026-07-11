@@ -40,7 +40,23 @@ async function enqueueTwitterResource(
 
 const MIN_TWEET_LENGTH = 150;
 
+async function reuseExistingTweet(env: CoreEnv, url: string): Promise<boolean> {
+	const [existing] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [url]));
+	if (!existing) return false;
+	if (existing.shouldRetryEnrichment) await enqueueProcessing(env, existing.id);
+	console.info({ tag: 'TWITTER', msg: 'Resource already exists (dedup)', url });
+	return true;
+}
+
 async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
+	let knownUrl: string | null = null;
+	try {
+		knownUrl = tweet.url ? normalizeUrl(tweet.url) : null;
+	} catch {
+		// Let content resolution surface a useful error for malformed API data.
+	}
+	if (knownUrl && (await reuseExistingTweet(env, knownUrl))) return true;
+
 	const resolved = await resolveTweetContent(tweet, env.KAITO_API_KEY);
 
 	if (resolved.kind === 'tweet' && !tweet.retweetedBy && resolved.eventText.length < MIN_TWEET_LENGTH) {
@@ -49,12 +65,7 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 	}
 
 	const resourceUrl = normalizeUrl(resolved.canonicalUrl);
-	const [existingResource] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [resourceUrl]));
-	if (existingResource) {
-		if (existingResource.shouldRetryEnrichment) await enqueueProcessing(env, existingResource.id);
-		console.info({ tag: 'TWITTER', msg: 'Resource already exists (dedup)', url: resourceUrl, eventType: resolved.kind });
-		return true;
-	}
+	if (resourceUrl !== knownUrl && (await reuseExistingTweet(env, resourceUrl))) return true;
 
 	const { scraped } = resolved;
 	const title = scraped.title || buildTweetTitle(tweet);

@@ -153,7 +153,7 @@ export function buildThreadResourceParts(tweets: Tweet[]): {
 
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
-	for (const tweet of sorted.slice(0, 10)) {
+	for (const tweet of sorted) {
 		const text = stripTweetUrls(tweet.text);
 		if (text && !seen.has(text)) {
 			seen.add(text);
