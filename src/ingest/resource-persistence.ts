@@ -35,11 +35,35 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 	});
 }
 
-export async function deleteResource(env: CoreEnv, resourceId: string): Promise<boolean> {
-	const deleted = await withCoreDb(env, async (db) => {
-		const deleted = await db.delete(resources).where(eq(resources.id, resourceId)).returning({ id: resources.id });
-		return deleted.length > 0;
+export async function settleForbiddenResource(env: CoreEnv, resourceId: string): Promise<boolean> {
+	const outcome = await withCoreDb(env, async (db) => {
+		const result = await db.execute(sql`
+			WITH deleted AS (
+				DELETE FROM resources resource
+				WHERE resource.id = ${resourceId}::uuid
+				  AND NOT EXISTS (
+					SELECT 1 FROM library item WHERE item.resource_id = resource.id
+				  )
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM resource_links link
+					WHERE link.to_type = 'resource' AND link.to_id = resource.id
+				  )
+				RETURNING resource.id
+			), retained AS (
+				UPDATE resources resource
+				SET enrichment_status = 'failed', updated_at = NOW()
+				WHERE resource.id = ${resourceId}::uuid
+				  AND NOT EXISTS (SELECT 1 FROM deleted)
+				RETURNING resource.id
+			)
+			SELECT EXISTS (SELECT 1 FROM deleted) AS deleted,
+			       EXISTS (SELECT 1 FROM retained) AS retained
+		`);
+		return (result.rows as Array<{ deleted: boolean; retained: boolean }>)[0];
 	});
+	if (!outcome?.deleted && !outcome?.retained) throw new Error(`Failed to settle resource ${resourceId}: not found`);
+	const deleted = outcome.deleted;
 	if (deleted) await deleteCorpusItem(env, resourceId);
 	return deleted;
 }

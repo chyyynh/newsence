@@ -23,10 +23,10 @@ import { stagePdfTextExtraction } from './platforms/pdf';
 import { processTwitterResource } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import {
-	deleteResource,
 	markResourceEnrichmentFailed,
 	persistProcessedResource,
 	persistUnchangedResourceResync,
+	settleForbiddenResource,
 } from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
@@ -74,7 +74,7 @@ async function stageSavedUrlAcquisition(
 			async () => {
 				try {
 					return await scrapeSavedUrlArtifact(resource.url, env, {
-						allowRenderedFallback: resource.scope === 'corpus' && resource.type === 'rss',
+						allowRenderedFallback: resource.scope === 'corpus',
 					});
 				} catch (error) {
 					if (acquisitionHttpStatus(error) !== 403) throw error;
@@ -103,31 +103,26 @@ type AcquisitionTerminalResult = {
 	reason: 'acquisition_http_403';
 };
 
-async function deleteResourceAfterAcquisition(
+async function settleResourceAfterForbiddenAcquisition(
 	env: CoreEnv,
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
-	input: {
-		stepName: string;
-		message: string;
-		reason: AcquisitionTerminalResult['reason'];
-		error?: unknown;
-	},
+	error: unknown,
 ): Promise<AcquisitionTerminalResult> {
 	const deleted = await step.do(
-		input.stepName,
+		'delete-forbidden-resource',
 		{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-		() => deleteResource(env, resource.id),
+		() => settleForbiddenResource(env, resource.id),
 	);
 	console.info({
 		tag: 'WORKFLOW',
-		msg: input.message,
+		msg: deleted ? 'Deleted unreferenced resource after forbidden acquisition' : 'Retained referenced resource after forbidden acquisition',
 		resource_id: resource.id,
 		url: resource.url,
 		deleted,
-		...(input.error === undefined ? {} : { error: String(input.error) }),
+		error: String(error),
 	});
-	return { resourceId: resource.id, deleted, reason: input.reason };
+	return { resourceId: resource.id, deleted, reason: 'acquisition_http_403' };
 }
 
 async function acquireResourceForOperation(
@@ -144,12 +139,7 @@ async function acquireResourceForOperation(
 	} catch (error) {
 		if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
 		return {
-			terminal: await deleteResourceAfterAcquisition(env, step, resource, {
-				stepName: 'delete-forbidden-resource',
-				message: 'Deleted resource after forbidden acquisition response',
-				reason: 'acquisition_http_403',
-				error,
-			}),
+			terminal: await settleResourceAfterForbiddenAcquisition(env, step, resource, error),
 		};
 	}
 	return { acquiredContent };
