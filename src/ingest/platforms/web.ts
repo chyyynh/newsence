@@ -12,9 +12,6 @@ const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
-const RENDERED_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
-const MIN_RENDERED_CONTENT_LENGTH = 200;
-const WEAK_DIRECT_CONTENT_LENGTH = 400;
 
 export type OgImagePatch = {
 	ogImageUrl: string | null;
@@ -32,10 +29,6 @@ export type BlobAcquisitionInput = {
 	fileName?: string | null;
 	mimeType?: string | null;
 	sourceUrl?: string | null;
-};
-
-export type WebAcquisitionOptions = {
-	allowRenderedFallback?: boolean;
 };
 
 export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
@@ -256,34 +249,6 @@ function titleFromMarkdown(markdown: string): string | null {
 	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || null;
 }
 
-function objectValue(value: unknown): Record<string, unknown> | null {
-	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-async function scrapeRenderedMarkdown(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
-	const response = await env.BROWSER.quickAction('markdown', {
-		url,
-		gotoOptions: { waitUntil: 'networkidle2', timeout: 30_000 },
-	});
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`Browser Run returned HTTP ${response.status}`);
-	}
-
-	const payload = JSON.parse(await readTextWithLimit(response, RENDERED_CONTENT_MAX_BYTES)) as unknown;
-	const value = objectValue(payload)?.result;
-	const markdown = typeof value === 'string' ? value.trim() : '';
-	if (markdown.length < MIN_RENDERED_CONTENT_LENGTH) throw new Error('Browser Run returned no usable content');
-	return {
-		type: 'web',
-		title: titleFromMarkdown(markdown),
-		markdown,
-		metadata: { author: null, language: null, publishedDate: null, siteName: null, description: null },
-		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
-		ogImage: EMPTY_OG_IMAGE_PATCH,
-	};
-}
-
 async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
 	const result = await env.AI.toMarkdown({
 		name: fileNameFromUrl(url, `${urlHost(url)}.html`),
@@ -423,31 +388,6 @@ async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcq
 	return scrapeHtmlContent(env, html, finalUrl, fileNameFromUrl(finalUrl, `${urlHost(finalUrl)}.html`));
 }
 
-export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAcquisitionOptions = {}): Promise<WebAcquiredContent> {
-	let direct: WebAcquiredContent;
-	try {
-		direct = await scrapeGenericUrlDirect(url, env);
-	} catch (error) {
-		if (!options.allowRenderedFallback) throw error;
-		console.warn({ tag: 'WEB', msg: 'Using rendered content fallback after direct acquisition failed', url, error: String(error) });
-		return scrapeRenderedMarkdown(url, env);
-	}
-
-	const directLength = direct.markdown.trim().length;
-	if (!options.allowRenderedFallback || direct.type !== 'web' || directLength >= WEAK_DIRECT_CONTENT_LENGTH) return direct;
-
-	try {
-		const rendered = await scrapeRenderedMarkdown(url, env);
-		const renderedLength = rendered.markdown.trim().length;
-		if (renderedLength < WEAK_DIRECT_CONTENT_LENGTH || renderedLength < directLength * 2) return direct;
-		console.info({ tag: 'WEB', msg: 'Using rendered content after weak direct extraction', url, directLength, renderedLength });
-		return {
-			...direct,
-			title: direct.title || rendered.title,
-			markdown: rendered.markdown,
-		};
-	} catch (error) {
-		console.warn({ tag: 'WEB', msg: 'Rendered content did not improve weak direct extraction', url, error: String(error) });
-		return direct;
-	}
+export function scrapeGenericUrl(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
+	return scrapeGenericUrlDirect(url, env);
 }

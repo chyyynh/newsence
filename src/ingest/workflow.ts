@@ -61,40 +61,20 @@ function shouldAcquireContent(
 	return (!hasContent || needsYouTubeAcquisition) && !resource.storage_key && !!resource.url;
 }
 
-async function stageSavedUrlAcquisition(
-	env: CoreEnv,
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-	allowFeedFallback: boolean,
-): Promise<AcquiredContent | undefined> {
-	try {
-		const artifact = await step.do(
-			'acquire-content',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			async () => {
-				try {
-					return await scrapeSavedUrlArtifact(resource.url, env, {
-						allowRenderedFallback: resource.scope === 'corpus',
-					});
-				} catch (error) {
-					if (acquisitionHttpStatus(error) !== 403) throw error;
-					throw new NonRetryableError(error instanceof Error ? error.message : String(error), 'AcquisitionForbiddenError');
-				}
-			},
-		);
-		return readAcquiredContentArtifact(artifact);
-	} catch (error) {
-		const hasFeedFallback = allowFeedFallback && resource.type === 'rss' && !!(resource.summary?.trim() || resource.content?.trim());
-		if (!hasFeedFallback) throw error;
-		console.warn({
-			tag: 'WORKFLOW',
-			msg: 'URL acquisition failed; continuing with RSS feed content',
-			resource_id: resource.id,
-			url: resource.url,
-			error: String(error),
-		});
-		return undefined;
-	}
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
+	const artifact = await step.do(
+		'acquire-content',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		async () => {
+			try {
+				return await scrapeSavedUrlArtifact(resource.url, env);
+			} catch (error) {
+				if (acquisitionHttpStatus(error) !== 403) throw error;
+				throw new NonRetryableError(error instanceof Error ? error.message : String(error), 'AcquisitionForbiddenError');
+			}
+		},
+	);
+	return readAcquiredContentArtifact(artifact);
 }
 
 type AcquisitionTerminalResult = {
@@ -135,7 +115,7 @@ async function acquireResourceForOperation(
 
 	let acquiredContent: AcquiredContent | undefined;
 	try {
-		acquiredContent = await stageSavedUrlAcquisition(env, step, resource, operation === 'ingest');
+		acquiredContent = await stageSavedUrlAcquisition(env, step, resource);
 	} catch (error) {
 		if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
 		return {

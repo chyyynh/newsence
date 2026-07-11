@@ -1,6 +1,6 @@
 import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
 import { withCoreDb } from '@db/client';
-import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
+import { extractFromJson, extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { loadEnabledSources, type MonitoredSource, markSourceScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
@@ -9,55 +9,9 @@ import { hackerNewsDiscussionUrl } from './hackernews';
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const FEED_CONCURRENCY = 4;
 const ITEM_CONCURRENCY = 5;
+const FEED_SUMMARY_MAX_CHARS = 500;
 
 type RssSource = MonitoredSource;
-
-const HTML_HREF_RE = /\bhref\s*=\s*["']([^"'#]+)["']/gi;
-
-function titleFromDiscoveredUrl(url: string): string {
-	const slug = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '';
-	let decoded = slug;
-	try {
-		decoded = decodeURIComponent(slug);
-	} catch {
-		// Keep the encoded slug when a site emits malformed escapes.
-	}
-	return decoded.replace(/[-_]+/g, ' ').trim() || new URL(url).hostname;
-}
-
-async function discoverOfficialBlogEntries(feed: RssSource): Promise<FeedEntry[]> {
-	if (!feed.siteUrl) return [];
-	const rssHost = new URL(feed.handle).hostname.toLowerCase();
-	const blogUrl = new URL(feed.siteUrl);
-	const pathPrefix = blogUrl.pathname.endsWith('/') ? blogUrl.pathname : `${blogUrl.pathname}/`;
-	if (rssHost !== 'rsshub.app' || pathPrefix === '/') return [];
-
-	const response = await fetchWithTimeout(blogUrl.toString(), {
-		headers: { 'User-Agent': FEED_UA, Accept: 'text/html,application/xhtml+xml' },
-	});
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`Official blog returned HTTP ${response.status}`);
-	}
-
-	const html = await readTextWithLimit(response, MAX_FEED_BYTES);
-	const urls = new Set<string>();
-	for (const match of html.matchAll(HTML_HREF_RE)) {
-		try {
-			const candidate = new URL(match[1].replace(/&amp;/g, '&'), blogUrl);
-			if (candidate.protocol !== 'http:' && candidate.protocol !== 'https:') continue;
-			if (candidate.hostname.toLowerCase() !== blogUrl.hostname.toLowerCase()) continue;
-			if (!candidate.pathname.startsWith(pathPrefix) || candidate.pathname === pathPrefix) continue;
-			candidate.hash = '';
-			urls.add(normalizeUrl(candidate.toString()));
-			if (urls.size >= 30) break;
-		} catch {
-			// Ignore malformed page links.
-		}
-	}
-
-	return [...urls].map((url) => ({ link: url, title: titleFromDiscoveredUrl(url) }) as FeedEntry);
-}
 
 async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[] | null> {
 	let response: Response;
@@ -74,30 +28,16 @@ async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[] | null> {
 	}
 
 	if (response.ok) {
-		return (extractFromXml(await readTextWithLimit(response, MAX_FEED_BYTES), { descriptionMaxLen: 0 }).entries ?? []).slice(
-			0,
-			30,
-		) as FeedEntry[];
+		const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+		const body = await readTextWithLimit(response, MAX_FEED_BYTES);
+		const options = { descriptionMaxLen: 0 };
+		const feed =
+			contentType.includes('json') || body.trimStart().startsWith('{') ? extractFromJson(body, options) : extractFromXml(body, options);
+		return (feed.entries ?? []).slice(0, 30) as FeedEntry[];
 	}
 
 	const status = response.status;
 	await response.body?.cancel();
-	if (status === 403) {
-		try {
-			const fallbackEntries = await discoverOfficialBlogEntries(feed);
-			if (fallbackEntries.length) {
-				console.warn({
-					tag: 'RSS',
-					msg: 'Using official blog discovery after feed rejection',
-					feed: feed.name,
-					count: fallbackEntries.length,
-				});
-				return fallbackEntries;
-			}
-		} catch (error) {
-			console.warn({ tag: 'RSS', msg: 'Official blog discovery failed', feed: feed.name, error: String(error) });
-		}
-	}
 	console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status });
 	return null;
 }
@@ -132,7 +72,7 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, u
 				title: item.title || 'No Title',
 				source: feed.name,
 				publishedDate: feedPublishedDate(item.published),
-				summary: description,
+				summary: description.slice(0, FEED_SUMMARY_MAX_CHARS),
 				type: 'rss',
 				content: null,
 				platformMetadata: null,

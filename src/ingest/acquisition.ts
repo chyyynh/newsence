@@ -14,7 +14,6 @@ import {
 	pdfExtractionMetadata,
 	scrapeGenericUrl,
 	scrapeBlob as scrapeWebBlob,
-	type WebAcquisitionOptions,
 } from './platforms/web';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 
@@ -22,7 +21,6 @@ export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
 export type { BlobAcquisitionInput };
 export type { PdfExtractionMetadata } from '@core-shared/types';
 export type { OgImagePatch };
-type AcquisitionOptions = WebAcquisitionOptions;
 
 export function acquisitionHttpStatus(error: unknown): number | undefined {
 	const message = error instanceof Error ? error.message : String(error);
@@ -66,7 +64,7 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
 	};
 }
 
-export async function scrapeSavedUrl(url: string, env: CoreEnv, options: AcquisitionOptions = {}): Promise<AcquiredContent> {
+export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 
 	const videoId = extractYouTubeId(validatedUrl);
@@ -78,19 +76,15 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv, options: Acquisi
 	const hackerNewsId = extractHackerNewsId(validatedUrl);
 	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId));
 
-	return sanitizeAcquiredContent(await scrapeGenericUrl(validatedUrl, env, options));
+	return sanitizeAcquiredContent(await scrapeGenericUrl(validatedUrl, env));
 }
 
 export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<AcquiredContent> {
 	return sanitizeAcquiredContent(await scrapeWebBlob(input, env));
 }
 
-export async function scrapeSavedUrlArtifact(
-	url: string,
-	env: CoreEnv,
-	options: AcquisitionOptions = {},
-): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(url, env, options);
+export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(url, env);
 	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
 	return new Blob([bytes], { type: 'application/json' }).stream();
 }

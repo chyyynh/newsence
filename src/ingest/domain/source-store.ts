@@ -7,7 +7,6 @@ export type MonitoredSource = {
 	id: string;
 	name: string;
 	handle: string;
-	siteUrl: string | null;
 	scrapedAt: Date | null;
 };
 
@@ -18,7 +17,6 @@ export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform)
 				id: sources.id,
 				name: sources.name,
 				handle: sources.handle,
-				siteUrl: sources.siteUrl,
 				scrapedAt: sources.scrapedAt,
 			})
 			.from(sources)
