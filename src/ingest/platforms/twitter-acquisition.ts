@@ -142,13 +142,9 @@ export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
 	return `${author}: ${tweet.text.substring(0, maxLength)}${suffix}`;
 }
 
-export function buildThreadResourceParts<T extends Tweet>(
-	tweets: T[],
-): {
-	first: T;
-	sorted: T[];
+export function buildThreadResourceParts(tweets: Tweet[]): {
+	first: Tweet;
 	combinedText: string;
-	media: TwitterMedia[];
 	platformMetadata: PlatformMetadata<'twitter'>;
 } {
 	const sorted = [...tweets].sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
@@ -171,9 +167,7 @@ export function buildThreadResourceParts<T extends Tweet>(
 	platformMetadata.data.threadTweetCount = sorted.length;
 	return {
 		first,
-		sorted,
 		combinedText: uniqueTexts.join('\n\n'),
-		media,
 		platformMetadata,
 	};
 }

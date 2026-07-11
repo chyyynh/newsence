@@ -20,7 +20,7 @@ async function enqueueTwitterResource(
 		platformMetadata: PlatformMetadata;
 		hashTags?: string[];
 	},
-): Promise<boolean> {
+): Promise<void> {
 	const resourceId = await withCoreDb(env, (db) =>
 		upsertPendingSourceResource(db, {
 			url: data.url,
@@ -36,7 +36,6 @@ async function enqueueTwitterResource(
 		}),
 	);
 	await enqueueProcessing(env, resourceId);
-	return true;
 }
 
 const MIN_TWEET_LENGTH = 150;
@@ -63,7 +62,7 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 		resolved.kind === 'share'
 			? scraped.metadata.siteName || scraped.metadata.author || 'External'
 			: tweet.author?.name || scraped.metadata.author || 'Twitter';
-	const queued = await enqueueTwitterResource(env, {
+	await enqueueTwitterResource(env, {
 		url: resourceUrl,
 		title,
 		source,
@@ -74,8 +73,8 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 		platformMetadata: scraped.platformMetadata,
 		hashTags: tweet.hashTags,
 	});
-	if (queued) console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: title.slice(0, 50) });
-	return queued;
+	console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: title.slice(0, 50) });
+	return true;
 }
 
 async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
@@ -102,7 +101,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 		return true;
 	}
 
-	const queued = await enqueueTwitterResource(env, {
+	await enqueueTwitterResource(env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author?.name || 'Twitter',
@@ -113,11 +112,8 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 		platformMetadata,
 		hashTags: first.hashTags,
 	});
-
-	if (queued) {
-		console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: tweetCount });
-	}
-	return queued;
+	console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: tweetCount });
+	return true;
 }
 
 // Twitter Monitor
