@@ -10,6 +10,7 @@ export const PDF_MIME = 'application/pdf';
 const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
+const MIN_HTML_CONTENT_CHARS = 180;
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
 
@@ -214,6 +215,10 @@ function titleFromMarkdown(markdown: string): string | null {
 	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || null;
 }
 
+function stripLeadingFrontmatter(markdown: string): string {
+	return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
+}
+
 async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
 	const result = await env.AI.toMarkdown({
 		name: fileNameFromUrl(url, `${urlHost(url)}.html`),
@@ -254,7 +259,10 @@ async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquire
 async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<WebAcquiredContent> {
 	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableContentHtml(html)]);
 	const markdown = await markdownFromHtml(env, readable?.html ?? html, url);
-	const content = preferReadableContentText(markdown, readable);
+	const content = stripLeadingFrontmatter(preferReadableContentText(markdown, readable));
+	if (content.length < MIN_HTML_CONTENT_CHARS) {
+		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
+	}
 	const title = metadata.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
 	return {
 		type: 'web',

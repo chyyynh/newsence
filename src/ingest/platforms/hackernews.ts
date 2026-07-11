@@ -102,14 +102,7 @@ export async function scrapeHackerNews(
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
 	const title = item.title || `HN Item ${itemId}`;
-	let target: WebAcquiredContent | null = null;
-	if (item.url) {
-		try {
-			target = await scrapeGenericUrl(item.url, env);
-		} catch (error) {
-			console.warn({ tag: 'HN', msg: 'External target fetch failed', itemId, url: item.url, error: String(error) });
-		}
-	}
+	const target: WebAcquiredContent | null = item.url ? await scrapeGenericUrl(item.url, env) : null;
 	const hnText = item.text ? htmlToText(item.text) : '';
 	const summary = target?.metadata.description ?? (hnText.slice(0, 280) || title);
 	console.info({
@@ -131,7 +124,7 @@ export async function scrapeHackerNews(
 			description: summary,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
-		...(target?.extraction?.status === 'ok' ? { extraction: target.extraction } : {}),
+		...(target?.extraction ? { extraction: target.extraction } : {}),
 		...(target?.ogImage ? { ogImage: target.ogImage } : {}),
 		hackerNewsItem: item,
 	};
