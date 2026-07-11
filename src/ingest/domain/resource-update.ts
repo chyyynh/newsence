@@ -52,7 +52,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		published_date: canonicalPublishedDate(acquired.metadata.publishedDate) ?? resource.published_date,
 		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
 		platform_metadata: mergePlatformMetadata(resource.platform_metadata, acquired.platformMetadata),
-		file_type: acquired.type === 'pdf' ? PDF_MIME : resource.file_type,
+		file_type: acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : resource.file_type,
 	};
 }
 

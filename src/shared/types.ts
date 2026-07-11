@@ -141,6 +141,16 @@ export interface HackerNewsMetadata {
 	commentCount: number;
 	itemType?: 'story' | 'ask' | 'show' | 'job';
 	storyUrl?: string | null;
+	target?: {
+		url: string;
+		status: 'fetched' | 'unavailable';
+		type?: 'web' | 'pdf';
+		title?: string | null;
+		siteName?: string | null;
+		description?: string | null;
+		fileName?: string;
+		fileSize?: number;
+	};
 }
 
 interface PdfMetadata {

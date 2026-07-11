@@ -214,7 +214,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					})
 				: null;
 		const pdfExtraction = pdfTextArtifact ?? acquiredContent?.extraction;
-		if (resourceType === 'pdf' && pdfExtraction?.status === 'needs_ocr') {
+		if (pdfExtraction?.status === 'needs_ocr') {
 			throw new NonRetryableError(`PDF resource ${resourceId} requires OCR`, 'PdfOcrRequiredError');
 		}
 		await step.do('validate-resource-content', { retries: { limit: 0, delay: '1 second' }, timeout: '5 seconds' }, async () => {
@@ -266,7 +266,14 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
-		const processorResult = { ...classificationResult, ...(platformEnrichments ? { enrichments: platformEnrichments } : {}) };
+		const processorResult = {
+			...classificationResult,
+			updateData: {
+				...classificationResult.updateData,
+				...(platformEnrichments?.editorial ? { summary: platformEnrichments.editorial } : {}),
+			},
+			...(platformEnrichments ? { enrichments: platformEnrichments } : {}),
+		};
 
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =

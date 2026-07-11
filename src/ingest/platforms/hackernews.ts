@@ -8,6 +8,7 @@ import {
 } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { decode } from 'html-entities';
+import { scrapeGenericUrl, type WebAcquiredContent } from './web';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const HN_ITEM_MAX_BYTES = 5 * 1024 * 1024;
@@ -52,7 +53,21 @@ function hnItemTypeForMetadata(type: HackerNewsItem['type'] | undefined): Hacker
 	return 'story';
 }
 
-function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
+function webTargetMetadata(url: string, target: WebAcquiredContent | null): NonNullable<HackerNewsMetadata['target']> {
+	if (!target) return { url, status: 'unavailable' };
+	const pdfData = target.type === 'pdf' && target.platformMetadata?.data ? target.platformMetadata.data : null;
+	return {
+		url,
+		status: target.markdown.trim() ? 'fetched' : 'unavailable',
+		type: target.type,
+		title: target.title,
+		siteName: target.metadata.siteName,
+		description: target.metadata.description,
+		...(pdfData ? { fileName: pdfData.fileName, fileSize: pdfData.fileSize } : {}),
+	};
+}
+
+function buildHnMetadata(item: HackerNewsItem, target: WebAcquiredContent | null): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author ?? '',
@@ -60,6 +75,7 @@ function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
 		commentCount: item.descendants ?? 0,
 		itemType: hnItemTypeForMetadata(item.type),
 		storyUrl: item.url ?? null,
+		...(item.url ? { target: webTargetMetadata(item.url, target) } : {}),
 	};
 }
 
@@ -98,24 +114,49 @@ function buildHnMarkdown(item: HackerNewsItem): string {
 	return parts.join('\n');
 }
 
-export async function scrapeHackerNews(itemId: string): Promise<NormalizedContent<'hackernews'> & { hackerNewsItem: HackerNewsItem }> {
+export async function scrapeHackerNews(
+	itemId: string,
+	env: CoreEnv,
+): Promise<
+	NormalizedContent<'hackernews'> &
+		Pick<WebAcquiredContent, 'extraction' | 'ogImage'> & {
+			hackerNewsItem: HackerNewsItem;
+		}
+> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
 	const title = item.title || `HN Item ${itemId}`;
-	const summary = item.text ? htmlToText(item.text).slice(0, 280) : title;
-	console.info({ tag: 'HN', msg: 'Item fetched', title });
+	let target: WebAcquiredContent | null = null;
+	if (item.url) {
+		try {
+			target = await scrapeGenericUrl(item.url, env);
+		} catch (error) {
+			console.warn({ tag: 'HN', msg: 'External target fetch failed', itemId, url: item.url, error: String(error) });
+		}
+	}
+	const hnText = item.text ? htmlToText(item.text) : '';
+	const summary = target?.metadata.description ?? (hnText.slice(0, 280) || title);
+	console.info({
+		tag: 'HN',
+		msg: 'Item fetched',
+		title,
+		targetUrl: item.url ?? null,
+		targetStatus: target?.markdown.trim() ? 'fetched' : 'unavailable',
+	});
 	return {
 		type: 'hackernews',
 		title,
-		markdown: buildHnMarkdown(item),
+		markdown: target?.markdown.trim() || buildHnMarkdown(item),
 		metadata: {
-			author: item.author || null,
-			language: null,
-			publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
-			siteName: 'Hacker News',
+			author: target?.metadata.author ?? item.author ?? null,
+			language: target?.metadata.language ?? null,
+			publishedDate: target?.metadata.publishedDate ?? (item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null),
+			siteName: target?.metadata.siteName ?? 'Hacker News',
 			description: summary,
 		},
-		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
+		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item, target) },
+		...(target?.extraction?.status === 'ok' ? { extraction: target.extraction } : {}),
+		...(target?.ogImage ? { ogImage: target.ogImage } : {}),
 		hackerNewsItem: item,
 	};
 }
@@ -155,24 +196,18 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 const HN_EDITORIAL_SYSTEM =
 	'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
 
-function buildEditorialPrompt(title: string, hnText: string, commentInput: string, commentCount: number): string {
+function buildEditorialPrompt(title: string, articleContent: string, hnText: string, commentInput: string, commentCount: number): string {
 	return `Title: ${title}
+Linked article or document:
+${articleContent.slice(0, 8000) || 'N/A'}
+
 HN post text:
 ${htmlToText(hnText).slice(0, 1200) || 'N/A'}
 
 HN comments (${commentCount} total):
 ${commentInput}
 
-Write a 400-600 word editorial note in English using flowing paragraphs, not bullet points. Format:
-
-## Background
-2-3 sentences of context so a reader unfamiliar with the resource can quickly understand what is being discussed.
-
-## Community Perspectives
-The most important section. Summarize HN commenters' viewpoints in coherent paragraphs — major arguments for and against, interesting supplementary perspectives, and notable debates or consensus. Weave different viewpoints together naturally, like a short commentary piece.
-
-## Further Reading
-Valuable resources, tools, or links mentioned in the comments. Omit this section if none.
+Write a 180-280 word discussion digest in English using 2-4 flowing paragraphs. Do not use headings or bullet points. Briefly establish the linked material's context, then focus on the major arguments for and against, supplementary perspectives, and notable debates or consensus. Mention valuable resources from the comments only when they materially help the reader.
 
 Rules:
 - Write in English
@@ -183,7 +218,13 @@ Rules:
 - Output Markdown directly, do not wrap in a code block`;
 }
 
-async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, comments: HnCollectedComment[]): Promise<string | null> {
+async function generateHnEditorial(
+	env: CoreEnv,
+	title: string,
+	articleContent: string,
+	hnText: string,
+	comments: HnCollectedComment[],
+): Promise<string | null> {
 	if (comments.length < 4) return null;
 
 	const commentInput = comments
@@ -191,7 +232,7 @@ async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, 
 		.join('\n')
 		.slice(0, 30000);
 
-	return generateText(env.AI, buildEditorialPrompt(title, hnText, commentInput, comments.length), {
+	return generateText(env.AI, buildEditorialPrompt(title, articleContent, hnText, commentInput, comments.length), {
 		systemPrompt: HN_EDITORIAL_SYSTEM,
 		task: 'hn-editorial-en',
 		gatewayId: env.AI_GATEWAY_NAME,
@@ -210,7 +251,7 @@ export async function generateHackerNewsEnrichments(
 
 	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
-	const editorial = hnData ? await generateHnEditorial(env, resource.title, hnData.text || '', comments) : null;
+	const editorial = hnData ? await generateHnEditorial(env, resource.title, resource.content ?? '', hnData.text || '', comments) : null;
 
 	return hnData
 		? {
