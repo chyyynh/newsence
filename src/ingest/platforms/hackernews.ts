@@ -152,16 +152,18 @@ function extractPostLinks(externalUrl?: string | null, hnTextHtml?: string | nul
 	return urls;
 }
 
-interface EditorialPrompts {
-	system: string;
-	instruction: string;
-	rules: string[];
-}
+const HN_EDITORIAL_SYSTEM =
+	'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.';
 
-const EDITORIAL_EN: EditorialPrompts = {
-	system:
-		'You are a professional tech news editor. Summarize Hacker News discussions into in-depth editorial notes. Use only the provided material. Output Markdown directly.',
-	instruction: `Write a 400-600 word editorial note in English using flowing paragraphs, not bullet points. Format:
+function buildEditorialPrompt(title: string, hnText: string, commentInput: string, commentCount: number): string {
+	return `Title: ${title}
+HN post text:
+${htmlToText(hnText).slice(0, 1200) || 'N/A'}
+
+HN comments (${commentCount} total):
+${commentInput}
+
+Write a 400-600 word editorial note in English using flowing paragraphs, not bullet points. Format:
 
 ## Background
 2-3 sentences of context so a reader unfamiliar with the resource can quickly understand what is being discussed.
@@ -170,37 +172,15 @@ const EDITORIAL_EN: EditorialPrompts = {
 The most important section. Summarize HN commenters' viewpoints in coherent paragraphs — major arguments for and against, interesting supplementary perspectives, and notable debates or consensus. Weave different viewpoints together naturally, like a short commentary piece.
 
 ## Further Reading
-Valuable resources, tools, or links mentioned in the comments. Omit this section if none.`,
-	rules: [
-		'Write in English',
-		'Do not use any emoji',
-		'Focus on how the community reacted, not restating the resource',
-		'Synthesize and paraphrase commenter opinions — do not translate verbatim',
-		'Maintain a neutral, objective but engaging tone',
-		'Output Markdown directly, do not wrap in a code block',
-	],
-};
-
-function buildEditorialPrompt(
-	prompts: EditorialPrompts,
-	title: string,
-	hnText: string,
-	commentInput: string,
-	commentCount: number,
-): { system: string; user: string } {
-	const rulesBlock = prompts.rules.map((rule) => `- ${rule}`).join('\n');
-	const user = `Title: ${title}
-HN post text:
-${htmlToText(hnText).slice(0, 1200) || 'N/A'}
-
-HN comments (${commentCount} total):
-${commentInput}
-
-${prompts.instruction}
+Valuable resources, tools, or links mentioned in the comments. Omit this section if none.
 
 Rules:
-${rulesBlock}`;
-	return { system: prompts.system, user };
+- Write in English
+- Do not use any emoji
+- Focus on how the community reacted, not restating the resource
+- Synthesize and paraphrase commenter opinions; do not translate verbatim
+- Maintain a neutral, objective but engaging tone
+- Output Markdown directly, do not wrap in a code block`;
 }
 
 async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, comments: HnCollectedComment[]): Promise<string | null> {
@@ -211,9 +191,8 @@ async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, 
 		.join('\n')
 		.slice(0, 30000);
 
-	const enPrompt = buildEditorialPrompt(EDITORIAL_EN, title, hnText, commentInput, comments.length);
-	return generateText(env.AI, enPrompt.user, {
-		systemPrompt: enPrompt.system,
+	return generateText(env.AI, buildEditorialPrompt(title, hnText, commentInput, comments.length), {
+		systemPrompt: HN_EDITORIAL_SYSTEM,
 		task: 'hn-editorial-en',
 		gatewayId: env.AI_GATEWAY_NAME,
 	});
