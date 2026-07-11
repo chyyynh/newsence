@@ -35,10 +35,6 @@ interface YouTubeVideoItem {
 	};
 }
 
-type YouTubeScrapeOptions = {
-	minDurationSecondsForTranscript?: number;
-};
-
 type YouTubeVideosResponse = {
 	items?: YouTubeVideoItem[];
 	error?: { message: string };
@@ -79,13 +75,6 @@ function toSeconds(value: string | number | undefined): number {
 	if (!value) return 0;
 	const parsed = Number.parseFloat(value);
 	return Number.isFinite(parsed) ? parsed : 0;
-}
-
-export function parseDurationSeconds(iso: string | undefined): number {
-	if (!iso) return 0;
-	const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-	if (!match) return 0;
-	return parseInt(match[1] || '0', 10) * 3600 + parseInt(match[2] || '0', 10) * 60 + parseInt(match[3] || '0', 10);
 }
 
 async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Promise<YouTubeVideosResponse> {
@@ -132,7 +121,6 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ se
 export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
-	options: YouTubeScrapeOptions = {},
 ): Promise<NormalizedContent<'youtube'> & { platformMetadata: PlatformMetadata<'youtube'> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
@@ -154,22 +142,8 @@ export async function scrapeYouTube(
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
-	let transcriptResult = EMPTY_TRANSCRIPT;
-	const durationSeconds = parseDurationSeconds(video.contentDetails.duration);
-	const shouldFetchTranscript =
-		!options.minDurationSecondsForTranscript || !durationSeconds || durationSeconds >= options.minDurationSecondsForTranscript;
-	if (shouldFetchTranscript) {
-		console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-		transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
-	} else {
-		console.info({
-			tag: 'YOUTUBE',
-			msg: 'Skipping transcript for short video',
-			videoId,
-			duration: video.contentDetails.duration,
-			threshold: options.minDurationSecondsForTranscript,
-		});
-	}
+	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
+	const transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
 	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
 	const transcriptMarkdown = transcript
 		.map((segment) => segment.text.trim())
