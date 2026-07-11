@@ -168,7 +168,7 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | Binding            | 用途                                        |
 | ------------------ | ------------------------------------------- |
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
-| `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance 建立     |
+| `RESOURCE_ENRICHMENT_WORKFLOW` | 建立 `ResourceEnrichmentWorkflow` instance |
 | `R2`               | 讀取 app-owned uploaded blob，供 PDF extraction 使用 |
 | `AI`               | Workers AI binding（AI Gateway 文字呼叫）   |
 | `AI_SEARCH`        | Cloudflare AI Search corpus namespace       |

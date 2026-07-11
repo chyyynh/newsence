@@ -33,11 +33,11 @@ type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
+	return enqueueOrRestartWorkflow(env.RESOURCE_ENRICHMENT_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
 }
 
 export function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
+	return enqueueOrRestartWorkflow(env.RESOURCE_ENRICHMENT_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
 		resourceId,
 		operation: 'resync',
 	});
@@ -140,7 +140,7 @@ async function stageOgImagePatch(
 	);
 }
 
-export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
+export class ResourceEnrichmentWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId } = event.payload;
 		const operation = event.payload.operation ?? 'ingest';

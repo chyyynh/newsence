@@ -3,14 +3,14 @@ import { ContentLocalizationWorkflow } from '@ingest/content-localization-workfl
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
-import { enqueueProcessing, enqueueResourceResync, NewsenceMonitorWorkflow } from '@ingest/workflow';
+import { enqueueProcessing, enqueueResourceResync, ResourceEnrichmentWorkflow } from '@ingest/workflow';
 import { CorpusSearchReindexWorkflow, startCorpusSearchReindex } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
-export { ContentLocalizationWorkflow, CorpusSearchReindexWorkflow, NewsenceMonitorWorkflow };
+export { ContentLocalizationWorkflow, CorpusSearchReindexWorkflow, ResourceEnrichmentWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {
@@ -72,7 +72,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read workflow status for app-side polling. */
 	async getWorkflowStatus(instanceId: string) {
-		const instance = await this.env.MONITOR_WORKFLOW.get(instanceId);
+		const instance = await this.env.RESOURCE_ENRICHMENT_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 
