@@ -6,8 +6,6 @@
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"deploy:dry-run": "pnpm run typecheck && wrangler deploy --dry-run",
-		"recover:missing-content": "node scripts/recover-missing-content.mjs",
-		"requeue:resources": "node scripts/requeue-resources.mjs",
 		"check:db-schema": "node scripts/check-drizzle-prisma-drift.mjs",
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
