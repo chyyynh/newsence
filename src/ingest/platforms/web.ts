@@ -196,7 +196,7 @@ function extractMetaName(html: string, name: string): string | null {
 	return raw ? decode(raw).trim() || null : null;
 }
 
-export function extractOgImageFromHtml(html: string, url: string): OgImagePatch {
+function extractOgImageFromHtml(html: string, url: string): OgImagePatch {
 	let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
 	if (!ogImageUrl) return EMPTY_OG_IMAGE_PATCH;
 

@@ -25,9 +25,9 @@ type CorpusDocumentRow = {
 	keywords: string[] | null;
 };
 
-export type AiSearchRank = { id: string; score: number };
+type AiSearchRank = { id: string; score: number };
 
-export async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null, limit = 50): Promise<string[]> {
+async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null, limit = 50): Promise<string[]> {
 	return withCoreDb(env, async (db) => {
 		const rows = await queryRows<{ id: string }>(
 			db,

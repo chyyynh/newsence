@@ -1,6 +1,4 @@
-export const RESOURCE_CONTENT_SURFACES = ['app', 'ai-tools', 'export'] as const;
-
-export type ResourceContentSurface = (typeof RESOURCE_CONTENT_SURFACES)[number];
+export type ResourceContentSurface = 'app' | 'ai-tools' | 'export';
 
 // Signed-in app readers can inspect corpus bodies; AI and exports stay
 // library-gated so stored or paywalled content is not redistributed by default.

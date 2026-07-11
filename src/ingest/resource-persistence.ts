@@ -12,7 +12,7 @@ import { ResourceUpdateBuilder } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
 import { persistYouTubeWorkflowData, type YouTubeHighlightsUpdate } from './platforms/youtube';
 
-export type PersistProcessedResourceInput = {
+type PersistProcessedResourceInput = {
 	resourceId: string;
 	resource: ResourceForProcessing;
 	processorResult: ProcessorResult;

@@ -22,7 +22,7 @@ export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
 export type { BlobAcquisitionInput };
 export type { PdfExtractionMetadata } from '@core-shared/types';
 export type { OgImagePatch };
-export type AcquisitionOptions = WebAcquisitionOptions;
+type AcquisitionOptions = WebAcquisitionOptions;
 
 export function acquisitionHttpStatus(error: unknown): number | undefined {
 	const message = error instanceof Error ? error.message : String(error);
@@ -94,12 +94,6 @@ export async function scrapeSavedUrlArtifact(
 	return new Blob([bytes], { type: 'application/json' }).stream();
 }
 
-export async function scrapeBlobArtifact(input: BlobAcquisitionInput, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeBlob(input, env);
-	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
-	return new Blob([bytes], { type: 'application/json' }).stream();
-}
-
 function isNullableString(value: unknown): value is string | null {
 	return value === null || typeof value === 'string';
 }
@@ -125,7 +119,7 @@ export async function readAcquiredContentArtifact(artifact: ReadableStream<Uint8
 	return acquired;
 }
 
-export type AcquisitionWorkflowParams = { url: string };
+type AcquisitionWorkflowParams = { url: string };
 
 export async function createAcquisitionJob(env: CoreEnv, url: string) {
 	const validatedUrl = validateAcquisitionUrl(url);

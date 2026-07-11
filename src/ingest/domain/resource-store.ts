@@ -47,7 +47,6 @@ interface ResourceStoreRow {
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;
-	origin_type?: string;
 }
 
 type ResourceStoreTranslationRow = {
@@ -190,7 +189,6 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
 	if (row.file_type) resource.file_type = row.file_type;
 	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;
-	if (row.origin_type) resource.origin_type = row.origin_type;
 	return resource;
 }
 

@@ -3,7 +3,7 @@ import type { CoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 
-export type ResourceTranslationWrite = {
+type ResourceTranslationWrite = {
 	resourceId: string;
 	lang: string;
 	title?: string | null;
