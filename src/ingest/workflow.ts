@@ -17,10 +17,10 @@ import {
 import { enqueueResourceTranslation, getPersistedResourceContentHashForTranslation } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
-import { processHackerNewsResource } from './platforms/hackernews';
+import { generateHackerNewsEnrichments } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
-import { processTwitterResource } from './platforms/twitter';
+import { prepareTwitterClassification } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import {
 	markResourceEnrichmentFailed,
@@ -222,18 +222,30 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		});
 		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent, operation === 'resync');
 
-		const processorResult = await step.do(
-			'ai-analysis',
+		const platformEnrichments =
+			resourceType === 'hackernews'
+				? await step.do(
+						'generate-hacker-news-editorial',
+						{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
+						() => generateHackerNewsEnrichments(resource, this.env, acquiredContent?.hackerNewsItem),
+					)
+				: undefined;
+
+		const classificationResult = await step.do(
+			'classify-resource',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
 				const fullResource = await loadFull();
-				if (resourceType === 'hackernews') {
-					return processHackerNewsResource(fullResource, this.env, acquiredContent?.hackerNewsItem);
-				}
-				if (resourceType === 'twitter') return processTwitterResource(fullResource, this.env);
-				return mergeResourceClassification(fullResource, await generateResourceClassification(fullResource, this.env));
+				const prepared = resourceType === 'twitter' ? prepareTwitterClassification(fullResource) : null;
+				const resourceToClassify = prepared?.resource ?? fullResource;
+				const classification = await generateResourceClassification(resourceToClassify, this.env);
+				return mergeResourceClassification(resourceToClassify, classification, {
+					updateData: prepared?.updateData,
+					extraTags: resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
+				});
 			},
 		);
+		const processorResult = { ...classificationResult, ...(platformEnrichments ? { enrichments: platformEnrichments } : {}) };
 
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =

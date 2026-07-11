@@ -8,7 +8,6 @@ import {
 } from '@core-shared/types';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 import { decode } from 'html-entities';
-import { generateResourceClassification, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
 const HN_ITEM_MAX_BYTES = 5 * 1024 * 1024;
@@ -199,11 +198,11 @@ async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, 
 	});
 }
 
-export async function processHackerNewsResource(
+export async function generateHackerNewsEnrichments(
 	resource: ResourceForProcessing,
 	env: CoreEnv,
 	acquiredItem?: HackerNewsItem,
-): Promise<ProcessorResult> {
+): Promise<PlatformEnrichments> {
 	const metadata = platformMetadataFor(resource, 'hackernews');
 	const itemId = metadata?.data?.itemId || null;
 
@@ -213,7 +212,7 @@ export async function processHackerNewsResource(
 
 	const editorial = hnData ? await generateHnEditorial(env, resource.title, hnData.text || '', comments) : null;
 
-	const enrichments: PlatformEnrichments = hnData
+	return hnData
 		? {
 				hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
 				externalUrl: hnData.url || null,
@@ -223,12 +222,4 @@ export async function processHackerNewsResource(
 				links: extractPostLinks(hnData.url, hnData.text),
 			}
 		: {};
-
-	const resourceForClassification = editorial ? { ...resource, content: editorial } : resource;
-	const classification = await generateResourceClassification(resourceForClassification, env);
-	const merged = mergeResourceClassification(resourceForClassification, classification, {
-		extraTags: ['HackerNews'],
-	});
-
-	return { updateData: merged.updateData, enrichments, classificationCategory: merged.classificationCategory };
 }

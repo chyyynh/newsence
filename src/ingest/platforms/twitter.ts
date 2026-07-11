@@ -4,7 +4,7 @@ import { withCoreDb } from '@db/client';
 import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { loadEnabledSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { generateResourceClassification, isEmpty, mergeResourceClassification, type ProcessorResult } from '../domain/ai-utils';
+import { isEmpty, type ProcessorResult } from '../domain/ai-utils';
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
 async function enqueueTwitterResource(
@@ -393,7 +393,10 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	});
 }
 
-export async function processTwitterResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
+export function prepareTwitterClassification(resource: ResourceForProcessing): {
+	resource: ResourceForProcessing;
+	updateData: ProcessorResult['updateData'];
+} {
 	const updateData: ProcessorResult['updateData'] = {};
 	const tweetText = resource.summary?.trim() || resource.content || '';
 	if (isEmpty(resource.summary)) updateData.summary = tweetText;
@@ -403,8 +406,5 @@ export async function processTwitterResource(resource: ResourceForProcessing, en
 		summary: updateData.summary ?? resource.summary,
 		content: updateData.content ?? resource.content,
 	};
-	console.info({ tag: 'TWITTER-PROCESSOR', msg: 'Classifying Twitter resource', title: resource.title.slice(0, 50) });
-	const classification = await generateResourceClassification(resourceForClassification, env);
-	const merged = mergeResourceClassification(resourceForClassification, classification, { updateData, extraTags: ['Twitter'] });
-	return { updateData: merged.updateData, classificationCategory: merged.classificationCategory };
+	return { resource: resourceForClassification, updateData };
 }
