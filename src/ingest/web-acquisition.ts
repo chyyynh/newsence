@@ -14,6 +14,14 @@ const MIN_ARTICLE_CONTENT_CHARS = 180;
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
 
+export type OgImagePatch = {
+	ogImageUrl: string | null;
+};
+
+export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
+	ogImageUrl: null,
+};
+
 type ExtractedHtmlArticle = {
 	html: string;
 	title: string | null;
@@ -22,41 +30,74 @@ type ExtractedHtmlArticle = {
 	publishedDate: string | null;
 	siteName: string | null;
 	description: string | null;
+	ogImage: OgImagePatch;
+};
+
+type ExtractedPageMetadata = {
+	language: string | null;
+	siteName: string | null;
+	ogImage: OgImagePatch;
 };
 
 function optionalText(value: string | undefined): string | null {
 	return value?.trim() || null;
 }
 
-async function extractSupplementalMetadata(html: string): Promise<{ language: string | null; siteName: string | null }> {
+function absoluteImageUrl(rawUrl: string | null, pageUrl: string): string | null {
+	if (!rawUrl) return null;
+	try {
+		const imageUrl = new URL(rawUrl, pageUrl);
+		if (imageUrl.protocol !== 'http:' && imageUrl.protocol !== 'https:') return null;
+		if (imageUrl.protocol === 'http:') imageUrl.protocol = 'https:';
+		return imageUrl.toString();
+	} catch {
+		return null;
+	}
+}
+
+async function extractPageMetadata(html: string, url: string): Promise<ExtractedPageMetadata> {
 	let language: string | null = null;
 	let siteName: string | null = null;
+	let imageUrl: string | null = null;
 	await new HTMLRewriter()
 		.on('html[lang]', {
 			element(element) {
 				language ??= canonicalizeOptionalResourceLang(element.getAttribute('lang'));
 			},
 		})
-		.on('meta[property="og:locale"]', {
+		.on('meta', {
 			element(element) {
-				language ??= canonicalizeOptionalResourceLang(element.getAttribute('content'));
-			},
-		})
-		.on('meta[property="og:site_name"]', {
-			element(element) {
-				const content = element.getAttribute('content')?.trim();
-				if (!siteName && content) siteName = decode(content).trim() || null;
+				const key = (element.getAttribute('property') ?? element.getAttribute('name'))?.trim().toLowerCase();
+				const rawContent = element.getAttribute('content')?.trim();
+				if (!key || !rawContent) return;
+				const content = decode(rawContent).trim();
+				if (!content) return;
+
+				if (key === 'og:locale') language ??= canonicalizeOptionalResourceLang(content);
+				else if (key === 'og:site_name') siteName ??= content;
+				else if (['og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src'].includes(key)) {
+					imageUrl ??= content;
+				}
 			},
 		})
 		.transform(new Response(html))
 		.arrayBuffer();
-	return { language, siteName };
+	return {
+		language,
+		siteName,
+		ogImage: {
+			ogImageUrl: absoluteImageUrl(imageUrl, url),
+		},
+	};
 }
 
 async function extractHtmlArticle(html: string, url: string): Promise<ExtractedHtmlArticle | null> {
-	const [article, supplementalMetadata] = await Promise.all([
-		extractFromHtml(html, url, { contentLengthThreshold: MIN_ARTICLE_CONTENT_CHARS }),
-		extractSupplementalMetadata(html),
+	const [article, pageMetadata] = await Promise.all([
+		extractFromHtml(html, url, {
+			contentLengthThreshold: MIN_ARTICLE_CONTENT_CHARS,
+			descriptionLengthThreshold: 0,
+		}),
+		extractPageMetadata(html, url),
 	]);
 	if (!article?.content?.trim()) return null;
 
@@ -64,28 +105,20 @@ async function extractHtmlArticle(html: string, url: string): Promise<ExtractedH
 		html: article.content.trim(),
 		title: optionalText(article.title),
 		author: optionalText(article.author),
-		language: supplementalMetadata.language,
+		language: pageMetadata.language,
 		publishedDate: optionalText(article.published),
-		siteName: supplementalMetadata.siteName ?? optionalText(article.source),
+		siteName: pageMetadata.siteName ?? optionalText(article.source),
 		description: optionalText(article.description),
+		ogImage: {
+			...pageMetadata.ogImage,
+			ogImageUrl: absoluteImageUrl(optionalText(article.image), url) ?? pageMetadata.ogImage.ogImageUrl,
+		},
 	};
 }
-
-export type OgImagePatch = {
-	ogImageUrl: string | null;
-	ogImageWidth: number | null;
-	ogImageHeight: number | null;
-};
 
 export type AcquiredWebContent = NormalizedContent<'web' | 'pdf'> & {
 	extraction?: PdfExtractionMetadata;
 	ogImage?: OgImagePatch;
-};
-
-export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
-	ogImageUrl: null,
-	ogImageWidth: null,
-	ogImageHeight: null,
 };
 
 function urlHost(url: string): string {
@@ -111,12 +144,6 @@ export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetada
 	return { status: pdf.status, parser: 'liteparse', chars: pdf.chars, pages: pdf.pages };
 }
 
-function parsePositiveInt(raw: string | null): number | null {
-	if (!raw) return null;
-	const parsed = Number.parseInt(raw, 10);
-	return parsed > 0 ? parsed : null;
-}
-
 function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
 	const merged = new Uint8Array(total);
 	let offset = 0;
@@ -125,38 +152,6 @@ function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
 		offset += chunk.byteLength;
 	}
 	return merged;
-}
-
-function extractMeta(html: string, property: string): string | null {
-	const re = new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
-	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i');
-	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decode(raw).trim() || null : null;
-}
-
-function extractMetaName(html: string, name: string): string | null {
-	const re = new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i');
-	const re2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i');
-	const raw = re.exec(html)?.[1] ?? re2.exec(html)?.[1] ?? null;
-	return raw ? decode(raw).trim() || null : null;
-}
-
-function extractOgImageFromHtml(html: string, url: string): OgImagePatch {
-	let ogImageUrl = extractMeta(html, 'og:image') || extractMeta(html, 'og:image:url') || extractMetaName(html, 'twitter:image');
-	if (!ogImageUrl) return EMPTY_OG_IMAGE_PATCH;
-
-	try {
-		ogImageUrl = new URL(ogImageUrl, url).toString();
-	} catch {
-		return EMPTY_OG_IMAGE_PATCH;
-	}
-	if (ogImageUrl.startsWith('http://')) ogImageUrl = ogImageUrl.replace(/^http:/, 'https:');
-
-	return {
-		ogImageUrl,
-		ogImageWidth: parsePositiveInt(extractMeta(html, 'og:image:width')),
-		ogImageHeight: parsePositiveInt(extractMeta(html, 'og:image:height')),
-	};
 }
 
 export async function fetchOgImage(url: string): Promise<OgImagePatch> {
@@ -190,7 +185,7 @@ export async function fetchOgImage(url: string): Promise<OgImagePatch> {
 		await reader.cancel();
 
 		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
-		return extractOgImageFromHtml(html, url);
+		return (await extractPageMetadata(html, url)).ogImage;
 	} catch {
 		return EMPTY_OG_IMAGE_PATCH;
 	}
@@ -268,7 +263,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, fileN
 			description: article.description,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
-		ogImage: extractOgImageFromHtml(html, url),
+		ogImage: article.ogImage,
 	};
 }
 

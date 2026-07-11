@@ -72,10 +72,6 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 	const updateData: ProcessorResult['updateData'] = processorResult?.updateData ?? {};
 	const metadataPatch: ResourceMetadataPatch = {};
 	if (extraction) metadataPatch.extraction = extraction;
-	if (ogImagePatch?.ogImageWidth && ogImagePatch.ogImageHeight) {
-		metadataPatch.ogImageWidth = ogImagePatch.ogImageWidth;
-		metadataPatch.ogImageHeight = ogImagePatch.ogImageHeight;
-	}
 	let platformMetadata = resource.platform_metadata;
 	if (paperEnrichment) {
 		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };

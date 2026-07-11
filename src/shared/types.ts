@@ -183,11 +183,6 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-interface OgImageDimensions {
-	ogImageWidth?: number | null;
-	ogImageHeight?: number | null;
-}
-
 export interface PlatformMetadataDataByResourceType {
 	web: null;
 	rss: null;
@@ -212,8 +207,7 @@ export type PlatformMetadata<T extends ContentResourceType = ContentResourceType
 	enrichments?: PlatformEnrichments | null;
 	sourceName?: string;
 	extraction?: PdfExtractionMetadata;
-} & ClassificationEnvelope &
-	OgImageDimensions;
+} & ClassificationEnvelope;
 
 export function platformMetadataFor<T extends ContentResourceType>(
 	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
