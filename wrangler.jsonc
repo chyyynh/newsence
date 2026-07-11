@@ -88,7 +88,7 @@
 	],
 	/**
 	 * Browser Run quick actions render public pages that reject direct Worker
-	 * fetches before the acquisition pipeline falls back to an external reader.
+	 * fetches or return an unusably small client-rendered shell.
 	 */
 	"browser": {
 		"binding": "BROWSER"

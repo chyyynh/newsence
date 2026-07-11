@@ -14,6 +14,7 @@ const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
 const RENDERED_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
 const MIN_RENDERED_CONTENT_LENGTH = 200;
+const WEAK_DIRECT_CONTENT_LENGTH = 400;
 
 export type OgImagePatch = {
 	ogImageUrl: string | null;
@@ -423,11 +424,30 @@ async function scrapeGenericUrlDirect(url: string, env: CoreEnv): Promise<WebAcq
 }
 
 export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAcquisitionOptions = {}): Promise<WebAcquiredContent> {
+	let direct: WebAcquiredContent;
 	try {
-		return await scrapeGenericUrlDirect(url, env);
+		direct = await scrapeGenericUrlDirect(url, env);
 	} catch (error) {
 		if (!options.allowRenderedFallback) throw error;
 		console.warn({ tag: 'WEB', msg: 'Using rendered content fallback after direct acquisition failed', url, error: String(error) });
 		return scrapeRenderedMarkdown(url, env);
+	}
+
+	const directLength = direct.markdown.trim().length;
+	if (!options.allowRenderedFallback || direct.type !== 'web' || directLength >= WEAK_DIRECT_CONTENT_LENGTH) return direct;
+
+	try {
+		const rendered = await scrapeRenderedMarkdown(url, env);
+		const renderedLength = rendered.markdown.trim().length;
+		if (renderedLength < WEAK_DIRECT_CONTENT_LENGTH || renderedLength < directLength * 2) return direct;
+		console.info({ tag: 'WEB', msg: 'Using rendered content after weak direct extraction', url, directLength, renderedLength });
+		return {
+			...direct,
+			title: direct.title || rendered.title,
+			markdown: rendered.markdown,
+		};
+	} catch (error) {
+		console.warn({ tag: 'WEB', msg: 'Rendered content did not improve weak direct extraction', url, error: String(error) });
+		return direct;
 	}
 }
