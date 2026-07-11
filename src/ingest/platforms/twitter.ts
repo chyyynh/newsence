@@ -175,10 +175,7 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 	return TWITTER_USERNAME_RE.test(userName) ? userName : null;
 }
 
-/**
- * Global sinceTime = oldest effective watermark across all users minus a 1h
- * overlap. A missing or invalid per-user watermark falls back to 24h ago.
- */
+/** Oldest effective watermark in one API batch, minus a one-hour overlap. */
 function calculateMonitoringSinceTime(users: Array<{ scrapedAt?: Date | string | null }>): number {
 	const fallback = Date.now() - TWITTER_INITIAL_LOOKBACK_MS;
 	let oldest = Number.POSITIVE_INFINITY;
@@ -269,24 +266,51 @@ function groupTweetsIntoThreads(tweets: Tweet[]): Tweet[][] {
 
 type MonitoredTwitterUser = MonitoredSource & { twitterUserName: string };
 
+type MonitoredTwitterIdentity = {
+	twitterUserName: string;
+	sources: MonitoredTwitterUser[];
+};
+
 function monitoredTwitterUsers(users: MonitoredSource[]): MonitoredTwitterUser[] {
 	return users.flatMap((user) => {
 		const twitterUserName = normalizeTwitterUserName(user.handle);
-		return twitterUserName ? [{ ...user, twitterUserName }] : [];
+		return twitterUserName ? [{ ...user, twitterUserName: twitterUserName.toLowerCase() }] : [];
 	});
 }
 
-function batchTwitterUserNames(userNames: string[]): string[][] {
-	const batches: string[][] = [];
-	for (let i = 0; i < userNames.length; i += TWITTER_BATCH_SIZE) {
-		batches.push(userNames.slice(i, i + TWITTER_BATCH_SIZE));
+function monitoredTwitterIdentities(users: MonitoredTwitterUser[]): MonitoredTwitterIdentity[] {
+	const byUserName = new Map<string, MonitoredTwitterUser[]>();
+	for (const user of users) {
+		const sources = byUserName.get(user.twitterUserName) ?? [];
+		sources.push(user);
+		byUserName.set(user.twitterUserName, sources);
+	}
+	return [...byUserName].map(([twitterUserName, sources]) => ({ twitterUserName, sources }));
+}
+
+function batchTwitterIdentities(identities: MonitoredTwitterIdentity[]): MonitoredTwitterIdentity[][] {
+	const batches: MonitoredTwitterIdentity[][] = [];
+	for (let i = 0; i < identities.length; i += TWITTER_BATCH_SIZE) {
+		batches.push(identities.slice(i, i + TWITTER_BATCH_SIZE));
 	}
 	return batches;
 }
 
-async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<{ processed: number; allSaved: boolean }> {
+function monitoredAuthorUserName(tweet: Tweet): string | null {
+	const userName = tweet.retweetedBy?.authorUserName || tweet.author?.userName;
+	return userName?.trim().toLowerCase() || null;
+}
+
+type TweetSaveResult = {
+	processed: number;
+	failedUserNames: Set<string>;
+	hasUnattributedFailure: boolean;
+};
+
+async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<TweetSaveResult> {
 	let processed = 0;
-	let allSaved = true;
+	const failedUserNames = new Set<string>();
+	let hasUnattributedFailure = false;
 	for (const group of groupTweetsIntoThreads(tweets)) {
 		const first = group[0];
 		if (!first) continue;
@@ -294,28 +318,42 @@ async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<{ process
 			const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
 			if (saved) processed++;
 		} catch (err) {
-			allSaved = false;
+			const userName = monitoredAuthorUserName(first);
+			if (userName) failedUserNames.add(userName);
+			else hasUnattributedFailure = true;
 			console.error({ tag: 'TWITTER', msg: 'Save failed', url: first.url, error: String(err) });
 		}
 	}
-	return { processed, allSaved };
+	return { processed, failedUserNames, hasUnattributedFailure };
 }
 
 async function processTwitterBatches(
 	env: CoreEnv,
-	batches: string[][],
-	sinceTime: number,
-): Promise<{ processed: number; allCompleted: boolean }> {
+	batches: MonitoredTwitterIdentity[][],
+	runStartedAt: Date,
+): Promise<{ processed: number; advancedSources: number; incompleteBatches: number }> {
 	let processed = 0;
-	let allCompleted = true;
+	let advancedSources = 0;
+	let incompleteBatches = 0;
 	for (const batch of batches) {
-		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, batch, sinceTime);
-		if (!completed) allCompleted = false;
+		const userNames = batch.map((identity) => identity.twitterUserName);
+		const batchSources = batch.flatMap((identity) => identity.sources);
+		const sinceTime = calculateMonitoringSinceTime(batchSources);
+		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, userNames, sinceTime);
 		const saved = await saveTweetGroups(env, tweets);
 		processed += saved.processed;
-		if (!saved.allSaved) allCompleted = false;
+		if (!completed || saved.hasUnattributedFailure) {
+			incompleteBatches++;
+			continue;
+		}
+
+		const completedSourceIds = batch
+			.filter((identity) => !saved.failedUserNames.has(identity.twitterUserName))
+			.flatMap((identity) => identity.sources.map((source) => source.id));
+		await markSourcesScraped(env, completedSourceIds, runStartedAt);
+		advancedSources += completedSourceIds.length;
 	}
-	return { processed, allCompleted };
+	return { processed, advancedSources, incompleteBatches };
 }
 
 export async function handleTwitterCron(env: CoreEnv): Promise<void> {
@@ -332,23 +370,16 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	}
 
 	const monitoredUsers = monitoredTwitterUsers(users);
-	const userNames = [...new Set(monitoredUsers.map((u) => u.twitterUserName))];
-	if (userNames.length === 0) {
+	const identities = monitoredTwitterIdentities(monitoredUsers);
+	if (identities.length === 0) {
 		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
 		return;
 	}
-	const sinceTime = calculateMonitoringSinceTime(monitoredUsers);
-	const batches = batchTwitterUserNames(userNames);
+	const batches = batchTwitterIdentities(identities);
 
-	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: userNames.length, batches: batches.length, sinceTime });
+	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: identities.length, batches: batches.length });
 
-	const { processed, allCompleted } = await processTwitterBatches(env, batches, sinceTime);
-	if (allCompleted)
-		await markSourcesScraped(
-			env,
-			monitoredUsers.map((u) => u.id),
-			runStartedAt,
-		);
+	const { processed, advancedSources, incompleteBatches } = await processTwitterBatches(env, batches, runStartedAt);
 
 	console.info({
 		tag: 'TWITTER',
@@ -356,6 +387,8 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 		processed,
 		users: users.length,
 		validUsers: monitoredUsers.length,
+		advancedSources,
+		incompleteBatches,
 		batches: batches.length,
 	});
 }
