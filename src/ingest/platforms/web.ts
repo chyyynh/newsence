@@ -4,7 +4,6 @@ import { FEED_UA, fetchWithTimeout, readBytesWithLimit, readTextWithLimit } from
 import { extractReadableContentHtml, preferReadableContentText } from '@ingest/html';
 import { decode } from 'html-entities';
 import { type PdfTextArtifact, parsePdfBytes } from './pdf';
-import { type RenderedWebContent, scrapeUrlWithRenderedContent } from './rendered-content';
 
 export const PDF_MIME = 'application/pdf';
 
@@ -13,6 +12,8 @@ const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const OG_FETCH_TIMEOUT_MS = 6_000;
 const OG_MAX_BYTES = 131_072;
+const RENDERED_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
+const MIN_RENDERED_CONTENT_LENGTH = 200;
 
 export type OgImagePatch = {
 	ogImageUrl: string | null;
@@ -254,6 +255,34 @@ function titleFromMarkdown(markdown: string): string | null {
 	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || null;
 }
 
+function objectValue(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+async function scrapeRenderedMarkdown(url: string, env: CoreEnv): Promise<WebAcquiredContent> {
+	const response = await env.BROWSER.quickAction('markdown', {
+		url,
+		gotoOptions: { waitUntil: 'networkidle2', timeout: 30_000 },
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`Browser Run returned HTTP ${response.status}`);
+	}
+
+	const payload = JSON.parse(await readTextWithLimit(response, RENDERED_CONTENT_MAX_BYTES)) as unknown;
+	const value = objectValue(payload)?.result;
+	const markdown = typeof value === 'string' ? value.trim() : '';
+	if (markdown.length < MIN_RENDERED_CONTENT_LENGTH) throw new Error('Browser Run returned no usable content');
+	return {
+		type: 'web',
+		title: titleFromMarkdown(markdown),
+		markdown,
+		metadata: { author: null, language: null, publishedDate: null, siteName: null, description: null },
+		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
+		ogImage: EMPTY_OG_IMAGE_PATCH,
+	};
+}
+
 async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
 	const result = await env.AI.toMarkdown({
 		name: fileNameFromUrl(url, `${urlHost(url)}.html`),
@@ -291,7 +320,7 @@ async function scrapePdfUrl(url: string, response: Response): Promise<WebAcquire
 	return scrapePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
 }
 
-async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<RenderedWebContent> {
+async function scrapeHtmlContent(env: CoreEnv, html: string, url: string, fileName: string): Promise<WebAcquiredContent> {
 	const [metadata, readable] = await Promise.all([extractHtmlMetadata(html, url), extractReadableContentHtml(html)]);
 	const markdown = await markdownFromHtml(env, readable?.html ?? html, url);
 	const content = preferReadableContentText(markdown, readable);
@@ -399,6 +428,6 @@ export async function scrapeGenericUrl(url: string, env: CoreEnv, options: WebAc
 	} catch (error) {
 		if (!options.allowRenderedFallback) throw error;
 		console.warn({ tag: 'WEB', msg: 'Using rendered content fallback after direct acquisition failed', url, error: String(error) });
-		return scrapeUrlWithRenderedContent(url, env);
+		return scrapeRenderedMarkdown(url, env);
 	}
 }
