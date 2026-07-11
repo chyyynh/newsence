@@ -142,8 +142,11 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
-	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({ search: key, per_page: 10 });
-	const matches = listed.result.filter((item) => item.key === key);
+	// Exact-key filtering landed in AI Search before the Workers type definition.
+	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({ key, source: 'builtin', per_page: 1 } as AiSearchListItemsParams & {
+		key: string;
+	});
+	const matches = listed.result.filter((item) => item.key === key && item.source_id === 'builtin');
 	await Promise.all(matches.map((item) => env.AI_SEARCH.get(INSTANCE_NAME).items.delete(item.id)));
 	if (matches.length) console.info({ tag: 'AI_SEARCH', msg: 'Corpus item deleted', resource_id: resourceId, count: matches.length });
 	return matches.length > 0;
