@@ -171,7 +171,7 @@ async function readCollectionResources(
 		     r.file_type,
 		     r.enrichment_status,
 		     other_translations.translations AS translations
-		   FROM citations c
+		   FROM resource_links c
 		   JOIN resources r ON c.to_type = 'resource' AND r.id = c.to_id
 		   LEFT JOIN library viewer_library
 		     ON viewer_library.resource_id = r.id

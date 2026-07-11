@@ -382,7 +382,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 			db,
 			sql`
 				SELECT from_id, to_id
-				FROM citations
+				FROM resource_links
 				WHERE user_id = ${userId}
 					AND from_type = 'collection'
 						AND from_id = ANY(${textArraySql(validIds)})

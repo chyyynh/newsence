@@ -195,7 +195,7 @@ export const papers = pgTable(
 	'papers',
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
-		openAlexId: varchar('openalex_id', { length: 64 }).notNull().unique(),
+		openAlexId: varchar('provider_paper_id', { length: 64 }).notNull().unique(),
 		doi: text('doi').unique(),
 		resourceId: uuid('resource_id').references(() => resources.id, { onDelete: 'set null' }),
 		title: text('title'),
@@ -231,12 +231,12 @@ export const collections = pgTable('collections', {
 	name: varchar('name', { length: 100 }).notNull(),
 	description: varchar('description', { length: 500 }),
 	visibility: text('visibility').notNull(),
-	resourceCount: integer('article_count').default(0).notNull(),
+	resourceCount: integer('resource_count').default(0).notNull(),
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });
 
-export const citations = pgTable('citations', {
+export const citations = pgTable('resource_links', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	fromType: text('from_type').notNull(),
 	fromId: text('from_id').notNull(),
