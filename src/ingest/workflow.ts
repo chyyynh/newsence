@@ -217,6 +217,10 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		if (resourceType === 'pdf' && pdfExtraction?.status === 'needs_ocr') {
 			throw new NonRetryableError(`PDF resource ${resourceId} requires OCR`, 'PdfOcrRequiredError');
 		}
+		const hasProcessableContent = hasContent || !!pdfTextArtifact?.text?.trim() || !!acquiredContent?.markdown?.trim();
+		if (!hasProcessableContent) {
+			throw new NonRetryableError(`Resource ${resourceId} has no extractable content`, 'ResourceContentMissingError');
+		}
 
 		// Reread durable rows unless in-memory acquisition already holds the freshest copy; PDF text always wins.
 		const loadFull = async (): Promise<ResourceForProcessing> => {
@@ -252,9 +256,6 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				const fullResource = await loadFull();
 				const prepared = resourceType === 'twitter' ? prepareTwitterClassification(fullResource) : null;
 				const resourceToClassify = prepared?.resource ?? fullResource;
-				if (!resourceToClassify.content?.trim()) {
-					throw new NonRetryableError(`Resource ${resourceId} has no extractable content`, 'ResourceContentMissingError');
-				}
 				const classification = await generateResourceClassification(resourceToClassify, this.env);
 				return mergeResourceClassification(resourceToClassify, classification, {
 					updateData: prepared?.updateData,
