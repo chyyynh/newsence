@@ -124,7 +124,7 @@ pnpm run deploy
 
 ## API Surface
 
-這個 Worker 提供一小組給內部呼叫的 acquisition HTTP surface：`POST /scrape` 同步回傳單一 `NormalizedContent`，`POST /acquisition` + `GET /acquisition/:id` 則提供可輪詢的 durable job。App/chat 整合主要走 Cloudflare service-binding RPC，cron 監控則走 scheduled triggers。用戶 ingest 的驗證與限流由 app Worker 在呼叫 core Worker 前處理。
+HTTP surface 只提供 `GET /health`。App/chat 透過 Cloudflare service-binding RPC 傳入已持久化的 resource ID，cron monitor 使用 scheduled triggers；URL acquisition 只存在於 canonical resource workflow 內部。
 
 ## CLI 與 MCP 伺服器
 

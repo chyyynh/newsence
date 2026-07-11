@@ -57,11 +57,6 @@
 			"class_name": "NewsenceMonitorWorkflow"
 		},
 		{
-			"binding": "ACQUISITION_WORKFLOW",
-			"name": "newsence-acquisition-workflow",
-			"class_name": "AcquisitionWorkflow"
-		},
-		{
 			"binding": "CONTENT_LOCALIZATION_WORKFLOW",
 			"name": "newsence-content-localization-workflow",
 			"class_name": "ContentLocalizationWorkflow"
@@ -120,13 +115,12 @@
 	 *   `default` is auto-created by Cloudflare on first use.
 	 *
 	 * Required secrets:
-	 * - CORE_WORKER_INTERNAL_TOKEN authenticates the external HTTP engine surface.
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
 	 * - YOUTUBE_API_KEY enables YouTube transcript/channel enrichment.
 	 * - S2_API_KEY increases Semantic Scholar quota for paper enrichment.
 	 */
 	"secrets": {
-		"required": ["CORE_WORKER_INTERNAL_TOKEN", "KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
+		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
 		"AI_GATEWAY_NAME": "default"

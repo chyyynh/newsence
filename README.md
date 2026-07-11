@@ -132,7 +132,7 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 
 ## API surface
 
-This Worker exposes a small acquisition HTTP surface for internal callers: `POST /scrape` returns one `NormalizedContent` result synchronously, while `POST /acquisition` + `GET /acquisition/:id` provide a durable pollable job. App/chat integrations primarily use Cloudflare service-binding RPC, while cron monitors run through scheduled triggers. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
+The HTTP surface only exposes `GET /health`. App/chat integrations use Cloudflare service-binding RPC with persisted resource IDs, while cron monitors run through scheduled triggers. URL acquisition is an internal stage of the canonical resource workflow.
 
 ## CLI & MCP
 
