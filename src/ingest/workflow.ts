@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
-import { syncCorpusItem } from '../ai-search';
+import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
@@ -160,6 +160,20 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 						error: String(markError),
 					}),
 				);
+			await step
+				.do(
+					'remove-failed-resource-from-search-index',
+					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+					() => deleteCorpusItem(this.env, resourceId),
+				)
+				.catch((indexError) =>
+					console.error({
+						tag: 'AI_SEARCH',
+						msg: 'Failed to remove failed resource from search index',
+						resource_id: resourceId,
+						error: String(indexError),
+					}),
+				);
 			throw error;
 		}
 	}
@@ -238,6 +252,9 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				const fullResource = await loadFull();
 				const prepared = resourceType === 'twitter' ? prepareTwitterClassification(fullResource) : null;
 				const resourceToClassify = prepared?.resource ?? fullResource;
+				if (!resourceToClassify.content?.trim()) {
+					throw new NonRetryableError(`Resource ${resourceId} has no extractable content`, 'ResourceContentMissingError');
+				}
 				const classification = await generateResourceClassification(resourceToClassify, this.env);
 				return mergeResourceClassification(resourceToClassify, classification, {
 					updateData: prepared?.updateData,

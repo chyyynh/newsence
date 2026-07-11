@@ -94,6 +94,9 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 			ogImagePatch: input.ogImagePatch,
 			processorResult: input.processorResult,
 		});
+		if (!updatePayload.content?.trim()) {
+			throw new Error(`Refusing to persist enriched resource ${input.resourceId} without content`);
+		}
 		const resourceType = updatePayload.type;
 		const platformMetadata = updatePayload.platform_metadata;
 		const resourceEntities = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
