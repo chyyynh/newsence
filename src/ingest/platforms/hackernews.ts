@@ -213,6 +213,7 @@ export async function buildHackerNewsContent(
 	if (!item) return resource.content ?? '';
 
 	const articleContent = withoutPreviousDiscussion(resource.content ?? '');
+	if (!articleContent) throw new Error(`Hacker News resource ${resource.id} has no content to annotate`);
 	const comments = item.children?.length ? collectAllComments(item.children) : [];
 	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text || '', comments);
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;

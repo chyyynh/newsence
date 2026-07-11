@@ -248,7 +248,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				? await step.do(
 						'build-hacker-news-content',
 						{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
-						() => buildHackerNewsContent(resource, this.env, acquiredContent?.hackerNewsItem),
+						async () => buildHackerNewsContent(await loadFull(), this.env, acquiredContent?.hackerNewsItem),
 					)
 				: undefined;
 
