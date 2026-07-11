@@ -17,14 +17,12 @@ import {
 	type ResourceTranslationSource,
 	type ResourceType,
 } from '../../resources/types';
-import { syncResourceContentLocalizationState } from './content-localization-store';
 import { type ResourceTranslationWrite, upsertResourceTranslation } from './resource-translation-store';
 import { mergePlatformMetadata, type ResourceUpdate, ResourceUpdateBuilder } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
-	original_content_hash?: string | null;
 };
 
 interface ResourceStoreRow {
@@ -46,7 +44,6 @@ interface ResourceStoreRow {
 	enrichment_status?: string;
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
-	original_content_hash?: string | null;
 	storage_key?: string | null;
 	file_type?: string;
 	normalized_source_url?: string | null;
@@ -116,7 +113,6 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.title AS title,
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
-			${shell ? sql`NULL::text` : sql`md5(rl.content)`} AS original_content_hash,
 			${shell ? sql`rl.content IS NOT NULL AND length(rl.content) > 0` : sql`NULL::boolean`} AS has_content,
 			${
 				shell
@@ -191,7 +187,6 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
-	if ('original_content_hash' in row) resource.original_content_hash = row.original_content_hash ?? null;
 	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
 	if (row.file_type) resource.file_type = row.file_type;
 	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;
@@ -503,7 +498,6 @@ async function syncResourceTranslations(db: CoreDb, resourceId: string, record: 
 			throw new Error(`Failed to sync ${translation.lang} translation for resource ${resourceId}`);
 		}
 	}
-	await syncResourceContentLocalizationState(db, resourceId);
 }
 
 function resourceTranslationRecords(resourceId: string, record: ResourceMirrorRecord): ResourceTranslationWrite[] {
@@ -646,7 +640,6 @@ export async function reopenResourceForReprocessing(
 		const sourceContentChanged = original.content !== effectiveContent;
 		if (original.summary === effectiveSummary && !sourceContentChanged) return false;
 
-		await syncResourceContentLocalizationState(db, resourceId, effectiveContent);
 		await db
 			.update(resources)
 			.set({

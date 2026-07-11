@@ -13,7 +13,7 @@ import {
 	createAcquisitionJob as createAcquisitionWorkflowJob,
 	getAcquisitionJobStatus as readAcquisitionJobStatus,
 } from '@ingest/acquisition-workflow';
-import { ContentLocalizationWorkflow, scheduleContentLocalization } from '@ingest/content-localization-workflow';
+import { ContentLocalizationWorkflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
@@ -137,12 +137,6 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		if (event.cron === '*/5 * * * *') {
 			this.ctx.waitUntil(
 				handleRSSCron(this.env).catch((error) => console.error({ tag: 'CORE', msg: 'RSS monitor failed', error: String(error) })),
-			);
-		} else if (event.cron === '* * * * *') {
-			this.ctx.waitUntil(
-				scheduleContentLocalization(this.env).catch((error) =>
-					console.error({ tag: 'CORE', msg: 'Content localization sweep failed', error: String(error) }),
-				),
 			);
 		} else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));

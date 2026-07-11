@@ -11,7 +11,6 @@ export type ResourceTranslationWrite = {
 	content?: string | null;
 	keywords?: string[];
 	source: ResourceTranslationSource;
-	expectedSourceContentHash?: string;
 };
 
 /**
@@ -19,16 +18,6 @@ export type ResourceTranslationWrite = {
  * incoming non-empty fields replace current values and empty fields are patches.
  */
 export async function upsertResourceTranslation(db: CoreDb, input: ResourceTranslationWrite): Promise<boolean> {
-	const expectedSourceContentHash = input.expectedSourceContentHash ?? null;
-	const sourceHashGuard = expectedSourceContentHash
-		? sql`EXISTS (
-			SELECT 1
-			FROM resource_localization_state localization
-			WHERE localization.resource_id = resource.id
-			  AND localization.current_source_content_hash = ${expectedSourceContentHash}
-			FOR SHARE
-		)`
-		: sql`TRUE`;
 	const keywords = textArraySql(input.keywords ?? []);
 	const result = await db.execute(sql`
 		WITH target_resource AS (
@@ -36,7 +25,6 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 			FROM resources resource
 			WHERE resource.id = ${input.resourceId}::uuid
 			  AND (${input.source} <> 'original' OR resource.original_lang = ${input.lang})
-			  AND ${sourceHashGuard}
 		), demoted_originals AS (
 			UPDATE resource_translations translation
 			SET source = 'machine', updated_at = NOW()

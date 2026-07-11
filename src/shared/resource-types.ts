@@ -64,15 +64,3 @@ export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];
 export const RESOURCE_TRANSLATION_SOURCES = ['original', 'machine', 'human'] as const;
 
 export type ResourceTranslationSource = (typeof RESOURCE_TRANSLATION_SOURCES)[number];
-
-export const RESOURCE_LOCALIZATION_STATUSES = [
-	'not_required',
-	'blocked_on_content',
-	'pending',
-	'queued',
-	'running',
-	'complete',
-	'failed',
-] as const;
-
-export type ResourceLocalizationStatus = (typeof RESOURCE_LOCALIZATION_STATUSES)[number];
