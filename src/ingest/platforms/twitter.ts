@@ -19,6 +19,7 @@ async function enqueueTwitterResource(
 		originalLang?: string;
 		content: string | null;
 		platformMetadata: PlatformMetadata;
+		previewImageUrl?: string | null;
 		hashTags?: string[];
 	},
 ): Promise<void> {
@@ -33,6 +34,7 @@ async function enqueueTwitterResource(
 			originalLang: data.originalLang,
 			content: data.content,
 			platformMetadata: data.platformMetadata,
+			previewImageUrl: data.previewImageUrl,
 			keywords: data.hashTags,
 		}),
 	);
@@ -83,6 +85,7 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 		originalLang: scraped.metadata.language ?? undefined,
 		content: resolved.kind === 'tweet' ? resolved.eventText || null : scraped.markdown,
 		platformMetadata: scraped.platformMetadata,
+		previewImageUrl: scraped.previewImageUrl,
 		hashTags: tweet.hashTags,
 	});
 	console.info({ tag: 'TWITTER', msg: 'Saved tweet content', kind: resolved.kind, title: title.slice(0, 50) });
@@ -122,6 +125,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 		originalLang: first.lang,
 		content: combinedText,
 		platformMetadata,
+		previewImageUrl: platformMetadata.data.media?.[0]?.url ?? null,
 		hashTags: first.hashTags,
 	});
 	console.info({ tag: 'TWITTER', msg: 'Saved thread', author: first.author?.userName, tweets: tweetCount });

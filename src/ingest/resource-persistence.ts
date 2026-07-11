@@ -6,7 +6,7 @@ import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
 import { deleteCorpusItem } from '../ai-search';
-import { type AcquiredContent, type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
+import { type AcquiredContent, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { buildResourceUpdate } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -19,7 +19,7 @@ type PersistProcessedResourceInput = {
 	pdfTextArtifact: PdfTextArtifact | null;
 	acquisitionExtraction?: PdfExtractionMetadata;
 	paperEnrichment: PaperMetadata | null;
-	ogImagePatch: OgImagePatch;
+	previewImageUrl: string | null;
 	youtubeTranscript?: YoutubeTranscript;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 };
@@ -70,12 +70,12 @@ export async function settleForbiddenResource(env: CoreEnv, resourceId: string):
 
 export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {
 	const platformMetadataJson = JSON.stringify(acquired.platformMetadata ?? {});
-	const ogImageUrl = acquired.ogImage?.ogImageUrl?.trim() || null;
+	const previewImageUrl = acquired.previewImageUrl?.trim() || null;
 	await withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
 			UPDATE resources
 			SET scraped_date = NOW(),
-				og_image_url = COALESCE(${ogImageUrl}, og_image_url),
+					og_image_url = COALESCE(${previewImageUrl}, og_image_url),
 				platform_metadata = COALESCE(platform_metadata, '{}'::jsonb) || ${platformMetadataJson}::jsonb,
 				updated_at = NOW()
 			WHERE id = ${resourceId}::uuid
@@ -91,7 +91,7 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 		const updatePayload = buildResourceUpdate(input.resource, {
 			extraction,
 			paperEnrichment: input.paperEnrichment,
-			ogImagePatch: input.ogImagePatch,
+			previewImageUrl: input.previewImageUrl,
 			processorResult: input.processorResult,
 		});
 		if (!updatePayload.content?.trim()) {

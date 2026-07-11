@@ -240,6 +240,7 @@ export interface SourceResourceDraft {
 	originalLang?: string;
 	content: string | null;
 	platformMetadata: unknown | null;
+	previewImageUrl?: string | null;
 	keywords?: string[];
 	tags?: string[];
 }
@@ -374,7 +375,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		content: base.content,
 		translations: {},
 		url: base.url,
-		og_image_url: null,
+		og_image_url: base.previewImageUrl ?? null,
 		source: base.source,
 		published_date: formatPublishedDate(base.publishedDate),
 		tags: base.tags ?? [],

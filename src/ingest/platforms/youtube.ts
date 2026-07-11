@@ -180,6 +180,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 				originalLang: scraped.metadata.language ?? undefined,
 				content: scraped.markdown,
 				platformMetadata: scraped.platformMetadata,
+				previewImageUrl: scraped.previewImageUrl,
 			});
 			await persistYouTubeWorkflowData(db, { transcript: scraped.youtubeTranscript });
 			return resourceId;

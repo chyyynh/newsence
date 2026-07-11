@@ -5,18 +5,10 @@ import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
-import {
-	acquireWebResource,
-	EMPTY_OG_IMAGE_PATCH,
-	fetchOgImage,
-	type OgImagePatch,
-	PDF_MIME,
-	pdfExtractionMetadata,
-} from './web-acquisition';
+import { acquireWebResource, fetchPreviewImageUrl, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
 
-export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
+export { fetchPreviewImageUrl, PDF_MIME, pdfExtractionMetadata };
 export type { PdfExtractionMetadata } from '@core-shared/types';
-export type { OgImagePatch };
 
 export function acquisitionHttpStatus(error: unknown): number | undefined {
 	const message = error instanceof Error ? error.message : String(error);
@@ -26,7 +18,6 @@ export function acquisitionHttpStatus(error: unknown): number | undefined {
 
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
-	ogImage?: OgImagePatch;
 	hackerNewsItem?: HackerNewsItem;
 };
 

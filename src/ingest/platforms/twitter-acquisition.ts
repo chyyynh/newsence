@@ -7,6 +7,7 @@ import type {
 	TwitterAuthorFields,
 	TwitterMedia,
 } from '@core-shared/types';
+import { fetchPreviewImageUrl } from '../web-acquisition';
 
 // twitterapi.io tweet response shape used inside the Twitter platform only.
 export interface Tweet {
@@ -215,7 +216,11 @@ function buildTweetPlatformMetadata(
 	};
 }
 
-function buildTwitterLongformPlatformMetadata(tweetId: string, author: Tweet['author'] | undefined): PlatformMetadata<'twitter'> {
+function buildTwitterLongformPlatformMetadata(
+	tweetId: string,
+	author: Tweet['author'] | undefined,
+	coverImageUrl?: string,
+): PlatformMetadata<'twitter'> {
 	return {
 		fetchedAt: new Date().toISOString(),
 		data: {
@@ -225,6 +230,7 @@ function buildTwitterLongformPlatformMetadata(tweetId: string, author: Tweet['au
 			authorUserName: author?.userName ?? '',
 			authorProfilePicture: author?.profilePicture,
 			authorVerified: author?.isBlueVerified,
+			media: coverImageUrl ? [{ url: coverImageUrl, type: 'photo' }] : [],
 		},
 	};
 }
@@ -303,7 +309,8 @@ async function scrapeTwitterLongform(
 			siteName: 'Twitter',
 			description: summary,
 		},
-		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, longform.author),
+		previewImageUrl: longform.cover_media_img_url ?? null,
+		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, longform.author, longform.cover_media_img_url),
 	};
 }
 
@@ -312,7 +319,7 @@ function buildExternalLinkTweet(
 	externalUrl: string,
 	media: TwitterMedia[],
 	tweetText: string,
-	ogImageUrl: string | null,
+	externalPreviewImageUrl: string | null,
 ): NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> } {
 	const title = `@${tweet.author?.userName}: ${tweetText || tweet.text}`.slice(0, 120);
 	return {
@@ -330,7 +337,7 @@ function buildExternalLinkTweet(
 			media,
 			tweetText,
 			externalUrl,
-			externalOgImage: ogImageUrl,
+			externalOgImage: externalPreviewImageUrl,
 			externalTitle: null,
 			originalTweetUrl: tweet.url,
 		}),
@@ -339,7 +346,7 @@ function buildExternalLinkTweet(
 
 export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	const media = extractTweetMedia(tweet);
-	const ogImageUrl = media[0]?.url ?? null;
+	const mediaPreviewImageUrl = media[0]?.url ?? null;
 	const expandedUrls = extractExpandedUrls(tweet);
 	const tweetText = stripTweetUrls(tweet.text);
 
@@ -362,7 +369,11 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	}
 
 	if (linkedContentUrl) {
-		const scraped = buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText, ogImageUrl);
+		const externalPreviewImageUrl = await fetchPreviewImageUrl(linkedContentUrl);
+		const scraped = {
+			...buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText, externalPreviewImageUrl),
+			previewImageUrl: mediaPreviewImageUrl ?? externalPreviewImageUrl,
+		};
 		return { kind: 'share' as const, scraped, canonicalUrl: tweet.url, eventText: tweetText };
 	}
 
@@ -383,6 +394,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 				siteName: 'Twitter',
 				description: tweet.text,
 			},
+			previewImageUrl: mediaPreviewImageUrl,
 			platformMetadata: buildTweetPlatformMetadata(tweet),
 		},
 		canonicalUrl: tweet.url,
@@ -432,6 +444,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 			siteName: 'Twitter',
 			description: parts.combinedText,
 		},
+		previewImageUrl: parts.platformMetadata.data.media?.[0]?.url ?? null,
 		platformMetadata: parts.platformMetadata,
 	};
 }

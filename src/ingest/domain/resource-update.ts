@@ -1,6 +1,6 @@
 import { type ContentResourceType, canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import { type AcquiredContent, type OgImagePatch, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
+import { type AcquiredContent, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
 
 export type ResourceUpdate = {
@@ -64,11 +64,11 @@ type BuildResourceUpdateInput = {
 	processorResult?: ProcessorResult;
 	extraction?: PdfExtractionMetadata;
 	paperEnrichment?: PaperMetadata | null;
-	ogImagePatch?: OgImagePatch;
+	previewImageUrl?: string | null;
 };
 
 export function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput = {}): ResourceUpdate {
-	const { processorResult, extraction, paperEnrichment, ogImagePatch } = input;
+	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
 	const updateData: ProcessorResult['updateData'] = processorResult?.updateData ?? {};
 	const metadataPatch: ResourceMetadataPatch = {};
 	if (extraction) metadataPatch.extraction = extraction;
@@ -111,7 +111,7 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 		tags: [...(updateData.tags ?? resource.tags)],
 		keywords: [...(updateData.keywords ?? resource.keywords)],
 		entities: updateData.entities,
-		og_image_url: ogImagePatch?.ogImageUrl || (resource.og_image_url ?? null),
+		og_image_url: previewImageUrl || (resource.og_image_url ?? null),
 		platform_metadata: platformMetadata,
 	};
 }

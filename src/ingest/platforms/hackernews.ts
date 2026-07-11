@@ -95,7 +95,7 @@ export async function scrapeHackerNews(
 	env: CoreEnv,
 ): Promise<
 	NormalizedContent<'hackernews'> &
-		Pick<AcquiredWebContent, 'extraction' | 'ogImage'> & {
+		Pick<AcquiredWebContent, 'extraction' | 'previewImageUrl'> & {
 			hackerNewsItem: HackerNewsItem;
 		}
 > {
@@ -125,7 +125,7 @@ export async function scrapeHackerNews(
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 		...(target?.extraction ? { extraction: target.extraction } : {}),
-		...(target?.ogImage ? { ogImage: target.ogImage } : {}),
+		...(target?.previewImageUrl ? { previewImageUrl: target.previewImageUrl } : {}),
 		hackerNewsItem: item,
 	};
 }

@@ -11,16 +11,8 @@ const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
-const OG_FETCH_TIMEOUT_MS = 6_000;
-const OG_MAX_BYTES = 131_072;
-
-export type OgImagePatch = {
-	ogImageUrl: string | null;
-};
-
-export const EMPTY_OG_IMAGE_PATCH: OgImagePatch = {
-	ogImageUrl: null,
-};
+const PREVIEW_METADATA_FETCH_TIMEOUT_MS = 6_000;
+const PREVIEW_METADATA_MAX_BYTES = 131_072;
 
 type ExtractedHtmlArticle = {
 	html: string;
@@ -30,13 +22,13 @@ type ExtractedHtmlArticle = {
 	publishedDate: string | null;
 	siteName: string | null;
 	description: string | null;
-	ogImage: OgImagePatch;
+	previewImageUrl: string | null;
 };
 
 type ExtractedPageMetadata = {
 	language: string | null;
 	siteName: string | null;
-	ogImage: OgImagePatch;
+	previewImageUrl: string | null;
 };
 
 function optionalText(value: string | undefined): string | null {
@@ -85,9 +77,7 @@ async function extractPageMetadata(html: string, url: string): Promise<Extracted
 	return {
 		language,
 		siteName,
-		ogImage: {
-			ogImageUrl: absoluteImageUrl(imageUrl, url),
-		},
+		previewImageUrl: absoluteImageUrl(imageUrl, url),
 	};
 }
 
@@ -109,16 +99,12 @@ async function extractHtmlArticle(html: string, url: string): Promise<ExtractedH
 		publishedDate: optionalText(article.published),
 		siteName: pageMetadata.siteName ?? optionalText(article.source),
 		description: optionalText(article.description),
-		ogImage: {
-			...pageMetadata.ogImage,
-			ogImageUrl: absoluteImageUrl(optionalText(article.image), url) ?? pageMetadata.ogImage.ogImageUrl,
-		},
+		previewImageUrl: absoluteImageUrl(optionalText(article.image), url) ?? pageMetadata.previewImageUrl,
 	};
 }
 
 export type AcquiredWebContent = NormalizedContent<'web' | 'pdf'> & {
 	extraction?: PdfExtractionMetadata;
-	ogImage?: OgImagePatch;
 };
 
 function urlHost(url: string): string {
@@ -154,7 +140,7 @@ function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
 	return merged;
 }
 
-export async function fetchOgImage(url: string): Promise<OgImagePatch> {
+export async function fetchPreviewImageUrl(url: string): Promise<string | null> {
 	try {
 		const response = await fetchWithTimeout(
 			url,
@@ -164,20 +150,20 @@ export async function fetchOgImage(url: string): Promise<OgImagePatch> {
 					Accept: 'text/html,application/xhtml+xml',
 				},
 			},
-			OG_FETCH_TIMEOUT_MS,
+			PREVIEW_METADATA_FETCH_TIMEOUT_MS,
 		);
 		if (!response.ok || !response.body) {
 			await response.body?.cancel();
-			return EMPTY_OG_IMAGE_PATCH;
+			return null;
 		}
 
 		const reader = response.body.getReader();
 		const chunks: Uint8Array[] = [];
 		let totalBytes = 0;
-		while (totalBytes < OG_MAX_BYTES) {
+		while (totalBytes < PREVIEW_METADATA_MAX_BYTES) {
 			const { done, value } = await reader.read();
 			if (done || !value) break;
-			const remaining = OG_MAX_BYTES - totalBytes;
+			const remaining = PREVIEW_METADATA_MAX_BYTES - totalBytes;
 			const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
 			chunks.push(chunk);
 			totalBytes += chunk.byteLength;
@@ -185,9 +171,9 @@ export async function fetchOgImage(url: string): Promise<OgImagePatch> {
 		await reader.cancel();
 
 		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
-		return (await extractPageMetadata(html, url)).ogImage;
+		return (await extractPageMetadata(html, url)).previewImageUrl;
 	} catch {
-		return EMPTY_OG_IMAGE_PATCH;
+		return null;
 	}
 }
 
@@ -263,7 +249,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, fileN
 			description: article.description,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
-		ogImage: article.ogImage,
+		previewImageUrl: article.previewImageUrl,
 	};
 }
 

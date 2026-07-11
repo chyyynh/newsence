@@ -164,6 +164,7 @@ export async function scrapeYouTube(
 			siteName: 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
 		},
+		previewImageUrl: thumbnailUrl,
 		platformMetadata: {
 			fetchedAt: new Date().toISOString(),
 			data: {

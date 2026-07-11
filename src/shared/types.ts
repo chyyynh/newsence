@@ -61,6 +61,8 @@ export interface NormalizedContent<T extends ContentResourceType = ContentResour
 	title: string | null;
 	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
+	/** Canonical preview image selected by the acquisition source. */
+	previewImageUrl?: string | null;
 	metadata: {
 		author: string | null;
 		language: string | null;

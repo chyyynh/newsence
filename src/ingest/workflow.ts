@@ -7,9 +7,7 @@ import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
 	acquisitionHttpStatus,
-	EMPTY_OG_IMAGE_PATCH,
-	fetchOgImage,
-	type OgImagePatch,
+	fetchPreviewImageUrl,
 	PDF_MIME,
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
@@ -125,18 +123,20 @@ async function acquireResourceForOperation(
 	return { acquiredContent };
 }
 
-async function stageOgImagePatch(
+async function stagePreviewImageUrl(
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
 	acquiredContent?: AcquiredContent,
 	force = false,
-): Promise<OgImagePatch> {
-	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
+): Promise<string | null> {
+	if (acquiredContent?.previewImageUrl) return acquiredContent.previewImageUrl;
 	if ((!force && resource.og_image_url) || !resource.url || resource.file_type === PDF_MIME || resource.type === 'hackernews') {
-		return EMPTY_OG_IMAGE_PATCH;
+		return null;
 	}
-	return step.do('resolve-og-image', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-		fetchOgImage(resource.url),
+	return step.do(
+		'resolve-preview-image',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+		() => fetchPreviewImageUrl(resource.url),
 	);
 }
 
@@ -241,7 +241,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			});
 			return null;
 		});
-		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent, operation === 'resync');
+		const previewImageUrl = await stagePreviewImageUrl(step, resource, acquiredContent, operation === 'resync');
 
 		const hackerNewsContent =
 			resourceType === 'hackernews'
@@ -296,7 +296,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					pdfTextArtifact,
 					acquisitionExtraction: acquiredContent?.extraction,
 					paperEnrichment,
-					ogImagePatch,
+					previewImageUrl,
 					youtubeTranscript,
 					youtubeHighlights,
 				});
