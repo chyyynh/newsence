@@ -154,33 +154,16 @@ function detectPaperId(url: string | null | undefined, content: string | null, s
 async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (apiKey) headers['x-api-key'] = apiKey;
-	for (let attempt = 0; attempt < 3; attempt++) {
-		try {
-			const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
-			if (res.ok) return JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)) as T;
-			if (res.status === 404) {
-				await res.body?.cancel();
-				return null;
-			}
-			if ((res.status === 429 || res.status >= 500) && attempt < 2) {
-				const retryAfter = Math.min(Number.parseInt(res.headers.get('retry-after') ?? '', 10) || 2, 5);
-				await res.body?.cancel();
-				await scheduler.wait(retryAfter * 1000);
-				continue;
-			}
-			await res.body?.cancel();
-			if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-				console.warn({ tag: 'S2', msg: 'request rejected', status: res.status, path: path.slice(0, 80) });
-				return null;
-			}
-			throw new Error(`Semantic Scholar request failed with HTTP ${res.status}`);
-		} catch (error) {
-			if (attempt >= 2) throw error;
-			console.warn({ tag: 'S2', msg: 'request failed, retrying', attempt: attempt + 1, error: String(error) });
-			await scheduler.wait(2 ** attempt * 1000);
-		}
+	const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
+	if (res.ok) return JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)) as T;
+	const status = res.status;
+	await res.body?.cancel();
+	if (status === 404) return null;
+	if (status >= 400 && status < 500 && status !== 429) {
+		console.warn({ tag: 'S2', msg: 'request rejected', status, path: path.slice(0, 80) });
+		return null;
 	}
-	throw new Error('Semantic Scholar request exhausted retries');
+	throw new Error(`Semantic Scholar request failed with HTTP ${status}`);
 }
 
 function authorNames(authors: S2Author[] | undefined): string[] {
@@ -326,7 +309,7 @@ function idPath(id: PaperId): string {
 	return id.kind === 'doi' ? `DOI:${id.value}` : `ARXIV:${id.value}`;
 }
 
-/** Resolve a paper by DOI or arXiv id. Returns null on miss / error — never throws. */
+/** Resolve a paper by DOI or arXiv id. Returns null when Semantic Scholar has no match. */
 async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetadata | null> {
 	const paper = await fetchS2<S2Paper>(`/paper/${idPath(id)}?fields=${PAPER_FIELDS}`, apiKey);
 	if (!paper?.paperId) return null;

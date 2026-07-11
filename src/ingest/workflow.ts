@@ -199,6 +199,10 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 						sourceStorageKey: resource.storage_key,
 					})
 				: null;
+		const pdfExtraction = pdfTextArtifact ?? acquiredContent?.extraction;
+		if (resourceType === 'pdf' && pdfExtraction?.status === 'needs_ocr') {
+			throw new NonRetryableError(`PDF resource ${resourceId} requires OCR`, 'PdfOcrRequiredError');
+		}
 
 		// Reread durable rows unless in-memory acquisition already holds the freshest copy; PDF text always wins.
 		const loadFull = async (): Promise<ResourceForProcessing> => {
