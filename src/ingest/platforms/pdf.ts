@@ -17,6 +17,11 @@ const MAX_PDF_BYTES = 25 * 1024 * 1024;
 
 let pdfParserReady = false;
 
+function extractedTextChars(markdown: string): number {
+	const content = markdown.replace(/^```[^\n]*$/gm, '').replace(/^[-_*]{3,}$/gm, '');
+	return content.match(/[\p{L}\p{N}]/gu)?.length ?? 0;
+}
+
 export async function parsePdfBytes(bytes: Uint8Array): Promise<PdfTextArtifact> {
 	if (!pdfParserReady) {
 		initSync({ module: wasmModule });
@@ -26,7 +31,7 @@ export async function parsePdfBytes(bytes: Uint8Array): Promise<PdfTextArtifact>
 	const raw = (await parser.parse(bytes)) as { text?: string; pages?: unknown[] };
 	const text = (raw.text ?? '').trim();
 	const pages = raw.pages?.length ?? 0;
-	const chars = text.length;
+	const chars = extractedTextChars(text);
 	const status = chars < MIN_PDF_CHARS || chars / Math.max(pages, 1) < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
 	return { text, pages, chars, status };
 }
