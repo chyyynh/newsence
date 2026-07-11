@@ -10,8 +10,7 @@ const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
 const RESPONSE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_REFERENCES = 50;
-const ARXIV_URL_RE = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/i;
-const ARXIV_INLINE_RE = /arxiv[:\s]\s*(\d{4}\.\d{4,5})(?:v\d+)?/i;
+const ARXIV_PATH_RE = /^\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
 
 const PAPER_FIELDS = [
@@ -23,7 +22,6 @@ const PAPER_FIELDS = [
 	'referenceCount',
 	'externalIds',
 	'authors.name',
-	'openAccessPdf',
 	'references.title',
 	'references.year',
 	'references.externalIds',
@@ -37,10 +35,8 @@ interface S2Author {
 }
 interface S2ExternalIds {
 	DOI?: string;
-	ArXiv?: string;
 }
 interface S2Ref {
-	paperId?: string;
 	title?: string;
 	year?: number | null;
 	externalIds?: S2ExternalIds | null;
@@ -56,7 +52,6 @@ interface S2Paper {
 	referenceCount?: number | null;
 	externalIds?: S2ExternalIds | null;
 	authors?: S2Author[];
-	openAccessPdf?: { url?: string | null } | null;
 	references?: S2Ref[];
 }
 function trimDoi(doi: string): string {
@@ -67,32 +62,37 @@ function isPlaceholderDoi(doi: string): boolean {
 	return /n{4,}|x{4,}/i.test(doi);
 }
 
-function extractArxivId(text: string): string | null {
-	return text.match(ARXIV_URL_RE)?.[1] ?? text.match(ARXIV_INLINE_RE)?.[1] ?? null;
-}
-
-function extractDoi(text: string): { value: string | null; marker: boolean } {
+function extractDoi(text: string): string | null {
 	const raw = text.match(DOI_RE)?.[1];
-	if (!raw) return { value: null, marker: false };
+	if (!raw) return null;
 	const doi = trimDoi(raw).toLowerCase();
-	return isPlaceholderDoi(doi) ? { value: null, marker: true } : { value: doi, marker: true };
+	return isPlaceholderDoi(doi) ? null : doi;
 }
 
 function detectPaperId(url: string | null | undefined): PaperId | null {
 	const safeUrl = typeof url === 'string' ? url : '';
-	let host = '';
+	let parsed: URL;
 	try {
-		host = new URL(safeUrl).hostname.toLowerCase();
+		parsed = new URL(safeUrl);
 	} catch {
-		// Non-URL resources are not implicitly classified as academic works.
+		return null;
+	}
+	const host = parsed.hostname.toLowerCase();
+
+	if (host === 'arxiv.org' || host.endsWith('.arxiv.org')) {
+		const arxivId = parsed.pathname.match(ARXIV_PATH_RE)?.[1];
+		if (arxivId) return { kind: 'arxiv', value: arxivId };
 	}
 
-	const urlArxiv = extractArxivId(safeUrl);
-	if (urlArxiv) return { kind: 'arxiv', value: urlArxiv };
-
-	if (host === 'doi.org' || host === 'dx.doi.org' || host.endsWith('arxiv.org')) {
-		const urlDoi = extractDoi(safeUrl);
-		if (urlDoi.value) return { kind: 'doi', value: urlDoi.value };
+	if (host === 'doi.org' || host === 'dx.doi.org') {
+		let doiPath = parsed.pathname.slice(1);
+		try {
+			doiPath = decodeURIComponent(doiPath);
+		} catch {
+			// Preserve malformed escapes; the DOI parser will reject them.
+		}
+		const doi = extractDoi(doiPath);
+		if (doi) return { kind: 'doi', value: doi };
 	}
 
 	return null;
@@ -121,7 +121,6 @@ function authorNames(authors: S2Author[] | undefined): string[] {
 function normalizeReferences(references: S2Ref[] | undefined): PaperReference[] {
 	if (!references) return [];
 	return references.slice(0, MAX_REFERENCES).map((ref) => ({
-		openAlexId: ref.paperId, // source-native id (S2 paperId); used only for a link fallback
 		doi: ref.externalIds?.DOI?.toLowerCase(),
 		title: ref.title ?? undefined,
 		year: ref.year ?? undefined,
@@ -129,13 +128,11 @@ function normalizeReferences(references: S2Ref[] | undefined): PaperReference[] 
 	}));
 }
 
-function normalizePaper(paper: S2Paper, arxivHint?: string): PaperMetadata {
+function normalizePaper(paper: S2Paper): PaperMetadata {
 	const doi = paper.externalIds?.DOI?.toLowerCase();
 	return {
 		source: 'semanticscholar',
-		openAlexId: paper.paperId,
 		doi,
-		arxivId: arxivHint ?? paper.externalIds?.ArXiv ?? undefined,
 		title: paper.title ?? undefined,
 		authors: authorNames(paper.authors),
 		abstract: paper.abstract ?? undefined,
@@ -143,8 +140,6 @@ function normalizePaper(paper: S2Paper, arxivHint?: string): PaperMetadata {
 		year: paper.year ?? undefined,
 		citedByCount: paper.citationCount ?? undefined,
 		referenceCount: paper.referenceCount ?? paper.references?.length ?? 0,
-		oaPdfUrl: paper.openAccessPdf?.url ?? undefined,
-		landingPageUrl: doi ? `https://doi.org/${doi}` : undefined,
 		references: normalizeReferences(paper.references),
 	};
 }
@@ -157,7 +152,7 @@ function idPath(id: PaperId): string {
 async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetadata | null> {
 	const paper = await fetchS2<S2Paper>(`/paper/${idPath(id)}?fields=${PAPER_FIELDS}`, apiKey);
 	if (!paper?.paperId) return null;
-	return normalizePaper(paper, id.kind === 'arxiv' ? id.value : undefined);
+	return normalizePaper(paper);
 }
 
 async function enrichPaperMetadata(url: string, apiKey?: string): Promise<PaperMetadata | null> {

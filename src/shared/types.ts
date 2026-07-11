@@ -149,7 +149,6 @@ interface PdfMetadata {
 }
 
 export interface PaperReference {
-	openAlexId?: string;
 	doi?: string;
 	title?: string;
 	year?: number;
@@ -157,11 +156,8 @@ export interface PaperReference {
 }
 
 export interface PaperMetadata {
-	source: 'openalex' | 'semanticscholar';
-	/** Legacy field name; new values are source-native Semantic Scholar paperIds. */
-	openAlexId?: string;
+	source: 'semanticscholar';
 	doi?: string;
-	arxivId?: string;
 	title?: string;
 	authors: string[];
 	abstract?: string;
@@ -169,8 +165,6 @@ export interface PaperMetadata {
 	year?: number;
 	citedByCount?: number;
 	referenceCount: number;
-	oaPdfUrl?: string;
-	landingPageUrl?: string;
 	references: PaperReference[];
 }
 
