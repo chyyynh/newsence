@@ -217,10 +217,13 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		if (resourceType === 'pdf' && pdfExtraction?.status === 'needs_ocr') {
 			throw new NonRetryableError(`PDF resource ${resourceId} requires OCR`, 'PdfOcrRequiredError');
 		}
-		const hasProcessableContent = hasContent || !!pdfTextArtifact?.text?.trim() || !!acquiredContent?.markdown?.trim();
-		if (!hasProcessableContent) {
-			throw new NonRetryableError(`Resource ${resourceId} has no extractable content`, 'ResourceContentMissingError');
-		}
+		await step.do('validate-resource-content', { retries: { limit: 0, delay: '1 second' }, timeout: '5 seconds' }, async () => {
+			const hasProcessableContent = hasContent || !!pdfTextArtifact?.text?.trim() || !!acquiredContent?.markdown?.trim();
+			if (!hasProcessableContent) {
+				throw new NonRetryableError(`Resource ${resourceId} has no extractable content`, 'ResourceContentMissingError');
+			}
+			return true;
+		});
 
 		// Reread durable rows unless in-memory acquisition already holds the freshest copy; PDF text always wins.
 		const loadFull = async (): Promise<ResourceForProcessing> => {
