@@ -175,6 +175,7 @@ export interface PaperMetadata {
 }
 
 export interface PlatformEnrichments {
+	academic?: PaperMetadata | null;
 	hnUrl?: string;
 	externalUrl?: string | null;
 	hnText?: string | null;
@@ -205,7 +206,6 @@ export interface PlatformMetadataDataByResourceType {
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
 	pdf: PdfMetadata;
-	paper: PaperMetadata;
 }
 
 export interface PdfExtractionMetadata {

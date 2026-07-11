@@ -211,10 +211,7 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			return extractedPdfText ? { ...base, content: extractedPdfText } : base;
 		};
 
-		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource, {
-			hasStagedText: !!pdfTextArtifact?.text,
-			loadContent: async () => (await loadFull()).content,
-		});
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent, operation === 'resync');
 
 		const processorResult = await step.do(

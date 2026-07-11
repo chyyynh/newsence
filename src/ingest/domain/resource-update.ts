@@ -76,9 +76,14 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 		metadataPatch.ogImageWidth = ogImagePatch.ogImageWidth;
 		metadataPatch.ogImageHeight = ogImagePatch.ogImageHeight;
 	}
-	if (paperEnrichment) metadataPatch.data = paperEnrichment;
-
 	let platformMetadata = resource.platform_metadata;
+	if (paperEnrichment) {
+		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
+		platformMetadata = {
+			...base,
+			enrichments: { ...(base.enrichments || {}), academic: paperEnrichment },
+		};
+	}
 	if (processorResult?.enrichments && Object.keys(processorResult.enrichments).length) {
 		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
 		platformMetadata = {
@@ -103,7 +108,7 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 	);
 
 	return {
-		type: paperEnrichment ? 'paper' : resource.type,
+		type: resource.type,
 		title: resource.title,
 		summary: updateData.summary !== undefined ? updateData.summary : resource.summary,
 		content: updateData.content !== undefined ? updateData.content : resource.content,
