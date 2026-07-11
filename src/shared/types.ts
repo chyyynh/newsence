@@ -178,6 +178,7 @@ export interface PlatformEnrichments {
 	hnUrl?: string;
 	externalUrl?: string | null;
 	hnText?: string | null;
+	editorial?: string | null;
 	commentCount?: number;
 	links?: string[];
 	processedAt?: string;

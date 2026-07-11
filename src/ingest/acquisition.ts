@@ -3,7 +3,7 @@ import { isResourceType } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
-import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
+import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import {
 	type BlobAcquisitionInput,
@@ -33,6 +33,7 @@ export function acquisitionHttpStatus(error: unknown): number | undefined {
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
 	ogImage?: OgImagePatch;
+	hackerNewsItem?: HackerNewsItem;
 };
 
 export function validateAcquisitionUrl(url: string): string {

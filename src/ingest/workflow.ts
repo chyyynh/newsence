@@ -238,7 +238,9 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
 				const fullResource = await loadFull();
-				if (resourceType === 'hackernews') return processHackerNewsResource(fullResource, this.env);
+				if (resourceType === 'hackernews') {
+					return processHackerNewsResource(fullResource, this.env, acquiredContent?.hackerNewsItem);
+				}
 				if (resourceType === 'twitter') return processTwitterResource(fullResource, this.env);
 				return mergeResourceClassification(fullResource, await generateResourceClassification(fullResource, this.env));
 			},

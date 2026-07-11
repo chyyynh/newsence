@@ -19,7 +19,7 @@ interface HnComment {
 	children?: HnComment[];
 }
 
-interface HnItem {
+export interface HackerNewsItem {
 	id: number;
 	title?: string;
 	url?: string;
@@ -48,12 +48,12 @@ export function hackerNewsDiscussionUrl(value: string): string | null {
 	return itemId ? `https://news.ycombinator.com/item?id=${itemId}` : null;
 }
 
-function hnItemTypeForMetadata(type: HnItem['type'] | undefined): HackerNewsMetadata['itemType'] {
+function hnItemTypeForMetadata(type: HackerNewsItem['type'] | undefined): HackerNewsMetadata['itemType'] {
 	if (type === 'ask' || type === 'show' || type === 'job') return type;
 	return 'story';
 }
 
-function buildHnMetadata(item: HnItem): HackerNewsMetadata {
+function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author ?? '',
@@ -64,13 +64,13 @@ function buildHnMetadata(item: HnItem): HackerNewsMetadata {
 	};
 }
 
-async function fetchHnItem(itemId: string): Promise<HnItem> {
+async function fetchHnItem(itemId: string): Promise<HackerNewsItem> {
 	const response = await fetchWithTimeout(`${HN_ALGOLIA_API}/${itemId}`);
 	if (!response.ok) {
 		await response.body?.cancel();
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
-	return JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)) as HnItem;
+	return JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)) as HackerNewsItem;
 }
 
 interface HnCollectedComment {
@@ -84,7 +84,7 @@ function htmlToText(str: string): string {
 		.trim();
 }
 
-function buildHnMarkdown(item: HnItem): string {
+function buildHnMarkdown(item: HackerNewsItem): string {
 	const title = item.title || `HN Item ${item.id}`;
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
 	const parts: string[] = [`# ${title}\n`];
@@ -99,7 +99,7 @@ function buildHnMarkdown(item: HnItem): string {
 	return parts.join('\n');
 }
 
-export async function scrapeHackerNews(itemId: string): Promise<NormalizedContent<'hackernews'>> {
+export async function scrapeHackerNews(itemId: string): Promise<NormalizedContent<'hackernews'> & { hackerNewsItem: HackerNewsItem }> {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
 	const title = item.title || `HN Item ${itemId}`;
@@ -117,6 +117,7 @@ export async function scrapeHackerNews(itemId: string): Promise<NormalizedConten
 			description: summary,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
+		hackerNewsItem: item,
 	};
 }
 
@@ -198,30 +199,34 @@ async function generateHnEditorial(env: CoreEnv, title: string, hnText: string, 
 	});
 }
 
-export async function processHackerNewsResource(resource: ResourceForProcessing, env: CoreEnv): Promise<ProcessorResult> {
+export async function processHackerNewsResource(
+	resource: ResourceForProcessing,
+	env: CoreEnv,
+	acquiredItem?: HackerNewsItem,
+): Promise<ProcessorResult> {
 	const metadata = platformMetadataFor(resource, 'hackernews');
 	const itemId = metadata?.data?.itemId || null;
 
-	const hnData: HnItem | null = itemId ? await fetchHnItem(itemId) : null;
+	const hnData = acquiredItem ?? (itemId ? await fetchHnItem(itemId) : null);
 
 	const comments = hnData?.children?.length ? collectAllComments(hnData.children) : [];
 
 	const editorial = hnData ? await generateHnEditorial(env, resource.title, hnData.text || '', comments) : null;
-	const updateData: ProcessorResult['updateData'] = editorial ? { content: editorial } : {};
 
 	const enrichments: PlatformEnrichments = hnData
 		? {
 				hnUrl: `https://news.ycombinator.com/item?id=${hnData.id}`,
 				externalUrl: hnData.url || null,
 				hnText: hnData.text || null,
+				editorial,
 				commentCount: comments.length,
 				links: extractPostLinks(hnData.url, hnData.text),
 			}
 		: {};
 
-	const classification = await generateResourceClassification(resource, env);
-	const merged = mergeResourceClassification(resource, classification, {
-		updateData,
+	const resourceForClassification = editorial ? { ...resource, content: editorial } : resource;
+	const classification = await generateResourceClassification(resourceForClassification, env);
+	const merged = mergeResourceClassification(resourceForClassification, classification, {
 		extraTags: ['HackerNews'],
 	});
 
