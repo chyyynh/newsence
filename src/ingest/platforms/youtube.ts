@@ -5,7 +5,7 @@ import { type CoreDb, withCoreDb } from '@db/client';
 import { youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadEnabledSources, markSourceScraped } from '@ingest/domain/source-store';
+import { loadEnabledSources, markSourceScraped, markSourceScrapedWithState } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -13,6 +13,7 @@ import { parseDurationSeconds, scrapeYouTube } from './youtube-acquisition';
 
 const SHORTS_MAX_SECONDS = 180;
 const MAX_FEED_BYTES = 1024 * 1024;
+const MAX_REMEMBERED_SHORTS = 100;
 
 const YouTubeHighlightSchema = z.object({
 	title: z.string().min(1),
@@ -163,7 +164,30 @@ function parseFeedVideos(xml: string) {
 	);
 }
 
-async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video: { videoId: string; url: string }): Promise<boolean> {
+type YouTubeQueueResult = 'queued' | 'skipped_short' | 'failed';
+
+function recordValue(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function rememberedShortIds(scrapeState: unknown): string[] {
+	const value = recordValue(scrapeState).youtubeSkippedVideoIds;
+	if (!Array.isArray(value)) return [];
+	return value.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(-MAX_REMEMBERED_SHORTS);
+}
+
+function withRememberedShortIds(scrapeState: unknown, videoIds: Iterable<string>): Record<string, unknown> {
+	return {
+		...recordValue(scrapeState),
+		youtubeSkippedVideoIds: [...new Set(videoIds)].slice(-MAX_REMEMBERED_SHORTS),
+	};
+}
+
+async function queueYouTubeVideo(
+	env: CoreEnv,
+	channel: { name: string },
+	video: { videoId: string; url: string },
+): Promise<YouTubeQueueResult> {
 	try {
 		const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY, {
 			minDurationSecondsForTranscript: SHORTS_MAX_SECONDS,
@@ -173,7 +197,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 		const title = scraped.title || `YouTube video ${video.videoId}`;
 		if (duration && parseDurationSeconds(duration) < SHORTS_MAX_SECONDS) {
 			console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipping short', videoId: video.videoId, duration });
-			return false;
+			return 'skipped_short';
 		}
 
 		const resourceId = await withCoreDb(env, async (db) => {
@@ -193,11 +217,26 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 		});
 		await enqueueProcessing(env, resourceId);
 		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
-		return true;
+		return 'queued';
 	} catch (err) {
 		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
-		return false;
+		return 'failed';
 	}
+}
+
+async function queueNewYouTubeVideos(
+	env: CoreEnv,
+	channel: { name: string },
+	videos: Array<{ videoId: string; url: string }>,
+	skippedShortIds: Set<string>,
+): Promise<number> {
+	let queued = 0;
+	for (const video of videos) {
+		const result = await queueYouTubeVideo(env, channel, video);
+		if (result === 'queued') queued++;
+		else if (result === 'skipped_short') skippedShortIds.add(video.videoId);
+	}
+	return queued;
 }
 
 export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
@@ -211,6 +250,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 	let totalQueued = 0;
 	for (const channel of channels) {
 		try {
+			const skippedShortIds = new Set(rememberedShortIds(channel.scrapeState));
 			const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': FEED_UA } });
 			if (!res.ok) {
 				await res.body?.cancel();
@@ -228,7 +268,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 			const videoUrls = videos.map(({ url }) => url);
 			const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
 			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
-			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
+			const newVideos = videos.filter(({ videoId, url }) => !existingSet.has(url) && !skippedShortIds.has(videoId));
 			for (const existing of existingRecords) {
 				if (!existing.shouldRetryEnrichment) continue;
 				try {
@@ -249,11 +289,9 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 				console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 			}
 
-			for (const video of newVideos) {
-				if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
-			}
+			totalQueued += await queueNewYouTubeVideos(env, channel, newVideos, skippedShortIds);
 
-			await markSourceScraped(env, channel.id);
+			await markSourceScrapedWithState(env, channel.id, withRememberedShortIds(channel.scrapeState, skippedShortIds));
 		} catch (err) {
 			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
 		}

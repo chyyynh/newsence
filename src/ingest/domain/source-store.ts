@@ -8,6 +8,7 @@ export type MonitoredSource = {
 	name: string;
 	handle: string;
 	scrapedAt: Date | null;
+	scrapeState: unknown;
 };
 
 export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
@@ -18,6 +19,7 @@ export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform)
 				name: sources.name,
 				handle: sources.handle,
 				scrapedAt: sources.scrapedAt,
+				scrapeState: sources.scrapeState,
 			})
 			.from(sources)
 			.where(and(eq(sources.enabled, true), eq(sources.platform, platform))),
@@ -32,5 +34,12 @@ export async function markSourcesScraped(env: CoreEnv, sourceIds: string[], scra
 	if (!sourceIds.length) return;
 	await withCoreDb(env, async (db) => {
 		await db.update(sources).set({ scrapedAt, updatedAt: scrapedAt }).where(inArray(sources.id, sourceIds));
+	});
+}
+
+export async function markSourceScrapedWithState(env: CoreEnv, sourceId: string, scrapeState: unknown): Promise<void> {
+	const scrapedAt = new Date();
+	await withCoreDb(env, async (db) => {
+		await db.update(sources).set({ scrapedAt, scrapeState, updatedAt: scrapedAt }).where(eq(sources.id, sourceId));
 	});
 }
