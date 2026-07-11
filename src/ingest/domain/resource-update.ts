@@ -60,98 +60,59 @@ function resourceTypeAfterAcquisition(currentType: ResourceType, acquiredType: R
 	return acquiredType === 'web' && currentType !== 'web' ? currentType : acquiredType;
 }
 
-export class ResourceUpdateBuilder {
-	private readonly update: ResourceUpdate;
-	private readonly metadataPatches: ResourceMetadataPatch[] = [];
+type BuildResourceUpdateInput = {
+	processorResult?: ProcessorResult;
+	extraction?: PdfExtractionMetadata;
+	paperEnrichment?: PaperMetadata | null;
+	ogImagePatch?: OgImagePatch;
+};
 
-	constructor(private readonly resource: ResourceForProcessing) {
-		this.update = {
-			type: resource.type,
-			title: resource.title,
-			summary: resource.summary,
-			content: resource.content,
-			tags: [...resource.tags],
-			keywords: [...resource.keywords],
-			entities: undefined,
-			og_image_url: resource.og_image_url ?? null,
-			platform_metadata: resource.platform_metadata,
+export function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput = {}): ResourceUpdate {
+	const { processorResult, extraction, paperEnrichment, ogImagePatch } = input;
+	const updateData: ProcessorResult['updateData'] = processorResult?.updateData ?? {};
+	const metadataPatch: ResourceMetadataPatch = {};
+	if (extraction) metadataPatch.extraction = extraction;
+	if (ogImagePatch?.ogImageWidth && ogImagePatch.ogImageHeight) {
+		metadataPatch.ogImageWidth = ogImagePatch.ogImageWidth;
+		metadataPatch.ogImageHeight = ogImagePatch.ogImageHeight;
+	}
+	if (paperEnrichment) metadataPatch.data = paperEnrichment;
+
+	let platformMetadata = resource.platform_metadata;
+	if (processorResult?.enrichments && Object.keys(processorResult.enrichments).length) {
+		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
+		platformMetadata = {
+			...base,
+			enrichments: { ...(base.enrichments || {}), ...processorResult.enrichments, processedAt: new Date().toISOString() },
 		};
 	}
-
-	addExtractionMetadata(extraction: PdfExtractionMetadata | undefined): this {
-		return extraction ? this.addMetadataPatch({ extraction }) : this;
-	}
-
-	addOgMetadata(patch: OgImagePatch): this {
-		return patch.ogImageWidth && patch.ogImageHeight
-			? this.addMetadataPatch({ ogImageWidth: patch.ogImageWidth, ogImageHeight: patch.ogImageHeight })
-			: this;
-	}
-
-	addPaperMetadata(paperEnrichment: PaperMetadata | null): this {
-		if (!paperEnrichment) return this;
-		this.update.type = 'paper';
-		return this.addMetadataPatch({ data: paperEnrichment });
-	}
-
-	applyProcessorResult(result: ProcessorResult): this {
-		const { updateData } = result;
-		if (updateData.summary !== undefined) this.update.summary = updateData.summary;
-		if (updateData.content !== undefined) this.update.content = updateData.content;
-		if (updateData.tags !== undefined) this.update.tags = updateData.tags;
-		if (updateData.keywords !== undefined) this.update.keywords = updateData.keywords;
-		if (updateData.entities !== undefined) this.update.entities = updateData.entities;
-		const category = result.classificationCategory;
-		const hasEnrichments = !!result.enrichments && Object.keys(result.enrichments).length > 0;
-		let mergedMetadata = this.update.platform_metadata;
-		if (hasEnrichments) {
-			const base = mergedMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
-			mergedMetadata = {
-				...base,
-				enrichments: { ...(base.enrichments || {}), ...result.enrichments, processedAt: new Date().toISOString() },
-			};
-		}
-		if (category) {
-			const base = mergedMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
-			mergedMetadata = {
-				...base,
-				classification: {
-					...(base.classification ?? {}),
-					category,
-					classifiedAt: new Date().toISOString(),
-				},
-			};
-		}
-		this.update.platform_metadata = mergedMetadata;
-		return this;
-	}
-
-	applyOgFields(patch: OgImagePatch): this {
-		if (patch.ogImageUrl) this.update.og_image_url = patch.ogImageUrl;
-		return this;
-	}
-
-	build(): ResourceUpdate {
-		const platformMetadata = platformMetadataWithSourceName(
-			mergePlatformMetadata(this.update.platform_metadata, this.mergedMetadataPatch()),
-			this.resource.source,
-		);
-		return {
-			...this.update,
-			tags: [...this.update.tags],
-			keywords: [...this.update.keywords],
-			platform_metadata: platformMetadata,
+	if (processorResult?.classificationCategory) {
+		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
+		platformMetadata = {
+			...base,
+			classification: {
+				...(base.classification ?? {}),
+				category: processorResult.classificationCategory,
+				classifiedAt: new Date().toISOString(),
+			},
 		};
 	}
+	platformMetadata = platformMetadataWithSourceName(
+		mergePlatformMetadata(platformMetadata, Object.keys(metadataPatch).length ? metadataPatch : undefined),
+		resource.source,
+	);
 
-	private addMetadataPatch(patch: unknown): this {
-		if (patch && typeof patch === 'object' && !Array.isArray(patch)) this.metadataPatches.push(patch as ResourceMetadataPatch);
-		return this;
-	}
-
-	private mergedMetadataPatch(): ResourceMetadataPatch | undefined {
-		return this.metadataPatches.length ? Object.assign({}, ...this.metadataPatches) : undefined;
-	}
+	return {
+		type: paperEnrichment ? 'paper' : resource.type,
+		title: resource.title,
+		summary: updateData.summary !== undefined ? updateData.summary : resource.summary,
+		content: updateData.content !== undefined ? updateData.content : resource.content,
+		tags: [...(updateData.tags ?? resource.tags)],
+		keywords: [...(updateData.keywords ?? resource.keywords)],
+		entities: updateData.entities,
+		og_image_url: ogImagePatch?.ogImageUrl || (resource.og_image_url ?? null),
+		platform_metadata: platformMetadata,
+	};
 }
 
 function platformMetadataWithSourceName(

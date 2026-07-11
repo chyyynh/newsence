@@ -18,7 +18,7 @@ import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema'
 import { textArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
-import { mergePlatformMetadata, type ResourceUpdate, ResourceUpdateBuilder } from './resource-update';
+import { buildResourceUpdate, mergePlatformMetadata, type ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
@@ -333,7 +333,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
 	const resource = preparedRecordToResource(base);
-	const record = resourceMirrorRecord('source', crypto.randomUUID(), resource, new ResourceUpdateBuilder(resource).build(), 'pending');
+	const record = resourceMirrorRecord('source', crypto.randomUUID(), resource, buildResourceUpdate(resource), 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
 	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
 	const resourceId = row?.id;

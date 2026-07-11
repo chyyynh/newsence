@@ -8,7 +8,7 @@ import { eq, sql } from 'drizzle-orm';
 import { deleteCorpusItem } from '../ai-search';
 import { type AcquiredContent, type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
-import { ResourceUpdateBuilder } from './domain/resource-update';
+import { buildResourceUpdate } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
 import { persistYouTubeWorkflowData, type YouTubeHighlightsUpdate } from './platforms/youtube';
 
@@ -64,13 +64,12 @@ export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: s
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {
 		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;
-		const updatePayload = new ResourceUpdateBuilder(input.resource)
-			.addExtractionMetadata(extraction)
-			.addOgMetadata(input.ogImagePatch)
-			.addPaperMetadata(input.paperEnrichment)
-			.applyProcessorResult(input.processorResult)
-			.applyOgFields(input.ogImagePatch)
-			.build();
+		const updatePayload = buildResourceUpdate(input.resource, {
+			extraction,
+			paperEnrichment: input.paperEnrichment,
+			ogImagePatch: input.ogImagePatch,
+			processorResult: input.processorResult,
+		});
 		const resourceType = updatePayload.type;
 		const platformMetadata = updatePayload.platform_metadata;
 		const resourceEntities = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
