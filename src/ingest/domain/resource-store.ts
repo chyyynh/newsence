@@ -296,6 +296,7 @@ export async function updateResourceAfterProcessing(
 	updatePayload: ResourceUpdate,
 ): Promise<string> {
 	const record = resourceMirrorRecord('resource', resourceId, resource, updatePayload);
+	await invalidateChangedMachineTranslationFields(db, resourceId, record);
 	const tags = textArraySql(record.tags);
 	const result = await db.execute(sql`
 		UPDATE resources
@@ -320,6 +321,47 @@ export async function updateResourceAfterProcessing(
 	if (!updatedId) throw new Error(`Failed to update resource ${resourceId}: no rows matched`);
 	await syncOriginalResourceTranslation(db, updatedId, record);
 	return updatedId;
+}
+
+async function invalidateChangedMachineTranslationFields(db: CoreDb, resourceId: string, record: ResourceMirrorRecord): Promise<void> {
+	await db.execute(sql`
+		WITH original AS (
+			SELECT resource.original_lang, translation.title, translation.summary, translation.content
+			FROM resources resource
+			JOIN resource_translations translation
+			  ON translation.resource_id = resource.id
+			 AND translation.lang = resource.original_lang
+			WHERE resource.id = ${resourceId}::uuid
+			FOR UPDATE OF translation
+		)
+		UPDATE resource_translations AS machine
+		SET title = CASE
+				WHEN original.original_lang IS DISTINCT FROM ${record.originalLang}
+				  OR original.title IS DISTINCT FROM ${record.title}
+				THEN NULL ELSE machine.title
+			END,
+			summary = CASE
+				WHEN original.original_lang IS DISTINCT FROM ${record.originalLang}
+				  OR original.summary IS DISTINCT FROM ${record.summary}
+				THEN NULL ELSE machine.summary
+			END,
+			content = CASE
+				WHEN original.original_lang IS DISTINCT FROM ${record.originalLang}
+				  OR original.content IS DISTINCT FROM ${record.content}
+				THEN NULL ELSE machine.content
+			END,
+			updated_at = NOW()
+		FROM original
+		WHERE machine.resource_id = ${resourceId}::uuid
+		  AND machine.lang <> original.original_lang
+		  AND machine.source = 'machine'
+		  AND (
+			original.original_lang IS DISTINCT FROM ${record.originalLang}
+			OR original.title IS DISTINCT FROM ${record.title}
+			OR original.summary IS DISTINCT FROM ${record.summary}
+			OR original.content IS DISTINCT FROM ${record.content}
+		  )
+	`);
 }
 
 function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {

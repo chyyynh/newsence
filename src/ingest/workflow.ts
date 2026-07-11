@@ -14,7 +14,7 @@ import {
 	readAcquiredContentArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { enqueueResourceTranslation, getPersistedResourceContentHashForTranslation } from './content-localization-workflow';
+import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
 import { generateHackerNewsEnrichments } from './platforms/hackernews';
@@ -306,7 +306,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			.do(
 				'load-resource-translation-source-hash',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => getPersistedResourceContentHashForTranslation(this.env, persistedResourceId),
+				() => getPersistedResourceTranslationHash(this.env, persistedResourceId),
 			)
 			.catch((error) => {
 				console.error({

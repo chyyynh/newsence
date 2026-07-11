@@ -19,10 +19,10 @@ import {
 } from './domain/ai-utils';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 
-export async function getPersistedResourceContentHashForTranslation(env: CoreEnv, resourceId: string): Promise<string | null> {
+export async function getPersistedResourceTranslationHash(env: CoreEnv, resourceId: string): Promise<string | null> {
 	return withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
-			SELECT md5(original.content) AS source_content_hash
+			SELECT md5(jsonb_build_array(original.title, original.summary, original.content)::text) AS source_translation_hash
 			FROM resources resource
 			JOIN resource_translations original
 			  ON original.resource_id = resource.id
@@ -36,7 +36,7 @@ export async function getPersistedResourceContentHashForTranslation(env: CoreEnv
 			  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
 			LIMIT 1
 		`);
-		return (result.rows as Array<{ source_content_hash: string }>)[0]?.source_content_hash ?? null;
+		return (result.rows as Array<{ source_translation_hash: string }>)[0]?.source_translation_hash ?? null;
 	});
 }
 
@@ -48,14 +48,14 @@ type MachineTranslationPatch = {
 
 class ResourceTranslationSourceChangedError extends NonRetryableError {
 	constructor(resourceId: string) {
-		super(`Original content changed while translating resource ${resourceId}`, 'ResourceTranslationSourceChangedError');
+		super(`Original translation source changed while translating resource ${resourceId}`, 'ResourceTranslationSourceChangedError');
 	}
 }
 
 async function persistMachineZhHantTranslation(
 	env: CoreEnv,
 	resourceId: string,
-	sourceContentHash: string,
+	sourceTranslationHash: string,
 	patch: MachineTranslationPatch,
 ): Promise<void> {
 	const persisted = await withCoreDb(env, (db) =>
@@ -65,17 +65,17 @@ async function persistMachineZhHantTranslation(
 			...patch,
 			keywords: [],
 			source: 'machine',
-			expectedOriginalContentHash: sourceContentHash,
+			expectedOriginalTranslationHash: sourceTranslationHash,
 		}),
 	);
 	if (!persisted) throw new ResourceTranslationSourceChangedError(resourceId);
 }
 
-function persistMachineZhHantContent(env: CoreEnv, resourceId: string, sourceContentHash: string, content: string): Promise<void> {
-	return persistMachineZhHantTranslation(env, resourceId, sourceContentHash, { content });
+function persistMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTranslationHash: string, content: string): Promise<void> {
+	return persistMachineZhHantTranslation(env, resourceId, sourceTranslationHash, { content });
 }
 
-async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourceContentHash: string): Promise<void> {
+async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTranslationHash: string): Promise<void> {
 	const sourceIsCurrent = await withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
 			WITH target_resource AS (
@@ -85,7 +85,7 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourc
 				  ON original.resource_id = resource.id
 				 AND original.lang = resource.original_lang
 				WHERE resource.id = ${resourceId}::uuid
-				  AND md5(original.content) = ${sourceContentHash}
+				  AND md5(jsonb_build_array(original.title, original.summary, original.content)::text) = ${sourceTranslationHash}
 				FOR SHARE OF original
 			), cleared AS (
 				UPDATE resource_translations translation
@@ -103,19 +103,19 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourc
 	if (!sourceIsCurrent) throw new ResourceTranslationSourceChangedError(resourceId);
 }
 
-type ResourceTranslationPayload = { resourceId: string; sourceContentHash: string };
+type ResourceTranslationPayload = { resourceId: string; sourceTranslationHash: string };
 
 const TRANSLATION_STEP_CONCURRENCY = 3;
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v8';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v9';
 
-function workflowId(resourceId: string, sourceContentHash: string): string {
-	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${sourceContentHash.slice(0, 12)}-${resourceId}`;
+function workflowId(resourceId: string, sourceTranslationHash: string): string {
+	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${sourceTranslationHash.slice(0, 12)}-${resourceId}`;
 }
 
-export function enqueueResourceTranslation(env: CoreEnv, resourceId: string, sourceContentHash: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_WORKFLOW, workflowId(resourceId, sourceContentHash), {
+export function enqueueResourceTranslation(env: CoreEnv, resourceId: string, sourceTranslationHash: string): Promise<string> {
+	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_WORKFLOW, workflowId(resourceId, sourceTranslationHash), {
 		resourceId,
-		sourceContentHash,
+		sourceTranslationHash,
 	});
 }
 
@@ -148,20 +148,19 @@ async function translateZhHantContentDurably(env: CoreEnv, step: WorkflowStep, s
 
 export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
 	async run(event: WorkflowEvent<ResourceTranslationPayload>, step: WorkflowStep) {
-		return this.translateResource(event.payload.resourceId, event.payload.sourceContentHash, step);
+		return this.translateResource(event.payload.resourceId, event.payload.sourceTranslationHash, step);
 	}
 
-	private async translateResource(resourceId: string, sourceContentHash: string, step: WorkflowStep) {
-		const [initial, currentSourceContentHash] = await step.do(
+	private async translateResource(resourceId: string, sourceTranslationHash: string, step: WorkflowStep) {
+		const [initial, currentSourceTranslationHash] = await step.do(
 			'load-resource-translation-input',
 			{
 				retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' },
 				timeout: '30 seconds',
 			},
-			() =>
-				Promise.all([loadResourceForProcessing(this.env, resourceId), getPersistedResourceContentHashForTranslation(this.env, resourceId)]),
+			() => Promise.all([loadResourceForProcessing(this.env, resourceId), getPersistedResourceTranslationHash(this.env, resourceId)]),
 		);
-		if (currentSourceContentHash !== sourceContentHash) throw new ResourceTranslationSourceChangedError(resourceId);
+		if (currentSourceTranslationHash !== sourceTranslationHash) throw new ResourceTranslationSourceChangedError(resourceId);
 
 		let resource = initial;
 		const initialContent = initial.content?.trim();
@@ -180,7 +179,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 			await step.do(
 				'clear-nontext-zh-hant-content',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => clearMachineZhHantContent(this.env, resourceId, sourceContentHash),
+				() => clearMachineZhHantContent(this.env, resourceId, sourceTranslationHash),
 			);
 		} else if (zhHantContent) {
 			const sanitizedContent = sanitizeExtractedMarkdown(zhHantContent);
@@ -195,7 +194,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 				await step.do(
 					'persist-sanitized-zh-hant-content',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => persistMachineZhHantContent(this.env, resourceId, sourceContentHash, sanitizedContent),
+					() => persistMachineZhHantContent(this.env, resourceId, sourceTranslationHash, sanitizedContent),
 				);
 			}
 		}
@@ -212,7 +211,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 			await step.do(
 				'persist-zh-hant-title-summary',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistMachineZhHantTranslation(this.env, resourceId, sourceContentHash, translatedMetadata),
+				() => persistMachineZhHantTranslation(this.env, resourceId, sourceTranslationHash, translatedMetadata),
 			);
 			resource = {
 				...resource,
@@ -240,7 +239,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 					},
 					timeout: '30 seconds',
 				},
-				() => persistMachineZhHantContent(this.env, resourceId, sourceContentHash, translated),
+				() => persistMachineZhHantContent(this.env, resourceId, sourceTranslationHash, translated),
 			);
 		}
 		console.info({
