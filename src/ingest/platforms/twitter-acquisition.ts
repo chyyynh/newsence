@@ -236,6 +236,7 @@ function buildTwitterLongformPlatformMetadata(
 			authorUserName: author.userName,
 			authorProfilePicture: author.profilePicture,
 			authorVerified: author.isBlueVerified,
+			coverImageUrl,
 			media: coverImageUrl ? [{ url: coverImageUrl, type: 'photo' }] : [],
 		},
 	};
@@ -251,9 +252,6 @@ interface TwitterLongform {
 		isBlueVerified?: boolean;
 		profilePicture?: string;
 	};
-	viewCount?: number;
-	likeCount?: number;
-	replyCount?: number;
 	createdAt?: string;
 }
 
@@ -294,22 +292,12 @@ async function scrapeTwitterLongform(
 		throw new Error(`Twitter longform ${tweetId} requires a valid published date`);
 	}
 
-	let md = `# ${title}\n\n`;
-	md += `**Author:** ${author.name}`;
-	if (author.isBlueVerified) md += ' ✓';
-	md += ` (@${author.userName})\n\n`;
-	if (longform.cover_media_img_url) md += `![Cover](${longform.cover_media_img_url})\n\n`;
-	md += `${contentText}\n\n---\n\n**Engagement:**\n`;
-	if (longform.viewCount !== undefined) md += `- Views: ${longform.viewCount.toLocaleString()}\n`;
-	if (longform.likeCount !== undefined) md += `- Likes: ${longform.likeCount.toLocaleString()}\n`;
-	if (longform.replyCount !== undefined) md += `- Replies: ${longform.replyCount.toLocaleString()}\n`;
-
 	console.info({ tag: 'TWITTER', msg: 'Longform fetched', title });
 
 	return {
 		type: 'twitter',
 		title,
-		markdown: md,
+		markdown: contentText,
 		metadata: {
 			author: author.userName,
 			language: language ?? null,

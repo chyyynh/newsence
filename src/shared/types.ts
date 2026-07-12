@@ -108,6 +108,7 @@ export interface RetweetedByData {
 
 interface TwitterMetadata extends TwitterAuthorFields {
 	tweetId?: string;
+	coverImageUrl?: string;
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
