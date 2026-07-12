@@ -425,7 +425,7 @@ function resourceMirrorRecord(
 	const storedPlatformMetadata = updatePayload.platform_metadata;
 	const fileType = stringOrNull(resource.file_type);
 	const url = cleanString(resource.url);
-	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url ?? resource.url) : url;
+	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url) : url;
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
 	const title = cleanString(updatePayload.title);
