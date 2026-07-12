@@ -230,10 +230,15 @@ export async function buildHackerNewsContent(
 	const comments = item.children?.length ? collectAllComments(item.children) : [];
 	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text ?? null, comments);
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
-	const stats = [`${item.points ?? 0} points`, `${item.descendants ?? comments.length} comments`].join(' | ');
+	const stats = [
+		item.points !== undefined ? `${item.points} points` : null,
+		item.descendants !== undefined ? `${item.descendants} comments` : null,
+	]
+		.filter(Boolean)
+		.join(' | ');
 	const links = [item.url ? `[Linked article](${item.url})` : null, `[View the full discussion](${discussionUrl})`]
 		.filter(Boolean)
 		.join(' | ');
 
-	return [articleContent, '---', HN_DISCUSSION_HEADING, `*${stats}*`, links, digest].filter(Boolean).join('\n\n');
+	return [articleContent, '---', HN_DISCUSSION_HEADING, stats ? `*${stats}*` : null, links, digest].filter(Boolean).join('\n\n');
 }
