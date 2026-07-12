@@ -223,10 +223,6 @@ function publishedSinceSql(fromDate: Date | null | undefined): SQL {
 	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
 }
 
-function corpusErrorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function truncate(content: string | null | undefined, max: number): string {
 	if (!content) return '';
 	return content.length > max ? `${content.slice(0, max)}\n\n[Content truncated]` : content;
@@ -491,9 +487,8 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): 
 		groups.set(item.type, list);
 	}
 
-	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>();
 	const entries = [...groups.entries()];
-	const settled = await Promise.allSettled(
+	const loaded = await Promise.all(
 		entries.map(async ([type, ids]) => {
 			const results =
 				type === 'collection'
@@ -504,17 +499,7 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): 
 			return [type, results] as const;
 		}),
 	);
-	for (const [index, settledResult] of settled.entries()) {
-		const [type, ids] = entries[index];
-		if (settledResult.status === 'fulfilled') {
-			resultMaps.set(settledResult.value[0], settledResult.value[1]);
-			continue;
-		}
-
-		const error = corpusErrorMessage(settledResult.reason);
-		console.warn({ tag: 'CORPUS', msg: 'read group failed', type, count: ids.length, error });
-		resultMaps.set(type, new Map(ids.map((id) => [id, { type: 'error' as const, id, error: `${type} read failed: ${error}` }])));
-	}
+	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>(loaded);
 
 	return capReadContextContent(
 		items.map(
