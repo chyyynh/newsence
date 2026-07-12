@@ -2,6 +2,9 @@ export {
 	CONTENT_RESOURCE_TYPES,
 	type ContentResourceType,
 	isContentResourceType,
+	isResourceType,
+	RESOURCE_TYPES,
+	type ResourceType,
 } from '@resource-types';
 
 import type { ContentResourceType } from '@resource-types';

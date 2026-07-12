@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
-import { loadResourceForProcessing } from '@ingest/domain/resource-store';
+import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
 import { loadRssSourcePolicy } from '@ingest/domain/source-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
@@ -135,7 +135,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const initialResource = await step.do(
 			'fetch-resource-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => loadResourceForProcessing(this.env, resourceId, true),
+			async () => loadResourceShellForProcessing(this.env, resourceId),
 		);
 		if (operation === 'resync' && !initialResource.url) {
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');

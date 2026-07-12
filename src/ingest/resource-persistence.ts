@@ -36,19 +36,19 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 
 export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
 	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
-	const platformMetadataJson = JSON.stringify(resource.platform_metadata);
 	const previewImageUrl = resource.og_image_url?.trim() || null;
 	await withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
-			UPDATE resources
-			SET scraped_date = NOW(),
-					og_image_url = ${previewImageUrl},
-				platform_metadata = ${platformMetadataJson}::jsonb,
-				updated_at = NOW()
-			WHERE id = ${resourceId}::uuid
-			RETURNING id
-		`);
-		if (!result.rows.length) throw new Error(`Failed to record resource ${resourceId} resync: not found`);
+		const updated = await db
+			.update(resources)
+			.set({
+				scrapedDate: new Date(),
+				ogImageUrl: previewImageUrl,
+				platformMetadata: resource.platform_metadata,
+				updatedAt: new Date(),
+			})
+			.where(eq(resources.id, resourceId))
+			.returning({ id: resources.id });
+		if (!updated.length) throw new Error(`Failed to record resource ${resourceId} resync: not found`);
 	});
 }
 

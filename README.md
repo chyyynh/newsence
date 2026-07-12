@@ -94,7 +94,7 @@ The one-click Deploy button above handles Worker + Workflows, but **Hyperdrive, 
 
 You need a PostgreSQL instance. Production currently runs on PlanetScale Postgres through Cloudflare Hyperdrive.
 
-Required tables: `resources`, `resource_translations`, `library`, `rss_list`, `youtube_transcripts`, plus entity/citation/paper tables. The canonical schema is defined in `web-tanstack/prisma/schema.prisma` and mirrored for the worker in `src/db/schema.ts`. For now, inspect those schema files or reach out via Issues if you want to run just the worker.
+The app-owned tables used by core are mirrored in `src/db/schema.ts`. Their canonical definitions live in `web-tanstack/prisma/schema.prisma`, with DB-only constraints and indexes in `web-tanstack/prisma/manual-indexes.sql`. Run `pnpm check:db-schema` after either schema changes.
 
 ### 2. Hyperdrive binding
 

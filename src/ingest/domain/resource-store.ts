@@ -16,7 +16,7 @@ import {
 import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap, RssMetadata } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
-import { textArraySql } from '@db/sql';
+import { textArraySql, uuidArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
 import type { ResourceUpdate } from './resource-update';
@@ -42,12 +42,11 @@ interface ResourceStoreRow {
 	tags: string[];
 	keywords: string[];
 	platform_metadata: unknown;
-	enrichment_status?: string;
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
 	storage_key?: string | null;
-	file_type?: string;
-	normalized_source_url?: string | null;
+	file_type?: string | null;
+	normalized_url?: string | null;
 }
 
 type ResourceStoreTranslationRow = {
@@ -59,7 +58,15 @@ type ResourceStoreTranslationRow = {
 	source?: unknown;
 };
 
-export async function loadResourceForProcessing(env: CoreEnv, resourceId: string, shell = false): Promise<StoredResourceForProcessing> {
+export async function loadResourceForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
+	return loadResource(env, resourceId, false);
+}
+
+export async function loadResourceShellForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
+	return loadResource(env, resourceId, true);
+}
+
+async function loadResource(env: CoreEnv, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing> {
 	return withCoreDb(env, async (db) => {
 		const row = await loadStoredResourceRow(db, resourceId, shell);
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
@@ -161,10 +168,9 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.tags AS tags,
 			rl.keywords AS keywords,
 			rl.platform_metadata AS platform_metadata,
-			rl.enrichment_status AS enrichment_status,
 			rl.storage_key AS storage_key,
 			rl.file_type AS file_type,
-			rl.normalized_url AS normalized_source_url
+			rl.normalized_url AS normalized_url
 		FROM resources_localized rl
 		WHERE rl.id = ${resourceId}::uuid
 		  AND rl.lang = rl.original_lang
@@ -194,9 +200,9 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
-	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
+	resource.storage_key = row.storage_key ?? null;
 	if (row.file_type) resource.file_type = row.file_type;
-	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;
+	resource.normalized_url = row.normalized_url ?? null;
 	return resource;
 }
 
@@ -426,7 +432,7 @@ function resourceMirrorRecord(
 	const storedPlatformMetadata = updatePayload.platform_metadata;
 	const fileType = stringOrNull(resource.file_type);
 	const url = cleanString(resource.url);
-	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url) : url;
+	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_url) : url;
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
 	const title = cleanString(updatePayload.title);
@@ -661,10 +667,6 @@ type ExistingResourceRecord = {
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
 	if (urls.length === 0) return [];
-	const urlArray = sql`ARRAY[${sql.join(
-		urls.map((url) => sql`${url}`),
-		sql`, `,
-	)}]::text[]`;
 	const result = await db.execute(sql`
 		SELECT
 			r.id::text AS id,
@@ -675,7 +677,7 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 				OR (r.enrichment_status = 'failed' AND r.updated_at < NOW() - INTERVAL '30 minutes')
 			) AS "shouldRetryEnrichment"
 		FROM resources r
-			WHERE r.normalized_url = ANY(${urlArray})
+			WHERE r.normalized_url = ANY(${textArraySql(urls)})
 			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 	`);
 	return result.rows as unknown as ExistingResourceRecord[];
@@ -683,16 +685,12 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 
 export async function recordRssFeedProvenance(db: CoreDb, resourceIds: string[], sourceName: string, data: RssMetadata): Promise<void> {
 	if (!resourceIds.length) return;
-	const idArray = sql`ARRAY[${sql.join(
-		resourceIds.map((id) => sql`${id}`),
-		sql`, `,
-	)}]::uuid[]`;
 	const dataJson = JSON.stringify(data);
 	await db.execute(sql`
 		UPDATE resources
 		SET platform_metadata = COALESCE(platform_metadata, '{}'::jsonb)
 			|| jsonb_build_object('sourceName', ${sourceName}::text, 'data', ${dataJson}::jsonb)
-		WHERE id = ANY(${idArray})
+		WHERE id = ANY(${uuidArraySql(resourceIds)})
 		  AND type = 'rss'
 		  AND (
 			platform_metadata->>'sourceName' IS DISTINCT FROM ${sourceName}

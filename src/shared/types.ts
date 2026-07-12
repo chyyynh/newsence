@@ -29,8 +29,7 @@ export interface ResourceForProcessing {
 	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;
 	file_type?: string;
-	normalized_source_url?: string | null;
-	origin_type?: string;
+	normalized_url?: string | null;
 }
 
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;

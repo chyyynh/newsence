@@ -22,7 +22,7 @@ addTransformations({
 		// article-extractor relies on the ambient DOM Document type, while Workers
 		// exposes a different global Document in service-binding consumers.
 		const postContent = (
-			document as unknown as {
+			document as typeof document & {
 				querySelector(selector: string): TransformElement | null;
 			}
 		).querySelector('.PostsPage-postContent');
