@@ -512,31 +512,27 @@ function resourceConflictSetSql(): SQL {
 			WHEN resources.scope = 'corpus' OR excluded.scope = 'private' THEN resources.scope
 			ELSE excluded.scope
 		END,
-		url = CASE WHEN ${preserveEnriched} THEN resources.url ELSE COALESCE(excluded.url, resources.url) END,
-		storage_key = CASE WHEN ${preserveEnriched} THEN resources.storage_key ELSE COALESCE(excluded.storage_key, resources.storage_key) END,
-		file_type = CASE WHEN ${preserveEnriched} THEN resources.file_type ELSE COALESCE(excluded.file_type, resources.file_type) END,
+		url = CASE WHEN ${preserveEnriched} THEN resources.url ELSE excluded.url END,
+		storage_key = CASE WHEN ${preserveEnriched} THEN resources.storage_key ELSE excluded.storage_key END,
+		file_type = CASE WHEN ${preserveEnriched} THEN resources.file_type ELSE excluded.file_type END,
 		original_lang = CASE WHEN ${preserveEnriched} THEN resources.original_lang ELSE excluded.original_lang END,
 		published_date = CASE
 			WHEN ${preserveEnriched} THEN resources.published_date
-			ELSE COALESCE(excluded.published_date, resources.published_date)
+			ELSE excluded.published_date
 		END,
 		scraped_date = CASE
 			WHEN ${preserveEnriched} THEN resources.scraped_date
-			ELSE COALESCE(excluded.scraped_date, resources.scraped_date)
+			ELSE excluded.scraped_date
 		END,
-		tags = CASE
-			WHEN ${preserveEnriched} THEN resources.tags
-			WHEN cardinality(excluded.tags) > 0 THEN excluded.tags
-			ELSE resources.tags
-		END,
-		category = CASE WHEN ${preserveEnriched} THEN resources.category ELSE COALESCE(excluded.category, resources.category) END,
+		tags = CASE WHEN ${preserveEnriched} THEN resources.tags ELSE excluded.tags END,
+		category = CASE WHEN ${preserveEnriched} THEN resources.category ELSE excluded.category END,
 		og_image_url = CASE
 			WHEN ${preserveEnriched} THEN resources.og_image_url
 			ELSE excluded.og_image_url
 		END,
 		platform_metadata = CASE
 			WHEN ${preserveEnriched} THEN resources.platform_metadata
-			ELSE COALESCE(excluded.platform_metadata, resources.platform_metadata)
+			ELSE excluded.platform_metadata
 		END,
 		enrichment_status = CASE
 			WHEN ${preserveEnriched} THEN resources.enrichment_status
