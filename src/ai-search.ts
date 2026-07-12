@@ -96,7 +96,7 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 				SELECT r.id::text,
 				       r.type,
 				       r.original_lang,
-				       r.published_date AS published_at,
+				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_at,
 				       r.tags,
 				       r.category,
 				       COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
@@ -148,10 +148,7 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
-	// Exact-key filtering landed in AI Search before the Workers type definition.
-	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({ key, source: 'builtin', per_page: 1 } as AiSearchListItemsParams & {
-		key: string;
-	});
+	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({ search: key, source: 'builtin', per_page: 50 });
 	const matches = listed.result.filter((item) => item.key === key && item.source_id === 'builtin');
 	await Promise.all(matches.map((item) => env.AI_SEARCH.get(INSTANCE_NAME).items.delete(item.id)));
 	if (matches.length) console.info({ tag: 'AI_SEARCH', msg: 'Corpus item deleted', resource_id: resourceId, count: matches.length });
@@ -193,7 +190,7 @@ export async function searchCorpusRanks(
 
 type SearchIndexRebuildPayload = { revision: string };
 
-const SEARCH_INDEX_REVISION = 'v2';
+const SEARCH_INDEX_REVISION = 'v3';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 
