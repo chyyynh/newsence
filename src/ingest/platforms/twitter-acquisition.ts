@@ -120,7 +120,10 @@ function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
 
 function extractExpandedUrls(tweet: Tweet): string[] {
 	const urls = tweet.urls ?? tweet.entities?.urls ?? [];
-	return urls.map((u) => u.expanded_url || u.url || '').filter(Boolean);
+	return urls.flatMap((url) => {
+		const expandedUrl = url.expanded_url?.trim();
+		return expandedUrl ? [expandedUrl] : [];
+	});
 }
 
 function stripTweetUrls(text: string): string {
