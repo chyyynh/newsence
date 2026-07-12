@@ -311,7 +311,7 @@ export async function updateResourceAfterProcessing(
 		       scraped_date = ${record.scrapedDate},
 		       tags = CASE WHEN cardinality(${tags}) > 0 THEN ${tags} ELSE resources.tags END,
 		       category = COALESCE(${record.category}, resources.category),
-		       og_image_url = COALESCE(NULLIF(${record.ogImageUrl}, ''), resources.og_image_url),
+		       og_image_url = ${record.ogImageUrl},
 		       platform_metadata = COALESCE(${record.platformMetadataJson}::jsonb, resources.platform_metadata),
 		       enrichment_status = 'enriched',
 		       updated_at = now()
@@ -387,7 +387,13 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
 	const resource = preparedRecordToResource(base);
-	const record = resourceMirrorRecord('source', crypto.randomUUID(), resource, buildResourceUpdate(resource), 'pending');
+	const record = resourceMirrorRecord(
+		'source',
+		crypto.randomUUID(),
+		resource,
+		buildResourceUpdate(resource, { previewImageUrl: resource.og_image_url ?? null }),
+		'pending',
+	);
 	const result = await db.execute(resourceUpsertStatement(record));
 	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
 	const resourceId = row?.id;
@@ -527,7 +533,7 @@ function resourceConflictSetSql(): SQL {
 		category = CASE WHEN ${preserveEnriched} THEN resources.category ELSE COALESCE(excluded.category, resources.category) END,
 		og_image_url = CASE
 			WHEN ${preserveEnriched} THEN resources.og_image_url
-			ELSE COALESCE(NULLIF(excluded.og_image_url, ''), resources.og_image_url)
+			ELSE excluded.og_image_url
 		END,
 		platform_metadata = CASE
 			WHEN ${preserveEnriched} THEN resources.platform_metadata

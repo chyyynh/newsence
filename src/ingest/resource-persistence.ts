@@ -75,7 +75,7 @@ export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: s
 		const result = await db.execute(sql`
 			UPDATE resources
 			SET scraped_date = NOW(),
-					og_image_url = COALESCE(${previewImageUrl}, og_image_url),
+					og_image_url = ${previewImageUrl},
 				platform_metadata = COALESCE(platform_metadata, '{}'::jsonb) || ${platformMetadataJson}::jsonb,
 				updated_at = NOW()
 			WHERE id = ${resourceId}::uuid

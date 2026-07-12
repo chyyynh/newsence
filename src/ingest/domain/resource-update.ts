@@ -55,10 +55,10 @@ type BuildResourceUpdateInput = {
 	processorResult?: ProcessorResult;
 	extraction?: PdfExtractionMetadata;
 	paperEnrichment?: PaperMetadata | null;
-	previewImageUrl?: string | null;
+	previewImageUrl: string | null;
 };
 
-export function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput = {}): ResourceUpdate {
+export function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput): ResourceUpdate {
 	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
 	const updateData: ProcessorResult['updateData'] = processorResult?.updateData ?? {};
 	const metadataPatch: ResourceMetadataPatch = {};
@@ -102,7 +102,7 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 		tags: [...(updateData.tags ?? resource.tags)],
 		keywords: [...(updateData.keywords ?? resource.keywords)],
 		entities: updateData.entities,
-		og_image_url: previewImageUrl || (resource.og_image_url ?? null),
+		og_image_url: previewImageUrl?.trim() || null,
 		platform_metadata: platformMetadata,
 	};
 }
