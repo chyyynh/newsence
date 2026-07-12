@@ -251,32 +251,26 @@ async function scrapeTwitterLongform(
 	tweetId: string,
 	apiKey: string,
 	language?: string,
-): Promise<(NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> }) | null> {
+): Promise<NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> }> {
 	console.info({ tag: 'TWITTER', msg: 'Fetching longform for tweet', tweetId });
 
-	let data: { article?: TwitterLongform; status?: string };
-	try {
-		const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
-			headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
-		});
-		if (!response.ok) {
-			await response.body?.cancel();
-			return null;
-		}
-		data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterLongform; status?: string };
-	} catch {
-		return null;
+	const response = await fetchWithTimeout(`https://api.twitterapi.io/twitter/article?tweet_id=${tweetId}`, {
+		headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+	});
+	if (!response.ok) {
+		await response.body?.cancel();
+		throw new Error(`Twitter longform request failed with HTTP ${response.status}`);
 	}
-	if ((data.status && data.status !== 'success') || !data.article) return null;
+	const data = JSON.parse(await readTextWithLimit(response)) as { article?: TwitterLongform; status?: string };
+	if (data.status !== 'success' || !data.article) throw new Error(`Twitter longform response was invalid for ${tweetId}`);
 
 	const longform = data.article;
 	const contentText = (longform.contents ?? [])
 		.map((c) => c.text ?? c.content ?? '')
 		.filter(Boolean)
 		.join('\n\n');
-	if (!longform.title && !contentText) return null;
-	const title = longform.title || `Twitter longform ${tweetId}`;
-	const summary = longform.preview_text || contentText.slice(0, 280);
+	if (!longform.title?.trim() || !contentText) throw new Error(`Twitter longform ${tweetId} requires both title and content`);
+	const title = longform.title.trim();
 
 	let md = `# ${title}\n\n`;
 	if (longform.author) {
@@ -302,7 +296,7 @@ async function scrapeTwitterLongform(
 			language: language ?? null,
 			publishedDate: longform.createdAt || null,
 			siteName: 'Twitter',
-			description: summary,
+			description: longform.preview_text?.trim() || null,
 		},
 		previewImageUrl: longform.cover_media_img_url ?? null,
 		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, longform.author, longform.cover_media_img_url),
@@ -345,19 +339,17 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	const longformUrl = findTwitterLongformUrl(expandedUrls, tweet.url);
 	const linkedContentUrl = findLinkedContentUrl(expandedUrls);
 
-	if (longformUrl || expandedUrls.length === 0) {
-		if (longformUrl) console.info({ tag: 'TWITTER', msg: 'Detected Twitter longform', longformUrl });
+	if (longformUrl) {
+		console.info({ tag: 'TWITTER', msg: 'Detected Twitter longform', longformUrl });
 		const tweetId = tweet.id ?? extractTweetId(tweet.url);
-		const longformContent = tweetId ? await scrapeTwitterLongform(tweetId, apiKey, tweet.lang) : null;
-		if (longformContent) {
-			return {
-				kind: 'longform' as const,
-				scraped: longformContent,
-				canonicalUrl: tweet.url || `https://x.com/i/status/${tweetId}`,
-				eventText: longformContent.metadata.description || tweetText,
-			};
-		}
-		if (longformUrl) throw new Error('Twitter longform API failed');
+		if (!tweetId) throw new Error(`Could not resolve tweet id for longform URL ${longformUrl}`);
+		const longformContent = await scrapeTwitterLongform(tweetId, apiKey, tweet.lang);
+		return {
+			kind: 'longform' as const,
+			scraped: longformContent,
+			canonicalUrl: tweet.url,
+			eventText: longformContent.markdown,
+		};
 	}
 
 	if (linkedContentUrl) {
