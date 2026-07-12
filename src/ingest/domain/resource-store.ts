@@ -704,9 +704,9 @@ export async function recordRssFeedProvenance(db: CoreDb, resourceIds: string[],
 export async function reopenResourceForReprocessing(
 	env: CoreEnv,
 	resourceId: string,
-	update: { summary: string; content: string; platformMetadata: PlatformMetadata },
+	update: { summary: string | null; content: string; platformMetadata: PlatformMetadata },
 ): Promise<boolean> {
-	if (!update.summary.trim() || !update.content.trim()) {
+	if (!update.content.trim()) {
 		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
 	}
 	return withCoreTx(env, async (db) => {

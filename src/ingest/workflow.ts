@@ -238,7 +238,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				const resourceToPersist = pdfTextArtifact?.text || acquiredContent ? await loadFull() : resource;
+				const resourceToPersist = await loadFull();
 				return persistProcessedResource(this.env, {
 					resourceId,
 					resource: resourceToPersist,

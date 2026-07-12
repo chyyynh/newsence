@@ -350,7 +350,7 @@ function buildExternalLinkTweet(
 			language: tweet.lang ?? null,
 			publishedDate: tweet.createdAt,
 			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
-			description: tweetText,
+			description: null,
 		},
 		platformMetadata: buildTweetPlatformMetadata(tweet, {
 			media,
@@ -407,7 +407,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 				language: tweet.lang ?? null,
 				publishedDate: tweet.createdAt,
 				siteName: 'Twitter',
-				description: tweet.text,
+				description: null,
 			},
 			previewImageUrl: mediaPreviewImageUrl,
 			platformMetadata: buildTweetPlatformMetadata(tweet),

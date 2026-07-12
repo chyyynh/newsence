@@ -91,7 +91,7 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 		title,
 		source,
 		publishedDate: requiredTweetDate(scraped.metadata.publishedDate, tweetId),
-		summary: scraped.metadata.description,
+		summary: resolved.kind === 'longform' ? scraped.metadata.description : null,
 		originalLang: scraped.metadata.language ?? undefined,
 		content: scraped.markdown,
 		platformMetadata: scraped.platformMetadata,
@@ -112,7 +112,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	if (existing) {
 		const existingId = existing.id;
 		const changed = await reopenResourceForReprocessing(env, existingId, {
-			summary: combinedText,
+			summary: null,
 			content: combinedText,
 			platformMetadata,
 		});
@@ -131,7 +131,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 		title: buildTweetTitle(first),
 		source: first.author.name,
 		publishedDate: new Date(first.createdAt),
-		summary: combinedText,
+		summary: null,
 		originalLang: first.lang,
 		content: combinedText,
 		platformMetadata,
