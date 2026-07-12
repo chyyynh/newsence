@@ -119,8 +119,7 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 	};
 }
 
-async function acquirePdfResponse(url: string, response: Response): Promise<AcquiredWebContent> {
-	const finalUrl = response.url || url;
+async function acquirePdfResponse(response: Response, finalUrl: string): Promise<AcquiredWebContent> {
 	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
 	return acquirePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl));
 }
@@ -166,10 +165,15 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 		await response.body?.cancel();
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
+	const finalUrl = response.url.trim();
+	if (!finalUrl) {
+		await response.body?.cancel();
+		throw new Error(`Fetch response has no final URL: ${url}`);
+	}
 
 	const contentType = response.headers.get('content-type')?.toLowerCase() || '';
-	if (contentType.includes(PDF_MIME) || new URL(response.url || url).pathname.toLowerCase().endsWith('.pdf')) {
-		return acquirePdfResponse(url, response);
+	if (contentType.includes(PDF_MIME) || new URL(finalUrl).pathname.toLowerCase().endsWith('.pdf')) {
+		return acquirePdfResponse(response, finalUrl);
 	}
 	if (
 		contentType &&
@@ -182,7 +186,6 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 		throw new Error(`Unsupported response content type: ${contentType}`);
 	}
 
-	const finalUrl = response.url || url;
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
 	return acquireHtmlArticle(env, html, finalUrl);
 }
