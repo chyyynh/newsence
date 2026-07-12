@@ -302,17 +302,17 @@ export async function updateResourceAfterProcessing(
 	const result = await db.execute(sql`
 		UPDATE resources
 		   SET type = ${record.type},
-		       url = COALESCE(${record.url}, resources.url),
-		       normalized_url = COALESCE(${record.normalizedUrl}, resources.normalized_url),
-		       storage_key = COALESCE(${record.storageKey}, resources.storage_key),
-		       file_type = COALESCE(${record.fileType}, resources.file_type),
+		       url = ${record.url},
+		       normalized_url = ${record.normalizedUrl},
+		       storage_key = ${record.storageKey},
+		       file_type = ${record.fileType},
 		       original_lang = ${record.originalLang},
-		       published_date = COALESCE(${record.publishedDate}, resources.published_date),
+		       published_date = ${record.publishedDate},
 		       scraped_date = ${record.scrapedDate},
-		       tags = CASE WHEN cardinality(${tags}) > 0 THEN ${tags} ELSE resources.tags END,
-		       category = COALESCE(${record.category}, resources.category),
+		       tags = ${tags},
+		       category = ${record.category},
 		       og_image_url = ${record.ogImageUrl},
-		       platform_metadata = COALESCE(${record.platformMetadataJson}::jsonb, resources.platform_metadata),
+		       platform_metadata = ${record.platformMetadataJson}::jsonb,
 		       enrichment_status = 'enriched',
 		       updated_at = now()
 		 WHERE id = ${resourceId}::uuid
