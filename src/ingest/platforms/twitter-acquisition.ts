@@ -307,19 +307,22 @@ function buildExternalLinkTweet(
 	tweet: Tweet,
 	externalUrl: string,
 	media: TwitterMedia[],
-	tweetText: string,
 ): NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> } {
-	const title = `@${tweet.author?.userName}: ${tweetText || tweet.text}`.slice(0, 120);
+	const userName = tweet.author?.userName.trim();
+	if (!userName) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no author username`);
+	const tweetText = tweet.text.trim();
+	if (!tweetText) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
+	const title = `@${userName}: ${tweetText}`.slice(0, 120);
 	return {
 		type: 'twitter',
 		title,
-		markdown: tweetText || tweet.text,
+		markdown: tweetText,
 		metadata: {
-			author: tweet.author?.userName || null,
+			author: userName,
 			language: tweet.lang ?? null,
 			publishedDate: tweet.createdAt,
 			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
-			description: tweetText || tweet.text,
+			description: tweetText,
 		},
 		platformMetadata: buildTweetPlatformMetadata(tweet, {
 			media,
@@ -354,7 +357,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 
 	if (linkedContentUrl) {
 		const scraped = {
-			...buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText),
+			...buildExternalLinkTweet(tweet, linkedContentUrl, media),
 			previewImageUrl: mediaPreviewImageUrl,
 		};
 		return { kind: 'share' as const, scraped, canonicalUrl: tweet.url, eventText: tweetText };
