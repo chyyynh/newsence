@@ -16,7 +16,7 @@ type ResourceTranslationWrite = {
 
 /**
  * Row ownership is human > original > machine. Within the winning owner,
- * incoming non-empty fields replace current values and empty fields are patches.
+ * explicitly supplied fields replace current values; omitted fields are patches.
  */
 export async function upsertResourceTranslation(db: CoreDb, input: ResourceTranslationWrite): Promise<boolean> {
 	const keywords = textArraySql(input.keywords ?? []);
@@ -63,23 +63,26 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 			title = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.title
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.title
-				ELSE COALESCE(NULLIF(excluded.title, ''), current_translation.title)
+				WHEN ${input.title === undefined} THEN current_translation.title
+				ELSE excluded.title
 			END,
 			summary = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.summary
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.summary
-				ELSE COALESCE(NULLIF(excluded.summary, ''), current_translation.summary)
+				WHEN ${input.summary === undefined} THEN current_translation.summary
+				ELSE excluded.summary
 			END,
 			content = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.content
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.content
-				ELSE COALESCE(NULLIF(excluded.content, ''), current_translation.content)
+				WHEN ${input.content === undefined} THEN current_translation.content
+				ELSE excluded.content
 			END,
 			keywords = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.keywords
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.keywords
-				WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords
-				ELSE current_translation.keywords
+				WHEN ${input.keywords === undefined} THEN current_translation.keywords
+				ELSE excluded.keywords
 			END,
 			source = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.source
