@@ -19,7 +19,7 @@ export interface ResourceForProcessing {
 	summary: string | null;
 	content: string | null;
 	translations?: ResourceTranslationMap;
-	url: string;
+	url: string | null;
 	og_image_url?: string | null;
 	source: string;
 	published_date: string;

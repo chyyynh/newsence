@@ -52,12 +52,14 @@ function shouldAcquireContent(
 }
 
 async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
+	const sourceUrl = resource.url;
+	if (!sourceUrl) throw new Error(`Resource ${resource.id} has no source URL`);
 	const artifact = await step.do(
 		'acquire-content',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 		async () => {
 			try {
-				return await scrapeSavedUrlArtifact(resource.url, env);
+				return await scrapeSavedUrlArtifact(sourceUrl, env);
 			} catch (error) {
 				if (acquisitionHttpStatus(error) !== 403) throw error;
 				throw new NonRetryableError(error instanceof Error ? error.message : String(error), 'AcquisitionForbiddenError');

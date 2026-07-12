@@ -185,7 +185,7 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		summary: row.summary,
 		content: row.content,
 		translations: resourceStoreTranslations(row),
-		url: row.url ?? '',
+		url: row.url,
 		og_image_url: row.og_image_url,
 		source: requiredString(row.source, 'source'),
 		published_date: formatPublishedDate(row.published_date),
