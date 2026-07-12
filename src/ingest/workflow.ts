@@ -21,10 +21,10 @@ import {
 } from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
-type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
+type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, storedWorkflowId(resourceId), { resourceId, operation: 'ingest' });
 }
 
 export function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
@@ -118,8 +118,7 @@ async function acquireResourceForOperation(
 
 export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
-		const { resourceId } = event.payload;
-		const operation = event.payload.operation ?? 'ingest';
+		const { resourceId, operation } = event.payload;
 		try {
 			return await this.runResource(resourceId, step, operation);
 		} catch (error) {
