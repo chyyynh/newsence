@@ -194,7 +194,6 @@ ${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_
 		maxTokens: 700,
 		systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 	});
-	if (!translation) throw new Error('Resource metadata localization did not return valid output');
 	return translation;
 }
 
@@ -355,7 +354,6 @@ export async function generateResourceClassification(resource: ResourceForProces
 			maxTokens: 500,
 			systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
 		});
-		if (!classification) throw new Error('Resource classification did not return valid output');
 		return {
 			tags: classification.tags.slice(0, 5),
 			keywords: classification.keywords.slice(0, 8),
