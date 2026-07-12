@@ -59,12 +59,7 @@ function urlHost(url: string): string {
 function fileNameFromUrl(url: string): string {
 	const encodedName = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '';
 	if (!encodedName) throw new Error(`URL has no file name: ${url}`);
-	let name = encodedName;
-	try {
-		name = decodeURIComponent(encodedName);
-	} catch {
-		// Keep the encoded path segment when the source URL has malformed escapes.
-	}
+	const name = decodeURIComponent(encodedName);
 	if (!name) throw new Error(`URL has no valid file name: ${url}`);
 	return name;
 }
