@@ -4,14 +4,7 @@ import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
-import {
-	type AcquiredContent,
-	acquisitionHttpStatus,
-	fetchPreviewImageUrl,
-	PDF_MIME,
-	readAcquiredContentArtifact,
-	scrapeSavedUrlArtifact,
-} from './acquisition';
+import { type AcquiredContent, acquisitionHttpStatus, PDF_MIME, readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
 import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
@@ -123,23 +116,6 @@ async function acquireResourceForOperation(
 	return { acquiredContent };
 }
 
-async function stagePreviewImageUrl(
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-	acquiredContent?: AcquiredContent,
-	force = false,
-): Promise<string | null> {
-	if (acquiredContent?.previewImageUrl) return acquiredContent.previewImageUrl;
-	if ((!force && resource.og_image_url) || !resource.url || resource.file_type === PDF_MIME || resource.type === 'hackernews') {
-		return null;
-	}
-	return step.do(
-		'resolve-preview-image',
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-		() => fetchPreviewImageUrl(resource.url),
-	);
-}
-
 export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId } = event.payload;
@@ -241,7 +217,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			});
 			return null;
 		});
-		const previewImageUrl = await stagePreviewImageUrl(step, resource, acquiredContent, operation === 'resync');
+		const previewImageUrl = acquiredContent?.previewImageUrl?.trim() || null;
 
 		const hackerNewsContent =
 			resourceType === 'hackernews'

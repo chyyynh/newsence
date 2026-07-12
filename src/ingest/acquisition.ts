@@ -5,9 +5,9 @@ import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
-import { acquireWebResource, fetchPreviewImageUrl, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
+import { acquireWebResource, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
 
-export { fetchPreviewImageUrl, PDF_MIME, pdfExtractionMetadata };
+export { PDF_MIME, pdfExtractionMetadata };
 export type { PdfExtractionMetadata } from '@core-shared/types';
 
 export function acquisitionHttpStatus(error: unknown): number | undefined {

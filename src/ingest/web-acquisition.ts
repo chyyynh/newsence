@@ -1,8 +1,6 @@
 import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
-import { canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { extractFromHtml } from '@extractus/article-extractor';
-import { decode } from 'html-entities';
 import { type PdfTextArtifact, parsePdfBytes } from './platforms/pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -11,8 +9,6 @@ const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
-const PREVIEW_METADATA_FETCH_TIMEOUT_MS = 6_000;
-const PREVIEW_METADATA_MAX_BYTES = 131_072;
 
 type ExtractedHtmlArticle = {
 	html: string;
@@ -25,81 +21,26 @@ type ExtractedHtmlArticle = {
 	previewImageUrl: string | null;
 };
 
-type ExtractedPageMetadata = {
-	language: string | null;
-	siteName: string | null;
-	previewImageUrl: string | null;
-};
-
 function optionalText(value: string | undefined): string | null {
 	return value?.trim() || null;
 }
 
-function absoluteImageUrl(rawUrl: string | null, pageUrl: string): string | null {
-	if (!rawUrl) return null;
-	try {
-		const imageUrl = new URL(rawUrl, pageUrl);
-		if (imageUrl.protocol !== 'http:' && imageUrl.protocol !== 'https:') return null;
-		if (imageUrl.protocol === 'http:') imageUrl.protocol = 'https:';
-		return imageUrl.toString();
-	} catch {
-		return null;
-	}
-}
-
-async function extractPageMetadata(html: string, url: string): Promise<ExtractedPageMetadata> {
-	let language: string | null = null;
-	let siteName: string | null = null;
-	let imageUrl: string | null = null;
-	await new HTMLRewriter()
-		.on('html[lang]', {
-			element(element) {
-				language ??= canonicalizeOptionalResourceLang(element.getAttribute('lang'));
-			},
-		})
-		.on('meta', {
-			element(element) {
-				const key = (element.getAttribute('property') ?? element.getAttribute('name'))?.trim().toLowerCase();
-				const rawContent = element.getAttribute('content')?.trim();
-				if (!key || !rawContent) return;
-				const content = decode(rawContent).trim();
-				if (!content) return;
-
-				if (key === 'og:locale') language ??= canonicalizeOptionalResourceLang(content);
-				else if (key === 'og:site_name') siteName ??= content;
-				else if (['og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src'].includes(key)) {
-					imageUrl ??= content;
-				}
-			},
-		})
-		.transform(new Response(html))
-		.arrayBuffer();
-	return {
-		language,
-		siteName,
-		previewImageUrl: absoluteImageUrl(imageUrl, url),
-	};
-}
-
 async function extractHtmlArticle(html: string, url: string): Promise<ExtractedHtmlArticle | null> {
-	const [article, pageMetadata] = await Promise.all([
-		extractFromHtml(html, url, {
-			contentLengthThreshold: MIN_ARTICLE_CONTENT_CHARS,
-			descriptionLengthThreshold: 0,
-		}),
-		extractPageMetadata(html, url),
-	]);
+	const article = await extractFromHtml(html, url, {
+		contentLengthThreshold: MIN_ARTICLE_CONTENT_CHARS,
+		descriptionLengthThreshold: 0,
+	});
 	if (!article?.content?.trim()) return null;
 
 	return {
 		html: article.content.trim(),
 		title: optionalText(article.title),
 		author: optionalText(article.author),
-		language: pageMetadata.language,
+		language: null,
 		publishedDate: optionalText(article.published),
-		siteName: pageMetadata.siteName ?? optionalText(article.source),
+		siteName: optionalText(article.source),
 		description: optionalText(article.description),
-		previewImageUrl: absoluteImageUrl(optionalText(article.image), url) ?? pageMetadata.previewImageUrl,
+		previewImageUrl: optionalText(article.image),
 	};
 }
 
@@ -128,53 +69,6 @@ function titleFromFileName(fileName: string): string {
 
 export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
 	return { status: pdf.status, parser: 'liteparse', chars: pdf.chars, pages: pdf.pages };
-}
-
-function mergeChunks(chunks: Uint8Array[], total: number): Uint8Array {
-	const merged = new Uint8Array(total);
-	let offset = 0;
-	for (const chunk of chunks) {
-		merged.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return merged;
-}
-
-export async function fetchPreviewImageUrl(url: string): Promise<string | null> {
-	try {
-		const response = await fetchWithTimeout(
-			url,
-			{
-				headers: {
-					'User-Agent': WEB_FETCH_USER_AGENT,
-					Accept: 'text/html,application/xhtml+xml',
-				},
-			},
-			PREVIEW_METADATA_FETCH_TIMEOUT_MS,
-		);
-		if (!response.ok || !response.body) {
-			await response.body?.cancel();
-			return null;
-		}
-
-		const reader = response.body.getReader();
-		const chunks: Uint8Array[] = [];
-		let totalBytes = 0;
-		while (totalBytes < PREVIEW_METADATA_MAX_BYTES) {
-			const { done, value } = await reader.read();
-			if (done || !value) break;
-			const remaining = PREVIEW_METADATA_MAX_BYTES - totalBytes;
-			const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
-			chunks.push(chunk);
-			totalBytes += chunk.byteLength;
-		}
-		await reader.cancel();
-
-		const html = new TextDecoder().decode(chunks.length === 1 ? chunks[0] : mergeChunks(chunks, totalBytes));
-		return (await extractPageMetadata(html, url)).previewImageUrl;
-	} catch {
-		return null;
-	}
 }
 
 function titleFromMarkdown(markdown: string): string | null {

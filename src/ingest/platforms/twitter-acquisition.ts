@@ -7,7 +7,6 @@ import type {
 	TwitterAuthorFields,
 	TwitterMedia,
 } from '@core-shared/types';
-import { fetchPreviewImageUrl } from '../web-acquisition';
 
 // twitterapi.io tweet response shape used inside the Twitter platform only.
 export interface Tweet {
@@ -177,8 +176,6 @@ function buildTweetPlatformMetadata(
 	tweet: Tweet,
 	options: {
 		externalUrl?: string;
-		externalOgImage?: string | null;
-		externalTitle?: string | null;
 		originalTweetUrl?: string;
 		tweetText?: string;
 		media?: TwitterMedia[];
@@ -203,8 +200,6 @@ function buildTweetPlatformMetadata(
 				...base,
 				tweetText,
 				externalUrl: options.externalUrl,
-				externalOgImage: options.externalOgImage ?? null,
-				externalTitle: options.externalTitle ?? null,
 				originalTweetUrl: options.originalTweetUrl,
 			},
 		};
@@ -319,7 +314,6 @@ function buildExternalLinkTweet(
 	externalUrl: string,
 	media: TwitterMedia[],
 	tweetText: string,
-	externalPreviewImageUrl: string | null,
 ): NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> } {
 	const title = `@${tweet.author?.userName}: ${tweetText || tweet.text}`.slice(0, 120);
 	return {
@@ -337,8 +331,6 @@ function buildExternalLinkTweet(
 			media,
 			tweetText,
 			externalUrl,
-			externalOgImage: externalPreviewImageUrl,
-			externalTitle: null,
 			originalTweetUrl: tweet.url,
 		}),
 	};
@@ -369,10 +361,9 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	}
 
 	if (linkedContentUrl) {
-		const externalPreviewImageUrl = await fetchPreviewImageUrl(linkedContentUrl);
 		const scraped = {
-			...buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText, externalPreviewImageUrl),
-			previewImageUrl: mediaPreviewImageUrl ?? externalPreviewImageUrl,
+			...buildExternalLinkTweet(tweet, linkedContentUrl, media, tweetText),
+			previewImageUrl: mediaPreviewImageUrl,
 		};
 		return { kind: 'share' as const, scraped, canonicalUrl: tweet.url, eventText: tweetText };
 	}
