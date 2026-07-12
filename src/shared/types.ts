@@ -58,7 +58,7 @@ export interface YoutubeTranscript {
 
 export interface NormalizedContent<T extends ContentResourceType = ContentResourceType> {
 	type: T;
-	title: string | null;
+	title: string;
 	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
 	/** Canonical preview image selected by the acquisition source. */
@@ -67,7 +67,7 @@ export interface NormalizedContent<T extends ContentResourceType = ContentResour
 		author: string | null;
 		language: string | null;
 		publishedDate: string | null;
-		siteName: string | null;
+		siteName: string;
 		description: string | null;
 	};
 	platformMetadata?: PlatformMetadata<T>;

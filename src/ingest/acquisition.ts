@@ -77,17 +77,21 @@ function isNullableString(value: unknown): value is string | null {
 	return value === null || typeof value === 'string';
 }
 
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === 'string' && !!value.trim();
+}
+
 function isAcquiredContent(value: unknown): value is AcquiredContent {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const content = value as Record<string, unknown>;
-	if (!isContentResourceType(content.type) || !isNullableString(content.title) || typeof content.markdown !== 'string') return false;
+	if (!isContentResourceType(content.type) || !isNonEmptyString(content.title) || typeof content.markdown !== 'string') return false;
 	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
 	const metadata = content.metadata as Record<string, unknown>;
 	return (
 		isNullableString(metadata.author) &&
 		isNullableString(metadata.language) &&
 		isNullableString(metadata.publishedDate) &&
-		isNullableString(metadata.siteName) &&
+		isNonEmptyString(metadata.siteName) &&
 		isNullableString(metadata.description)
 	);
 }

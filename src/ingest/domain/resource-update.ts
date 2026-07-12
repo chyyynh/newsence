@@ -1,4 +1,4 @@
-import { type ContentResourceType, canonicalizeOptionalResourceLang } from '@core-shared/resource-types';
+import type { ContentResourceType } from '@core-shared/resource-types';
 import type { PaperMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { type AcquiredContent, PDF_MIME, type PdfExtractionMetadata } from '../acquisition';
 import type { ProcessorResult } from './ai-utils';
@@ -16,12 +16,6 @@ export type ResourceUpdate = {
 };
 
 type ResourceMetadataPatch = Record<string, unknown>;
-
-function canonicalPublishedDate(value: string | null): string | null {
-	if (!value) return null;
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
 
 function metadataRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -41,15 +35,12 @@ export function mergePlatformMetadata(current: unknown, incoming: unknown): Plat
 
 export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
-	const acquiredTitle = acquired.title?.trim();
 	return {
 		...resource,
-		title: acquiredTitle || resource.title,
-		summary: acquired.metadata.description ?? resource.summary,
-		content: acquired.markdown || resource.content,
-		source: acquired.metadata.siteName ?? acquired.metadata.author ?? resource.source,
-		original_lang: canonicalizeOptionalResourceLang(acquired.metadata.language) ?? resource.original_lang,
-		published_date: canonicalPublishedDate(acquired.metadata.publishedDate) ?? resource.published_date,
+		title: acquired.title.trim(),
+		summary: acquired.metadata.description,
+		content: acquired.markdown,
+		source: acquired.metadata.siteName,
 		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
 		platform_metadata: mergePlatformMetadata(resource.platform_metadata, acquired.platformMetadata),
 		file_type: acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : resource.file_type,
