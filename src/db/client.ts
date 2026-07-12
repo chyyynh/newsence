@@ -39,21 +39,9 @@ function createCoreDb(client: Client): CoreDb {
 }
 
 async function rollbackCoreDbClient(client: Client): Promise<void> {
-	await client.query('ROLLBACK').catch((error) =>
-		console.error({
-			tag: 'DB',
-			msg: 'transaction rollback failed',
-			error: String(error),
-		}),
-	);
+	await client.query('ROLLBACK');
 }
 
 async function closeCoreDbClient(client: Client): Promise<void> {
-	await client.end().catch((error) =>
-		console.warn({
-			tag: 'DB',
-			msg: 'client close failed',
-			error: String(error),
-		}),
-	);
+	await client.end();
 }
