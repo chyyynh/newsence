@@ -78,8 +78,7 @@ function htmlToText(str: string): string {
 		.trim();
 }
 
-function buildHnPostMarkdown(item: HackerNewsItem): string {
-	const title = item.title || `HN Item ${item.id}`;
+function buildHnPostMarkdown(item: HackerNewsItem, title: string): string {
 	const parts: string[] = [`# ${title}\n`];
 	const metaParts: string[] = [];
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
@@ -101,10 +100,21 @@ export async function scrapeHackerNews(
 > {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
-	const title = item.title || `HN Item ${itemId}`;
-	const target: AcquiredWebContent | null = item.url ? await acquireWebResource(item.url, env) : null;
+	const title = item.title?.trim();
+	if (!title) throw new Error(`Hacker News item ${itemId} has no title`);
 	const hnText = item.text ? htmlToText(item.text) : '';
-	const summary = target?.metadata.description ?? (hnText.slice(0, 280) || title);
+	let target: AcquiredWebContent | null = null;
+	let markdown: string;
+	let description: string | null;
+	if (item.url) {
+		target = await acquireWebResource(item.url, env);
+		markdown = target.markdown.trim();
+		description = target.metadata.description;
+	} else {
+		markdown = buildHnPostMarkdown(item, title);
+		description = hnText.slice(0, 280) || null;
+	}
+	if (!markdown) throw new Error(`Hacker News item ${itemId} has no content`);
 	console.info({
 		tag: 'HN',
 		msg: 'Item fetched',
@@ -115,13 +125,13 @@ export async function scrapeHackerNews(
 	return {
 		type: 'hackernews',
 		title,
-		markdown: target?.markdown.trim() || buildHnPostMarkdown(item),
+		markdown,
 		metadata: {
-			author: target?.metadata.author ?? item.author ?? null,
+			author: item.author ?? null,
 			language: target?.metadata.language ?? null,
-			publishedDate: target?.metadata.publishedDate ?? (item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null),
-			siteName: target?.metadata.siteName ?? 'Hacker News',
-			description: summary,
+			publishedDate: item.created_at_i ? new Date(item.created_at_i * 1000).toISOString() : null,
+			siteName: 'Hacker News',
+			description,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
 		...(target?.extraction ? { extraction: target.extraction } : {}),
@@ -202,8 +212,11 @@ export async function buildHackerNewsContent(
 ): Promise<string> {
 	const metadata = platformMetadataFor(resource, 'hackernews');
 	const itemId = metadata?.data?.itemId || null;
-	const item = acquiredItem ?? (itemId ? await fetchHnItem(itemId) : null);
-	if (!item) return resource.content ?? '';
+	let item = acquiredItem;
+	if (!item) {
+		if (!itemId) throw new Error(`Hacker News resource ${resource.id} has no item id`);
+		item = await fetchHnItem(itemId);
+	}
 
 	const articleContent = withoutPreviousDiscussion(resource.content ?? '');
 	if (!articleContent) throw new Error(`Hacker News resource ${resource.id} has no content to annotate`);
