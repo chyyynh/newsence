@@ -129,12 +129,15 @@ function stripTweetUrls(text: string): string {
 
 function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 	const q = tweet.quoted_tweet;
-	if (!q?.text || !q.author) return undefined;
+	if (!q) return undefined;
+	const author = requiredTweetAuthor(q);
+	const text = stripTweetUrls(q.text);
+	if (!text) throw new Error(`Quoted tweet ${q.id ?? q.url} has no text`);
 	return {
-		authorName: q.author.name || '',
-		authorUserName: q.author.userName || '',
-		authorProfilePicture: q.author.profilePicture,
-		text: stripTweetUrls(q.text),
+		authorName: author.name,
+		authorUserName: author.userName,
+		authorProfilePicture: author.profilePicture,
+		text,
 	};
 }
 
