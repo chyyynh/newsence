@@ -46,8 +46,6 @@ export function mergeResourceClassification(
 }
 
 const MAX_CONTENT_LENGTH = 10000;
-const MAX_CONTENT_CLEANUP_LENGTH = 12000;
-const MIN_CONTENT_CLEANUP_LENGTH = 800;
 const CONTENT_TRANSLATION_CHUNK_LENGTH = 6000;
 export const DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS = 96;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
@@ -99,23 +97,6 @@ const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文�
 - 專有名詞保留常見英文名稱；必要時可在中文後保留英文
 - 若原文已是繁體中文，直接保留原文；若是簡體中文，轉為自然繁體中文
 - 直接輸出翻譯後的 Markdown，不要包 code block。`;
-
-const RESOURCE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理編輯。請清理抽取出的原文 Markdown，只移除非正文內容。
-
-移除：
-- 廣告、贊助、活動宣傳、newsletter/subscribe CTA、cookie/privacy banner
-- 導航、頁尾、作者 bio、社群分享提示、推薦閱讀、熱門文章、相關文章列表
-- 重複標題、重複段落、圖片版權雜訊、無關的 UI 文案
-
-保留：
-- 原文語言，不要翻譯
-- 正文內容、必要的小標、列表、引用、連結、程式碼區塊
-- 與文章主題直接相關的圖片 markdown
-
-規則：
-- 不要摘要、不要改寫、不要新增資訊
-- 若內容已乾淨，直接原樣輸出
-- 直接輸出清理後 Markdown，不要包 code block，不要解釋。`;
 
 const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
@@ -216,23 +197,8 @@ function shouldWriteResourceContentTranslation(resource: ResourceForProcessing):
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
 
-function normalizeComparableContent(content: string): string {
-	return content.replace(/\s+/g, ' ').trim();
-}
-
 function looksLikeModelExplanation(content: string): boolean {
 	return /^(以下是|這是|Here is|I've cleaned|I cleaned|清理後|已清理)/i.test(content.trim());
-}
-
-function validateCleanedContent(original: string, cleaned: string | null): string | null {
-	const trimmed = cleaned?.trim();
-	if (!trimmed || looksLikeModelExplanation(trimmed)) return null;
-	const originalComparable = normalizeComparableContent(original);
-	const cleanedComparable = normalizeComparableContent(trimmed);
-	if (!cleanedComparable || cleanedComparable === originalComparable) return null;
-	if (cleanedComparable.length < Math.max(300, originalComparable.length * 0.25)) return null;
-	if (cleanedComparable.length > originalComparable.length * 1.15) return null;
-	return trimmed;
 }
 
 function splitOversizedBlock(block: string, maxLength: number): string[] {
@@ -323,30 +289,11 @@ export function assembleZhHantContentTranslation(original: string, translatedChu
 	return translated;
 }
 
-async function generateResourceContentCleanup(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
-	const content = resource.content?.trim();
-	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || resource.type === 'youtube' || resource.type === 'hackernews') return null;
-	const cleanupContent = content.slice(0, MAX_CONTENT_CLEANUP_LENGTH);
-	const cleaned = await generateText(env.AI, `原文 Markdown:\n${cleanupContent}`, {
-		task: 'resource-content-cleanup',
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 6000,
-		temperature: 0.1,
-		systemPrompt: RESOURCE_CONTENT_CLEANUP_SYSTEM_PROMPT,
-	});
-	return validateCleanedContent(cleanupContent, cleaned);
-}
-
 export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
 	try {
-		const cleanedContent = await generateResourceContentCleanup(resource, env).catch((error) => {
-			console.error({ tag: 'AI', msg: 'Resource content cleanup failed', error: String(error) });
-			return null;
-		});
-		const resourceForAnalysis = cleanedContent ? { ...resource, content: cleanedContent } : resource;
-		const resourcePrompt = buildResourceContextPrompt(resourceForAnalysis);
+		const resourcePrompt = buildResourceContextPrompt(resource);
 		const classification = await generateObject(env.AI, resourcePrompt, {
 			schema: ResourceClassificationSchema,
 			task: 'resource-classification',
