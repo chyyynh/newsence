@@ -69,14 +69,15 @@ export async function settleForbiddenResource(env: CoreEnv, resourceId: string):
 }
 
 export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {
-	const platformMetadataJson = JSON.stringify(acquired.platformMetadata ?? {});
+	if (!acquired.platformMetadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
+	const platformMetadataJson = JSON.stringify(acquired.platformMetadata);
 	const previewImageUrl = acquired.previewImageUrl?.trim() || null;
 	await withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
 			UPDATE resources
 			SET scraped_date = NOW(),
 					og_image_url = ${previewImageUrl},
-				platform_metadata = COALESCE(platform_metadata, '{}'::jsonb) || ${platformMetadataJson}::jsonb,
+				platform_metadata = ${platformMetadataJson}::jsonb,
 				updated_at = NOW()
 			WHERE id = ${resourceId}::uuid
 			RETURNING id
