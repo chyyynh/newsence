@@ -156,20 +156,31 @@ const TWITTER_WATERMARK_OVERLAP_MS = 60 * 60 * 1000;
 
 function normalizeRetweet(tweet: Tweet): Tweet | null {
 	if (tweet.retweeted_tweet) {
-		return {
+		const retweeter = tweet.author;
+		if (!retweeter?.name.trim() || !retweeter.userName.trim()) {
+			throw new Error(`Retweet ${tweet.id ?? tweet.url} has no complete author`);
+		}
+		const normalized = {
 			...tweet.retweeted_tweet,
 			retweetedBy: {
 				tweetId: tweet.id,
 				tweetUrl: tweet.url,
 				retweetedAt: tweet.createdAt,
-				authorName: tweet.author?.name || '',
-				authorUserName: tweet.author?.userName || '',
-				authorProfilePicture: tweet.author?.profilePicture,
-				authorVerified: tweet.author?.isBlueVerified,
+				authorName: retweeter.name,
+				authorUserName: retweeter.userName,
+				authorProfilePicture: retweeter.profilePicture,
+				authorVerified: retweeter.isBlueVerified,
 			},
 		};
+		if (!normalized.author?.name.trim() || !normalized.author.userName.trim()) {
+			throw new Error(`Retweeted tweet ${normalized.id ?? normalized.url} has no complete author`);
+		}
+		return normalized;
 	}
 	if (tweet.text.startsWith('RT @')) return null;
+	if (!tweet.author?.name.trim() || !tweet.author.userName.trim()) {
+		throw new Error(`Tweet ${tweet.id ?? tweet.url} has no complete author`);
+	}
 	return tweet;
 }
 
@@ -229,7 +240,8 @@ async function fetchTweetsForBatch(apiKey: string, userNames: string[], sinceTim
 			has_next_page?: boolean;
 			next_cursor?: string;
 		};
-		for (const tweet of apiRes.tweets || []) {
+		if (!Array.isArray(apiRes.tweets)) throw new Error('Twitter Advanced Search response omitted tweets');
+		for (const tweet of apiRes.tweets) {
 			const normalized = normalizeRetweet(tweet);
 			if (normalized) tweets.push(normalized);
 		}
