@@ -42,7 +42,11 @@ async function withCoreDbClient<T>(env: CoreEnv, operation: CoreDbOperation<T>):
 		await client.end();
 	} catch (closeError) {
 		if (!outcome.ok) throw new AggregateError([outcome.error, closeError], 'Database operation and client close both failed');
-		throw closeError;
+		console.warn({
+			tag: 'DB',
+			msg: 'Database client close failed after a successful operation',
+			error: closeError instanceof Error ? closeError.message : String(closeError),
+		});
 	}
 	if (!outcome.ok) throw outcome.error;
 	return outcome.value;
