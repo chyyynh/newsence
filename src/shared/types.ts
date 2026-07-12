@@ -21,8 +21,8 @@ export interface ResourceForProcessing {
 	translations?: ResourceTranslationMap;
 	url: string | null;
 	og_image_url?: string | null;
-	source: string;
-	published_date: string;
+	source: string | null;
+	published_date: string | null;
 	tags: string[];
 	keywords: string[];
 	platform_metadata?: PlatformMetadata;

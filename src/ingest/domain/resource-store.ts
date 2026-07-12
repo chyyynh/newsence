@@ -184,13 +184,13 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		translations: resourceStoreTranslations(row),
 		url: row.url,
 		og_image_url: row.og_image_url,
-		source: requiredString(row.source, 'source'),
-		published_date: formatPublishedDate(row.published_date),
+		source: cleanString(row.source),
+		published_date: formatOptionalPublishedDate(row.published_date),
 		tags: row.tags,
 		keywords: row.keywords,
 		type: parseResourceType(row.type),
 		scope: parseResourceScope(row.scope),
-		platform_metadata: platformMetadataValue(row.platform_metadata),
+		platform_metadata: optionalPlatformMetadataValue(row.platform_metadata),
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
@@ -223,6 +223,10 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 
 function formatPublishedDate(value: Date | string | null): string {
 	return dateValue(value, 'published_date').toISOString();
+}
+
+function formatOptionalPublishedDate(value: Date | string | null): string | null {
+	return value === null ? null : formatPublishedDate(value);
 }
 
 export interface SourceResourceDraft {
@@ -398,6 +402,7 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 }
 
 function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata: PlatformMetadata | null): ResourceUpdate {
+	const sourceName = requiredString(resource.source, 'source');
 	return {
 		type: resource.type,
 		title: resource.title,
@@ -407,7 +412,7 @@ function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata
 		keywords: resource.keywords,
 		entities: undefined,
 		og_image_url: resource.og_image_url?.trim() || null,
-		platform_metadata: platformMetadata,
+		platform_metadata: platformMetadata ? { ...platformMetadata, sourceName } : null,
 	};
 }
 
@@ -605,6 +610,10 @@ function platformMetadataValue(value: unknown): PlatformMetadata {
 	requiredString(metadata.fetchedAt, 'platform_metadata.fetchedAt');
 	if (!Object.hasOwn(metadata, 'data')) throw new Error('Invalid platform_metadata: missing data');
 	return value as PlatformMetadata;
+}
+
+function optionalPlatformMetadataValue(value: unknown): PlatformMetadata | undefined {
+	return value === null || value === undefined ? undefined : platformMetadataValue(value);
 }
 
 function deriveResourceCategory(platformMetadata: unknown): ResourceCategory | null {

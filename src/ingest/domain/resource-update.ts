@@ -26,8 +26,24 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		content: acquired.markdown,
 		source: acquired.metadata.siteName,
 		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
-		platform_metadata: acquired.platformMetadata,
+		og_image_url: acquired.previewImageUrl?.trim() || null,
+		platform_metadata: mergeAcquiredPlatformMetadata(resource.platform_metadata, acquired.platformMetadata, acquired.metadata.siteName),
 		file_type: acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : resource.file_type,
+	};
+}
+
+function mergeAcquiredPlatformMetadata(
+	current: PlatformMetadata | undefined,
+	acquired: PlatformMetadata,
+	source: string,
+): PlatformMetadata {
+	const sourceName = source.trim();
+	if (!sourceName) throw new Error('Acquired content has no source name');
+	return {
+		...acquired,
+		...(current?.enrichments === undefined ? {} : { enrichments: current.enrichments }),
+		...(current?.classification === undefined ? {} : { classification: current.classification }),
+		sourceName,
 	};
 }
 
@@ -90,8 +106,8 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 	};
 }
 
-function platformMetadataWithSourceName(platformMetadata: PlatformMetadata, source: string): PlatformMetadata {
-	const sourceName = source.trim();
+function platformMetadataWithSourceName(platformMetadata: PlatformMetadata, source: string | null): PlatformMetadata {
+	const sourceName = source?.trim();
 	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
 	return { ...platformMetadata, sourceName };
 }

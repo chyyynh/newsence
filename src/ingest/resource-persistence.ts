@@ -5,7 +5,7 @@ import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
-import { type AcquiredContent, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
+import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { buildResourceUpdate } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -34,10 +34,10 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 	});
 }
 
-export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {
-	if (!acquired.platformMetadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
-	const platformMetadataJson = JSON.stringify(acquired.platformMetadata);
-	const previewImageUrl = acquired.previewImageUrl?.trim() || null;
+export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
+	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
+	const platformMetadataJson = JSON.stringify(resource.platform_metadata);
+	const previewImageUrl = resource.og_image_url?.trim() || null;
 	await withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
 			UPDATE resources

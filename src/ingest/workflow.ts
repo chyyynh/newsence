@@ -43,7 +43,8 @@ function shouldAcquireContent(
 	if (force) return !!resource.url;
 	const hasContent = 'has_content' in resource && !!resource.has_content;
 	const needsYouTubeAcquisition = resource.type === 'youtube' && !resource.has_youtube_transcript;
-	return (!hasContent || needsYouTubeAcquisition) && !resource.storage_key && !!resource.url;
+	const needsAcquisitionIdentity = !resource.source || !resource.platform_metadata;
+	return (!hasContent || needsYouTubeAcquisition || needsAcquisitionIdentity) && !resource.storage_key && !!resource.url;
 }
 
 async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
@@ -98,17 +99,17 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
+		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
 			await step.do(
 				'record-unchanged-resync',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistUnchangedResourceResync(this.env, resourceId, acquiredContent),
+				() => persistUnchangedResourceResync(this.env, resourceId, resource),
 			);
 			return { success: true, resource_id: resourceId, operation, changed: false };
 		}
-		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const resourceType = resource.type;
 		const logContext = { resource_id: resourceId, table: 'resources' };
 

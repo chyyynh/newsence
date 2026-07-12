@@ -124,15 +124,22 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實
 
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
 	const content = requiredResourceContent(resource);
+	const source = requiredResourceSource(resource);
 	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 	const summaryLine = resource.summary?.trim() ? `\n摘要: ${resource.summary.trim()}` : '';
 	return `文章資訊:
 標題: ${resource.title}
-來源: ${resource.source}
+來源: ${source}
 資源類型: ${resource.type}${excludedLine}${summaryLine}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
+}
+
+function requiredResourceSource(resource: ResourceForProcessing): string {
+	const source = resource.source?.trim();
+	if (!source) throw new Error(`Resource ${resource.id} has no source`);
+	return source;
 }
 
 function requiredResourceContent(resource: ResourceForProcessing): string {
