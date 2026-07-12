@@ -58,10 +58,12 @@ function urlHost(url: string): string {
 
 function fileNameFromUrl(url: string): string {
 	const encodedName = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '';
-	if (!encodedName) throw new Error(`URL has no file name: ${url}`);
-	const name = decodeURIComponent(encodedName);
-	if (!name) throw new Error(`URL has no valid file name: ${url}`);
-	return name;
+	if (!encodedName) return 'document.pdf';
+	try {
+		return decodeURIComponent(encodedName) || 'document.pdf';
+	} catch {
+		return encodedName;
+	}
 }
 
 function titleFromFileName(fileName: string): string {

@@ -26,7 +26,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		content: acquired.markdown,
 		source: acquired.metadata.siteName,
 		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
-		og_image_url: acquired.previewImageUrl?.trim() || null,
+		og_image_url: acquired.previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: mergeAcquiredPlatformMetadata(resource.platform_metadata, acquired.platformMetadata, acquired.metadata.siteName),
 		file_type: acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : resource.file_type,
 	};
@@ -101,7 +101,7 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 		tags: [...(updateData.tags ?? resource.tags)],
 		keywords: [...(updateData.keywords ?? resource.keywords)],
 		entities: updateData.entities,
-		og_image_url: previewImageUrl?.trim() || null,
+		og_image_url: previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata,
 	};
 }
