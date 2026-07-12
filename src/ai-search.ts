@@ -178,7 +178,8 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, fromDate?: 
 	for (const chunk of response.chunks) {
 		const id = idFromItemKey(chunk.item.key);
 		if (!id) continue;
-		scores.set(id, Math.max(scores.get(id) ?? 0, chunk.score));
+		const previousScore = scores.get(id);
+		scores.set(id, previousScore === undefined ? chunk.score : Math.max(previousScore, chunk.score));
 	}
 	return [...scores].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score);
 }
