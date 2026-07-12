@@ -85,8 +85,10 @@ async function buildCollectionOkfBundle(
 		if (!collection) throw new Error('Collection not found');
 
 		const resources = await readCollectionResources(db, collection.id, input.viewerId, input.primaryLocale);
+		const collectionSlug = slugify(collection.name);
+		if (!collectionSlug) throw new Error(`Collection ${collection.id} has no valid slug`);
 		return {
-			slug: `${slugify(collection.name) || 'collection'}-${collection.id.slice(0, 8)}`,
+			slug: `${collectionSlug}-${collection.id.slice(0, 8)}`,
 			files: renderOkfFiles(collection, resources),
 		};
 	});
@@ -186,14 +188,17 @@ function renderResource(resource: ResourceRow): string {
 }
 
 function resourceLabel(resource: ResourceRow): string {
-	return resource.title || resource.url || resource.id;
+	const title = resource.title?.trim();
+	if (!title) throw new Error(`Resource ${resource.id} has no title`);
+	return title;
 }
 
 function assignResourcePaths(resources: ResourceRow[]): Map<string, string> {
 	const used = new Set<string>();
 	const paths = new Map<string, string>();
 	for (const resource of resources) {
-		const base = slugify(resourceLabel(resource)) || 'resource';
+		const base = slugify(resourceLabel(resource));
+		if (!base) throw new Error(`Resource ${resource.id} has no valid slug`);
 		let slug = base;
 		for (let index = 2; used.has(slug); index++) slug = `${base}-${index}`;
 		used.add(slug);
@@ -207,7 +212,7 @@ function slugify(value: string): string {
 		.toLowerCase()
 		.normalize('NFKD')
 		.replace(/[\u0300-\u036f]/g, '')
-		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/[^\p{L}\p{N}]+/gu, '-')
 		.replace(/^-+|-+$/g, '')
 		.slice(0, 72);
 }
