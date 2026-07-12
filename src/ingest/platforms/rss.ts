@@ -60,7 +60,7 @@ function feedPublishedDate(value: string | undefined): Date {
 }
 
 async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
-	const description = item.description?.trim() ?? '';
+	const description = item.description?.trim();
 	const title = item.title?.trim();
 	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
 	const resourceId = await withCoreDb(env, (db) =>
@@ -69,7 +69,7 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, u
 			title,
 			source: feed.name,
 			publishedDate: feedPublishedDate(item.published),
-			summary: description.slice(0, FEED_SUMMARY_MAX_CHARS),
+			summary: description ? description.slice(0, FEED_SUMMARY_MAX_CHARS) : null,
 			type: 'rss',
 			content: null,
 			platformMetadata: null,
