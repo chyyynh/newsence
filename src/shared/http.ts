@@ -2,6 +2,22 @@ export const WEB_FETCH_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_1
 
 const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
 
+async function responseContentLength(response: Response): Promise<number | null> {
+	const header = response.headers.get('content-length');
+	if (header === null) return null;
+	const value = header.trim();
+	if (!/^\d+$/.test(value)) {
+		await response.body?.cancel();
+		throw new Error(`Invalid Content-Length header: ${header}`);
+	}
+	const length = Number(value);
+	if (!Number.isSafeInteger(length)) {
+		await response.body?.cancel();
+		throw new Error(`Invalid Content-Length header: ${header}`);
+	}
+	return length;
+}
+
 export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
 	try {
 		const timeout = AbortSignal.timeout(timeoutMs);
@@ -15,8 +31,8 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
 }
 
 export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_TEXT_MAX_BYTES): Promise<string> {
-	const contentLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
-	if (contentLength > maxBytes) {
+	const contentLength = await responseContentLength(response);
+	if (contentLength !== null && contentLength > maxBytes) {
 		await response.body?.cancel();
 		throw new Error(`Response too large: ${contentLength} bytes`);
 	}
@@ -41,8 +57,8 @@ export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_T
 }
 
 export async function readBytesWithLimit(response: Response, maxBytes: number): Promise<Uint8Array> {
-	const contentLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
-	if (contentLength > maxBytes) {
+	const contentLength = await responseContentLength(response);
+	if (contentLength !== null && contentLength > maxBytes) {
 		await response.body?.cancel();
 		throw new Error(`Response too large: ${contentLength} bytes`);
 	}
