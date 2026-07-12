@@ -5,7 +5,6 @@ import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
-import { deleteCorpusItem } from '../ai-search';
 import { type AcquiredContent, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import { buildResourceUpdate } from './domain/resource-update';
@@ -33,39 +32,6 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 			.returning({ id: resources.id });
 		if (!updated.length) throw new Error(`Failed to mark resource ${resourceId} as failed: not found`);
 	});
-}
-
-export async function settleForbiddenResource(env: CoreEnv, resourceId: string): Promise<boolean> {
-	const outcome = await withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
-			WITH deleted AS (
-				DELETE FROM resources resource
-				WHERE resource.id = ${resourceId}::uuid
-				  AND NOT EXISTS (
-					SELECT 1 FROM library item WHERE item.resource_id = resource.id
-				  )
-				  AND NOT EXISTS (
-					SELECT 1
-					FROM resource_links link
-					WHERE link.to_type = 'resource' AND link.to_id = resource.id
-				  )
-				RETURNING resource.id
-			), retained AS (
-				UPDATE resources resource
-				SET enrichment_status = 'failed', updated_at = NOW()
-				WHERE resource.id = ${resourceId}::uuid
-				  AND NOT EXISTS (SELECT 1 FROM deleted)
-				RETURNING resource.id
-			)
-			SELECT EXISTS (SELECT 1 FROM deleted) AS deleted,
-			       EXISTS (SELECT 1 FROM retained) AS retained
-		`);
-		return (result.rows as Array<{ deleted: boolean; retained: boolean }>)[0];
-	});
-	if (!outcome?.deleted && !outcome?.retained) throw new Error(`Failed to settle resource ${resourceId}: not found`);
-	const deleted = outcome.deleted;
-	if (deleted) await deleteCorpusItem(env, resourceId);
-	return deleted;
 }
 
 export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {

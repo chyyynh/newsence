@@ -37,7 +37,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return enqueueProcessing(this.env, resourceId);
 	}
 
-	/** Reacquire a URL-backed resource while preserving the current copy if the source fetch fails. */
+	/** Reacquire a URL-backed resource through the enrichment workflow. */
 	async resyncResource(resourceId: string) {
 		await assertResourceProcessable(this.env, resourceId);
 		return enqueueResourceResync(this.env, resourceId);

@@ -4,7 +4,7 @@ import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
-import { type AcquiredContent, acquisitionHttpStatus, PDF_MIME, readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
+import { type AcquiredContent, PDF_MIME, readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
 import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
@@ -12,12 +12,7 @@ import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import {
-	markResourceEnrichmentFailed,
-	persistProcessedResource,
-	persistUnchangedResourceResync,
-	settleForbiddenResource,
-} from './resource-persistence';
+import { markResourceEnrichmentFailed, persistProcessedResource, persistUnchangedResourceResync } from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
@@ -57,44 +52,9 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	const artifact = await step.do(
 		'acquire-content',
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		async () => {
-			try {
-				return await scrapeSavedUrlArtifact(sourceUrl, env);
-			} catch (error) {
-				if (acquisitionHttpStatus(error) !== 403) throw error;
-				throw new NonRetryableError(error instanceof Error ? error.message : String(error), 'AcquisitionForbiddenError');
-			}
-		},
+		() => scrapeSavedUrlArtifact(sourceUrl, env),
 	);
 	return readAcquiredContentArtifact(artifact);
-}
-
-type AcquisitionTerminalResult = {
-	resourceId: string;
-	deleted: boolean;
-	reason: 'acquisition_http_403';
-};
-
-async function settleResourceAfterForbiddenAcquisition(
-	env: CoreEnv,
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-	error: unknown,
-): Promise<AcquisitionTerminalResult> {
-	const deleted = await step.do(
-		'delete-forbidden-resource',
-		{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-		() => settleForbiddenResource(env, resource.id),
-	);
-	console.info({
-		tag: 'WORKFLOW',
-		msg: deleted ? 'Deleted unreferenced resource after forbidden acquisition' : 'Retained referenced resource after forbidden acquisition',
-		resource_id: resource.id,
-		url: resource.url,
-		deleted,
-		error: String(error),
-	});
-	return { resourceId: resource.id, deleted, reason: 'acquisition_http_403' };
 }
 
 async function acquireResourceForOperation(
@@ -102,19 +62,9 @@ async function acquireResourceForOperation(
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
 	operation: WorkflowOperation,
-): Promise<{ acquiredContent?: AcquiredContent } | { terminal: AcquisitionTerminalResult }> {
-	if (!shouldAcquireContent(resource, operation === 'resync')) return {};
-
-	let acquiredContent: AcquiredContent | undefined;
-	try {
-		acquiredContent = await stageSavedUrlAcquisition(env, step, resource);
-	} catch (error) {
-		if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
-		return {
-			terminal: await settleResourceAfterForbiddenAcquisition(env, step, resource, error),
-		};
-	}
-	return { acquiredContent };
+): Promise<AcquiredContent | undefined> {
+	if (!shouldAcquireContent(resource, operation === 'resync')) return undefined;
+	return stageSavedUrlAcquisition(env, step, resource);
 }
 
 export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
@@ -147,9 +97,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		if (operation === 'resync' && !initialResource.url) {
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
-		const acquisition = await acquireResourceForOperation(this.env, step, initialResource, operation);
-		if ('terminal' in acquisition) return acquisition.terminal;
-		const { acquiredContent } = acquisition;
+		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
