@@ -137,23 +137,20 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 					: sql`NULL::boolean`
 			} AS has_youtube_transcript,
 			rl.original_lang AS original_lang,
-			COALESCE(
-				(
-					SELECT jsonb_agg(
-						jsonb_build_object(
-							'lang', rt.lang,
-							'title', rt.title,
-							'summary', rt.summary,
-							'content', ${shell ? sql`NULL::text` : sql`rt.content`},
-							'keywords', COALESCE(rt.keywords, '{}'::text[]),
-							'source', rt.source
-						)
-						ORDER BY (rt.lang = rl.original_lang) DESC, rt.lang ASC
+			(
+				SELECT jsonb_agg(
+					jsonb_build_object(
+						'lang', rt.lang,
+						'title', rt.title,
+						'summary', rt.summary,
+						'content', ${shell ? sql`NULL::text` : sql`rt.content`},
+						'keywords', rt.keywords,
+						'source', rt.source
 					)
-					FROM resource_translations rt
-					WHERE rt.resource_id = rl.id
-				),
-				'[]'::jsonb
+					ORDER BY (rt.lang = rl.original_lang) DESC, rt.lang ASC
+				)
+				FROM resource_translations rt
+				WHERE rt.resource_id = rl.id
 			) AS translations,
 			rl.url AS url,
 			rl.og_image_url AS og_image_url,
@@ -162,7 +159,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.scope AS scope,
 			rl.published_date AS published_date,
 			rl.tags AS tags,
-			COALESCE(rl.keywords, '{}'::text[]) AS keywords,
+			rl.keywords AS keywords,
 			rl.platform_metadata AS platform_metadata,
 			rl.enrichment_status AS enrichment_status,
 			rl.storage_key AS storage_key,
@@ -205,7 +202,7 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 
 function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMap {
 	const map: ResourceTranslationMap = {};
-	if (!Array.isArray(row.translations)) return map;
+	if (!Array.isArray(row.translations)) throw new Error(`Invalid translations for resource ${row.id}: expected array`);
 	for (const item of row.translations) {
 		if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
 		const translation = item as ResourceStoreTranslationRow;
