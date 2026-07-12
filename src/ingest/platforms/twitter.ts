@@ -192,11 +192,7 @@ function calculateMonitoringSinceTime(users: Array<{ scrapedAt?: Date | string |
 }
 
 /** Fetch all tweets matching `(from:u1 OR from:u2 …) since_time:<unix>`, paginating through cursors. */
-async function fetchTweetsForBatch(
-	apiKey: string,
-	userNames: string[],
-	sinceTime: number,
-): Promise<{ tweets: Tweet[]; completed: boolean }> {
+async function fetchTweetsForBatch(apiKey: string, userNames: string[], sinceTime: number): Promise<Tweet[]> {
 	const fromClause = userNames.map((u) => `from:${u}`).join(' OR ');
 	const query = `(${fromClause}) since_time:${sinceTime}`;
 
@@ -208,43 +204,36 @@ async function fetchTweetsForBatch(
 		const params = new URLSearchParams({ query, queryType: 'Latest' });
 		if (cursor) params.set('cursor', cursor);
 
-		let apiRes: { tweets?: Tweet[]; has_next_page?: boolean; next_cursor?: string };
-		try {
-			const response = await fetchWithTimeout(
-				`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
-				{ headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' } },
-				20_000,
-			);
-			if (!response.ok) {
-				await response.body?.cancel();
-				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-			}
-			apiRes = JSON.parse(await readTextWithLimit(response, 2 * 1024 * 1024)) as {
-				tweets?: Tweet[];
-				has_next_page?: boolean;
-				next_cursor?: string;
-			};
-		} catch (err) {
-			console.error({ tag: 'TWITTER', msg: 'Advanced Search fetch failed', error: String(err) });
-			return { tweets, completed: false };
+		const response = await fetchWithTimeout(
+			`${TWITTER_ADVANCED_SEARCH_API}?${params}`,
+			{ headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' } },
+			20_000,
+		);
+		if (!response.ok) {
+			await response.body?.cancel();
+			throw new Error(`Twitter Advanced Search failed with HTTP ${response.status}`);
 		}
+		const apiRes = JSON.parse(await readTextWithLimit(response, 2 * 1024 * 1024)) as {
+			tweets?: Tweet[];
+			has_next_page?: boolean;
+			next_cursor?: string;
+		};
 		for (const tweet of apiRes.tweets || []) {
 			const normalized = normalizeRetweet(tweet);
 			if (normalized) tweets.push(normalized);
 		}
 
 		if (!apiRes.has_next_page) break;
-		cursor = apiRes.next_cursor || '';
-		if (!cursor) break;
+		cursor = apiRes.next_cursor?.trim() ?? '';
+		if (!cursor) throw new Error('Twitter Advanced Search response omitted the next cursor');
 		if (seenCursors.has(cursor)) {
-			console.error({ tag: 'TWITTER', msg: 'Advanced Search returned a repeated cursor', cursor: cursor.slice(0, 32) });
-			return { tweets, completed: false };
+			throw new Error(`Twitter Advanced Search returned a repeated cursor: ${cursor.slice(0, 32)}`);
 		}
 		seenCursors.add(cursor);
 		await scheduler.wait(1000);
 	}
 
-	return { tweets, completed: true };
+	return tweets;
 }
 
 /**
@@ -301,71 +290,39 @@ function batchTwitterIdentities(identities: MonitoredTwitterIdentity[]): Monitor
 	return batches;
 }
 
-function monitoredAuthorUserName(tweet: Tweet): string | null {
-	const userName = tweet.retweetedBy?.authorUserName || tweet.author?.userName;
-	return userName?.trim().toLowerCase() || null;
-}
-
-type TweetSaveResult = {
-	processed: number;
-	failedUserNames: Set<string>;
-	hasUnattributedFailure: boolean;
-};
-
-async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<TweetSaveResult> {
+async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<number> {
 	let processed = 0;
-	const failedUserNames = new Set<string>();
-	let hasUnattributedFailure = false;
 	for (const group of groupTweetsIntoThreads(tweets)) {
 		const first = group[0];
 		if (!first) continue;
-		try {
-			const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
-			if (saved) processed++;
-		} catch (err) {
-			const userName = monitoredAuthorUserName(first);
-			if (userName) failedUserNames.add(userName);
-			else hasUnattributedFailure = true;
-			console.error({ tag: 'TWITTER', msg: 'Save failed', url: first.url, error: String(err) });
-		}
+		const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
+		if (saved) processed++;
 	}
-	return { processed, failedUserNames, hasUnattributedFailure };
+	return processed;
 }
 
 async function processTwitterBatches(
 	env: CoreEnv,
 	batches: MonitoredTwitterIdentity[][],
 	runStartedAt: Date,
-): Promise<{ processed: number; advancedSources: number; incompleteBatches: number }> {
+): Promise<{ processed: number; advancedSources: number }> {
 	let processed = 0;
 	let advancedSources = 0;
-	let incompleteBatches = 0;
 	for (const batch of batches) {
 		const userNames = batch.map((identity) => identity.twitterUserName);
 		const batchSources = batch.flatMap((identity) => identity.sources);
 		const sinceTime = calculateMonitoringSinceTime(batchSources);
-		const { tweets, completed } = await fetchTweetsForBatch(env.KAITO_API_KEY, userNames, sinceTime);
-		const saved = await saveTweetGroups(env, tweets);
-		processed += saved.processed;
-		if (!completed || saved.hasUnattributedFailure) {
-			incompleteBatches++;
-			continue;
-		}
-
-		const completedSourceIds = batch
-			.filter((identity) => !saved.failedUserNames.has(identity.twitterUserName))
-			.flatMap((identity) => identity.sources.map((source) => source.id));
-		await markSourcesScraped(env, completedSourceIds, runStartedAt);
-		advancedSources += completedSourceIds.length;
+		const tweets = await fetchTweetsForBatch(env.KAITO_API_KEY, userNames, sinceTime);
+		processed += await saveTweetGroups(env, tweets);
+		const sourceIds = batchSources.map((source) => source.id);
+		await markSourcesScraped(env, sourceIds, runStartedAt);
+		advancedSources += sourceIds.length;
 	}
-	return { processed, advancedSources, incompleteBatches };
+	return { processed, advancedSources };
 }
 
 export async function handleTwitterCron(env: CoreEnv): Promise<void> {
-	if (!env.KAITO_API_KEY) {
-		console.info({ tag: 'TWITTER', msg: 'Skipped - KAITO_API_KEY not configured' });
-		return;
-	}
+	if (!env.KAITO_API_KEY) throw new Error('KAITO_API_KEY is not configured');
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const runStartedAt = new Date();
 	const users = await loadEnabledSources(env, 'twitter');
@@ -377,14 +334,13 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	const monitoredUsers = monitoredTwitterUsers(users);
 	const identities = monitoredTwitterIdentities(monitoredUsers);
 	if (identities.length === 0) {
-		console.warn({ tag: 'TWITTER', msg: 'No valid twitter usernames in source feeds', users: users.length });
-		return;
+		throw new Error(`No valid Twitter usernames in ${users.length} configured sources`);
 	}
 	const batches = batchTwitterIdentities(identities);
 
 	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: identities.length, batches: batches.length });
 
-	const { processed, advancedSources, incompleteBatches } = await processTwitterBatches(env, batches, runStartedAt);
+	const { processed, advancedSources } = await processTwitterBatches(env, batches, runStartedAt);
 
 	console.info({
 		tag: 'TWITTER',
@@ -393,7 +349,6 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 		users: users.length,
 		validUsers: monitoredUsers.length,
 		advancedSources,
-		incompleteBatches,
 		batches: batches.length,
 	});
 }
