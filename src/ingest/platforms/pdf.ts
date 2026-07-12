@@ -28,11 +28,13 @@ export async function parsePdfBytes(bytes: Uint8Array): Promise<PdfTextArtifact>
 		pdfParserReady = true;
 	}
 	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'markdown', imageMode: 'off' });
-	const raw = (await parser.parse(bytes)) as { text?: string; pages?: unknown[] };
-	const text = (raw.text ?? '').trim();
-	const pages = raw.pages?.length ?? 0;
+	const raw = (await parser.parse(bytes)) as { text?: unknown; pages?: unknown };
+	if (typeof raw.text !== 'string') throw new Error('LiteParse response is missing text');
+	if (!Array.isArray(raw.pages) || raw.pages.length === 0) throw new Error('LiteParse response is missing pages');
+	const text = raw.text.trim();
+	const pages = raw.pages.length;
 	const chars = extractedTextChars(text);
-	const status = chars < MIN_PDF_CHARS || chars / Math.max(pages, 1) < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
+	const status = chars < MIN_PDF_CHARS || chars / pages < MIN_PDF_CHARS_PER_PAGE ? 'needs_ocr' : 'ok';
 	return { text, pages, chars, status };
 }
 
