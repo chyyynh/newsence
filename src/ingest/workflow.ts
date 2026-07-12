@@ -11,7 +11,6 @@ import { applyAcquiredContent } from './domain/resource-update';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
-import { prepareTwitterClassification } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import {
 	markResourceEnrichmentFailed,
@@ -208,12 +207,9 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
 				const fullResource = await loadFull();
-				const resourceWithDiscussion = hackerNewsContent ? { ...fullResource, content: hackerNewsContent } : fullResource;
-				const prepared = resourceType === 'twitter' ? prepareTwitterClassification(resourceWithDiscussion) : null;
-				const resourceToClassify = prepared?.resource ?? resourceWithDiscussion;
+				const resourceToClassify = hackerNewsContent ? { ...fullResource, content: hackerNewsContent } : fullResource;
 				const classification = await generateResourceClassification(resourceToClassify, this.env);
 				return mergeResourceClassification(resourceToClassify, classification, {
-					updateData: prepared?.updateData,
 					extraTags: resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
 				});
 			},

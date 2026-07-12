@@ -1,11 +1,10 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
-import type { PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
+import type { PlatformMetadata } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
 import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { loadEnabledSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { isEmpty, type ProcessorResult } from '../domain/ai-utils';
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
 async function enqueueTwitterResource(
@@ -374,20 +373,4 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 		advancedSources,
 		batches: batches.length,
 	});
-}
-
-export function prepareTwitterClassification(resource: ResourceForProcessing): {
-	resource: ResourceForProcessing;
-	updateData: ProcessorResult['updateData'];
-} {
-	const updateData: ProcessorResult['updateData'] = {};
-	const tweetText = resource.summary?.trim() || resource.content || '';
-	if (isEmpty(resource.summary)) updateData.summary = tweetText;
-	if (isEmpty(resource.content)) updateData.content = tweetText;
-	const resourceForClassification = {
-		...resource,
-		summary: updateData.summary ?? resource.summary,
-		content: updateData.content ?? resource.content,
-	};
-	return { resource: resourceForClassification, updateData };
 }
