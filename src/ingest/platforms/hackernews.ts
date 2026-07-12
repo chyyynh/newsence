@@ -89,6 +89,14 @@ function buildHnPostMarkdown(item: HackerNewsItem, title: string): string {
 	return parts.join('\n');
 }
 
+function hackerNewsItemTitle(item: HackerNewsItem, itemId: string): string {
+	const title = item.title?.trim();
+	if (title) return title;
+	if (item.type === 'comment') return `Hacker News comment #${itemId}`;
+	if (item.type === 'poll') return `Hacker News poll #${itemId}`;
+	return `Hacker News item #${itemId}`;
+}
+
 export async function scrapeHackerNews(
 	itemId: string,
 	env: CoreEnv,
@@ -100,9 +108,9 @@ export async function scrapeHackerNews(
 > {
 	console.info({ tag: 'HN', msg: 'Fetching item', itemId });
 	const item = await fetchHnItem(itemId);
-	const title = item.title?.trim();
-	if (!title) throw new Error(`Hacker News item ${itemId} has no title`);
+	const title = hackerNewsItemTitle(item, itemId);
 	const hnText = item.text ? htmlToText(item.text) : '';
+	if (item.type === 'comment' && !hnText) throw new Error(`Hacker News comment ${itemId} has no text`);
 	let target: AcquiredWebContent | null = null;
 	let markdown: string;
 	let description: string | null;

@@ -146,11 +146,21 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 
 		const hackerNewsContent =
 			resourceType === 'hackernews'
-				? await step.do(
-						'build-hacker-news-content',
-						{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
-						async () => buildHackerNewsContent(await loadFull(), this.env, acquiredContent?.hackerNewsItem),
-					)
+				? await step
+						.do(
+							'build-hacker-news-content',
+							{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
+							async () => buildHackerNewsContent(await loadFull(), this.env, acquiredContent?.hackerNewsItem),
+						)
+						.catch((error) => {
+							console.error({
+								tag: 'HN',
+								msg: 'Optional Hacker News discussion annotation failed after retries',
+								resource_id: resourceId,
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return undefined;
+						})
 				: undefined;
 
 		const classificationResult = await step.do(
