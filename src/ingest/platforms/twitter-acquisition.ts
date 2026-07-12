@@ -485,6 +485,7 @@ async function fetchTwitterThreadContext(tweetId: string, apiKey: string): Promi
 		};
 		if (!Array.isArray(data.tweets)) throw new Error(`Twitter thread context ${tweetId} omitted tweets`);
 		tweets.push(...data.tweets);
+		if (typeof data.has_next_page !== 'boolean') throw new Error(`Twitter thread context ${tweetId} omitted has_next_page`);
 		if (!data.has_next_page) break;
 		if (page === 4) throw new Error(`Twitter thread context ${tweetId} exceeded 5 pages`);
 		const nextCursor = data.next_cursor?.trim();

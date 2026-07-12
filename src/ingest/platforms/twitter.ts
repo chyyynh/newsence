@@ -246,6 +246,7 @@ async function fetchTweetsForBatch(apiKey: string, userNames: string[], sinceTim
 			if (normalized) tweets.push(normalized);
 		}
 
+		if (typeof apiRes.has_next_page !== 'boolean') throw new Error('Twitter Advanced Search response omitted has_next_page');
 		if (!apiRes.has_next_page) break;
 		cursor = apiRes.next_cursor?.trim() ?? '';
 		if (!cursor) throw new Error('Twitter Advanced Search response omitted the next cursor');
