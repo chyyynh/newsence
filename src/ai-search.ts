@@ -14,9 +14,8 @@ const MAX_RESULTS = 50;
 type CorpusDocumentRow = {
 	id: string;
 	type: string;
-	url: string | null;
 	original_lang: string;
-	published_at: Date | string;
+	published_at: Date | string | null;
 	tags: string[] | null;
 	category: string | null;
 	source: string | null;
@@ -61,20 +60,25 @@ function markdownSection(label: string, value: string | null | undefined): strin
 	return value?.trim() ? `\n## ${label}\n\n${value.trim()}\n` : '';
 }
 
-function sourceDomain(url: string | null): string {
-	if (!url) return '';
-	try {
-		return new URL(url).hostname.replace(/^www\./, '');
-	} catch {
-		return '';
-	}
+function requiredDocumentText(value: string | null, field: string, resourceId: string): string {
+	const text = value?.trim();
+	if (!text) throw new Error(`AI Search document ${resourceId} is missing ${field}`);
+	return text;
+}
+
+function documentPublishedAt(row: CorpusDocumentRow): string {
+	if (!row.published_at) throw new Error(`AI Search document ${row.id} is missing published_at`);
+	const date = new Date(row.published_at);
+	if (Number.isNaN(date.getTime())) throw new Error(`AI Search document ${row.id} has invalid published_at`);
+	return date.toISOString();
 }
 
 function serializeDocument(row: CorpusDocumentRow): string {
-	const displaySource = [row.source?.trim(), sourceDomain(row.url)].filter(Boolean).join(' · ');
+	const title = requiredDocumentText(row.title, 'title', row.id);
+	const source = requiredDocumentText(row.source, 'source', row.id);
 	return [
-		`# ${row.title ?? row.url ?? 'Untitled resource'}`,
-		displaySource,
+		`# ${title}`,
+		source,
 		row.tags?.length ? `Tags: ${row.tags.join(', ')}` : '',
 		row.keywords?.length ? `Keywords: ${row.keywords.join(', ')}` : '',
 		markdownSection('Summary', row.summary),
@@ -90,12 +94,11 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 		sql`
 				SELECT r.id::text,
 				       r.type,
-				       r.url,
 				       r.original_lang,
-				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_at,
+				       r.published_date AS published_at,
 				       r.tags,
 				       r.category,
-				       COALESCE(r.platform_metadata->>'sourceName', r.type) AS source,
+				       NULLIF(r.platform_metadata->>'sourceName', '') AS source,
 				       rt.title,
 				       rt.summary,
 				       rt.content,
@@ -121,13 +124,15 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 		return 'deleted';
 	}
 	const startedAt = Date.now();
+	const publishedAt = documentPublishedAt(document);
+	const source = requiredDocumentText(document.source, 'source', document.id);
 	const result = await env.AI_SEARCH.get(INSTANCE_NAME).items.upload(itemKey(resourceId), serializeDocument(document), {
 		metadata: {
-			published_at: new Date(document.published_at).toISOString(),
+			published_at: publishedAt,
 			language: document.original_lang,
-			source: document.source ?? document.type,
+			source,
 			type: document.type,
-			category: document.category ?? '',
+			...(document.category ? { category: document.category } : {}),
 		},
 	});
 	console.info({
