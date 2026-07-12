@@ -92,25 +92,25 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 	}
 }
 
-async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<TranscriptSegment[]> {
-	const { getSubtitles } = await import('youtube-caption-extractor');
-	const items = await getSubtitles({ videoID: videoId, fetch: transcriptFetch });
+async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
+	const { YoutubeTranscript } = await import('youtube-transcript');
+	const items = await YoutubeTranscript.fetchTranscript(videoId, { fetch: transcriptFetch });
 
 	if (!items?.length) {
 		console.info({ tag: 'YOUTUBE', msg: 'Transcript unavailable; using video description', videoId });
 		return [];
 	}
 
-	const segments: TranscriptSegment[] = items.map((item: { start: string; dur: string; text: string }) => {
-		const startTime = toSeconds(item.start, 'start', videoId);
+	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => {
+		const startTime = toSeconds(item.offset, 'offset', videoId) / 1000;
 		return {
 			startTime,
-			endTime: startTime + toSeconds(item.dur, 'duration', videoId),
+			endTime: startTime + toSeconds(item.duration, 'duration', videoId) / 1000,
 			text: item.text,
 		};
 	});
 
-	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', provider: 'youtube-caption-extractor', count: segments.length });
+	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', provider: 'youtube-transcript', count: segments.length });
 	return segments;
 }
 
@@ -134,7 +134,7 @@ export async function scrapeYouTube(
 	const chapters = parseChaptersFromDescription(snippet.description);
 
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-	const transcript = await fetchTranscriptViaCaptionExtractor(videoId);
+	const transcript = await fetchTranscript(videoId);
 	const transcriptMarkdown = transcript
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)
