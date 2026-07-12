@@ -194,6 +194,54 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
 }
 
+async function retryExistingYouTubeVideos(
+	env: CoreEnv,
+	channelName: string,
+	records: Array<{ id: string; shouldRetryEnrichment: boolean }>,
+): Promise<number> {
+	let queued = 0;
+	for (const record of records) {
+		if (!record.shouldRetryEnrichment) continue;
+		try {
+			await enqueueProcessing(env, record.id);
+			queued++;
+		} catch (error) {
+			console.error({
+				tag: 'YOUTUBE-CRON',
+				msg: 'Failed to retry video workflow',
+				channel: channelName,
+				resourceId: record.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	return queued;
+}
+
+async function queueNewYouTubeVideos(
+	env: CoreEnv,
+	channel: { name: string },
+	videos: Array<{ videoId: string; url: string }>,
+): Promise<number> {
+	let queued = 0;
+	for (const video of videos) {
+		try {
+			await queueYouTubeVideo(env, channel, video);
+			queued++;
+		} catch (error) {
+			console.error({
+				tag: 'YOUTUBE-CRON',
+				msg: 'Failed to queue video',
+				channel: channel.name,
+				videoId: video.videoId,
+				url: video.url,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	return queued;
+}
+
 export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 	if (!env.YOUTUBE_API_KEY) throw new Error('YOUTUBE_API_KEY is not configured');
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
@@ -218,18 +266,11 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 		const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
 		const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 		const newVideos = videos.filter(({ url }) => !existingSet.has(url));
-		for (const existing of existingRecords) {
-			if (!existing.shouldRetryEnrichment) continue;
-			await enqueueProcessing(env, existing.id);
-			totalQueued++;
-		}
+		totalQueued += await retryExistingYouTubeVideos(env, channel.name, existingRecords);
 
 		if (!newVideos.length) console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
 
-		for (const video of newVideos) {
-			await queueYouTubeVideo(env, channel, video);
-			totalQueued++;
-		}
+		totalQueued += await queueNewYouTubeVideos(env, channel, newVideos);
 
 		await markSourceScraped(env, channel.id);
 	}

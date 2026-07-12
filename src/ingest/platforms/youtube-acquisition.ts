@@ -96,7 +96,10 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<Tran
 	const { getSubtitles } = await import('youtube-caption-extractor');
 	const items = await getSubtitles({ videoID: videoId, fetch: transcriptFetch });
 
-	if (!items?.length) throw new Error(`YouTube transcript is unavailable for ${videoId}`);
+	if (!items?.length) {
+		console.info({ tag: 'YOUTUBE', msg: 'Transcript unavailable; using video description', videoId });
+		return [];
+	}
 
 	const segments: TranscriptSegment[] = items.map((item: { start: string; dur: string; text: string }) => {
 		const startTime = toSeconds(item.start, 'start', videoId);
@@ -136,14 +139,14 @@ export async function scrapeYouTube(
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)
 		.join('\n');
-	if (!transcriptMarkdown) throw new Error(`YouTube transcript is empty for ${videoId}`);
+	const content = transcriptMarkdown || snippet.description.trim();
 
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
 		type: 'youtube',
 		title: snippet.title,
-		markdown: transcriptMarkdown,
+		markdown: content,
 		metadata: {
 			author: snippet.channelTitle,
 			language: snippet.defaultAudioLanguage ?? null,
