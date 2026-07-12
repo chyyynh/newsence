@@ -678,6 +678,9 @@ export async function reopenResourceForReprocessing(
 	resourceId: string,
 	update: { summary: string; content: string; platformMetadata: PlatformMetadata },
 ): Promise<boolean> {
+	if (!update.summary.trim() || !update.content.trim()) {
+		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
+	}
 	return withCoreTx(env, async (db) => {
 		const resourceResult = await db.execute(sql`
 			SELECT original_lang
@@ -705,8 +708,8 @@ export async function reopenResourceForReprocessing(
 		if (!original) throw new Error(`Failed to reopen resource ${resourceId}: original translation not found`);
 
 		const preserveOwnedTranslation = original.source === 'human';
-		const effectiveSummary = preserveOwnedTranslation || update.summary === '' ? original.summary : update.summary;
-		const effectiveContent = preserveOwnedTranslation || update.content === '' ? original.content : update.content;
+		const effectiveSummary = preserveOwnedTranslation ? original.summary : update.summary;
+		const effectiveContent = preserveOwnedTranslation ? original.content : update.content;
 		const sourceContentChanged = original.content !== effectiveContent;
 		if (original.summary === effectiveSummary && !sourceContentChanged) return false;
 
