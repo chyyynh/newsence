@@ -135,7 +135,7 @@ function normalizePaper(paper: S2Paper): PaperMetadata {
 		venue: paper.venue ?? undefined,
 		year: paper.year ?? undefined,
 		citedByCount: paper.citationCount ?? undefined,
-		referenceCount: paper.referenceCount ?? paper.references?.length ?? 0,
+		referenceCount: paper.referenceCount ?? undefined,
 		references: normalizeReferences(paper.references),
 	};
 }

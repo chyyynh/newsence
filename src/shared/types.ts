@@ -166,7 +166,7 @@ export interface PaperMetadata {
 	venue?: string;
 	year?: number;
 	citedByCount?: number;
-	referenceCount: number;
+	referenceCount?: number;
 	references: PaperReference[];
 }
 
