@@ -109,8 +109,8 @@ function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
 			}
 			if (m.video_info?.variants) {
 				const mp4 = m.video_info.variants
-					.filter((v) => v.content_type === 'video/mp4')
-					.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+					.filter((v): v is typeof v & { bitrate: number } => v.content_type === 'video/mp4' && Number.isFinite(v.bitrate))
+					.sort((a, b) => b.bitrate - a.bitrate)[0];
 				if (mp4) result.videoUrl = mp4.url;
 			}
 			return [result];
