@@ -13,13 +13,8 @@ interface YouTubeVideoItem {
 		channelId: string;
 		channelTitle: string;
 		defaultAudioLanguage?: string;
-		defaultLanguage?: string;
 		publishedAt: string;
 		thumbnails: {
-			default?: { url: string };
-			medium?: { url: string };
-			high?: { url: string };
-			standard?: { url: string };
 			maxres?: { url: string };
 		};
 		tags?: string[];
@@ -98,7 +93,7 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 	}
 }
 
-async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
+async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<TranscriptSegment[]> {
 	const { getSubtitles } = await import('youtube-caption-extractor');
 	const items = await getSubtitles({ videoID: videoId, fetch: transcriptFetch });
 
@@ -114,7 +109,7 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ se
 	});
 
 	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', provider: 'youtube-caption-extractor', count: segments.length });
-	return { segments, language: null };
+	return segments;
 }
 
 export async function scrapeYouTube(
@@ -132,18 +127,12 @@ export async function scrapeYouTube(
 	const snippet = video.snippet;
 	const stats = video.statistics;
 
-	const thumbnailUrl =
-		snippet.thumbnails.maxres?.url ||
-		snippet.thumbnails.standard?.url ||
-		snippet.thumbnails.high?.url ||
-		snippet.thumbnails.medium?.url ||
-		null;
+	const thumbnailUrl = snippet.thumbnails.maxres?.url ?? null;
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-	const transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
-	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
+	const transcript = await fetchTranscriptViaCaptionExtractor(videoId);
 	const transcriptMarkdown = transcript
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)
@@ -158,7 +147,7 @@ export async function scrapeYouTube(
 		markdown: transcriptMarkdown,
 		metadata: {
 			author: snippet.channelTitle,
-			language: transcriptLanguage ?? snippet.defaultAudioLanguage ?? snippet.defaultLanguage ?? null,
+			language: snippet.defaultAudioLanguage ?? null,
 			publishedDate: snippet.publishedAt,
 			siteName: 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
@@ -183,7 +172,7 @@ export async function scrapeYouTube(
 		youtubeTranscript: {
 			videoId: video.id,
 			segments: transcript,
-			language: transcriptLanguage,
+			language: snippet.defaultAudioLanguage ?? null,
 			chapters,
 			chaptersFromDescription: chapters.length > 0,
 		},
