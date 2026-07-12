@@ -156,13 +156,19 @@ const HN_DISCUSSION_HEADING = '## Hacker News community perspectives';
 const HN_DISCUSSION_SYSTEM =
 	'You are a professional tech news editor. Synthesize Hacker News comments into concise community perspectives. Use only the provided material. Output Markdown directly.';
 
-function buildDiscussionPrompt(title: string, articleContent: string, hnText: string, commentInput: string, commentCount: number): string {
+function buildDiscussionPrompt(
+	title: string,
+	articleContent: string,
+	hnText: string | null,
+	commentInput: string,
+	commentCount: number,
+): string {
+	const hnPostText = hnText ? htmlToText(hnText).slice(0, 1200) : '';
+	const hnPostSection = hnPostText ? `\nHN post text:\n${hnPostText}\n` : '';
 	return `Title: ${title}
 Linked article or document:
-${articleContent.slice(0, 8000) || 'N/A'}
-
-HN post text:
-${htmlToText(hnText).slice(0, 1200) || 'N/A'}
+${articleContent.slice(0, 8000)}
+${hnPostSection}
 
 HN comments (${commentCount} total):
 ${commentInput}
@@ -184,7 +190,7 @@ async function generateHnDiscussionDigest(
 	env: CoreEnv,
 	title: string,
 	articleContent: string,
-	hnText: string,
+	hnText: string | null,
 	comments: HnCollectedComment[],
 ): Promise<string | null> {
 	if (comments.length < 4) return null;
@@ -202,7 +208,7 @@ async function generateHnDiscussionDigest(
 }
 
 function withoutPreviousDiscussion(content: string): string {
-	return content.split(`\n\n---\n\n${HN_DISCUSSION_HEADING}`)[0]?.trim() ?? '';
+	return content.split(`\n\n---\n\n${HN_DISCUSSION_HEADING}`, 1)[0].trim();
 }
 
 export async function buildHackerNewsContent(
@@ -211,17 +217,18 @@ export async function buildHackerNewsContent(
 	acquiredItem?: HackerNewsItem,
 ): Promise<string> {
 	const metadata = platformMetadataFor(resource, 'hackernews');
-	const itemId = metadata?.data?.itemId || null;
+	const itemId = metadata?.data?.itemId;
 	let item = acquiredItem;
 	if (!item) {
 		if (!itemId) throw new Error(`Hacker News resource ${resource.id} has no item id`);
 		item = await fetchHnItem(itemId);
 	}
 
-	const articleContent = withoutPreviousDiscussion(resource.content ?? '');
+	if (!resource.content) throw new Error(`Hacker News resource ${resource.id} has no content to annotate`);
+	const articleContent = withoutPreviousDiscussion(resource.content);
 	if (!articleContent) throw new Error(`Hacker News resource ${resource.id} has no content to annotate`);
 	const comments = item.children?.length ? collectAllComments(item.children) : [];
-	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text || '', comments);
+	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text ?? null, comments);
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
 	const stats = [`${item.points ?? 0} points`, `${item.descendants ?? comments.length} comments`].join(' | ');
 	const links = [item.url ? `[Linked article](${item.url})` : null, `[View the full discussion](${discussionUrl})`]
