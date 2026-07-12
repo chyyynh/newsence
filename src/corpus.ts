@@ -166,8 +166,8 @@ export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], us
 	return withCoreDb(env, (db) => readItems(db, items, userId));
 }
 
-function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+function clampInt(value: number | undefined, min: number, max: number, defaultValue: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return defaultValue;
 	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
