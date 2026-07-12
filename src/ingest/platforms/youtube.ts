@@ -163,94 +163,72 @@ function parseFeedVideos(xml: string) {
 	});
 }
 
-async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video: { videoId: string; url: string }): Promise<boolean> {
-	try {
-		const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY);
-		const youtubeMetadata = scraped.platformMetadata.data;
-		const title = scraped.title || `YouTube video ${video.videoId}`;
+async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video: { videoId: string; url: string }): Promise<void> {
+	const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY);
+	const youtubeMetadata = scraped.platformMetadata.data;
+	const title = scraped.title?.trim();
+	if (!title) throw new Error(`YouTube video ${video.videoId} has no title`);
+	const publishedDate = scraped.metadata.publishedDate;
+	if (!publishedDate) throw new Error(`YouTube video ${video.videoId} has no published date`);
 
-		const resourceId = await withCoreDb(env, async (db) => {
-			const resourceId = await upsertPendingSourceResource(db, {
-				url: video.url,
-				title,
-				source: youtubeMetadata.channelName,
-				publishedDate: scraped.metadata.publishedDate ?? new Date().toISOString(),
-				summary: scraped.metadata.description ?? '',
-				type: 'youtube',
-				originalLang: scraped.metadata.language ?? undefined,
-				content: scraped.markdown,
-				platformMetadata: scraped.platformMetadata,
-				previewImageUrl: scraped.previewImageUrl,
-			});
-			await persistYouTubeWorkflowData(db, { transcript: scraped.youtubeTranscript });
-			return resourceId;
+	const resourceId = await withCoreDb(env, async (db) => {
+		const resourceId = await upsertPendingSourceResource(db, {
+			url: video.url,
+			title,
+			source: youtubeMetadata.channelName,
+			publishedDate,
+			summary: scraped.metadata.description ?? '',
+			type: 'youtube',
+			originalLang: scraped.metadata.language ?? undefined,
+			content: scraped.markdown,
+			platformMetadata: scraped.platformMetadata,
+			previewImageUrl: scraped.previewImageUrl,
 		});
-		await enqueueProcessing(env, resourceId);
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
-		return true;
-	} catch (err) {
-		console.warn({ tag: 'YOUTUBE-CRON', msg: 'Video process failed', videoId: video.videoId, error: String(err) });
-		return false;
-	}
+		await persistYouTubeWorkflowData(db, { transcript: scraped.youtubeTranscript });
+		return resourceId;
+	});
+	await enqueueProcessing(env, resourceId);
+	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
 }
 
 export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
-	if (!env.YOUTUBE_API_KEY) {
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'Skipped — YOUTUBE_API_KEY not configured' });
-		return;
-	}
+	if (!env.YOUTUBE_API_KEY) throw new Error('YOUTUBE_API_KEY is not configured');
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
 	const channels = await loadEnabledSources(env, 'youtube');
 
 	let totalQueued = 0;
 	for (const channel of channels) {
-		try {
-			const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': WEB_FETCH_USER_AGENT } });
-			if (!res.ok) {
-				await res.body?.cancel();
-				console.warn({ tag: 'YOUTUBE-CRON', msg: 'Feed fetch failed', channel: channel.name, status: res.status });
-				continue;
-			}
-
-			const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
-			if (videos.length === 0) {
-				console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-				await markSourceScraped(env, channel.id);
-				continue;
-			}
-
-			const videoUrls = videos.map(({ url }) => url);
-			const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
-			const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
-			const newVideos = videos.filter(({ url }) => !existingSet.has(url));
-			for (const existing of existingRecords) {
-				if (!existing.shouldRetryEnrichment) continue;
-				try {
-					await enqueueProcessing(env, existing.id);
-					totalQueued++;
-				} catch (err) {
-					console.warn({
-						tag: 'YOUTUBE-CRON',
-						msg: 'Existing resource retry enqueue failed',
-						channel: channel.name,
-						url: existing.url,
-						error: String(err),
-					});
-				}
-			}
-
-			if (!newVideos.length) {
-				console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
-			}
-
-			for (const video of newVideos) {
-				if (await queueYouTubeVideo(env, channel, video)) totalQueued++;
-			}
-
-			await markSourceScraped(env, channel.id);
-		} catch (err) {
-			console.error({ tag: 'YOUTUBE-CRON', msg: 'Channel failed', channel: channel.name, error: String(err) });
+		const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': WEB_FETCH_USER_AGENT } });
+		if (!res.ok) {
+			await res.body?.cancel();
+			throw new Error(`YouTube feed ${channel.name} failed with HTTP ${res.status}`);
 		}
+
+		const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
+		if (videos.length === 0) {
+			console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
+			await markSourceScraped(env, channel.id);
+			continue;
+		}
+
+		const videoUrls = videos.map(({ url }) => url);
+		const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
+		const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
+		const newVideos = videos.filter(({ url }) => !existingSet.has(url));
+		for (const existing of existingRecords) {
+			if (!existing.shouldRetryEnrichment) continue;
+			await enqueueProcessing(env, existing.id);
+			totalQueued++;
+		}
+
+		if (!newVideos.length) console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
+
+		for (const video of newVideos) {
+			await queueYouTubeVideo(env, channel, video);
+			totalQueued++;
+		}
+
+		await markSourceScraped(env, channel.id);
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
 }
