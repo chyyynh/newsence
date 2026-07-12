@@ -107,18 +107,13 @@ export interface RetweetedByData {
 }
 
 interface TwitterMetadata extends TwitterAuthorFields {
-	variant?: 'shared' | 'longform';
 	tweetId?: string;
-	threadTweetCount?: number;
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
-	retweetedBy?: RetweetedByData;
-	tweetText?: string;
 	externalUrl?: string;
 	externalOgImage?: string | null;
 	externalTitle?: string | null;
-	originalTweetUrl?: string;
 }
 
 interface YouTubeMetadata {

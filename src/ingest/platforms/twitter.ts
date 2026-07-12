@@ -14,7 +14,6 @@ async function enqueueTwitterResource(
 		title: string;
 		source: string;
 		publishedDate: Date;
-		summary: string | null;
 		originalLang?: string;
 		content: string | null;
 		platformMetadata: PlatformMetadata;
@@ -28,7 +27,7 @@ async function enqueueTwitterResource(
 			title: data.title,
 			source: data.source,
 			publishedDate: data.publishedDate,
-			summary: data.summary,
+			summary: null,
 			type: 'twitter',
 			originalLang: data.originalLang,
 			content: data.content,
@@ -91,7 +90,6 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 		title,
 		source,
 		publishedDate: requiredTweetDate(scraped.metadata.publishedDate, tweetId),
-		summary: resolved.kind === 'longform' ? scraped.metadata.description : null,
 		originalLang: scraped.metadata.language ?? undefined,
 		content: scraped.markdown,
 		platformMetadata: scraped.platformMetadata,
@@ -112,7 +110,6 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	if (existing) {
 		const existingId = existing.id;
 		const changed = await reopenResourceForReprocessing(env, existingId, {
-			summary: null,
 			content: combinedText,
 			platformMetadata,
 		});
@@ -131,7 +128,6 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 		title: buildTweetTitle(first),
 		source: first.author.name,
 		publishedDate: new Date(first.createdAt),
-		summary: null,
 		originalLang: first.lang,
 		content: combinedText,
 		platformMetadata,

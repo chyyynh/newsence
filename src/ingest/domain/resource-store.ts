@@ -704,7 +704,7 @@ export async function recordRssFeedProvenance(db: CoreDb, resourceIds: string[],
 export async function reopenResourceForReprocessing(
 	env: CoreEnv,
 	resourceId: string,
-	update: { summary: string | null; content: string; platformMetadata: PlatformMetadata },
+	update: { content: string; platformMetadata: PlatformMetadata },
 ): Promise<boolean> {
 	if (!update.content.trim()) {
 		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
@@ -736,10 +736,10 @@ export async function reopenResourceForReprocessing(
 		if (!original) throw new Error(`Failed to reopen resource ${resourceId}: original translation not found`);
 
 		const preserveOwnedTranslation = original.source === 'human';
-		const effectiveSummary = preserveOwnedTranslation ? original.summary : update.summary;
 		const effectiveContent = preserveOwnedTranslation ? original.content : update.content;
+		const sourceSummaryChanged = !preserveOwnedTranslation && original.summary !== null;
 		const sourceContentChanged = original.content !== effectiveContent;
-		if (original.summary === effectiveSummary && !sourceContentChanged) return false;
+		if (!sourceSummaryChanged && !sourceContentChanged) return false;
 
 		await db
 			.update(resources)
@@ -753,7 +753,7 @@ export async function reopenResourceForReprocessing(
 			!(await upsertResourceTranslation(db, {
 				resourceId,
 				lang: resource.original_lang,
-				summary: update.summary,
+				summary: null,
 				content: update.content,
 				keywords: [],
 				source: 'original',
