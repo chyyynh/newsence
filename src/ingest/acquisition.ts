@@ -34,7 +34,7 @@ async function sourceSnapshotHash(acquired: AcquiredContent): Promise<string> {
 		title: acquired.title,
 		markdown: acquired.markdown,
 		metadata: acquired.metadata,
-		platformData: acquired.platformMetadata?.data,
+		platformData: acquired.platformMetadata.data,
 	});
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -46,7 +46,7 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
 	return {
 		...sanitized,
 		platformMetadata: {
-			...(sanitized.platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null }),
+			...sanitized.platformMetadata,
 			sourceSnapshotHash: await sourceSnapshotHash(sanitized),
 		},
 	};
@@ -86,13 +86,17 @@ function isAcquiredContent(value: unknown): value is AcquiredContent {
 	const content = value as Record<string, unknown>;
 	if (!isContentResourceType(content.type) || !isNonEmptyString(content.title) || typeof content.markdown !== 'string') return false;
 	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
+	if (!content.platformMetadata || typeof content.platformMetadata !== 'object' || Array.isArray(content.platformMetadata)) return false;
 	const metadata = content.metadata as Record<string, unknown>;
+	const platformMetadata = content.platformMetadata as Record<string, unknown>;
 	return (
 		isNullableString(metadata.author) &&
 		isNullableString(metadata.language) &&
 		isNullableString(metadata.publishedDate) &&
 		isNonEmptyString(metadata.siteName) &&
-		isNullableString(metadata.description)
+		isNullableString(metadata.description) &&
+		isNonEmptyString(platformMetadata.fetchedAt) &&
+		Object.hasOwn(platformMetadata, 'data')
 	);
 }
 

@@ -70,7 +70,7 @@ export interface NormalizedContent<T extends ContentResourceType = ContentResour
 		siteName: string;
 		description: string | null;
 	};
-	platformMetadata?: PlatformMetadata<T>;
+	platformMetadata: PlatformMetadata<T>;
 	youtubeTranscript?: YoutubeTranscript;
 }
 
