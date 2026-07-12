@@ -299,23 +299,18 @@ export function assembleZhHantContentTranslation(original: string, translatedChu
 export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
-	try {
-		const resourcePrompt = buildResourceContextPrompt(resource);
-		const classification = await generateObject(env.AI, resourcePrompt, {
-			schema: ResourceClassificationSchema,
-			task: 'resource-classification',
-			gatewayId: env.AI_GATEWAY_NAME,
-			maxTokens: 500,
-			systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
-		});
-		return {
-			tags: classification.tags.slice(0, 5),
-			keywords: classification.keywords.slice(0, 8),
-			category: classification.category,
-			entities: classification.entities.slice(0, 10),
-		};
-	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Analysis failed', error: String(error) });
-		throw error;
-	}
+	const resourcePrompt = buildResourceContextPrompt(resource);
+	const classification = await generateObject(env.AI, resourcePrompt, {
+		schema: ResourceClassificationSchema,
+		task: 'resource-classification',
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 500,
+		systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
+	});
+	return {
+		tags: classification.tags.slice(0, 5),
+		keywords: classification.keywords.slice(0, 8),
+		category: classification.category,
+		entities: classification.entities.slice(0, 10),
+	};
 }
