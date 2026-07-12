@@ -53,10 +53,9 @@ function canonicalFeedItemUrl(item: FeedEntry): string | null {
 }
 
 function feedPublishedDate(value: string | undefined): Date {
-	if (!value) throw new Error('RSS item has no published date');
+	if (!value) return new Date();
 	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) throw new Error(`RSS item has invalid published date: ${value}`);
-	return date;
+	return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
 async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
@@ -101,16 +100,38 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	let retried = 0;
 	for (const existing of existingRecords) {
 		if (!existing.shouldRetryEnrichment) continue;
-		await enqueueProcessing(env, existing.id);
-		retried++;
+		try {
+			await enqueueProcessing(env, existing.id);
+			retried++;
+		} catch (error) {
+			console.error({
+				tag: 'RSS',
+				msg: 'Existing resource retry enqueue failed',
+				feed: feed.name,
+				url: existing.url,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, retried, totalCount: items.length });
 	let queued = 0;
 	for (let index = 0; index < newItems.length; index += ITEM_CONCURRENCY) {
 		const batch = newItems.slice(index, index + ITEM_CONCURRENCY);
-		await Promise.all(batch.map(({ item, url }) => enqueueFeedItem(env, feed, item, url)));
-		queued += batch.length;
+		const results = await Promise.allSettled(batch.map(({ item, url }) => enqueueFeedItem(env, feed, item, url)));
+		for (const [resultIndex, result] of results.entries()) {
+			if (result.status === 'fulfilled') {
+				queued++;
+				continue;
+			}
+			console.error({
+				tag: 'RSS',
+				msg: 'Item enqueue failed',
+				feed: feed.name,
+				url: batch[resultIndex]?.url,
+				error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+			});
+		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
 	await markSourceScraped(env, feed.id);
@@ -121,7 +142,17 @@ export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	const feeds = await loadEnabledSources(env, 'rss');
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);
-		await Promise.all(batch.map((feed) => processFeed(env, feed)));
+		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));
+		for (const [resultIndex, result] of results.entries()) {
+			if (result.status === 'rejected') {
+				console.error({
+					tag: 'RSS',
+					msg: 'Feed processing failed',
+					feed: batch[resultIndex]?.name,
+					error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+				});
+			}
+		}
 	}
 
 	console.info({ tag: 'RSS', msg: 'end' });
