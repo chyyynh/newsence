@@ -2,7 +2,6 @@ import { type ZodType, z } from 'zod';
 
 const CORE_TEXT_MODEL = 'google/gemini-3.5-flash';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
-const DEFAULT_AI_GATEWAY_ID = 'default';
 
 type GenerationAiBinding = Ai;
 type AiMessage = { role: 'system' | 'user'; content: string };
@@ -13,19 +12,21 @@ type GeminiTextResponse = { candidates?: Array<{ content?: { parts?: Array<{ tex
 type OpenAIChatResponse = { choices?: Array<{ message?: { content?: string } }> };
 
 interface GenerateTextOptions {
-	gatewayId?: string;
+	gatewayId: string;
 	maxTokens?: number;
 	temperature?: number;
 	systemPrompt?: string;
-	task?: string;
+	task: string;
 }
 
 interface GenerateObjectOptions<T> extends GenerateTextOptions {
 	schema: ZodType<T>;
 }
 
-export async function generateText(ai: GenerationAiBinding, prompt: string, options: GenerateTextOptions = {}): Promise<string> {
-	const { gatewayId: gatewayIdValue, systemPrompt, task } = options;
+export async function generateText(ai: GenerationAiBinding, prompt: string, options: GenerateTextOptions): Promise<string> {
+	const { systemPrompt, task } = options;
+	const gatewayId = options.gatewayId.trim();
+	if (!gatewayId) throw new Error('AI Gateway id is required');
 	const inputs = {
 		contents: [{ role: 'user', parts: [{ text: prompt }] }],
 		...(systemPrompt && { systemInstruction: { parts: [{ text: systemPrompt }] } }),
@@ -36,21 +37,24 @@ export async function generateText(ai: GenerationAiBinding, prompt: string, opti
 	};
 	const aiOptions = {
 		gateway: {
-			id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
+			id: gatewayId,
 			collectLog: true,
-			...(task && { metadata: { app: 'newsence', task } }),
+			metadata: { app: 'newsence', task },
 		},
 	};
 
 	const response = await (ai as GatewayAi).run<GeminiTextResponse>(CORE_TEXT_MODEL, inputs, aiOptions);
 	const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
-	if (!text?.trim()) throw new Error(`AI Gateway returned no text for ${task ?? 'text-generation'}`);
+	if (!text?.trim()) throw new Error(`AI Gateway returned no text for ${task}`);
 	return text.trim();
 }
 
 export async function generateObject<T>(ai: GenerationAiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T> {
-	const { gatewayId: gatewayIdValue, schema, systemPrompt, task } = options;
-	const schemaName = (task ?? 'structured-output').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'structured_output';
+	const { schema, systemPrompt, task } = options;
+	const gatewayId = options.gatewayId.trim();
+	if (!gatewayId) throw new Error('AI Gateway id is required');
+	const schemaName = task.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+	if (!schemaName) throw new Error(`AI task ${task} has no valid schema name`);
 	const messages: AiMessage[] = [
 		...(systemPrompt ? [{ role: 'system', content: systemPrompt } as const] : []),
 		{ role: 'user', content: prompt },
@@ -73,13 +77,13 @@ export async function generateObject<T>(ai: GenerationAiBinding, prompt: string,
 		},
 		{
 			gateway: {
-				id: gatewayIdValue?.trim() || DEFAULT_AI_GATEWAY_ID,
+				id: gatewayId,
 				collectLog: true,
-				...(task && { metadata: { app: 'newsence', task } }),
+				metadata: { app: 'newsence', task },
 			},
 		},
 	);
 	const text = response.choices?.[0]?.message?.content?.trim();
-	if (!text) throw new Error(`AI Gateway returned no structured output for ${task ?? 'structured-output'}`);
+	if (!text) throw new Error(`AI Gateway returned no structured output for ${task}`);
 	return schema.parse(JSON.parse(text));
 }
