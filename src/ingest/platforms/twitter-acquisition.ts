@@ -47,6 +47,13 @@ export interface Tweet {
 	retweetedBy?: RetweetedByData;
 }
 
+function requiredTweetAuthor(tweet: Tweet): NonNullable<Tweet['author']> {
+	if (!tweet.author?.userName.trim() || !tweet.author.name.trim()) {
+		throw new Error(`Tweet ${tweet.id ?? tweet.url} has no complete author`);
+	}
+	return tweet.author;
+}
+
 function isTwitterHost(hostname: string): boolean {
 	const lower = hostname.toLowerCase();
 	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
@@ -80,11 +87,12 @@ export function extractTweetId(url: string): string | null {
 }
 
 function extractTweetAuthor(tweet: Tweet): TwitterAuthorFields {
+	const author = requiredTweetAuthor(tweet);
 	return {
-		authorName: tweet.author?.name || '',
-		authorUserName: tweet.author?.userName || '',
-		authorProfilePicture: tweet.author?.profilePicture,
-		authorVerified: tweet.author?.isBlueVerified,
+		authorName: author.name,
+		authorUserName: author.userName,
+		authorProfilePicture: author.profilePicture,
+		authorVerified: author.isBlueVerified,
 	};
 }
 
@@ -137,9 +145,11 @@ function findLinkedContentUrl(urls: string[]): string | undefined {
 }
 
 export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
+	const author = requiredTweetAuthor(tweet);
+	const text = tweet.text.trim();
+	if (!text) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
 	const suffix = tweet.text.length > maxLength ? '...' : '';
-	const author = tweet.author?.userName ? `@${tweet.author.userName}` : 'Twitter';
-	return `${author}: ${tweet.text.substring(0, maxLength)}${suffix}`;
+	return `@${author.userName}: ${text.substring(0, maxLength)}${suffix}`;
 }
 
 export function buildThreadResourceParts(tweets: Tweet[]): {
@@ -308,17 +318,16 @@ function buildExternalLinkTweet(
 	externalUrl: string,
 	media: TwitterMedia[],
 ): NormalizedContent<'twitter'> & { platformMetadata: PlatformMetadata<'twitter'> } {
-	const userName = tweet.author?.userName.trim();
-	if (!userName) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no author username`);
+	const author = requiredTweetAuthor(tweet);
 	const tweetText = tweet.text.trim();
 	if (!tweetText) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
-	const title = `@${userName}: ${tweetText}`.slice(0, 120);
+	const title = `@${author.userName}: ${tweetText}`.slice(0, 120);
 	return {
 		type: 'twitter',
 		title,
 		markdown: tweetText,
 		metadata: {
-			author: userName,
+			author: author.userName,
 			language: tweet.lang ?? null,
 			publishedDate: tweet.createdAt,
 			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
