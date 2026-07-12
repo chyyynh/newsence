@@ -663,14 +663,14 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 	const result = await db.execute(sql`
 		SELECT
 			r.id::text AS id,
-			COALESCE(r.normalized_url, r.url) AS url,
+			r.normalized_url AS url,
 			r.type AS type,
 			(
 				r.enrichment_status = 'pending'
 				OR (r.enrichment_status = 'failed' AND r.updated_at < NOW() - INTERVAL '30 minutes')
 			) AS "shouldRetryEnrichment"
 		FROM resources r
-			WHERE (r.normalized_url = ANY(${urlArray}) OR r.url = ANY(${urlArray}))
+			WHERE r.normalized_url = ANY(${urlArray})
 			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 	`);
 	return result.rows as unknown as ExistingResourceRecord[];
