@@ -253,7 +253,7 @@ interface TwitterLongform {
 	title?: string;
 	preview_text?: string;
 	cover_media_img_url?: string;
-	contents?: Array<{ text?: string; content?: string }>;
+	contents?: Array<{ text?: string }>;
 	author?: {
 		userName: string;
 		name: string;
@@ -284,9 +284,15 @@ async function scrapeTwitterLongform(
 	if (data.status !== 'success' || !data.article) throw new Error(`Twitter longform response was invalid for ${tweetId}`);
 
 	const longform = data.article;
-	const contentText = (longform.contents ?? [])
-		.map((c) => c.text ?? c.content ?? '')
-		.filter(Boolean)
+	if (!Array.isArray(longform.contents) || longform.contents.length === 0) {
+		throw new Error(`Twitter longform ${tweetId} requires contents`);
+	}
+	const contentText = longform.contents
+		.map((content, index) => {
+			const text = content.text?.trim();
+			if (!text) throw new Error(`Twitter longform ${tweetId} has invalid content ${index}`);
+			return text;
+		})
 		.join('\n\n');
 	if (!longform.title?.trim() || !contentText) throw new Error(`Twitter longform ${tweetId} requires both title and content`);
 	const title = longform.title.trim();
