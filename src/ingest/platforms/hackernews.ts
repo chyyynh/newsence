@@ -43,18 +43,18 @@ export function hackerNewsDiscussionUrl(value: string): string | null {
 }
 
 function hnItemTypeForMetadata(type: HackerNewsItem['type'] | undefined): HackerNewsMetadata['itemType'] {
-	if (type === 'ask' || type === 'show' || type === 'job') return type;
-	return 'story';
+	if (type === 'story' || type === 'ask' || type === 'show' || type === 'job') return type;
+	return undefined;
 }
 
 function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
-		author: item.author ?? '',
-		points: item.points ?? 0,
-		commentCount: item.descendants ?? 0,
+		author: item.author,
+		points: item.points,
+		commentCount: item.descendants,
 		itemType: hnItemTypeForMetadata(item.type),
-		storyUrl: item.url ?? null,
+		storyUrl: item.url,
 	};
 }
 
