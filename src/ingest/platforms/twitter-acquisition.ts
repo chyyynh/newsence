@@ -226,7 +226,7 @@ function buildTweetPlatformMetadata(
 
 function buildTwitterLongformPlatformMetadata(
 	tweetId: string,
-	author: Tweet['author'] | undefined,
+	author: NonNullable<TwitterLongform['author']>,
 	coverImageUrl?: string,
 ): PlatformMetadata<'twitter'> {
 	return {
@@ -234,10 +234,10 @@ function buildTwitterLongformPlatformMetadata(
 		data: {
 			variant: 'longform',
 			tweetId,
-			authorName: author?.name ?? '',
-			authorUserName: author?.userName ?? '',
-			authorProfilePicture: author?.profilePicture,
-			authorVerified: author?.isBlueVerified,
+			authorName: author.name,
+			authorUserName: author.userName,
+			authorProfilePicture: author.profilePicture,
+			authorVerified: author.isBlueVerified,
 			media: coverImageUrl ? [{ url: coverImageUrl, type: 'photo' }] : [],
 		},
 	};
@@ -284,14 +284,17 @@ async function scrapeTwitterLongform(
 		.join('\n\n');
 	if (!longform.title?.trim() || !contentText) throw new Error(`Twitter longform ${tweetId} requires both title and content`);
 	const title = longform.title.trim();
+	const author = longform.author;
+	if (!author?.name.trim() || !author.userName.trim()) throw new Error(`Twitter longform ${tweetId} requires a complete author`);
+	const publishedDate = longform.createdAt?.trim();
+	if (!publishedDate || Number.isNaN(new Date(publishedDate).getTime())) {
+		throw new Error(`Twitter longform ${tweetId} requires a valid published date`);
+	}
 
 	let md = `# ${title}\n\n`;
-	if (longform.author) {
-		md += `**Author:** ${longform.author.name || longform.author.userName}`;
-		if (longform.author.isBlueVerified) md += ' ✓';
-		if (longform.author.userName) md += ` (@${longform.author.userName})`;
-		md += '\n\n';
-	}
+	md += `**Author:** ${author.name}`;
+	if (author.isBlueVerified) md += ' ✓';
+	md += ` (@${author.userName})\n\n`;
 	if (longform.cover_media_img_url) md += `![Cover](${longform.cover_media_img_url})\n\n`;
 	md += `${contentText}\n\n---\n\n**Engagement:**\n`;
 	if (longform.viewCount !== undefined) md += `- Views: ${longform.viewCount.toLocaleString()}\n`;
@@ -305,14 +308,14 @@ async function scrapeTwitterLongform(
 		title,
 		markdown: md,
 		metadata: {
-			author: longform.author?.userName || null,
+			author: author.userName,
 			language: language ?? null,
-			publishedDate: longform.createdAt || null,
+			publishedDate,
 			siteName: 'Twitter',
 			description: longform.preview_text?.trim() || null,
 		},
 		previewImageUrl: longform.cover_media_img_url ?? null,
-		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, longform.author, longform.cover_media_img_url),
+		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, author, longform.cover_media_img_url),
 	};
 }
 
