@@ -681,13 +681,19 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 	return result.rows as unknown as ExistingResourceRecord[];
 }
 
-export async function recordRssFeedProvenance(db: CoreDb, resourceId: string, sourceName: string, data: RssMetadata): Promise<void> {
+export async function recordRssFeedProvenance(db: CoreDb, resourceIds: string[], sourceName: string, data: RssMetadata): Promise<void> {
+	if (!resourceIds.length) return;
+	const idArray = sql`ARRAY[${sql.join(
+		resourceIds.map((id) => sql`${id}`),
+		sql`, `,
+	)}]::uuid[]`;
 	const dataJson = JSON.stringify(data);
 	await db.execute(sql`
 		UPDATE resources
 		SET platform_metadata = COALESCE(platform_metadata, '{}'::jsonb)
 			|| jsonb_build_object('sourceName', ${sourceName}, 'data', ${dataJson}::jsonb)
-		WHERE id = ${resourceId}::uuid
+		WHERE id = ANY(${idArray})
+		  AND type = 'rss'
 		  AND (
 			platform_metadata->>'sourceName' IS DISTINCT FROM ${sourceName}
 			OR platform_metadata->'data' IS DISTINCT FROM ${dataJson}::jsonb

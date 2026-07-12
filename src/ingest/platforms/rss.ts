@@ -52,12 +52,15 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	const urls = itemUrls.map(({ url }) => url);
 	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, urls));
 	if (mode === 'feed') {
-		await withCoreDb(env, async (db) => {
-			for (const existing of existingRecords) {
-				if (!itemUrlsByUrl.has(normalizeUrl(existing.url))) continue;
-				await recordRssFeedProvenance(db, existing.id, feed.name, { sourceId: feed.id });
-			}
-		});
+		const rssResourceIds = existingRecords.filter((resource) => resource.type === 'rss').map((resource) => resource.id);
+		await withCoreDb(env, (db) => recordRssFeedProvenance(db, rssResourceIds, feed.name, { sourceId: feed.id })).catch((error) =>
+			console.error({
+				tag: 'RSS',
+				msg: 'Feed provenance backfill failed',
+				feed: feed.name,
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		);
 	}
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
