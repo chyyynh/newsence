@@ -691,7 +691,7 @@ export async function recordRssFeedProvenance(db: CoreDb, resourceIds: string[],
 	await db.execute(sql`
 		UPDATE resources
 		SET platform_metadata = COALESCE(platform_metadata, '{}'::jsonb)
-			|| jsonb_build_object('sourceName', ${sourceName}, 'data', ${dataJson}::jsonb)
+			|| jsonb_build_object('sourceName', ${sourceName}::text, 'data', ${dataJson}::jsonb)
 		WHERE id = ANY(${idArray})
 		  AND type = 'rss'
 		  AND (
