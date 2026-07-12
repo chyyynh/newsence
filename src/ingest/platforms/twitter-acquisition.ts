@@ -390,9 +390,10 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		return { kind: 'share' as const, scraped, canonicalUrl: tweet.url, eventText: tweetText };
 	}
 
+	const author = requiredTweetAuthor(tweet);
 	const title = buildTweetTitle(tweet, 80);
 
-	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: tweet.author?.userName });
+	console.info({ tag: 'TWITTER', msg: 'Tweet fetched', userName: author.userName });
 
 	return {
 		kind: 'tweet' as const,
@@ -401,7 +402,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 			title,
 			markdown: tweet.text,
 			metadata: {
-				author: tweet.author?.userName || null,
+				author: author.userName,
 				language: tweet.lang ?? null,
 				publishedDate: tweet.createdAt,
 				siteName: 'Twitter',
@@ -425,7 +426,8 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
 	const data = JSON.parse(await readTextWithLimit(response)) as { tweets?: Tweet[]; status: string; msg?: string };
-	const tweet = data.tweets?.[0];
+	if (!Array.isArray(data.tweets)) throw new Error(`Twitter API response omitted tweets (status=${data.status})`);
+	const tweet = data.tweets[0];
 	if (!tweet) throw new Error(`Twitter API: Tweet not found (status=${data.status})`);
 	const resolved = await resolveTweetContent(tweet, apiKey);
 	if (resolved.kind !== 'tweet') return resolved.scraped;
@@ -451,7 +453,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 		title: buildTweetTitle(parts.first, 80),
 		markdown: parts.combinedText,
 		metadata: {
-			author: parts.first.author?.userName || null,
+			author: parts.first.author.userName,
 			language: parts.first.lang ?? null,
 			publishedDate: parts.first.createdAt,
 			siteName: 'Twitter',
