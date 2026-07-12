@@ -270,49 +270,21 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
-		const translationSourceHash = await step
-			.do(
-				'load-resource-translation-source-hash',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => getPersistedResourceTranslationHash(this.env, persistedResourceId),
-			)
-			.catch((error) => {
-				console.error({
-					tag: 'RESOURCE_TRANSLATION',
-					msg: 'Failed to inspect persisted resource for translation',
-					resource_id: persistedResourceId,
-					error: String(error),
-				});
-				return null;
-			});
+		const translationSourceHash = await step.do(
+			'load-resource-translation-source-hash',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => getPersistedResourceTranslationHash(this.env, persistedResourceId),
+		);
 		if (translationSourceHash) {
-			await step
-				.do(
-					'enqueue-resource-translation',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueResourceTranslation(this.env, persistedResourceId, translationSourceHash),
-				)
-				.catch((error) =>
-					console.error({
-						tag: 'WORKFLOW',
-						msg: 'Failed to enqueue resource translation',
-						resource_id: persistedResourceId,
-						error: String(error),
-					}),
-				);
-		}
-		await step
-			.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-				syncCorpusItem(this.env, persistedResourceId),
-			)
-			.catch((error) =>
-				console.error({
-					tag: 'AI_SEARCH',
-					msg: 'Failed to sync enriched resource; reindex can repair it',
-					resource_id: persistedResourceId,
-					error: String(error),
-				}),
+			await step.do(
+				'enqueue-resource-translation',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => enqueueResourceTranslation(this.env, persistedResourceId, translationSourceHash),
 			);
+		}
+		await step.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+			syncCorpusItem(this.env, persistedResourceId),
+		);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return {
