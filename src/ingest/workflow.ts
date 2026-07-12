@@ -208,15 +208,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			return extractedPdfText ? { ...base, content: extractedPdfText } : base;
 		};
 
-		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource).catch((error) => {
-			console.error({
-				tag: 'ACADEMIC_ENRICHMENT',
-				msg: 'Optional Semantic Scholar enrichment failed',
-				resource_id: resourceId,
-				error: String(error),
-			});
-			return null;
-		});
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const previewImageUrl = acquiredContent?.previewImageUrl?.trim() || null;
 
 		const hackerNewsContent =

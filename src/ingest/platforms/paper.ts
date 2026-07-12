@@ -106,10 +106,6 @@ async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
 	const status = res.status;
 	await res.body?.cancel();
 	if (status === 404) return null;
-	if (status >= 400 && status < 500 && status !== 429) {
-		console.warn({ tag: 'S2', msg: 'request rejected', status, path: path.slice(0, 80) });
-		return null;
-	}
 	throw new Error(`Semantic Scholar request failed with HTTP ${status}`);
 }
 
