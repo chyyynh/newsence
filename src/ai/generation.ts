@@ -44,9 +44,17 @@ export async function generateText(ai: GenerationAiBinding, prompt: string, opti
 	};
 
 	const response = await (ai as GatewayAi).run<GeminiTextResponse>(CORE_TEXT_MODEL, inputs, aiOptions);
-	const text = response.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('');
-	if (!text?.trim()) throw new Error(`AI Gateway returned no text for ${task}`);
-	return text.trim();
+	const parts = response.candidates?.[0]?.content?.parts;
+	if (!parts?.length) throw new Error(`AI Gateway returned no parts for ${task}`);
+	const text = parts
+		.map((part, index) => {
+			if (typeof part.text !== 'string') throw new Error(`AI Gateway returned non-text part ${index} for ${task}`);
+			return part.text;
+		})
+		.join('')
+		.trim();
+	if (!text) throw new Error(`AI Gateway returned no text for ${task}`);
+	return text;
 }
 
 export async function generateObject<T>(ai: GenerationAiBinding, prompt: string, options: GenerateObjectOptions<T>): Promise<T> {
