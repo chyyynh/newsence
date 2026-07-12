@@ -133,13 +133,14 @@ function stripTweetUrls(text: string): string {
 function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 	const q = tweet.quoted_tweet;
 	if (!q) return undefined;
-	const author = requiredTweetAuthor(q);
-	const text = stripTweetUrls(q.text);
-	if (!text) throw new Error(`Quoted tweet ${q.id ?? q.url} has no text`);
+	const authorName = q.author?.name?.trim();
+	const authorUserName = q.author?.userName?.trim();
+	const text = typeof q.text === 'string' ? stripTweetUrls(q.text) : '';
+	if (!authorName || !authorUserName || !text) return undefined;
 	return {
-		authorName: author.name,
-		authorUserName: author.userName,
-		authorProfilePicture: author.profilePicture,
+		authorName,
+		authorUserName,
+		authorProfilePicture: q.author?.profilePicture,
 		text,
 	};
 }

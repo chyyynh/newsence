@@ -315,35 +315,98 @@ function batchTwitterIdentities(identities: MonitoredTwitterIdentity[]): Monitor
 	return batches;
 }
 
-async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<number> {
+function monitoredAuthorUserName(tweet: Tweet): string | null {
+	const userName = tweet.retweetedBy?.authorUserName || tweet.author?.userName;
+	return userName?.trim().toLowerCase() || null;
+}
+
+type TweetSaveResult = {
+	processed: number;
+	failedUserNames: Set<string>;
+	hasUnattributedFailure: boolean;
+};
+
+async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<TweetSaveResult> {
 	let processed = 0;
+	const failedUserNames = new Set<string>();
+	let hasUnattributedFailure = false;
 	for (const group of groupTweetsIntoThreads(tweets)) {
 		const first = group[0];
 		if (!first) continue;
-		const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
-		if (saved) processed++;
+		try {
+			const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
+			if (saved) processed++;
+		} catch (error) {
+			const userName = monitoredAuthorUserName(first);
+			if (userName) failedUserNames.add(userName);
+			else hasUnattributedFailure = true;
+			console.error({
+				tag: 'TWITTER',
+				msg: 'Tweet group save failed',
+				url: first.url,
+				groupSize: group.length,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
-	return processed;
+	return { processed, failedUserNames, hasUnattributedFailure };
 }
 
 async function processTwitterBatches(
 	env: CoreEnv,
 	batches: MonitoredTwitterIdentity[][],
 	runStartedAt: Date,
-): Promise<{ processed: number; advancedSources: number }> {
+): Promise<{ processed: number; advancedSources: number; incompleteBatches: number; systemFailures: unknown[] }> {
 	let processed = 0;
 	let advancedSources = 0;
+	let incompleteBatches = 0;
+	const systemFailures: unknown[] = [];
 	for (const batch of batches) {
 		const userNames = batch.map((identity) => identity.twitterUserName);
 		const batchSources = batch.flatMap((identity) => identity.sources);
-		const sinceTime = calculateMonitoringSinceTime(batchSources);
-		const tweets = await fetchTweetsForBatch(env.KAITO_API_KEY, userNames, sinceTime);
-		processed += await saveTweetGroups(env, tweets);
-		const sourceIds = batchSources.map((source) => source.id);
-		await markSourcesScraped(env, sourceIds, runStartedAt);
-		advancedSources += sourceIds.length;
+		let tweets: Tweet[];
+		try {
+			const sinceTime = calculateMonitoringSinceTime(batchSources);
+			tweets = await fetchTweetsForBatch(env.KAITO_API_KEY, userNames, sinceTime);
+		} catch (error) {
+			incompleteBatches++;
+			systemFailures.push(error);
+			console.error({
+				tag: 'TWITTER',
+				msg: 'Twitter batch fetch failed',
+				userNames,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			continue;
+		}
+
+		const saved = await saveTweetGroups(env, tweets);
+		processed += saved.processed;
+		if (saved.hasUnattributedFailure) {
+			incompleteBatches++;
+			continue;
+		}
+
+		const completedSourceIds = batch
+			.filter((identity) => !saved.failedUserNames.has(identity.twitterUserName))
+			.flatMap((identity) => identity.sources.map((source) => source.id));
+		if (saved.failedUserNames.size) incompleteBatches++;
+		if (!completedSourceIds.length) continue;
+		try {
+			await markSourcesScraped(env, completedSourceIds, runStartedAt);
+			advancedSources += completedSourceIds.length;
+		} catch (error) {
+			if (!saved.failedUserNames.size) incompleteBatches++;
+			systemFailures.push(error);
+			console.error({
+				tag: 'TWITTER',
+				msg: 'Twitter source watermark update failed',
+				userNames,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
-	return { processed, advancedSources };
+	return { processed, advancedSources, incompleteBatches, systemFailures };
 }
 
 export async function handleTwitterCron(env: CoreEnv): Promise<void> {
@@ -365,7 +428,7 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 
 	console.info({ tag: 'TWITTER', msg: 'Fetching via Advanced Search', users: identities.length, batches: batches.length });
 
-	const { processed, advancedSources } = await processTwitterBatches(env, batches, runStartedAt);
+	const { processed, advancedSources, incompleteBatches, systemFailures } = await processTwitterBatches(env, batches, runStartedAt);
 
 	console.info({
 		tag: 'TWITTER',
@@ -374,6 +437,10 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 		users: users.length,
 		validUsers: monitoredUsers.length,
 		advancedSources,
+		incompleteBatches,
 		batches: batches.length,
 	});
+	if (systemFailures.length) {
+		throw new AggregateError(systemFailures, `${systemFailures.length} Twitter monitor batches failed`);
+	}
 }
