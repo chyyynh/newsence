@@ -5,6 +5,14 @@ const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
 
+interface YouTubeThumbnails {
+	default?: { url: string };
+	medium?: { url: string };
+	high?: { url: string };
+	standard?: { url: string };
+	maxres?: { url: string };
+}
+
 interface YouTubeVideoItem {
 	id: string;
 	snippet: {
@@ -14,13 +22,7 @@ interface YouTubeVideoItem {
 		channelTitle: string;
 		defaultAudioLanguage?: string;
 		publishedAt: string;
-		thumbnails: {
-			default?: { url: string };
-			medium?: { url: string };
-			high?: { url: string };
-			standard?: { url: string };
-			maxres?: { url: string };
-		};
+		thumbnails: YouTubeThumbnails;
 		tags?: string[];
 	};
 	contentDetails: {
@@ -37,6 +39,17 @@ type YouTubeVideosResponse = {
 	items?: YouTubeVideoItem[];
 	error?: { message: string };
 };
+
+type YouTubeChannelsResponse = {
+	items?: Array<{ snippet: { thumbnails: YouTubeThumbnails } }>;
+	error?: { message: string };
+};
+
+function bestThumbnailUrl(thumbnails: YouTubeThumbnails): string | null {
+	return (
+		thumbnails.maxres?.url ?? thumbnails.standard?.url ?? thumbnails.high?.url ?? thumbnails.medium?.url ?? thumbnails.default?.url ?? null
+	);
+}
 
 function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 	const chapterRegex = /(?:^|\n)(\d{1,2}:)?(\d{1,2}):(\d{2})\s+(.+?)(?=\n|$)/g;
@@ -96,6 +109,31 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 	}
 }
 
+async function fetchYouTubeChannelAvatar(channelId: string, youtubeApiKey: string): Promise<string | null> {
+	const url = new URL('https://www.googleapis.com/youtube/v3/channels');
+	url.searchParams.set('id', channelId);
+	url.searchParams.set('part', 'snippet');
+	url.searchParams.set('key', youtubeApiKey);
+
+	try {
+		const response = await fetchWithTimeout(url.toString(), undefined, YOUTUBE_API_TIMEOUT_MS);
+		if (!response.ok) {
+			await response.body?.cancel();
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+
+		const channelData = JSON.parse(await readTextWithLimit(response, YOUTUBE_API_MAX_BYTES)) as YouTubeChannelsResponse;
+		if (channelData.error) throw new Error(channelData.error.message);
+		if (!channelData.items?.length) throw new Error('Channel not found');
+		return bestThumbnailUrl(channelData.items[0].snippet.thumbnails);
+	} catch (error) {
+		const message = String(error);
+		throw new Error(
+			`YouTube channel API request failed for ${channelId}: ${youtubeApiKey ? message.replaceAll(youtubeApiKey, '[redacted]') : message}`,
+		);
+	}
+}
+
 async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
 	const { YoutubeTranscript } = await import('youtube-transcript');
 	let items: Array<{ offset: number; duration: number; text: string }>;
@@ -144,13 +182,8 @@ export async function scrapeYouTube(
 	const snippet = video.snippet;
 	const stats = video.statistics;
 
-	const thumbnailUrl =
-		snippet.thumbnails.maxres?.url ??
-		snippet.thumbnails.standard?.url ??
-		snippet.thumbnails.high?.url ??
-		snippet.thumbnails.medium?.url ??
-		snippet.thumbnails.default?.url ??
-		null;
+	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
+	const channelAvatar = await fetchYouTubeChannelAvatar(snippet.channelId, youtubeApiKey);
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
@@ -182,6 +215,7 @@ export async function scrapeYouTube(
 				videoId: video.id,
 				channelName: snippet.channelTitle,
 				channelId: snippet.channelId,
+				...(channelAvatar ? { channelAvatar } : {}),
 				duration: video.contentDetails.duration,
 				...(thumbnailUrl ? { thumbnailUrl } : {}),
 				viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,
