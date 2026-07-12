@@ -56,19 +56,23 @@ function urlHost(url: string): string {
 	return new URL(url).hostname.replace(/^www\./, '');
 }
 
-function fileNameFromUrl(url: string, fallback: string): string {
+function fileNameFromUrl(url: string): string {
 	const encodedName = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '';
+	if (!encodedName) throw new Error(`URL has no file name: ${url}`);
 	let name = encodedName;
 	try {
 		name = decodeURIComponent(encodedName);
 	} catch {
 		// Keep the encoded path segment when the source URL has malformed escapes.
 	}
-	return name || fallback;
+	if (!name) throw new Error(`URL has no valid file name: ${url}`);
+	return name;
 }
 
 function titleFromFileName(fileName: string): string {
-	return fileName.replace(/\.[a-z0-9]+$/i, '').trim() || fileName;
+	const title = fileName.replace(/\.[a-z0-9]+$/i, '').trim();
+	if (!title) throw new Error(`File name has no title: ${fileName}`);
+	return title;
 }
 
 export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
@@ -82,7 +86,7 @@ function stripLeadingFrontmatter(markdown: string): string {
 async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
 	const result = await env.AI.toMarkdown(
 		{
-			name: fileNameFromUrl(url, `${urlHost(url)}.html`),
+			name: `${urlHost(url)}.html`,
 			blob: new Blob([html], { type: 'text/html' }),
 		},
 		{
@@ -95,7 +99,7 @@ async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promis
 
 async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string): Promise<AcquiredWebContent> {
 	const parsed = await parsePdfBytes(bytes);
-	const title = titleFromFileName(fileName) || 'PDF document';
+	const title = titleFromFileName(fileName);
 	return {
 		type: 'pdf',
 		title,
@@ -118,7 +122,7 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 async function acquirePdfResponse(url: string, response: Response): Promise<AcquiredWebContent> {
 	const finalUrl = response.url || url;
 	const bytes = await readBytesWithLimit(response, GENERIC_PDF_MAX_BYTES);
-	return acquirePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
+	return acquirePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl));
 }
 
 async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Promise<AcquiredWebContent> {
