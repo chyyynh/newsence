@@ -12,11 +12,11 @@ const MIN_ARTICLE_CONTENT_CHARS = 180;
 
 type ExtractedHtmlArticle = {
 	html: string;
-	title: string | null;
+	title: string;
 	author: string | null;
 	language: string | null;
 	publishedDate: string | null;
-	siteName: string | null;
+	siteName: string;
 	description: string | null;
 	previewImageUrl: string | null;
 };
@@ -31,14 +31,18 @@ async function extractHtmlArticle(html: string, url: string): Promise<ExtractedH
 		descriptionLengthThreshold: 0,
 	});
 	if (!article?.content?.trim()) return null;
+	const title = article.title?.trim();
+	if (!title) throw new Error(`Extracted article has no title: ${url}`);
+	const siteName = article.source?.trim();
+	if (!siteName) throw new Error(`Extracted article has no source: ${url}`);
 
 	return {
 		html: article.content.trim(),
-		title: optionalText(article.title),
+		title,
 		author: optionalText(article.author),
 		language: null,
 		publishedDate: optionalText(article.published),
-		siteName: optionalText(article.source),
+		siteName,
 		description: optionalText(article.description),
 		previewImageUrl: optionalText(article.image),
 	};
@@ -69,10 +73,6 @@ function titleFromFileName(fileName: string): string {
 
 export function pdfExtractionMetadata(pdf: PdfTextArtifact): PdfExtractionMetadata {
 	return { status: pdf.status, parser: 'liteparse', chars: pdf.chars, pages: pdf.pages };
-}
-
-function titleFromMarkdown(markdown: string): string | null {
-	return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || null;
 }
 
 function stripLeadingFrontmatter(markdown: string): string {
@@ -121,7 +121,7 @@ async function acquirePdfResponse(url: string, response: Response): Promise<Acqu
 	return acquirePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl, 'document.pdf'));
 }
 
-async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, fileName: string): Promise<AcquiredWebContent> {
+async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Promise<AcquiredWebContent> {
 	const article = await extractHtmlArticle(html, url);
 	if (!article) throw new Error(`No readable article content found: ${url}`);
 
@@ -130,16 +130,15 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, fileN
 	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
-	const title = article.title ?? titleFromMarkdown(markdown) ?? titleFromFileName(fileName);
 	return {
 		type: 'web',
-		title,
+		title: article.title,
 		markdown: content,
 		metadata: {
 			author: article.author,
 			language: article.language,
 			publishedDate: article.publishedDate,
-			siteName: article.siteName ?? urlHost(url),
+			siteName: article.siteName,
 			description: article.description,
 		},
 		platformMetadata: { fetchedAt: new Date().toISOString(), data: null },
@@ -181,5 +180,5 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 
 	const finalUrl = response.url || url;
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-	return acquireHtmlArticle(env, html, finalUrl, fileNameFromUrl(finalUrl, `${urlHost(finalUrl)}.html`));
+	return acquireHtmlArticle(env, html, finalUrl);
 }
