@@ -8,6 +8,7 @@ export type MonitoredSource = {
 	name: string;
 	handle: string;
 	scrapedAt: Date | null;
+	createdAt: Date;
 };
 
 export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
@@ -18,6 +19,7 @@ export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform)
 				name: sources.name,
 				handle: sources.handle,
 				scrapedAt: sources.scrapedAt,
+				createdAt: sources.createdAt,
 			})
 			.from(sources)
 			.where(and(eq(sources.enabled, true), eq(sources.platform, platform))),

@@ -150,7 +150,6 @@ const TWITTER_ADVANCED_SEARCH_API = 'https://api.twitterapi.io/twitter/tweet/adv
 const TWITTER_BATCH_SIZE = 20;
 const TWITTER_USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const TWITTER_NON_PROFILE_PATHS = new Set(['home', 'i', 'intent', 'search', 'share']);
-const TWITTER_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const TWITTER_WATERMARK_OVERLAP_MS = 60 * 60 * 1000;
 
 function normalizeRetweet(tweet: Tweet): Tweet | null {
@@ -202,14 +201,16 @@ function normalizeTwitterUserName(input: string | null | undefined): string | nu
 }
 
 /** Oldest effective watermark in one API batch, minus a one-hour overlap. */
-function calculateMonitoringSinceTime(users: Array<{ scrapedAt?: Date | string | null }>): number {
-	const fallback = Date.now() - TWITTER_INITIAL_LOOKBACK_MS;
+function calculateMonitoringSinceTime(users: Array<{ scrapedAt?: Date | string | null; createdAt: Date | string }>): number {
 	let oldest = Number.POSITIVE_INFINITY;
 	for (const user of users) {
-		const timestamp = user.scrapedAt ? new Date(user.scrapedAt).getTime() : Number.NaN;
-		oldest = Math.min(oldest, Number.isFinite(timestamp) ? timestamp : fallback);
+		const watermark = user.scrapedAt === null || user.scrapedAt === undefined ? user.createdAt : user.scrapedAt;
+		const timestamp = new Date(watermark).getTime();
+		if (!Number.isFinite(timestamp)) throw new Error('Twitter source has an invalid monitoring watermark');
+		oldest = Math.min(oldest, timestamp);
 	}
-	return Math.floor(((Number.isFinite(oldest) ? oldest : fallback) - TWITTER_WATERMARK_OVERLAP_MS) / 1000);
+	if (!Number.isFinite(oldest)) throw new Error('Cannot calculate a Twitter watermark for an empty batch');
+	return Math.floor((oldest - TWITTER_WATERMARK_OVERLAP_MS) / 1000);
 }
 
 /** Fetch all tweets matching `(from:u1 OR from:u2 …) since_time:<unix>`, paginating through cursors. */
