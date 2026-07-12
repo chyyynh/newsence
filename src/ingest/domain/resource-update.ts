@@ -12,7 +12,7 @@ export type ResourceUpdate = {
 	keywords: string[];
 	entities: ProcessorResult['updateData']['entities'];
 	og_image_url: string | null;
-	platform_metadata: PlatformMetadata | undefined;
+	platform_metadata: PlatformMetadata;
 };
 
 type ResourceMetadataPatch = Record<string, unknown>;
@@ -60,39 +60,38 @@ type BuildResourceUpdateInput = {
 
 export function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput): ResourceUpdate {
 	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
+	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
 	const updateData: ProcessorResult['updateData'] = processorResult?.updateData ?? {};
 	const metadataPatch: ResourceMetadataPatch = {};
 	if (extraction) metadataPatch.extraction = extraction;
 	let platformMetadata = resource.platform_metadata;
 	if (paperEnrichment) {
-		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
 		platformMetadata = {
-			...base,
-			enrichments: { ...(base.enrichments || {}), academic: paperEnrichment },
+			...platformMetadata,
+			enrichments: { ...(platformMetadata.enrichments || {}), academic: paperEnrichment },
 		};
 	}
 	if (processorResult?.enrichments && Object.keys(processorResult.enrichments).length) {
-		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
 		platformMetadata = {
-			...base,
-			enrichments: { ...(base.enrichments || {}), ...processorResult.enrichments, processedAt: new Date().toISOString() },
+			...platformMetadata,
+			enrichments: {
+				...(platformMetadata.enrichments || {}),
+				...processorResult.enrichments,
+				processedAt: new Date().toISOString(),
+			},
 		};
 	}
 	if (processorResult?.classificationCategory) {
-		const base = platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null };
 		platformMetadata = {
-			...base,
+			...platformMetadata,
 			classification: {
-				...(base.classification ?? {}),
+				...(platformMetadata.classification ?? {}),
 				category: processorResult.classificationCategory,
 				classifiedAt: new Date().toISOString(),
 			},
 		};
 	}
-	platformMetadata = platformMetadataWithSourceName(
-		mergePlatformMetadata(platformMetadata, Object.keys(metadataPatch).length ? metadataPatch : undefined),
-		resource.source,
-	);
+	platformMetadata = platformMetadataWithSourceName({ ...platformMetadata, ...metadataPatch }, resource.source);
 
 	return {
 		type: resource.type,
@@ -107,11 +106,8 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 	};
 }
 
-function platformMetadataWithSourceName(
-	platformMetadata: PlatformMetadata | undefined,
-	source: string | null | undefined,
-): PlatformMetadata | undefined {
+function platformMetadataWithSourceName(platformMetadata: PlatformMetadata, source: string | null | undefined): PlatformMetadata {
 	const sourceName = source?.trim();
 	if (!sourceName) return platformMetadata;
-	return platformMetadata ? { ...platformMetadata, sourceName } : { fetchedAt: new Date().toISOString(), data: null, sourceName };
+	return { ...platformMetadata, sourceName };
 }
