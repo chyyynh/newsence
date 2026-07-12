@@ -36,7 +36,7 @@ function resourceTypeAfterAcquisition(currentType: ContentResourceType, acquired
 }
 
 type BuildResourceUpdateInput = {
-	processorResult?: ProcessorResult;
+	processorResult: ProcessorResult;
 	extraction?: PdfExtractionMetadata;
 	paperEnrichment?: PaperMetadata | null;
 	previewImageUrl: string | null;
@@ -45,7 +45,7 @@ type BuildResourceUpdateInput = {
 export function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput): ResourceUpdate {
 	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
 	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
-	const updateData: ProcessorResult['updateData'] = processorResult?.updateData ?? {};
+	const updateData = processorResult.updateData;
 	const metadataPatch: ResourceMetadataPatch = {};
 	if (extraction) metadataPatch.extraction = extraction;
 	let platformMetadata = resource.platform_metadata;
@@ -55,7 +55,7 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 			enrichments: { ...(platformMetadata.enrichments || {}), academic: paperEnrichment },
 		};
 	}
-	if (processorResult?.enrichments && Object.keys(processorResult.enrichments).length) {
+	if (processorResult.enrichments && Object.keys(processorResult.enrichments).length) {
 		platformMetadata = {
 			...platformMetadata,
 			enrichments: {
@@ -65,7 +65,7 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 			},
 		};
 	}
-	if (processorResult?.classificationCategory) {
+	if (processorResult.classificationCategory) {
 		platformMetadata = {
 			...platformMetadata,
 			classification: {
@@ -90,8 +90,8 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 	};
 }
 
-function platformMetadataWithSourceName(platformMetadata: PlatformMetadata, source: string | null | undefined): PlatformMetadata {
-	const sourceName = source?.trim();
-	if (!sourceName) return platformMetadata;
+function platformMetadataWithSourceName(platformMetadata: PlatformMetadata, source: string): PlatformMetadata {
+	const sourceName = source.trim();
+	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
 	return { ...platformMetadata, sourceName };
 }
