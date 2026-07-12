@@ -1,16 +1,24 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import type { ResourceForProcessing } from '@core-shared/types';
+import { platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
+import { loadRssSourcePolicy } from '@ingest/domain/source-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
-import { type AcquiredContent, PDF_MIME, readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
+import {
+	type AcquiredContent,
+	PDF_MIME,
+	readAcquiredContentArtifact,
+	scrapeRssFeedItemArtifact,
+	scrapeSavedUrlArtifact,
+} from './acquisition';
 import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { applyAcquiredContent } from './domain/resource-update';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
+import type { RssFeedAcquisitionInput } from './platforms/rss-feed';
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import { markResourceEnrichmentFailed, persistProcessedResource, persistUnchangedResourceResync } from './resource-persistence';
 
@@ -58,6 +66,23 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	return readAcquiredContentArtifact(artifact);
 }
 
+function rssSourceId(resource: ResourceForProcessing): string | null {
+	const data = platformMetadataFor(resource, 'rss')?.data;
+	if (!data) return null;
+	const sourceId = data.sourceId?.trim();
+	if (!sourceId) throw new Error(`RSS resource ${resource.id} has invalid source provenance`);
+	return sourceId;
+}
+
+async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
+	const artifact = await step.do(
+		'acquire-rss-feed-content',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => scrapeRssFeedItemArtifact(input, env),
+	);
+	return readAcquiredContentArtifact(artifact);
+}
+
 async function acquireResourceForOperation(
 	env: CoreEnv,
 	step: WorkflowStep,
@@ -65,6 +90,23 @@ async function acquireResourceForOperation(
 	operation: WorkflowOperation,
 ): Promise<AcquiredContent | undefined> {
 	if (!shouldAcquireContent(resource, operation === 'resync')) return undefined;
+	const sourceId = rssSourceId(resource);
+	if (sourceId) {
+		const source = await step.do(
+			'load-rss-source-policy',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => loadRssSourcePolicy(env, sourceId),
+		);
+		if (source.contentMode === 'feed') {
+			if (!resource.url) throw new Error(`RSS resource ${resource.id} has no article URL`);
+			return stageRssFeedAcquisition(env, step, {
+				sourceId: source.id,
+				feedUrl: source.handle,
+				articleUrl: resource.url,
+				sourceName: source.name,
+			});
+		}
+	}
 	return stageSavedUrlAcquisition(env, step, resource);
 }
 

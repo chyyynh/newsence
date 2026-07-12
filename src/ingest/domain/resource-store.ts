@@ -13,7 +13,7 @@ import {
 	type ResourceScope,
 	type ResourceTranslationSource,
 } from '@core-shared/resource-types';
-import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
+import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap, RssMetadata } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { textArraySql } from '@db/sql';
@@ -679,6 +679,20 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 	`);
 	return result.rows as unknown as ExistingResourceRecord[];
+}
+
+export async function recordRssFeedProvenance(db: CoreDb, resourceId: string, sourceName: string, data: RssMetadata): Promise<void> {
+	const dataJson = JSON.stringify(data);
+	await db.execute(sql`
+		UPDATE resources
+		SET platform_metadata = COALESCE(platform_metadata, '{}'::jsonb)
+			|| jsonb_build_object('sourceName', ${sourceName}, 'data', ${dataJson}::jsonb)
+		WHERE id = ${resourceId}::uuid
+		  AND (
+			platform_metadata->>'sourceName' IS DISTINCT FROM ${sourceName}
+			OR platform_metadata->'data' IS DISTINCT FROM ${dataJson}::jsonb
+		  )
+	`);
 }
 
 export async function reopenResourceForReprocessing(

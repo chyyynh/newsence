@@ -185,9 +185,13 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
+export interface RssMetadata {
+	sourceId: string;
+}
+
 export interface PlatformMetadataDataByResourceType {
 	web: null;
-	rss: null;
+	rss: RssMetadata | null;
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;

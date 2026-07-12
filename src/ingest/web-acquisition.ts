@@ -10,6 +10,7 @@ const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
 
+// Direct saved LessWrong URLs still use web acquisition. RSS sources in feed mode never reach this transformation.
 addTransformations({
 	patterns: [/^https:\/\/(?:www\.)?lesswrong\.com\/posts\//],
 	pre(document) {

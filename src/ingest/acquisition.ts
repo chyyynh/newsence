@@ -3,6 +3,7 @@ import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/type
 import { extractYouTubeId, normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
+import { acquireRssFeedItem, type RssFeedAcquisitionInput } from './platforms/rss-feed';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 import { acquireWebResource, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
@@ -63,6 +64,14 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<Acquire
 
 export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
 	const acquired = await scrapeSavedUrl(url, env);
+	return acquiredContentArtifact(acquired);
+}
+
+export async function scrapeRssFeedItemArtifact(input: RssFeedAcquisitionInput, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
+	return acquiredContentArtifact(await sanitizeAcquiredContent(await acquireRssFeedItem(env, input)));
+}
+
+function acquiredContentArtifact(acquired: AcquiredContent): ReadableStream<Uint8Array> {
 	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
 	return new Blob([bytes], { type: 'application/json' }).stream();
 }
