@@ -1,7 +1,6 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 
-const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
@@ -103,7 +102,7 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ se
 	const { getSubtitles } = await import('youtube-caption-extractor');
 	const items = await getSubtitles({ videoID: videoId, fetch: transcriptFetch });
 
-	if (!items?.length) return EMPTY_TRANSCRIPT;
+	if (!items?.length) throw new Error(`YouTube transcript is unavailable for ${videoId}`);
 
 	const segments: TranscriptSegment[] = items.map((item: { start: string; dur: string; text: string }) => {
 		const startTime = toSeconds(item.start);
@@ -149,14 +148,14 @@ export async function scrapeYouTube(
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)
 		.join('\n');
-	const content = transcriptMarkdown || snippet.description.trim();
+	if (!transcriptMarkdown) throw new Error(`YouTube transcript is empty for ${videoId}`);
 
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
 		type: 'youtube',
 		title: snippet.title,
-		markdown: content,
+		markdown: transcriptMarkdown,
 		metadata: {
 			author: snippet.channelTitle,
 			language: transcriptLanguage ?? snippet.defaultAudioLanguage ?? snippet.defaultLanguage ?? null,
