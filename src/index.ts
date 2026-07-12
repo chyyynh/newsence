@@ -23,9 +23,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
 
 		if (event.cron === '*/5 * * * *') {
-			this.ctx.waitUntil(
-				handleRSSCron(this.env).catch((error) => console.error({ tag: 'CORE', msg: 'RSS monitor failed', error: String(error) })),
-			);
+			this.ctx.waitUntil(handleRSSCron(this.env));
 		} else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
 		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
 	}
