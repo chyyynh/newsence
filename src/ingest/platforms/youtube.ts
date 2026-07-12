@@ -151,10 +151,12 @@ async function prepareYouTubeHighlightsFromTranscript(
 }
 
 function parseFeedVideos(xml: string) {
-	const entries = (extractFromXml(xml, {
+	const feed = extractFromXml(xml, {
 		descriptionMaxLen: 0,
 		getExtraEntryFields: (entry) => ({ videoId: entry['yt:videoId'] }),
-	}).entries ?? []) as Array<FeedEntry & { videoId?: unknown }>;
+	});
+	if (!Array.isArray(feed.entries)) throw new Error('YouTube feed parser returned no entries');
+	const entries = feed.entries as Array<FeedEntry & { videoId?: unknown }>;
 
 	return entries.flatMap((entry) => {
 		if (typeof entry.videoId !== 'string' || !entry.videoId.trim()) throw new Error('YouTube feed entry is missing videoId');

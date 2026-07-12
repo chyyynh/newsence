@@ -26,9 +26,10 @@ async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[]> {
 		const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
 		const body = await readTextWithLimit(response, MAX_FEED_BYTES);
 		const options = { descriptionMaxLen: 0 };
-		const feed =
+		const parsedFeed =
 			contentType.includes('json') || body.trimStart().startsWith('{') ? extractFromJson(body, options) : extractFromXml(body, options);
-		return (feed.entries ?? []).slice(0, 30) as FeedEntry[];
+		if (!Array.isArray(parsedFeed.entries)) throw new Error(`Feed parser returned no entries for ${feed.handle}`);
+		return parsedFeed.entries.slice(0, 30) as FeedEntry[];
 	}
 
 	const status = response.status;
