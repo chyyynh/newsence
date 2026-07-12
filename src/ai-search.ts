@@ -98,7 +98,7 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 				       r.published_date AS published_at,
 				       r.tags,
 				       r.category,
-				       NULLIF(r.platform_metadata->>'sourceName', '') AS source,
+				       COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 				       rt.title,
 				       rt.summary,
 				       rt.content,

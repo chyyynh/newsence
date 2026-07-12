@@ -308,7 +308,7 @@ function resourceSearchSelect(): SQL {
 		rt.title AS title,
 		r.url,
 		${recencySql()} AS published_date,
-		NULLIF(r.platform_metadata->>'sourceName', '') AS source,
+		COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
