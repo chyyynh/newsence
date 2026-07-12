@@ -130,7 +130,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	await enqueueTwitterResource(env, {
 		url: firstUrl,
 		title: buildTweetTitle(first),
-		source: first.author?.name || 'Twitter',
+		source: first.author.name,
 		publishedDate: new Date(first.createdAt),
 		summary: combinedText,
 		originalLang: first.lang,

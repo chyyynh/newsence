@@ -47,6 +47,8 @@ export interface Tweet {
 	retweetedBy?: RetweetedByData;
 }
 
+type AuthoredTweet = Tweet & { author: NonNullable<Tweet['author']> };
+
 function requiredTweetAuthor(tweet: Tweet): NonNullable<Tweet['author']> {
 	if (!tweet.author?.userName.trim() || !tweet.author.name.trim()) {
 		throw new Error(`Tweet ${tweet.id ?? tweet.url} has no complete author`);
@@ -153,13 +155,14 @@ export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
 }
 
 export function buildThreadResourceParts(tweets: Tweet[]): {
-	first: Tweet;
+	first: AuthoredTweet;
 	combinedText: string;
 	platformMetadata: PlatformMetadata<'twitter'>;
 } {
-	const sorted = [...tweets].sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime());
-	const first = sorted[0];
-	if (!first) throw new Error('Cannot build twitter thread resource from empty tweets');
+	const sorted = [...tweets].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+	const firstTweet = sorted[0];
+	if (!firstTweet) throw new Error('Cannot build twitter thread resource from empty tweets');
+	const first: AuthoredTweet = { ...firstTweet, author: requiredTweetAuthor(firstTweet) };
 
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
