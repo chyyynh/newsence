@@ -123,32 +123,16 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			return await this.runResource(resourceId, step, operation);
 		} catch (error) {
 			if (operation === 'resync') throw error;
-			await step
-				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-					markResourceEnrichmentFailed(this.env, resourceId),
-				)
-				.catch((markError) =>
-					console.error({
-						tag: 'WORKFLOW',
-						msg: 'Failed to mark resource enrichment as failed',
-						resource_id: resourceId,
-						error: String(markError),
-					}),
-				);
-			await step
-				.do(
-					'remove-failed-resource-from-search-index',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => deleteCorpusItem(this.env, resourceId),
-				)
-				.catch((indexError) =>
-					console.error({
-						tag: 'AI_SEARCH',
-						msg: 'Failed to remove failed resource from search index',
-						resource_id: resourceId,
-						error: String(indexError),
-					}),
-				);
+			await step.do(
+				'mark-resource-failed',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => markResourceEnrichmentFailed(this.env, resourceId),
+			);
+			await step.do(
+				'remove-failed-resource-from-search-index',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => deleteCorpusItem(this.env, resourceId),
+			);
 			throw error;
 		}
 	}
