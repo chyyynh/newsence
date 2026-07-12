@@ -1,14 +1,14 @@
+import type { SourcePlatform } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { sources } from '@db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
-import type { SourcePlatform } from '../../resources/types';
 
 export type MonitoredSource = {
 	id: string;
 	name: string;
 	handle: string;
-	siteUrl: string | null;
 	scrapedAt: Date | null;
+	createdAt: Date;
 };
 
 export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
@@ -18,8 +18,8 @@ export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform)
 				id: sources.id,
 				name: sources.name,
 				handle: sources.handle,
-				siteUrl: sources.siteUrl,
 				scrapedAt: sources.scrapedAt,
+				createdAt: sources.createdAt,
 			})
 			.from(sources)
 			.where(and(eq(sources.enabled, true), eq(sources.platform, platform))),

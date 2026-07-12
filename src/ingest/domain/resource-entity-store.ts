@@ -1,14 +1,14 @@
+import type { ContentResourceType, ResourceTranslationSource } from '@core-shared/resource-types';
 import type { CoreDb } from '@db/client';
 import { entities, entityTranslations, resourceEntities } from '@db/schema';
 import { canonicalizeEntityName, normalizeResourceEntitiesForStorage, type ResourceEntityInput } from '@entities/normalize';
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
-import type { ResourceTranslationSource, ResourceType } from '../../resources/types';
 
 export async function syncResourceEntities(
 	db: CoreDb,
 	resourceId: string,
 	inputEntities: ResourceEntityInput[],
-	resourceType: ResourceType,
+	resourceType: ContentResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<void> {
@@ -39,7 +39,7 @@ export async function syncResourceEntities(
 async function upsertEntityIds(
 	db: CoreDb,
 	inputEntities: ResourceEntityInput[],
-	resourceType: ResourceType,
+	resourceType: ContentResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): Promise<{ normalizedEntities: ResourceEntityInput[]; entityIds: string[] }> {
@@ -86,7 +86,7 @@ async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity:
 				set: {
 					name: sql`CASE
 						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.name}
-						ELSE COALESCE(NULLIF(excluded.name, ''), ${entityTranslations.name})
+						ELSE excluded.name
 					END`,
 					source: sql`CASE
 						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.source}

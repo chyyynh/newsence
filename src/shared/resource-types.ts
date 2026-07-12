@@ -1,26 +1,16 @@
-export const RESOURCE_TYPES = ['web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf', 'paper', 'image', 'file'] as const;
+export {
+	CONTENT_RESOURCE_TYPES,
+	type ContentResourceType,
+	isContentResourceType,
+} from '@resource-types';
 
-export type ResourceType = (typeof RESOURCE_TYPES)[number];
+import type { ContentResourceType } from '@resource-types';
 
-export const RESOURCE_ENRICHMENT_TYPES = [
-	'web',
-	'rss',
-	'twitter',
-	'youtube',
-	'hackernews',
-	'pdf',
-	'paper',
-] as const satisfies readonly ResourceType[];
+export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const satisfies readonly ContentResourceType[];
 
-export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const satisfies readonly ResourceType[];
-
-export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies readonly ResourceType[];
+export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies readonly ContentResourceType[];
 
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
-
-export function isResourceType(value: unknown): value is ResourceType {
-	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
-}
 
 export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 
@@ -64,15 +54,3 @@ export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];
 export const RESOURCE_TRANSLATION_SOURCES = ['original', 'machine', 'human'] as const;
 
 export type ResourceTranslationSource = (typeof RESOURCE_TRANSLATION_SOURCES)[number];
-
-export const RESOURCE_LOCALIZATION_STATUSES = [
-	'not_required',
-	'blocked_on_content',
-	'pending',
-	'queued',
-	'running',
-	'complete',
-	'failed',
-] as const;
-
-export type ResourceLocalizationStatus = (typeof RESOURCE_LOCALIZATION_STATUSES)[number];

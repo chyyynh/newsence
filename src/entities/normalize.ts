@@ -4,8 +4,8 @@
 // storing and under WHAT canonical key. Consumed by the ingest
 // pipeline (persistence + prompt exclusion lists).
 
+import type { ContentResourceType } from '@core-shared/resource-types';
 import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
-import type { ResourceType } from '../resources/types';
 
 export type ResourceEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedResourceEntity = { name: string; name_cn: string; type: EntityType };
@@ -65,10 +65,10 @@ function normalizeResourceEntity(entity: ResourceEntityInput): NormalizedResourc
 	const name = entity.name.trim();
 	const nameCn = entity.name_cn.trim();
 	const type = normalizeEntityType(entity.type);
-	if (!type) return null;
+	if (!name || !type) return null;
 	return {
 		name,
-		name_cn: nameCn || name,
+		name_cn: nameCn,
 		type,
 	};
 }
@@ -115,7 +115,7 @@ function hostFromSource(value: string): string | null {
 	}
 }
 
-function platformMetadataSourceAliases(resourceType: ResourceType, metadata: unknown): string[] {
+function platformMetadataSourceAliases(resourceType: ContentResourceType, metadata: unknown): string[] {
 	const envelope = recordValue(metadata);
 	const data = recordValue(envelope?.data);
 	if (!data) return [];
@@ -140,12 +140,16 @@ function platformMetadataSourceAliases(resourceType: ResourceType, metadata: unk
 	return aliases;
 }
 
-function excludedEntityCanonicalNames(resourceType: ResourceType, source?: string | null, platformMetadata?: unknown): Set<string> {
+function excludedEntityCanonicalNames(resourceType: ContentResourceType, source?: string | null, platformMetadata?: unknown): Set<string> {
 	const names = entityExtractionExclusionNames(resourceType, source, platformMetadata);
 	return new Set(names.map(canonicalizeEntityName).filter(Boolean));
 }
 
-export function entityExtractionExclusionNames(resourceType: ResourceType, source?: string | null, platformMetadata?: unknown): string[] {
+export function entityExtractionExclusionNames(
+	resourceType: ContentResourceType,
+	source?: string | null,
+	platformMetadata?: unknown,
+): string[] {
 	const seen = new Set<string>();
 	const names: string[] = [];
 	for (const name of [...sourceNameAliases(source), ...platformMetadataSourceAliases(resourceType, platformMetadata)]) {
@@ -160,7 +164,7 @@ export function entityExtractionExclusionNames(resourceType: ResourceType, sourc
 
 export function normalizeResourceEntitiesForStorage(
 	entities: ResourceEntityInput[],
-	resourceType: ResourceType,
+	resourceType: ContentResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): NormalizedResourceEntity[] {
@@ -179,7 +183,7 @@ export function normalizeResourceEntitiesForStorage(
 
 export function normalizeResourceEntityUpdatePayload(
 	updatePayload: { entities?: unknown },
-	resourceType: ResourceType,
+	resourceType: ContentResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): NormalizedResourceEntity[] | null {

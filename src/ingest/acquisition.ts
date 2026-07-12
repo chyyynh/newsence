@@ -1,37 +1,18 @@
+import { isContentResourceType } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
-import { extractYouTubeId, normalizeUrl } from '@core-shared/web';
-import { isResourceType } from '../resources/types';
+import { extractYouTubeId, normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
-import { extractHackerNewsId, scrapeHackerNews } from './platforms/hackernews';
+import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
-import {
-	type BlobAcquisitionInput,
-	EMPTY_OG_IMAGE_PATCH,
-	fetchOgImage,
-	type OgImagePatch,
-	PDF_MIME,
-	pdfExtractionMetadata,
-	scrapeGenericUrl,
-	scrapeBlob as scrapeWebBlob,
-	type WebAcquisitionOptions,
-} from './platforms/web';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
+import { acquireWebResource, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
 
-export { EMPTY_OG_IMAGE_PATCH, fetchOgImage, PDF_MIME, pdfExtractionMetadata };
-export type { BlobAcquisitionInput };
+export { PDF_MIME, pdfExtractionMetadata };
 export type { PdfExtractionMetadata } from '@core-shared/types';
-export type { OgImagePatch };
-export type AcquisitionOptions = WebAcquisitionOptions;
-
-export function acquisitionHttpStatus(error: unknown): number | undefined {
-	const message = error instanceof Error ? error.message : String(error);
-	const status = Number.parseInt(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1] ?? '', 10);
-	return Number.isInteger(status) ? status : undefined;
-}
 
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
-	ogImage?: OgImagePatch;
+	hackerNewsItem?: HackerNewsItem;
 };
 
 export function validateAcquisitionUrl(url: string): string {
@@ -47,6 +28,7 @@ async function sourceSnapshotHash(acquired: AcquiredContent): Promise<string> {
 		title: acquired.title,
 		markdown: acquired.markdown,
 		metadata: acquired.metadata,
+		platformData: acquired.platformMetadata.data,
 	});
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -58,13 +40,13 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
 	return {
 		...sanitized,
 		platformMetadata: {
-			...(sanitized.platformMetadata ?? { fetchedAt: new Date().toISOString(), data: null }),
+			...sanitized.platformMetadata,
 			sourceSnapshotHash: await sourceSnapshotHash(sanitized),
 		},
 	};
 }
 
-export async function scrapeSavedUrl(url: string, env: CoreEnv, options: AcquisitionOptions = {}): Promise<AcquiredContent> {
+export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 
 	const videoId = extractYouTubeId(validatedUrl);
@@ -74,27 +56,13 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv, options: Acquisi
 	if (tweetId) return sanitizeAcquiredContent(await scrapeTweet(tweetId, env.KAITO_API_KEY));
 
 	const hackerNewsId = extractHackerNewsId(validatedUrl);
-	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId));
+	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId, env));
 
-	return sanitizeAcquiredContent(await scrapeGenericUrl(validatedUrl, env, options));
+	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env));
 }
 
-export async function scrapeBlob(input: BlobAcquisitionInput, env: CoreEnv): Promise<AcquiredContent> {
-	return sanitizeAcquiredContent(await scrapeWebBlob(input, env));
-}
-
-export async function scrapeSavedUrlArtifact(
-	url: string,
-	env: CoreEnv,
-	options: AcquisitionOptions = {},
-): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(url, env, options);
-	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
-	return new Blob([bytes], { type: 'application/json' }).stream();
-}
-
-export async function scrapeBlobArtifact(input: BlobAcquisitionInput, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeBlob(input, env);
+export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(url, env);
 	const bytes = new TextEncoder().encode(JSON.stringify(acquired));
 	return new Blob([bytes], { type: 'application/json' }).stream();
 }
@@ -103,18 +71,26 @@ function isNullableString(value: unknown): value is string | null {
 	return value === null || typeof value === 'string';
 }
 
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === 'string' && !!value.trim();
+}
+
 function isAcquiredContent(value: unknown): value is AcquiredContent {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const content = value as Record<string, unknown>;
-	if (!isResourceType(content.type) || !isNullableString(content.title) || typeof content.markdown !== 'string') return false;
+	if (!isContentResourceType(content.type) || !isNonEmptyString(content.title) || typeof content.markdown !== 'string') return false;
 	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
+	if (!content.platformMetadata || typeof content.platformMetadata !== 'object' || Array.isArray(content.platformMetadata)) return false;
 	const metadata = content.metadata as Record<string, unknown>;
+	const platformMetadata = content.platformMetadata as Record<string, unknown>;
 	return (
 		isNullableString(metadata.author) &&
 		isNullableString(metadata.language) &&
 		isNullableString(metadata.publishedDate) &&
-		isNullableString(metadata.siteName) &&
-		isNullableString(metadata.description)
+		isNonEmptyString(metadata.siteName) &&
+		isNullableString(metadata.description) &&
+		isNonEmptyString(platformMetadata.fetchedAt) &&
+		Object.hasOwn(platformMetadata, 'data')
 	);
 }
 

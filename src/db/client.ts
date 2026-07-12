@@ -5,55 +5,53 @@ import * as schema from './schema';
 export type CoreDb = NodePgDatabase<typeof schema>;
 
 type CoreDbOperation<T> = (db: CoreDb, client: Client) => Promise<T>;
+type CoreDbOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 export async function withCoreDb<T>(env: CoreEnv, operation: CoreDbOperation<T>): Promise<T> {
-	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await client.connect();
-		return await operation(createCoreDb(client), client);
-	} finally {
-		await closeCoreDbClient(client);
-	}
+	return withCoreDbClient(env, operation);
 }
 
 export async function withCoreTx<T>(env: CoreEnv, operation: CoreDbOperation<T>): Promise<T> {
-	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	try {
-		await client.connect();
+	return withCoreDbClient(env, async (db, client) => {
 		await client.query('BEGIN');
 		try {
-			const result = await operation(createCoreDb(client), client);
+			const result = await operation(db, client);
 			await client.query('COMMIT');
 			return result;
 		} catch (error) {
-			await rollbackCoreDbClient(client);
+			try {
+				await client.query('ROLLBACK');
+			} catch (rollbackError) {
+				throw new AggregateError([error, rollbackError], 'Database transaction and rollback both failed');
+			}
 			throw error;
 		}
-	} finally {
-		await closeCoreDbClient(client);
+	});
+}
+
+async function withCoreDbClient<T>(env: CoreEnv, operation: CoreDbOperation<T>): Promise<T> {
+	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+	let outcome: CoreDbOutcome<T>;
+	try {
+		await client.connect();
+		outcome = { ok: true, value: await operation(createCoreDb(client), client) };
+	} catch (error) {
+		outcome = { ok: false, error };
 	}
+	try {
+		await client.end();
+	} catch (closeError) {
+		if (!outcome.ok) throw new AggregateError([outcome.error, closeError], 'Database operation and client close both failed');
+		console.warn({
+			tag: 'DB',
+			msg: 'Database client close failed after a successful operation',
+			error: closeError instanceof Error ? closeError.message : String(closeError),
+		});
+	}
+	if (!outcome.ok) throw outcome.error;
+	return outcome.value;
 }
 
 function createCoreDb(client: Client): CoreDb {
 	return drizzle(client, { schema });
-}
-
-async function rollbackCoreDbClient(client: Client): Promise<void> {
-	await client.query('ROLLBACK').catch((error) =>
-		console.error({
-			tag: 'DB',
-			msg: 'transaction rollback failed',
-			error: String(error),
-		}),
-	);
-}
-
-async function closeCoreDbClient(client: Client): Promise<void> {
-	await client.end().catch((error) =>
-		console.warn({
-			tag: 'DB',
-			msg: 'client close failed',
-			error: String(error),
-		}),
-	);
 }

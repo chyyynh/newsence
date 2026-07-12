@@ -1,4 +1,4 @@
-import type { ResourceCategory, ResourceScope, ResourceTranslationSource, ResourceType } from '../resources/types';
+import type { ContentResourceType, ResourceCategory, ResourceScope, ResourceTranslationSource } from '@core-shared/resource-types';
 
 export type ResourceLocaleText = {
 	title?: string | null;
@@ -12,17 +12,17 @@ export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefin
 
 export interface ResourceForProcessing {
 	id: string;
-	type: ResourceType;
+	type: ContentResourceType;
 	scope: ResourceScope;
 	original_lang: string;
 	title: string;
 	summary: string | null;
 	content: string | null;
 	translations?: ResourceTranslationMap;
-	url: string;
+	url: string | null;
 	og_image_url?: string | null;
-	source: string;
-	published_date: string;
+	source: string | null;
+	published_date: string | null;
 	tags: string[];
 	keywords: string[];
 	platform_metadata?: PlatformMetadata;
@@ -45,7 +45,7 @@ export interface TranscriptSegment {
 export interface YouTubeChapter {
 	title: string;
 	startTime: number;
-	endTime: number;
+	endTime?: number;
 }
 
 export interface YoutubeTranscript {
@@ -56,19 +56,21 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent<T extends ResourceType = ResourceType> {
+export interface NormalizedContent<T extends ContentResourceType = ContentResourceType> {
 	type: T;
-	title: string | null;
+	title: string;
 	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
+	/** Canonical preview image selected by the acquisition source. */
+	previewImageUrl?: string | null;
 	metadata: {
 		author: string | null;
 		language: string | null;
 		publishedDate: string | null;
-		siteName: string | null;
+		siteName: string;
 		description: string | null;
 	};
-	platformMetadata?: PlatformMetadata<T>;
+	platformMetadata: PlatformMetadata<T>;
 	youtubeTranscript?: YoutubeTranscript;
 }
 
@@ -136,9 +138,9 @@ interface YouTubeMetadata {
 
 export interface HackerNewsMetadata {
 	itemId: string;
-	author: string;
-	points: number;
-	commentCount: number;
+	author?: string;
+	points?: number;
+	commentCount?: number;
 	itemType?: 'story' | 'ask' | 'show' | 'job';
 	storyUrl?: string | null;
 }
@@ -149,7 +151,6 @@ interface PdfMetadata {
 }
 
 export interface PaperReference {
-	openAlexId?: string;
 	doi?: string;
 	title?: string;
 	year?: number;
@@ -157,28 +158,20 @@ export interface PaperReference {
 }
 
 export interface PaperMetadata {
-	source: 'openalex' | 'semanticscholar';
-	/** Legacy field name; new values are source-native Semantic Scholar paperIds. */
-	openAlexId?: string;
+	source: 'semanticscholar';
 	doi?: string;
-	arxivId?: string;
 	title?: string;
 	authors: string[];
 	abstract?: string;
 	venue?: string;
 	year?: number;
 	citedByCount?: number;
-	referenceCount: number;
-	oaPdfUrl?: string;
-	landingPageUrl?: string;
+	referenceCount?: number;
 	references: PaperReference[];
 }
 
 export interface PlatformEnrichments {
-	hnUrl?: string;
-	externalUrl?: string | null;
-	hnText?: string | null;
-	commentCount?: number;
+	academic?: PaperMetadata | null;
 	links?: string[];
 	processedAt?: string;
 }
@@ -192,11 +185,6 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-interface OgImageDimensions {
-	ogImageWidth?: number | null;
-	ogImageHeight?: number | null;
-}
-
 export interface PlatformMetadataDataByResourceType {
 	web: null;
 	rss: null;
@@ -204,9 +192,6 @@ export interface PlatformMetadataDataByResourceType {
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
 	pdf: PdfMetadata;
-	paper: PaperMetadata;
-	image: null;
-	file: null;
 }
 
 export interface PdfExtractionMetadata {
@@ -216,7 +201,7 @@ export interface PdfExtractionMetadata {
 	pages: number;
 }
 
-export type PlatformMetadata<T extends ResourceType = ResourceType> = {
+export type PlatformMetadata<T extends ContentResourceType = ContentResourceType> = {
 	fetchedAt: string;
 	data: PlatformMetadataDataByResourceType[T];
 	/** Hash of normalized source fields used to skip unchanged resync runs. */
@@ -224,10 +209,9 @@ export type PlatformMetadata<T extends ResourceType = ResourceType> = {
 	enrichments?: PlatformEnrichments | null;
 	sourceName?: string;
 	extraction?: PdfExtractionMetadata;
-} & ClassificationEnvelope &
-	OgImageDimensions;
+} & ClassificationEnvelope;
 
-export function platformMetadataFor<T extends ResourceType>(
+export function platformMetadataFor<T extends ContentResourceType>(
 	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
 	type: T,
 ): PlatformMetadata<T> | null {

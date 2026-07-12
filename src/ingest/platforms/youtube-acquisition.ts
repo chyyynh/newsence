@@ -1,7 +1,6 @@
+import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
-import { fetchWithTimeout, readTextWithLimit } from '@core-shared/web';
 
-const EMPTY_TRANSCRIPT: { segments: TranscriptSegment[]; language: string | null } = { segments: [], language: null };
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
@@ -14,13 +13,8 @@ interface YouTubeVideoItem {
 		channelId: string;
 		channelTitle: string;
 		defaultAudioLanguage?: string;
-		defaultLanguage?: string;
 		publishedAt: string;
 		thumbnails: {
-			default?: { url: string };
-			medium?: { url: string };
-			high?: { url: string };
-			standard?: { url: string };
 			maxres?: { url: string };
 		};
 		tags?: string[];
@@ -34,10 +28,6 @@ interface YouTubeVideoItem {
 		commentCount?: string;
 	};
 }
-
-type YouTubeScrapeOptions = {
-	minDurationSecondsForTranscript?: number;
-};
 
 type YouTubeVideosResponse = {
 	items?: YouTubeVideoItem[];
@@ -59,11 +49,11 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 		if (title.length < 2 || /^\d+:\d+/.test(title)) continue;
 
 		const startTime = hours * 3600 + minutes * 60 + seconds;
-		chapters.push({ title, startTime, endTime: 0 });
+		chapters.push({ title, startTime });
 	}
 
-	for (let i = 0; i < chapters.length; i++) {
-		chapters[i].endTime = chapters[i + 1]?.startTime ?? Number.MAX_SAFE_INTEGER;
+	for (let i = 0; i < chapters.length - 1; i++) {
+		chapters[i].endTime = chapters[i + 1].startTime;
 	}
 
 	return chapters.length >= 2 ? chapters : [];
@@ -74,18 +64,10 @@ const transcriptFetch: typeof fetch = (input, init) => {
 	return fetchWithTimeout(url, init, TRANSCRIPT_FETCH_TIMEOUT_MS);
 };
 
-function toSeconds(value: string | number | undefined): number {
-	if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-	if (!value) return 0;
-	const parsed = Number.parseFloat(value);
-	return Number.isFinite(parsed) ? parsed : 0;
-}
-
-export function parseDurationSeconds(iso: string | undefined): number {
-	if (!iso) return 0;
-	const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-	if (!match) return 0;
-	return parseInt(match[1] || '0', 10) * 3600 + parseInt(match[2] || '0', 10) * 60 + parseInt(match[3] || '0', 10);
+function toSeconds(value: string | number | undefined, field: string, videoId: string): number {
+	const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number.parseFloat(value) : Number.NaN;
+	if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`YouTube transcript ${videoId} has invalid ${field}`);
+	return parsed;
 }
 
 async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Promise<YouTubeVideosResponse> {
@@ -110,29 +92,31 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 	}
 }
 
-async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<{ segments: TranscriptSegment[]; language: string | null }> {
-	const { getSubtitles } = await import('youtube-caption-extractor');
-	const items = await getSubtitles({ videoID: videoId, fetch: transcriptFetch });
+async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
+	const { YoutubeTranscript } = await import('youtube-transcript');
+	const items = await YoutubeTranscript.fetchTranscript(videoId, { fetch: transcriptFetch });
 
-	if (!items?.length) return EMPTY_TRANSCRIPT;
+	if (!items?.length) {
+		console.info({ tag: 'YOUTUBE', msg: 'Transcript unavailable; using video description', videoId });
+		return [];
+	}
 
-	const segments: TranscriptSegment[] = items.map((item: { start: string; dur: string; text: string }) => {
-		const startTime = toSeconds(item.start);
+	const segments: TranscriptSegment[] = items.map((item: { offset: number; duration: number; text: string }) => {
+		const startTime = toSeconds(item.offset, 'offset', videoId) / 1000;
 		return {
 			startTime,
-			endTime: startTime + toSeconds(item.dur),
+			endTime: startTime + toSeconds(item.duration, 'duration', videoId) / 1000,
 			text: item.text,
 		};
 	});
 
-	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', provider: 'youtube-caption-extractor', count: segments.length });
-	return { segments, language: null };
+	console.info({ tag: 'YOUTUBE', msg: 'Transcript fetched', provider: 'youtube-transcript', count: segments.length });
+	return segments;
 }
 
 export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
-	options: YouTubeScrapeOptions = {},
 ): Promise<NormalizedContent<'youtube'> & { platformMetadata: PlatformMetadata<'youtube'> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
@@ -145,32 +129,12 @@ export async function scrapeYouTube(
 	const snippet = video.snippet;
 	const stats = video.statistics;
 
-	const thumbnailUrl =
-		snippet.thumbnails.maxres?.url ||
-		snippet.thumbnails.standard?.url ||
-		snippet.thumbnails.high?.url ||
-		snippet.thumbnails.medium?.url ||
-		null;
+	const thumbnailUrl = snippet.thumbnails.maxres?.url ?? null;
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
-	let transcriptResult = EMPTY_TRANSCRIPT;
-	const durationSeconds = parseDurationSeconds(video.contentDetails.duration);
-	const shouldFetchTranscript =
-		!options.minDurationSecondsForTranscript || !durationSeconds || durationSeconds >= options.minDurationSecondsForTranscript;
-	if (shouldFetchTranscript) {
-		console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-		transcriptResult = await fetchTranscriptViaCaptionExtractor(videoId);
-	} else {
-		console.info({
-			tag: 'YOUTUBE',
-			msg: 'Skipping transcript for short video',
-			videoId,
-			duration: video.contentDetails.duration,
-			threshold: options.minDurationSecondsForTranscript,
-		});
-	}
-	const { segments: transcript, language: transcriptLanguage } = transcriptResult;
+	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
+	const transcript = await fetchTranscript(videoId);
 	const transcriptMarkdown = transcript
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)
@@ -185,11 +149,12 @@ export async function scrapeYouTube(
 		markdown: content,
 		metadata: {
 			author: snippet.channelTitle,
-			language: transcriptLanguage ?? snippet.defaultAudioLanguage ?? snippet.defaultLanguage ?? null,
+			language: snippet.defaultAudioLanguage ?? null,
 			publishedDate: snippet.publishedAt,
 			siteName: 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
 		},
+		previewImageUrl: thumbnailUrl,
 		platformMetadata: {
 			fetchedAt: new Date().toISOString(),
 			data: {
@@ -197,19 +162,19 @@ export async function scrapeYouTube(
 				channelName: snippet.channelTitle,
 				channelId: snippet.channelId,
 				duration: video.contentDetails.duration,
-				thumbnailUrl: thumbnailUrl ?? undefined,
+				...(thumbnailUrl ? { thumbnailUrl } : {}),
 				viewCount: stats.viewCount ? Number.parseInt(stats.viewCount, 10) : undefined,
 				likeCount: stats.likeCount ? Number.parseInt(stats.likeCount, 10) : undefined,
 				commentCount: stats.commentCount ? Number.parseInt(stats.commentCount, 10) : undefined,
-				tags: snippet.tags || [],
+				tags: snippet.tags,
 				publishedAt: snippet.publishedAt,
-				description: snippet.description || '',
+				description: snippet.description,
 			},
 		},
 		youtubeTranscript: {
 			videoId: video.id,
 			segments: transcript,
-			language: transcriptLanguage,
+			language: snippet.defaultAudioLanguage ?? null,
 			chapters,
 			chaptersFromDescription: chapters.length > 0,
 		},

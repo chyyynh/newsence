@@ -1,43 +1,28 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { generateResourceEmbedding, prepareResourceTextForEmbedding } from '@core-ai/embedding';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing } from '@ingest/domain/resource-store';
-import {
-	type AcquiredContent,
-	acquisitionHttpStatus,
-	EMPTY_OG_IMAGE_PATCH,
-	fetchOgImage,
-	type OgImagePatch,
-	PDF_MIME,
-	readAcquiredContentArtifact,
-	scrapeSavedUrlArtifact,
-} from './acquisition';
-import { enqueueContentLocalization, enqueueOrRestartWorkflow } from './content-localization-workflow';
+import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
+import { enqueueOrRestartWorkflow } from '../workflow-control';
+import { type AcquiredContent, PDF_MIME, readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
+import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
-import { getPersistedResourceContentHashForLocalization } from './domain/content-localization-store';
 import { applyAcquiredContent } from './domain/resource-update';
-import { processHackerNewsResource } from './platforms/hackernews';
-import { stagePaperEnrichment, syncPaperGraphForEnrichment } from './platforms/paper';
+import { buildHackerNewsContent } from './platforms/hackernews';
+import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
-import { processTwitterResource } from './platforms/twitter';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import {
-	deleteResource,
-	markResourceEnrichmentFailed,
-	persistProcessedResource,
-	persistUnchangedResourceResync,
-} from './resource-persistence';
+import { markResourceEnrichmentFailed, persistProcessedResource, persistUnchangedResourceResync } from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
-type WorkflowPayload = { resourceId: string; operation?: WorkflowOperation };
+type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
 
 export function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, storedWorkflowId(resourceId), { resourceId });
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, storedWorkflowId(resourceId), { resourceId, operation: 'ingest' });
 }
 
 export function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.MONITOR_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
 		resourceId,
 		operation: 'resync',
 	});
@@ -58,76 +43,19 @@ function shouldAcquireContent(
 	if (force) return !!resource.url;
 	const hasContent = 'has_content' in resource && !!resource.has_content;
 	const needsYouTubeAcquisition = resource.type === 'youtube' && !resource.has_youtube_transcript;
-	return (!hasContent || needsYouTubeAcquisition) && !resource.storage_key && !!resource.url;
+	const needsAcquisitionIdentity = !resource.source || !resource.platform_metadata;
+	return (!hasContent || needsYouTubeAcquisition || needsAcquisitionIdentity) && !resource.storage_key && !!resource.url;
 }
 
-async function stageSavedUrlAcquisition(
-	env: CoreEnv,
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-	allowFeedFallback: boolean,
-): Promise<AcquiredContent | undefined> {
-	try {
-		const artifact = await step.do(
-			'acquire-content',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			async () => {
-				try {
-					return await scrapeSavedUrlArtifact(resource.url, env, {
-						allowRenderedFallback: resource.scope === 'corpus' && resource.type === 'rss',
-					});
-				} catch (error) {
-					if (acquisitionHttpStatus(error) !== 403) throw error;
-					throw new NonRetryableError(error instanceof Error ? error.message : String(error), 'AcquisitionForbiddenError');
-				}
-			},
-		);
-		return readAcquiredContentArtifact(artifact);
-	} catch (error) {
-		const hasFeedFallback = allowFeedFallback && resource.type === 'rss' && !!(resource.summary?.trim() || resource.content?.trim());
-		if (!hasFeedFallback) throw error;
-		console.warn({
-			tag: 'WORKFLOW',
-			msg: 'URL acquisition failed; continuing with RSS feed content',
-			resource_id: resource.id,
-			url: resource.url,
-			error: String(error),
-		});
-		return undefined;
-	}
-}
-
-type AcquisitionTerminalResult = {
-	resourceId: string;
-	deleted: boolean;
-	reason: 'acquisition_http_403';
-};
-
-async function deleteResourceAfterAcquisition(
-	env: CoreEnv,
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-	input: {
-		stepName: string;
-		message: string;
-		reason: AcquisitionTerminalResult['reason'];
-		error?: unknown;
-	},
-): Promise<AcquisitionTerminalResult> {
-	const deleted = await step.do(
-		input.stepName,
-		{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-		() => deleteResource(env, resource.id),
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
+	const sourceUrl = resource.url;
+	if (!sourceUrl) throw new Error(`Resource ${resource.id} has no source URL`);
+	const artifact = await step.do(
+		'acquire-content',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => scrapeSavedUrlArtifact(sourceUrl, env),
 	);
-	console.info({
-		tag: 'WORKFLOW',
-		msg: input.message,
-		resource_id: resource.id,
-		url: resource.url,
-		deleted,
-		...(input.error === undefined ? {} : { error: String(input.error) }),
-	});
-	return { resourceId: resource.id, deleted, reason: input.reason };
+	return readAcquiredContentArtifact(artifact);
 }
 
 async function acquireResourceForOperation(
@@ -135,59 +63,28 @@ async function acquireResourceForOperation(
 	step: WorkflowStep,
 	resource: ResourceForProcessing,
 	operation: WorkflowOperation,
-): Promise<{ acquiredContent?: AcquiredContent } | { terminal: AcquisitionTerminalResult }> {
-	if (!shouldAcquireContent(resource, operation === 'resync')) return {};
-
-	let acquiredContent: AcquiredContent | undefined;
-	try {
-		acquiredContent = await stageSavedUrlAcquisition(env, step, resource, operation === 'ingest');
-	} catch (error) {
-		if (operation === 'resync' || acquisitionHttpStatus(error) !== 403) throw error;
-		return {
-			terminal: await deleteResourceAfterAcquisition(env, step, resource, {
-				stepName: 'delete-forbidden-resource',
-				message: 'Deleted resource after forbidden acquisition response',
-				reason: 'acquisition_http_403',
-				error,
-			}),
-		};
-	}
-	return { acquiredContent };
+): Promise<AcquiredContent | undefined> {
+	if (!shouldAcquireContent(resource, operation === 'resync')) return undefined;
+	return stageSavedUrlAcquisition(env, step, resource);
 }
 
-async function stageOgImagePatch(
-	step: WorkflowStep,
-	resource: ResourceForProcessing,
-	acquiredContent?: AcquiredContent,
-	force = false,
-): Promise<OgImagePatch> {
-	if (acquiredContent?.ogImage?.ogImageUrl) return acquiredContent.ogImage;
-	if ((!force && resource.og_image_url) || !resource.url || resource.file_type === PDF_MIME) return EMPTY_OG_IMAGE_PATCH;
-	return step.do('resolve-og-image', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-		fetchOgImage(resource.url),
-	);
-}
-
-export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
+export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
-		const { resourceId } = event.payload;
-		const operation = event.payload.operation ?? 'ingest';
+		const { resourceId, operation } = event.payload;
 		try {
 			return await this.runResource(resourceId, step, operation);
 		} catch (error) {
 			if (operation === 'resync') throw error;
-			await step
-				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-					markResourceEnrichmentFailed(this.env, resourceId),
-				)
-				.catch((markError) =>
-					console.error({
-						tag: 'WORKFLOW',
-						msg: 'Failed to mark resource enrichment as failed',
-						resource_id: resourceId,
-						error: String(markError),
-					}),
-				);
+			await step.do(
+				'mark-resource-failed',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => markResourceEnrichmentFailed(this.env, resourceId),
+			);
+			await step.do(
+				'remove-failed-resource-from-search-index',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => deleteCorpusItem(this.env, resourceId),
+			);
 			throw error;
 		}
 	}
@@ -201,20 +98,18 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 		if (operation === 'resync' && !initialResource.url) {
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
-		const acquisition = await acquireResourceForOperation(this.env, step, initialResource, operation);
-		if ('terminal' in acquisition) return acquisition.terminal;
-		const { acquiredContent } = acquisition;
+		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
+		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
 			await step.do(
 				'record-unchanged-resync',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistUnchangedResourceResync(this.env, resourceId, acquiredContent),
+				() => persistUnchangedResourceResync(this.env, resourceId, resource),
 			);
 			return { success: true, resource_id: resourceId, operation, changed: false };
 		}
-		const resource = applyAcquiredContent(initialResource, acquiredContent);
 		const resourceType = resource.type;
 		const logContext = { resource_id: resourceId, table: 'resources' };
 
@@ -227,6 +122,17 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 						sourceStorageKey: resource.storage_key,
 					})
 				: null;
+		const pdfExtraction = pdfTextArtifact ?? acquiredContent?.extraction;
+		if (pdfExtraction?.status === 'needs_ocr') {
+			throw new NonRetryableError(`PDF resource ${resourceId} requires OCR`, 'PdfOcrRequiredError');
+		}
+		await step.do('validate-resource-content', { retries: { limit: 0, delay: '1 second' }, timeout: '5 seconds' }, async () => {
+			const hasProcessableContent = hasContent || !!pdfTextArtifact?.text?.trim() || !!acquiredContent?.markdown?.trim();
+			if (!hasProcessableContent) {
+				throw new NonRetryableError(`Resource ${resourceId} has no extractable content`, 'ResourceContentMissingError');
+			}
+			return true;
+		});
 
 		// Reread durable rows unless in-memory acquisition already holds the freshest copy; PDF text always wins.
 		const loadFull = async (): Promise<ResourceForProcessing> => {
@@ -235,41 +141,47 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 			return extractedPdfText ? { ...base, content: extractedPdfText } : base;
 		};
 
-		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource, {
-			hasStagedText: !!pdfTextArtifact?.text,
-			loadContent: async () => (await loadFull()).content,
-		});
-		const ogImagePatch = await stageOgImagePatch(step, resource, acquiredContent, operation === 'resync');
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
+		const previewImageUrl = acquiredContent?.previewImageUrl?.trim() || null;
 
-		const processorResult = await step.do(
-			'ai-analysis',
+		const hackerNewsContent =
+			resourceType === 'hackernews'
+				? await step
+						.do(
+							'build-hacker-news-content',
+							{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
+							async () => buildHackerNewsContent(await loadFull(), this.env, acquiredContent?.hackerNewsItem),
+						)
+						.catch((error) => {
+							console.error({
+								tag: 'HN',
+								msg: 'Optional Hacker News discussion annotation failed after retries',
+								resource_id: resourceId,
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return undefined;
+						})
+				: undefined;
+
+		const classificationResult = await step.do(
+			'classify-resource',
 			{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '600 seconds' },
 			async () => {
 				const fullResource = await loadFull();
-				if (resourceType === 'hackernews') return processHackerNewsResource(fullResource, this.env);
-				if (resourceType === 'twitter') return processTwitterResource(fullResource, this.env);
-				return mergeResourceClassification(fullResource, await generateResourceClassification(fullResource, this.env));
-			},
-		);
-
-		const embedding = await step.do(
-			'generate-embedding',
-			{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			async () => {
-				const fullResource = await loadFull();
-				const text = prepareResourceTextForEmbedding({
-					title: fullResource.title,
-					summary: processorResult.updateData.summary ?? fullResource.summary,
-					content: processorResult.updateData.content ?? fullResource.content,
-					tags: processorResult.updateData.tags ?? fullResource.tags,
-					keywords: processorResult.updateData.keywords ?? fullResource.keywords,
+				const resourceToClassify = hackerNewsContent ? { ...fullResource, content: hackerNewsContent } : fullResource;
+				const classification = await generateResourceClassification(resourceToClassify, this.env);
+				return mergeResourceClassification(resourceToClassify, classification, {
+					extraTags: resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
 				});
-				if (!text) throw new Error(`Resource ${resourceId} has no text to embed`);
-				const generated = await generateResourceEmbedding(text, this.env.AI, this.env.AI_GATEWAY_NAME);
-				if (!generated?.length) throw new Error(`Embedding generation failed for resource ${resourceId}`);
-				return generated;
 			},
 		);
+		const processorResult = {
+			...classificationResult,
+			updateData: {
+				...classificationResult.updateData,
+				...(hackerNewsContent ? { content: hackerNewsContent } : {}),
+			},
+		};
 
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
@@ -289,39 +201,58 @@ export class NewsenceMonitorWorkflow extends WorkflowEntrypoint<CoreEnv, Workflo
 					resourceId,
 					resource: resourceToPersist,
 					processorResult,
-					embedding,
 					pdfTextArtifact,
 					acquisitionExtraction: acquiredContent?.extraction,
 					paperEnrichment,
-					ogImagePatch,
+					previewImageUrl,
 					youtubeTranscript,
 					youtubeHighlights,
 				});
 			},
 		);
-
-		const localizationSourceHash = await step.do(
-			'verify-persisted-original-content',
-			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => getPersistedResourceContentHashForLocalization(this.env, persistedResourceId),
-		);
-		if (localizationSourceHash) {
+		const translationSourceHash = await step
+			.do(
+				'load-resource-translation-source-hash',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => getPersistedResourceTranslationHash(this.env, persistedResourceId),
+			)
+			.catch((error) => {
+				console.error({
+					tag: 'RESOURCE_TRANSLATION',
+					msg: 'Failed to inspect persisted resource for translation',
+					resource_id: persistedResourceId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return null;
+			});
+		if (translationSourceHash) {
 			await step
 				.do(
-					'enqueue-content-localization',
+					'enqueue-resource-translation',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueContentLocalization(this.env, persistedResourceId, localizationSourceHash),
+					() => enqueueResourceTranslation(this.env, persistedResourceId, translationSourceHash),
 				)
 				.catch((error) =>
 					console.error({
-						tag: 'WORKFLOW',
-						msg: 'Failed to enqueue dedicated content localization',
+						tag: 'RESOURCE_TRANSLATION',
+						msg: 'Failed to enqueue resource translation',
 						resource_id: persistedResourceId,
-						error: String(error),
+						error: error instanceof Error ? error.message : String(error),
 					}),
 				);
 		}
-		await syncPaperGraphForEnrichment(this.env, step, persistedResourceId, paperEnrichment);
+		await step
+			.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
+				syncCorpusItem(this.env, persistedResourceId),
+			)
+			.catch((error) =>
+				console.error({
+					tag: 'AI_SEARCH',
+					msg: 'Failed to sync enriched resource; reindex can repair it',
+					resource_id: persistedResourceId,
+					error: error instanceof Error ? error.message : String(error),
+				}),
+			);
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return {

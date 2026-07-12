@@ -1,104 +1,40 @@
-import { FEED_UA, fetchWithTimeout, normalizeUrl, readTextWithLimit } from '@core-shared/web';
+import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
+import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
-import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
+import { extractFromJson, extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
 import { loadEnabledSources, type MonitoredSource, markSourceScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
+import { hackerNewsDiscussionUrl } from './hackernews';
 
 const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const FEED_CONCURRENCY = 4;
 const ITEM_CONCURRENCY = 5;
+const FEED_SUMMARY_MAX_CHARS = 500;
 
 type RssSource = MonitoredSource;
 
-const HTML_HREF_RE = /\bhref\s*=\s*["']([^"'#]+)["']/gi;
-
-function titleFromDiscoveredUrl(url: string): string {
-	const slug = new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '';
-	let decoded = slug;
-	try {
-		decoded = decodeURIComponent(slug);
-	} catch {
-		// Keep the encoded slug when a site emits malformed escapes.
-	}
-	return decoded.replace(/[-_]+/g, ' ').trim() || new URL(url).hostname;
-}
-
-async function discoverOfficialBlogEntries(feed: RssSource): Promise<FeedEntry[]> {
-	if (!feed.siteUrl) return [];
-	const rssHost = new URL(feed.handle).hostname.toLowerCase();
-	const blogUrl = new URL(feed.siteUrl);
-	const pathPrefix = blogUrl.pathname.endsWith('/') ? blogUrl.pathname : `${blogUrl.pathname}/`;
-	if (rssHost !== 'rsshub.app' || pathPrefix === '/') return [];
-
-	const response = await fetchWithTimeout(blogUrl.toString(), {
-		headers: { 'User-Agent': FEED_UA, Accept: 'text/html,application/xhtml+xml' },
+async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[]> {
+	const response = await fetchWithTimeout(feed.handle, {
+		headers: {
+			'User-Agent': WEB_FETCH_USER_AGENT,
+			Accept: 'application/rss+xml, application/xml, text/xml, */*',
+		},
 	});
-	if (!response.ok) {
-		await response.body?.cancel();
-		throw new Error(`Official blog returned HTTP ${response.status}`);
-	}
-
-	const html = await readTextWithLimit(response, MAX_FEED_BYTES);
-	const urls = new Set<string>();
-	for (const match of html.matchAll(HTML_HREF_RE)) {
-		try {
-			const candidate = new URL(match[1].replace(/&amp;/g, '&'), blogUrl);
-			if (candidate.protocol !== 'http:' && candidate.protocol !== 'https:') continue;
-			if (candidate.hostname.toLowerCase() !== blogUrl.hostname.toLowerCase()) continue;
-			if (!candidate.pathname.startsWith(pathPrefix) || candidate.pathname === pathPrefix) continue;
-			candidate.hash = '';
-			urls.add(normalizeUrl(candidate.toString()));
-			if (urls.size >= 30) break;
-		} catch {
-			// Ignore malformed page links.
-		}
-	}
-
-	return [...urls].map((url) => ({ link: url, title: titleFromDiscoveredUrl(url) }) as FeedEntry);
-}
-
-async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[] | null> {
-	let response: Response;
-	try {
-		response = await fetchWithTimeout(feed.handle, {
-			headers: {
-				'User-Agent': FEED_UA,
-				Accept: 'application/rss+xml, application/xml, text/xml, */*',
-			},
-		});
-	} catch (error) {
-		console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, error: String(error) });
-		return null;
-	}
 
 	if (response.ok) {
-		return (extractFromXml(await readTextWithLimit(response, MAX_FEED_BYTES), { descriptionMaxLen: 0 }).entries ?? []).slice(
-			0,
-			30,
-		) as FeedEntry[];
+		const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+		const body = await readTextWithLimit(response, MAX_FEED_BYTES);
+		const options = { descriptionMaxLen: 0 };
+		const parsedFeed =
+			contentType.includes('json') || body.trimStart().startsWith('{') ? extractFromJson(body, options) : extractFromXml(body, options);
+		if (!Array.isArray(parsedFeed.entries)) throw new Error(`Feed parser returned no entries for ${feed.handle}`);
+		return parsedFeed.entries.slice(0, 30) as FeedEntry[];
 	}
 
 	const status = response.status;
 	await response.body?.cancel();
-	if (status === 403) {
-		try {
-			const fallbackEntries = await discoverOfficialBlogEntries(feed);
-			if (fallbackEntries.length) {
-				console.warn({
-					tag: 'RSS',
-					msg: 'Using official blog discovery after feed rejection',
-					feed: feed.name,
-					count: fallbackEntries.length,
-				});
-				return fallbackEntries;
-			}
-		} catch (error) {
-			console.warn({ tag: 'RSS', msg: 'Official blog discovery failed', feed: feed.name, error: String(error) });
-		}
-	}
-	console.warn({ tag: 'RSS', msg: 'Feed fetch failed', feed: feed.name, status });
-	return null;
+	throw new Error(`RSS feed ${feed.name} failed with HTTP ${status}`);
 }
 
 function normalizeFeedItemUrl(value: string | undefined): string | null {
@@ -112,38 +48,37 @@ function normalizeFeedItemUrl(value: string | undefined): string | null {
 	}
 }
 
+function canonicalFeedItemUrl(item: FeedEntry): string | null {
+	return normalizeFeedItemUrl(hackerNewsDiscussionUrl(item.id) ?? item.link);
+}
+
 function feedPublishedDate(value: string | undefined): Date {
 	if (!value) return new Date();
 	const date = new Date(value);
 	return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
-async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, url: string): Promise<boolean> {
-	try {
-		const description = item.description?.trim() ?? '';
-		const resourceId = await withCoreDb(env, (db) =>
-			upsertPendingSourceResource(db, {
-				url,
-				title: item.title || 'No Title',
-				source: feed.name,
-				publishedDate: feedPublishedDate(item.published),
-				summary: description,
-				type: 'rss',
-				content: null,
-				platformMetadata: null,
-			}),
-		);
-		await enqueueProcessing(env, resourceId);
-		return true;
-	} catch (err) {
-		console.warn({ tag: 'RSS', msg: 'Item enqueue failed, skipping', feed: feed.name, url, error: String(err) });
-		return false;
-	}
+async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
+	const description = item.description?.trim();
+	const title = item.title?.trim();
+	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
+	const resourceId = await withCoreDb(env, (db) =>
+		upsertPendingSourceResource(db, {
+			url,
+			title,
+			source: feed.name,
+			publishedDate: feedPublishedDate(item.published),
+			summary: description ? description.slice(0, FEED_SUMMARY_MAX_CHARS) : null,
+			type: 'rss',
+			content: null,
+			platformMetadata: null,
+		}),
+	);
+	await enqueueProcessing(env, resourceId);
 }
 
 async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	const items = await loadFeedEntries(feed);
-	if (!items) return;
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
 		await markSourceScraped(env, feed.id);
@@ -152,7 +87,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 	const itemUrlsByUrl = new Map<string, { item: FeedEntry; url: string }>();
 	for (const item of items) {
-		const url = normalizeFeedItemUrl(item.link);
+		const url = canonicalFeedItemUrl(item);
 		if (url && !itemUrlsByUrl.has(url)) itemUrlsByUrl.set(url, { item, url });
 	}
 	const itemUrls = [...itemUrlsByUrl.values()];
@@ -168,18 +103,35 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 		try {
 			await enqueueProcessing(env, existing.id);
 			retried++;
-		} catch (err) {
-			console.warn({ tag: 'RSS', msg: 'Existing resource retry enqueue failed', feed: feed.name, url: existing.url, error: String(err) });
+		} catch (error) {
+			console.error({
+				tag: 'RSS',
+				msg: 'Existing resource retry enqueue failed',
+				feed: feed.name,
+				url: existing.url,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, retried, totalCount: items.length });
 	let queued = 0;
 	for (let index = 0; index < newItems.length; index += ITEM_CONCURRENCY) {
-		const results = await Promise.all(
-			newItems.slice(index, index + ITEM_CONCURRENCY).map(({ item, url }) => enqueueFeedItem(env, feed, item, url)),
-		);
-		queued += results.filter(Boolean).length;
+		const batch = newItems.slice(index, index + ITEM_CONCURRENCY);
+		const results = await Promise.allSettled(batch.map(({ item, url }) => enqueueFeedItem(env, feed, item, url)));
+		for (const [resultIndex, result] of results.entries()) {
+			if (result.status === 'fulfilled') {
+				queued++;
+				continue;
+			}
+			console.error({
+				tag: 'RSS',
+				msg: 'Item enqueue failed',
+				feed: feed.name,
+				url: batch[resultIndex]?.url,
+				error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+			});
+		}
 	}
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
 	await markSourceScraped(env, feed.id);
@@ -193,7 +145,12 @@ export async function handleRSSCron(env: CoreEnv): Promise<void> {
 		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));
 		for (const [resultIndex, result] of results.entries()) {
 			if (result.status === 'rejected') {
-				console.warn({ tag: 'RSS', msg: 'Feed failed', feed: batch[resultIndex]?.name, error: String(result.reason) });
+				console.error({
+					tag: 'RSS',
+					msg: 'Feed processing failed',
+					feed: batch[resultIndex]?.name,
+					error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+				});
 			}
 		}
 	}

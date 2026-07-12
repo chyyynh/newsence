@@ -5,21 +5,20 @@ import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
 import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
-import { type AcquiredContent, type OgImagePatch, type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
+import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
-import { ResourceUpdateBuilder } from './domain/resource-update';
+import { buildResourceUpdate } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
 import { persistYouTubeWorkflowData, type YouTubeHighlightsUpdate } from './platforms/youtube';
 
-export type PersistProcessedResourceInput = {
+type PersistProcessedResourceInput = {
 	resourceId: string;
 	resource: ResourceForProcessing;
 	processorResult: ProcessorResult;
-	embedding: number[] | null;
 	pdfTextArtifact: PdfTextArtifact | null;
 	acquisitionExtraction?: PdfExtractionMetadata;
 	paperEnrichment: PaperMetadata | null;
-	ogImagePatch: OgImagePatch;
+	previewImageUrl: string | null;
 	youtubeTranscript?: YoutubeTranscript;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 };
@@ -35,22 +34,16 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 	});
 }
 
-export async function deleteResource(env: CoreEnv, resourceId: string): Promise<boolean> {
-	return withCoreDb(env, async (db) => {
-		const deleted = await db.delete(resources).where(eq(resources.id, resourceId)).returning({ id: resources.id });
-		return deleted.length > 0;
-	});
-}
-
-export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, acquired: AcquiredContent): Promise<void> {
-	const platformMetadataJson = JSON.stringify(acquired.platformMetadata ?? {});
-	const ogImageUrl = acquired.ogImage?.ogImageUrl?.trim() || null;
+export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
+	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
+	const platformMetadataJson = JSON.stringify(resource.platform_metadata);
+	const previewImageUrl = resource.og_image_url?.trim() || null;
 	await withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
 			UPDATE resources
 			SET scraped_date = NOW(),
-				og_image_url = COALESCE(${ogImageUrl}, og_image_url),
-				platform_metadata = COALESCE(platform_metadata, '{}'::jsonb) || ${platformMetadataJson}::jsonb,
+					og_image_url = ${previewImageUrl},
+				platform_metadata = ${platformMetadataJson}::jsonb,
 				updated_at = NOW()
 			WHERE id = ${resourceId}::uuid
 			RETURNING id
@@ -62,13 +55,15 @@ export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: s
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {
 		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;
-		const updatePayload = new ResourceUpdateBuilder(input.resource)
-			.addExtractionMetadata(extraction)
-			.addOgMetadata(input.ogImagePatch)
-			.addPaperMetadata(input.paperEnrichment)
-			.applyProcessorResult(input.processorResult, input.embedding)
-			.applyOgFields(input.ogImagePatch)
-			.build();
+		const updatePayload = buildResourceUpdate(input.resource, {
+			extraction,
+			paperEnrichment: input.paperEnrichment,
+			previewImageUrl: input.previewImageUrl,
+			processorResult: input.processorResult,
+		});
+		if (!updatePayload.content?.trim()) {
+			throw new Error(`Refusing to persist enriched resource ${input.resourceId} without content`);
+		}
 		const resourceType = updatePayload.type;
 		const platformMetadata = updatePayload.platform_metadata;
 		const resourceEntities = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);

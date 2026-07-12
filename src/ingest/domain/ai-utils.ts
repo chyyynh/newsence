@@ -1,8 +1,8 @@
-import { generateObject, generateText } from '@core-ai/embedding';
+import { generateObject, generateText } from '@core-ai/generation';
+import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { ENTITY_TYPES, type PlatformEnrichments, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
-import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '../../resources/types';
 
 export interface ProcessorResult {
 	updateData: {
@@ -46,8 +46,6 @@ export function mergeResourceClassification(
 }
 
 const MAX_CONTENT_LENGTH = 10000;
-const MAX_CONTENT_CLEANUP_LENGTH = 12000;
-const MIN_CONTENT_CLEANUP_LENGTH = 800;
 const CONTENT_TRANSLATION_CHUNK_LENGTH = 6000;
 export const DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS = 96;
 const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
@@ -100,23 +98,6 @@ const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文�
 - 若原文已是繁體中文，直接保留原文；若是簡體中文，轉為自然繁體中文
 - 直接輸出翻譯後的 Markdown，不要包 code block。`;
 
-const RESOURCE_CONTENT_CLEANUP_SYSTEM_PROMPT = `你是專業的新聞內容清理編輯。請清理抽取出的原文 Markdown，只移除非正文內容。
-
-移除：
-- 廣告、贊助、活動宣傳、newsletter/subscribe CTA、cookie/privacy banner
-- 導航、頁尾、作者 bio、社群分享提示、推薦閱讀、熱門文章、相關文章列表
-- 重複標題、重複段落、圖片版權雜訊、無關的 UI 文案
-
-保留：
-- 原文語言，不要翻譯
-- 正文內容、必要的小標、列表、引用、連結、程式碼區塊
-- 與文章主題直接相關的圖片 markdown
-
-規則：
-- 不要摘要、不要改寫、不要新增資訊
-- 若內容已乾淨，直接原樣輸出
-- 直接輸出清理後 Markdown，不要包 code block，不要解釋。`;
-
 const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
 任務：
@@ -142,16 +123,29 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
-	const content = resource.content || resource.summary || resource.title;
+	const content = requiredResourceContent(resource);
+	const source = requiredResourceSource(resource);
 	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
+	const summaryLine = resource.summary?.trim() ? `\n摘要: ${resource.summary.trim()}` : '';
 	return `文章資訊:
 標題: ${resource.title}
-來源: ${resource.source}
-資源類型: ${resource.type}${excludedLine}
-摘要: ${resource.summary || '無摘要'}
+來源: ${source}
+資源類型: ${resource.type}${excludedLine}${summaryLine}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
+}
+
+function requiredResourceSource(resource: ResourceForProcessing): string {
+	const source = resource.source?.trim();
+	if (!source) throw new Error(`Resource ${resource.id} has no source`);
+	return source;
+}
+
+function requiredResourceContent(resource: ResourceForProcessing): string {
+	const content = resource.content?.trim();
+	if (!content) throw new Error(`Resource ${resource.id} has no content`);
+	return content;
 }
 
 function cjkRatio(text: string): number {
@@ -181,12 +175,13 @@ export async function generateZhHantMetadataTranslation(
 	resource: ResourceForProcessing,
 	env: CoreEnv,
 ): Promise<z.infer<typeof ZhHantMetadataTranslationSchema>> {
+	const content = requiredResourceContent(resource);
+	const summaryLine = resource.summary?.trim() ? `\n摘要：${resource.summary.trim()}` : '';
 	const prompt = `原文資訊：
 	資源類型：${resource.type}
-	標題：${resource.title}
-摘要：${resource.summary || '無摘要'}
+	標題：${resource.title}${summaryLine}
 內容：
-${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_LENGTH)}`;
+${content.slice(0, MAX_CONTENT_LENGTH)}`;
 	const translation = await generateObject(env.AI, prompt, {
 		schema: ZhHantMetadataTranslationSchema,
 		task: 'resource-metadata-localization',
@@ -194,7 +189,6 @@ ${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_
 		maxTokens: 700,
 		systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 	});
-	if (!translation) throw new Error('Resource metadata localization did not return valid output');
 	return translation;
 }
 
@@ -217,23 +211,8 @@ function shouldWriteResourceContentTranslation(resource: ResourceForProcessing):
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
 
-function normalizeComparableContent(content: string): string {
-	return content.replace(/\s+/g, ' ').trim();
-}
-
 function looksLikeModelExplanation(content: string): boolean {
 	return /^(以下是|這是|Here is|I've cleaned|I cleaned|清理後|已清理)/i.test(content.trim());
-}
-
-function validateCleanedContent(original: string, cleaned: string | null): string | null {
-	const trimmed = cleaned?.trim();
-	if (!trimmed || looksLikeModelExplanation(trimmed)) return null;
-	const originalComparable = normalizeComparableContent(original);
-	const cleanedComparable = normalizeComparableContent(trimmed);
-	if (!cleanedComparable || cleanedComparable === originalComparable) return null;
-	if (cleanedComparable.length < Math.max(300, originalComparable.length * 0.25)) return null;
-	if (cleanedComparable.length > originalComparable.length * 1.15) return null;
-	return trimmed;
 }
 
 function splitOversizedBlock(block: string, maxLength: number): string[] {
@@ -324,46 +303,21 @@ export function assembleZhHantContentTranslation(original: string, translatedChu
 	return translated;
 }
 
-async function generateResourceContentCleanup(resource: ResourceForProcessing, env: CoreEnv): Promise<string | null> {
-	const content = resource.content?.trim();
-	if (!content || content.length < MIN_CONTENT_CLEANUP_LENGTH || resource.type === 'youtube' || resource.type === 'hackernews') return null;
-	const cleanupContent = content.slice(0, MAX_CONTENT_CLEANUP_LENGTH);
-	const cleaned = await generateText(env.AI, `原文 Markdown:\n${cleanupContent}`, {
-		task: 'resource-content-cleanup',
-		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 6000,
-		temperature: 0.1,
-		systemPrompt: RESOURCE_CONTENT_CLEANUP_SYSTEM_PROMPT,
-	});
-	return validateCleanedContent(cleanupContent, cleaned);
-}
-
 export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
-	try {
-		const cleanedContent = await generateResourceContentCleanup(resource, env).catch((error) => {
-			console.error({ tag: 'AI', msg: 'Resource content cleanup failed', error: String(error) });
-			return null;
-		});
-		const resourceForAnalysis = cleanedContent ? { ...resource, content: cleanedContent } : resource;
-		const resourcePrompt = buildResourceContextPrompt(resourceForAnalysis);
-		const classification = await generateObject(env.AI, resourcePrompt, {
-			schema: ResourceClassificationSchema,
-			task: 'resource-classification',
-			gatewayId: env.AI_GATEWAY_NAME,
-			maxTokens: 500,
-			systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
-		});
-		if (!classification) throw new Error('Resource classification did not return valid output');
-		return {
-			tags: classification.tags.slice(0, 5),
-			keywords: classification.keywords.slice(0, 8),
-			category: classification.category,
-			entities: classification.entities.slice(0, 10),
-		};
-	} catch (error) {
-		console.error({ tag: 'AI', msg: 'Analysis failed', error: String(error) });
-		throw error;
-	}
+	const resourcePrompt = buildResourceContextPrompt(resource);
+	const classification = await generateObject(env.AI, resourcePrompt, {
+		schema: ResourceClassificationSchema,
+		task: 'resource-classification',
+		gatewayId: env.AI_GATEWAY_NAME,
+		maxTokens: 500,
+		systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
+	});
+	return {
+		tags: classification.tags.slice(0, 5),
+		keywords: classification.keywords.slice(0, 8),
+		category: classification.category,
+		entities: classification.entities.slice(0, 10),
+	};
 }

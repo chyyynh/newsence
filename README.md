@@ -20,7 +20,7 @@
 
 ## What is newsence?
 
-Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, stores them as searchable resources and an entity graph. Follows the [**LLM Wiki**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern — each source is read once and integrated into a persistent artifact (summaries, entities, embeddings, cross-refs), not RAG'd at query time.
+Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, stores them as searchable resources and an entity graph. Each enriched corpus resource is synchronized to Cloudflare AI Search for retrieval.
 
 ## Supported Platforms
 
@@ -45,14 +45,14 @@ All platforms output a unified `NormalizedContent` shape → same AI pipeline.
 Each resource goes through an automated workflow with independent retries:
 
 ```
-Content arrives (source monitor / saved URL / uploaded blob / retry)
+Content arrives (source monitor / saved URL / uploaded blob / resync)
   │
   ├─ 1. Load Resource ──────── Canonical resources row; acquire URL content or extract uploaded PDF text
   ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
   ├─ 3. Save to DB ─────────── Update resources + resource_translations
   ├─    Sync Entities ──────── Upsert entities, link through resource_entities
   ├─ 4. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
-  └─ 5. Embed ─────────────── BGE-M3 → 1024-dim vector from title + summary + content + entities
+  └─ 5. Sync AI Search ─────── Upload the enriched corpus document to Cloudflare AI Search
 ```
 
 Roughly 30 seconds per resource. Each step retries independently with exponential backoff.
@@ -63,7 +63,7 @@ Roughly 30 seconds per resource. Each step retries independently with exponentia
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
 | **Analysis**          | AI Gateway text model | Resource → bilingual title, summary, tags, keywords, category                                      |
 | **Entity Extraction** | AI Gateway JSON model | Resource → named entities (person, organization, product, technology, event, location) with EN + zh-TW names |
-| **Embedding**         | BGE-M3 (1024d)        | Title + summary + content + entity names → dense vector (HNSW-indexed)                            |
+| **Retrieval Index**   | Cloudflare AI Search  | Hybrid keyword and semantic retrieval over enriched corpus documents                              |
 
 Translation/summary and classification/entities are separate structured calls so one schema failure does not force the whole resource into fallback.
 
@@ -81,9 +81,9 @@ Change the DB schema only when the product needs a query shape that the current 
 | ------------- | ------------------------------------------------- |
 | Runtime       | Cloudflare Workers (V8 isolates)                  |
 | Orchestration | Cloudflare Workflows                              |
-| Database      | PostgreSQL + pgvector (via Cloudflare Hyperdrive) |
+| Database      | PostgreSQL (via Cloudflare Hyperdrive)            |
 | LLM           | Cloudflare AI Gateway                             |
-| Embeddings    | Cloudflare Workers AI → BGE-M3                    |
+| Search        | Cloudflare AI Search                              |
 | Twitter Data  | Kaito API (third-party)                           |
 
 ## Self-Hosting
@@ -92,7 +92,7 @@ The one-click Deploy button above handles Worker + Workflows, but **Hyperdrive, 
 
 ### 1. Database
 
-You need a PostgreSQL instance with pgvector. Currently runs on PlanetScale Postgres (via Cloudflare Hyperdrive); any Postgres ≥ 15 with the `vector` extension works.
+You need a PostgreSQL instance. Production currently runs on PlanetScale Postgres through Cloudflare Hyperdrive.
 
 Required tables: `resources`, `resource_translations`, `library`, `rss_list`, `youtube_transcripts`, plus entity/citation/paper tables. The canonical schema is defined in `web-tanstack/prisma/schema.prisma` and mirrored for the worker in `src/db/schema.ts`. For now, inspect those schema files or reach out via Issues if you want to run just the worker.
 
@@ -113,7 +113,7 @@ Workflows are provisioned automatically on first deploy via the `workflows` bind
 
 ### 4. Secrets
 
-AI analysis and embeddings use the Workers AI binding, so no external LLM secret is required. Platform/API secrets are required by Wrangler config:
+AI analysis uses the Workers AI binding through AI Gateway, so no external LLM secret is required. Platform/API secrets are required by Wrangler config:
 
 ```bash
 wrangler secret put KAITO_API_KEY            # Twitter monitoring
@@ -132,7 +132,7 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 
 ## API surface
 
-This Worker exposes a small acquisition HTTP surface for internal callers: `POST /scrape` returns one `NormalizedContent` result synchronously, while `POST /acquisition` + `GET /acquisition/:id` provide a durable pollable job. App/chat integrations primarily use Cloudflare service-binding RPC, while cron monitors run through scheduled triggers. User ingest authentication and rate limiting live in the app Worker before calls reach this core Worker.
+The HTTP surface only exposes `GET /health`. App/chat integrations use Cloudflare service-binding RPC with persisted resource IDs, while cron monitors run through scheduled triggers. URL acquisition is an internal stage of the canonical resource workflow.
 
 ## CLI & MCP
 
@@ -176,9 +176,12 @@ Bindings (in `wrangler.jsonc`):
 | Binding            | Purpose                                      |
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
-| `MONITOR_WORKFLOW` | `NewsenceMonitorWorkflow` instance creator   |
+| `RESOURCE_PROCESSING_WORKFLOW` | Fetch, parse, classify, and persist a resource |
+| `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
+| `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
-| `AI`               | Workers AI binding (AI Gateway text calls + BGE-M3 embeddings) |
+| `AI`               | Workers AI binding for AI Gateway text calls |
+| `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |
 
 Secrets (via `wrangler secret put`):
 

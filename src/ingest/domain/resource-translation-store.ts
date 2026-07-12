@@ -1,9 +1,9 @@
+import type { ResourceTranslationSource } from '@core-shared/resource-types';
 import type { CoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
-import type { ResourceTranslationSource } from '../../resources/types';
 
-export type ResourceTranslationWrite = {
+type ResourceTranslationWrite = {
 	resourceId: string;
 	lang: string;
 	title?: string | null;
@@ -11,24 +11,14 @@ export type ResourceTranslationWrite = {
 	content?: string | null;
 	keywords?: string[];
 	source: ResourceTranslationSource;
-	expectedSourceContentHash?: string;
+	expectedOriginalTranslationHash?: string;
 };
 
 /**
  * Row ownership is human > original > machine. Within the winning owner,
- * incoming non-empty fields replace current values and empty fields are patches.
+ * explicitly supplied fields replace current values; omitted fields are patches.
  */
 export async function upsertResourceTranslation(db: CoreDb, input: ResourceTranslationWrite): Promise<boolean> {
-	const expectedSourceContentHash = input.expectedSourceContentHash ?? null;
-	const sourceHashGuard = expectedSourceContentHash
-		? sql`EXISTS (
-			SELECT 1
-			FROM resource_localization_state localization
-			WHERE localization.resource_id = resource.id
-			  AND localization.current_source_content_hash = ${expectedSourceContentHash}
-			FOR SHARE
-		)`
-		: sql`TRUE`;
 	const keywords = textArraySql(input.keywords ?? []);
 	const result = await db.execute(sql`
 		WITH target_resource AS (
@@ -36,7 +26,17 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 			FROM resources resource
 			WHERE resource.id = ${input.resourceId}::uuid
 			  AND (${input.source} <> 'original' OR resource.original_lang = ${input.lang})
-			  AND ${sourceHashGuard}
+			  AND (
+					${input.expectedOriginalTranslationHash ?? null}::text IS NULL
+				OR EXISTS (
+					SELECT 1
+					FROM resource_translations original
+					WHERE original.resource_id = resource.id
+					  AND original.lang = resource.original_lang
+					  AND md5(jsonb_build_array(original.title, original.summary, original.content)::text) = ${input.expectedOriginalTranslationHash ?? null}
+					FOR SHARE
+				)
+			  )
 		), demoted_originals AS (
 			UPDATE resource_translations translation
 			SET source = 'machine', updated_at = NOW()
@@ -63,23 +63,26 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 			title = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.title
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.title
-				ELSE COALESCE(NULLIF(excluded.title, ''), current_translation.title)
+				WHEN ${input.title === undefined} THEN current_translation.title
+				ELSE excluded.title
 			END,
 			summary = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.summary
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.summary
-				ELSE COALESCE(NULLIF(excluded.summary, ''), current_translation.summary)
+				WHEN ${input.summary === undefined} THEN current_translation.summary
+				ELSE excluded.summary
 			END,
 			content = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.content
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.content
-				ELSE COALESCE(NULLIF(excluded.content, ''), current_translation.content)
+				WHEN ${input.content === undefined} THEN current_translation.content
+				ELSE excluded.content
 			END,
 			keywords = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.keywords
 				WHEN current_translation.source = 'original' AND excluded.source = 'machine' THEN current_translation.keywords
-				WHEN cardinality(excluded.keywords) > 0 THEN excluded.keywords
-				ELSE current_translation.keywords
+				WHEN ${input.keywords === undefined} THEN current_translation.keywords
+				ELSE excluded.keywords
 			END,
 			source = CASE
 				WHEN current_translation.source = 'human' AND excluded.source <> 'human' THEN current_translation.source

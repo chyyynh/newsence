@@ -1,9 +1,10 @@
-import { generateResourceEmbedding } from '@core-ai/embedding';
-import { normalizeUrl } from '@core-shared/web';
+import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
+import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
+import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
-import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
+import { searchCorpusRanks } from './ai-search';
+import { resourceContentAccessSql } from './resource-query-policy';
 
 export interface ResourceSummary {
 	id: string;
@@ -47,9 +48,7 @@ export interface ReadContextResult {
 	error?: string;
 }
 
-type SearchRanks = Map<string, number>;
 type ResourceType = ReadContextItem['type'];
-type RankResourceOptions = { fromDate?: Date | null };
 
 interface ResourceContentRow {
 	id: string;
@@ -81,24 +80,15 @@ interface ResourceSearchRow {
 }
 
 type ResourceSummaryRow = Pick<ResourceContentRow, 'id' | 'title' | 'summary'>;
-const EMPTY_RANKS: SearchRanks = new Map();
-const SEARCH_LIMIT = 200;
-const SEARCH_RANK_LIMIT_MAX = 500;
 const RESULT_LIMIT = 10;
 const RESULT_LIMIT_MAX = 50;
 const RELATED_LIMIT_DEFAULT = 12;
 const RELATED_LIMIT_MAX = 500;
-const SEARCH_RANK_BUFFER_MULTIPLIER = 4;
-const SEARCH_RANK_BUFFER_MIN = 40;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
 const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
-const RRF_K = 60;
-const RECENCY_HALF_LIFE_DAYS = 30;
-const OVERFETCH_MULTIPLIER = 5;
-const OVERFETCH_CAP = 200;
 
 export async function searchCorpusResourceRanks(
 	env: CoreEnv,
@@ -106,12 +96,8 @@ export async function searchCorpusResourceRanks(
 ): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
-	const limit = clampInt(input.limit, 1, SEARCH_RANK_LIMIT_MAX, 100);
-	const vector = await searchQueryVector(env, query);
-	return withCoreDb(env, async (db) => {
-		const ranks = await rankResources(db, query, limit, {}, vector);
-		return [...ranks].map(([id, score]) => ({ id, score }));
-	});
+	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
+	return (await searchCorpusRanks(env, query)).slice(0, limit);
 }
 
 export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
@@ -119,22 +105,22 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 	if (!seed.id) return [];
 	const limit = clampInt(input.limit, 1, RELATED_LIMIT_MAX, RELATED_LIMIT_DEFAULT);
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
-	return withCoreDb(env, async (db) => {
-		const ids = await relatedResources(db, seed, limit, offset);
-		return [...new Set(ids)].filter((id) => id !== seed.id);
-	});
+	const seedText = await withCoreDb(env, (db) => relatedSeedText(db, seed.id));
+	if (!seedText) return [];
+	const ranks = await searchCorpusRanks(env, seedText);
+	return ranks
+		.map((rank) => rank.id)
+		.filter((id) => id !== seed.id)
+		.slice(offset, offset + limit);
 }
 
 export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	const vector = query ? await searchQueryVector(env, query) : null;
+	const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
+	const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
+	const ranks = query ? new Map((await searchCorpusRanks(env, query, fromDate)).map(({ id, score }) => [id, score])) : null;
 	return withCoreDb(env, async (db) => {
-		const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
-		const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
-		const rankLimit = Math.min(SEARCH_LIMIT, Math.max(limit * SEARCH_RANK_BUFFER_MULTIPLIER, SEARCH_RANK_BUFFER_MIN));
-		const ranks = query ? await rankResources(db, query, rankLimit, { fromDate }, vector) : null;
-
 		if (ranks) {
 			if (ranks.size === 0) return [];
 			const candidateIds = [...ranks.keys()].filter(isValidUuid);
@@ -150,7 +136,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 				`,
 			);
 			return rows
-				.sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0))
+				.sort((a, b) => requiredRank(ranks, b.id) - requiredRank(ranks, a.id))
 				.slice(0, limit)
 				.map(formatSummary);
 		}
@@ -170,205 +156,78 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 	});
 }
 
+function requiredRank(ranks: Map<string, number>, resourceId: string): number {
+	const rank = ranks.get(resourceId);
+	if (rank === undefined) throw new Error(`Corpus resource ${resourceId} has no search rank`);
+	return rank;
+}
+
 export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	return withCoreDb(env, (db) => readItems(db, items, userId));
 }
 
-function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+function clampInt(value: number | undefined, min: number, max: number, defaultValue: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return defaultValue;
 	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const summary = resource.summary ?? undefined;
+	const publishedDate = optionalCorpusDate(resource.published_date, resource.id);
 	return {
 		id: resource.id,
-		title: resource.title || resource.url || 'Untitled resource',
-		url: resource.url ?? '',
-		publishedDate: toIsoString(resource.published_date),
-		source: resource.source ?? undefined,
+		title: requiredCorpusText(resource.title, 'title', resource.id),
+		url: requiredCorpusText(resource.url, 'url', resource.id),
+		...(publishedDate ? { publishedDate } : {}),
+		source: requiredCorpusText(resource.source, 'source', resource.id),
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: resource.tags ?? undefined,
 	};
 }
 
-async function relatedResources(db: CoreDb, seed: { id: string; type: 'resource' }, limit: number, offset: number): Promise<string[]> {
-	if (!isValidUuid(seed.id)) return [];
-	const rows = await queryRows<{ id: string }>(
+function requiredCorpusText(value: string | null, field: string, resourceId: string): string {
+	const text = value?.trim();
+	if (!text) throw new Error(`Corpus resource ${resourceId} is missing ${field}`);
+	return text;
+}
+
+function optionalCorpusDate(value: Date | string | null, resourceId: string): string | undefined {
+	if (value === null) return undefined;
+	const date = value instanceof Date ? value : new Date(value);
+	if (Number.isNaN(date.getTime())) throw new Error(`Corpus resource ${resourceId} has invalid published_date`);
+	return date.toISOString();
+}
+
+async function relatedSeedText(db: CoreDb, resourceId: string): Promise<string | null> {
+	if (!isValidUuid(resourceId)) return null;
+	const rows = await queryRows<{ title: string | null; summary: string | null; tags: string[] | null }>(
 		db,
 		sql`
-			WITH src AS (
-				SELECT embedding FROM resources WHERE id = ${seed.id}::uuid AND embedding IS NOT NULL LIMIT 1
-			)
-			SELECT r.id
-			FROM resources r, src
-			WHERE r.id <> ${seed.id}::uuid
-				AND ${corpusEnrichedSql()}
-				AND r.embedding IS NOT NULL
-			ORDER BY r.embedding <=> src.embedding
-			LIMIT ${limit} OFFSET ${offset}
+			SELECT rt.title, rt.summary, r.tags
+			FROM resources r
+			LEFT JOIN LATERAL (
+				SELECT title, summary FROM resources_localized WHERE id = r.id LIMIT 1
+			) rt ON TRUE
+			WHERE r.id = ${resourceId}::uuid AND ${corpusEnrichedSql()}
+			LIMIT 1
 		`,
 	);
-	return rows.map((r) => r.id);
+	const row = rows[0];
+	return row ? [row.title, row.summary, row.tags?.join(' ')].filter(Boolean).join('\n').slice(0, 4000) : null;
 }
 
 function recencySql(): SQL {
-	return sql`COALESCE(r.published_date, r.scraped_date, r.created_at)`;
+	return sql`r.published_date`;
 }
 
 function corpusEnrichedSql(): SQL {
-	return sql`r.scope = 'corpus' AND r.enrichment_status = 'enriched'`;
+	return sql`r.scope = 'corpus'
+		AND r.enrichment_status = 'enriched'
+		AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})`;
 }
 
 function publishedSinceSql(fromDate: Date | null | undefined): SQL {
 	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
-}
-
-function keywordMatchSql(patternArray: SQL): SQL {
-	return sql`(
-		EXISTS (SELECT 1 FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
-		OR EXISTS (
-			SELECT 1
-			FROM resource_translations rt
-			WHERE rt.resource_id = r.id
-				AND (
-					EXISTS (SELECT 1 FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
-					OR rt.title ILIKE ANY(${patternArray})
-					OR rt.summary ILIKE ANY(${patternArray})
-				)
-		)
-		OR r.type ILIKE ANY(${patternArray})
-		OR r.url ILIKE ANY(${patternArray})
-	)`;
-}
-
-async function rankResources(
-	db: CoreDb,
-	query: string,
-	limit = 100,
-	options: RankResourceOptions = {},
-	vectorStr: string | null = null,
-): Promise<SearchRanks> {
-	const sanitized = sanitize(query);
-	if (!sanitized) return EMPTY_RANKS;
-
-	const tokens = tokenize(sanitized);
-	const patterns = tokens.length > 0 ? tokens.map(likePattern) : [likePattern(sanitized)];
-	const patternArray = textArraySql(patterns);
-
-	if (!vectorStr) return keywordOnly(db, patternArray, limit, options);
-	const overfetchLimit = Math.min(limit * OVERFETCH_MULTIPLIER, OVERFETCH_CAP);
-
-	try {
-		const rows = await queryRows<{ id: string; score: number | string }>(
-			db,
-			sql`
-			WITH vec AS (
-				SELECT r.id, ROW_NUMBER() OVER (ORDER BY r.embedding <=> ${vectorStr}::vector) AS rank
-				FROM resources r
-				WHERE ${corpusEnrichedSql()}
-					AND r.embedding IS NOT NULL${publishedSinceSql(options.fromDate)}
-				ORDER BY r.embedding <=> ${vectorStr}::vector
-				LIMIT ${overfetchLimit}
-			),
-			kw AS (
-				SELECT r.id, ROW_NUMBER() OVER (ORDER BY ${recencySql()} DESC NULLS LAST) AS rank
-				FROM resources r
-				WHERE ${corpusEnrichedSql()}
-					AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
-				LIMIT ${overfetchLimit}
-			),
-			fused AS (
-				SELECT id, 1.0 / (${RRF_K} + rank) AS score FROM vec
-				UNION ALL
-				SELECT id, 1.0 / (${RRF_K} + rank) AS score FROM kw
-			),
-			scored AS (
-				SELECT id, SUM(score) AS s FROM fused GROUP BY id
-			)
-			SELECT
-				s.id::text,
-					s.s * (1.0 / (1 + GREATEST(EXTRACT(EPOCH FROM now() - ${recencySql()}), 0) / 86400.0 / ${RECENCY_HALF_LIFE_DAYS})) AS score
-			FROM scored s
-			JOIN resources r ON s.id = r.id
-			ORDER BY score DESC
-			LIMIT ${limit}
-			`,
-		);
-		return new Map(rows.map((r) => [r.id, Number(r.score)]));
-	} catch (error) {
-		console.warn({ tag: 'CORPUS', msg: 'hybrid query failed, falling back to keyword search', error: String(error) });
-		return keywordOnly(db, patternArray, limit, options);
-	}
-}
-
-async function searchQueryVector(env: CoreEnv, query: string): Promise<string | null> {
-	const sanitized = sanitize(query);
-	if (!sanitized) return null;
-	const embedding = await generateResourceEmbedding(sanitized, env.AI, env.AI_GATEWAY_NAME);
-	return embedding?.length ? `[${embedding.join(',')}]` : null;
-}
-
-function likePattern(value: string): string {
-	return `%${value.replace(/[\\%_]/g, '\\$&')}%`;
-}
-
-async function keywordOnly(db: CoreDb, patternArray: SQL, limit: number, options: RankResourceOptions = {}): Promise<SearchRanks> {
-	try {
-		const rows = await queryRows<{ id: string; match_count: number | string }>(
-			db,
-			sql`
-			SELECT r.id,
-				(
-					(SELECT COUNT(*) FROM unnest(r.tags) k WHERE k ILIKE ANY(${patternArray}))
-					+ CASE WHEN r.type ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-					+ CASE WHEN r.url ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-					+ (
-						SELECT COALESCE(SUM(
-							(SELECT COUNT(*) FROM unnest(rt.keywords) k WHERE k ILIKE ANY(${patternArray}))
-							+ CASE WHEN rt.title ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-							+ CASE WHEN rt.summary ILIKE ANY(${patternArray}) THEN 1 ELSE 0 END
-						), 0)
-						FROM resource_translations rt
-						WHERE rt.resource_id = r.id
-					)
-				) AS match_count
-			FROM resources r
-			WHERE ${corpusEnrichedSql()}
-				AND ${keywordMatchSql(patternArray)}${publishedSinceSql(options.fromDate)}
-			ORDER BY match_count DESC, ${recencySql()} DESC NULLS LAST
-			LIMIT ${limit}
-			`,
-		);
-		const max = Math.max(...rows.map((r) => Number(r.match_count)), 1);
-		return new Map(rows.map((r) => [r.id, Number(r.match_count) / max]));
-	} catch (error) {
-		console.warn({ tag: 'CORPUS', msg: 'keyword fallback failed', error: String(error) });
-		return EMPTY_RANKS;
-	}
-}
-
-function sanitize(query: string, maxLength = 200): string {
-	return query
-		.trim()
-		.replace(/['"\\;!&|():<>]/g, ' ')
-		.replace(/\s+/g, ' ')
-		.slice(0, maxLength);
-}
-
-function tokenize(sanitized: string): string[] {
-	const parts = sanitized.split(/[\s,，、。.;；!！?？/\\|]+/).filter(Boolean);
-	const tokens = new Set<string>();
-	for (const p of parts) {
-		if (/[㐀-鿿぀-ヿ]/.test(p) || p.length >= 2) {
-			tokens.add(p);
-		}
-	}
-	return [...tokens].slice(0, 8);
-}
-
-function corpusErrorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 function truncate(content: string | null | undefined, max: number): string {
@@ -396,8 +255,7 @@ function resourceLocalizedJoin(): SQL {
 		LEFT JOIN LATERAL (
 			SELECT lang, title, summary, content, keywords, translation_source
 			FROM resources_localized
-			WHERE id = r.id
-			ORDER BY ${resourceTranslationOrderSql({ lang: sql`lang`, originalLang: sql`r.original_lang` })}
+			WHERE id = r.id AND lang = r.original_lang
 			LIMIT 1
 		) rt ON TRUE
 	`;
@@ -450,7 +308,7 @@ function resourceSearchSelect(): SQL {
 		rt.title AS title,
 		r.url,
 		${recencySql()} AS published_date,
-		r.type AS source,
+		COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
@@ -458,7 +316,8 @@ function resourceSearchSelect(): SQL {
 
 function resourceAccessPredicate(userId: string): SQL {
 	return sql`
-		(
+		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+		AND (
 			r.scope = 'corpus'
 			OR EXISTS (
 				SELECT 1
@@ -470,17 +329,16 @@ function resourceAccessPredicate(userId: string): SQL {
 }
 
 function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {
-	const title = resource.title || resource.url || 'Untitled resource';
-	const publishedDate = resource.published_date ?? resource.scraped_date;
+	const publishedDate = optionalCorpusDate(resource.published_date, resource.id);
 	return {
 		type: 'resource',
 		id: resource.id,
-		title,
-		content: truncate(resource.content || resource.summary, CONTENT_MAX),
+		title: requiredCorpusText(resource.title, 'title', resource.id),
+		content: resource.content ? truncate(resource.content, CONTENT_MAX) : undefined,
 		metadata: {
 			url: resource.url,
 			source: resource.type,
-			publishedDate,
+			...(publishedDate ? { publishedDate } : {}),
 			tags: resource.tags,
 			keywords: resource.keywords,
 			scope: resource.scope,
@@ -542,7 +400,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 			db,
 			sql`
 				SELECT from_id, to_id
-				FROM citations
+				FROM resource_links
 				WHERE user_id = ${userId}
 					AND from_type = 'collection'
 						AND from_id = ANY(${textArraySql(validIds)})
@@ -585,7 +443,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 				.filter((resource): resource is ResourceSummaryRow => !!resource);
 			const entries = colResources.map((resource) => ({
 				id: resource.id,
-				title: resource.title || 'Untitled resource',
+				title: requiredCorpusText(resource.title, 'title', resource.id),
 				summary: resource.summary ? truncate(resource.summary, SUMMARY_MAX) : null,
 			}));
 			return [
@@ -637,9 +495,8 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): 
 		groups.set(item.type, list);
 	}
 
-	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>();
 	const entries = [...groups.entries()];
-	const settled = await Promise.allSettled(
+	const loaded = await Promise.all(
 		entries.map(async ([type, ids]) => {
 			const results =
 				type === 'collection'
@@ -650,17 +507,7 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): 
 			return [type, results] as const;
 		}),
 	);
-	for (const [index, settledResult] of settled.entries()) {
-		const [type, ids] = entries[index];
-		if (settledResult.status === 'fulfilled') {
-			resultMaps.set(settledResult.value[0], settledResult.value[1]);
-			continue;
-		}
-
-		const error = corpusErrorMessage(settledResult.reason);
-		console.warn({ tag: 'CORPUS', msg: 'read group failed', type, count: ids.length, error });
-		resultMaps.set(type, new Map(ids.map((id) => [id, { type: 'error' as const, id, error: `${type} read failed: ${error}` }])));
-	}
+	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>(loaded);
 
 	return capReadContextContent(
 		items.map(
