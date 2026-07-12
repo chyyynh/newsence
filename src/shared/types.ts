@@ -45,7 +45,7 @@ export interface TranscriptSegment {
 export interface YouTubeChapter {
 	title: string;
 	startTime: number;
-	endTime: number;
+	endTime?: number;
 }
 
 export interface YoutubeTranscript {

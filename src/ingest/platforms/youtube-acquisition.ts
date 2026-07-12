@@ -49,11 +49,11 @@ function parseChaptersFromDescription(description: string): YouTubeChapter[] {
 		if (title.length < 2 || /^\d+:\d+/.test(title)) continue;
 
 		const startTime = hours * 3600 + minutes * 60 + seconds;
-		chapters.push({ title, startTime, endTime: 0 });
+		chapters.push({ title, startTime });
 	}
 
-	for (let i = 0; i < chapters.length; i++) {
-		chapters[i].endTime = chapters[i + 1]?.startTime ?? Number.MAX_SAFE_INTEGER;
+	for (let i = 0; i < chapters.length - 1; i++) {
+		chapters[i].endTime = chapters[i + 1].startTime;
 	}
 
 	return chapters.length >= 2 ? chapters : [];
