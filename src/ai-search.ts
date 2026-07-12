@@ -26,6 +26,7 @@ type CorpusDocumentRow = {
 };
 
 type AiSearchRank = { id: string; score: number };
+type SearchRetrievalType = 'hybrid' | 'keyword';
 
 async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null, limit = 50): Promise<string[]> {
 	return withCoreDb(env, async (db) => {
@@ -157,17 +158,23 @@ export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promis
 	return matches.length > 0;
 }
 
-export async function searchCorpusRanks(env: CoreEnv, query: string, fromDate?: Date | null): Promise<AiSearchRank[]> {
+export async function searchCorpusRanks(
+	env: CoreEnv,
+	query: string,
+	fromDate?: Date | null,
+	retrievalType: SearchRetrievalType = 'hybrid',
+): Promise<AiSearchRank[]> {
 	const response = await env.AI_SEARCH.get(INSTANCE_NAME).search({
 		query,
 		ai_search_options: {
 			query_rewrite: { enabled: false },
 			reranking: { enabled: false },
 			retrieval: {
-				retrieval_type: 'hybrid',
-				fusion_method: 'rrf',
+				retrieval_type: retrievalType,
+				...(retrievalType === 'hybrid' ? { fusion_method: 'rrf' as const } : {}),
 				keyword_match_mode: 'or',
 				max_num_results: MAX_RESULTS,
+				metadata_only: true,
 				return_on_failure: false,
 				boost_by: [{ field: 'published_at', direction: 'desc' }],
 				...(fromDate ? { filters: { published_at: { $gte: fromDate.toISOString() } } } : {}),

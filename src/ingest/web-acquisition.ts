@@ -10,11 +10,22 @@ const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
 
+type TransformElement = {
+	parentElement: TransformElement | null;
+	removeAttribute(name: string): void;
+};
+
 // Direct saved LessWrong URLs still use web acquisition. RSS sources in feed mode never reach this transformation.
 addTransformations({
 	patterns: [/^https:\/\/(?:www\.)?lesswrong\.com\/posts\//],
 	pre(document) {
-		const postContent = document.querySelector('.PostsPage-postContent');
+		// article-extractor relies on the ambient DOM Document type, while Workers
+		// exposes a different global Document in service-binding consumers.
+		const postContent = (
+			document as unknown as {
+				querySelector(selector: string): TransformElement | null;
+			}
+		).querySelector('.PostsPage-postContent');
 		let container = postContent?.parentElement;
 		while (container) {
 			container.removeAttribute('hidden');

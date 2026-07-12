@@ -119,7 +119,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
 	const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
-	const ranks = query ? new Map((await searchCorpusRanks(env, query, fromDate)).map(({ id, score }) => [id, score])) : null;
+	const ranks = query ? new Map((await searchSummaryRanks(env, query, fromDate)).map(({ id, score }) => [id, score])) : null;
 	return withCoreDb(env, async (db) => {
 		if (ranks) {
 			if (ranks.size === 0) return [];
@@ -154,6 +154,11 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 		);
 		return rows.map(formatSummary);
 	});
+}
+
+async function searchSummaryRanks(env: CoreEnv, query: string, fromDate: Date | null) {
+	const keywordRanks = await searchCorpusRanks(env, query, fromDate, 'keyword');
+	return keywordRanks.length ? keywordRanks : searchCorpusRanks(env, query, fromDate);
 }
 
 function requiredRank(ranks: Map<string, number>, resourceId: string): number {
