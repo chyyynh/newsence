@@ -4,7 +4,7 @@ import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
-import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
+import { resourceContentAccessSql } from './resource-query-policy';
 
 export interface ResourceSummary {
 	id: string;
@@ -239,8 +239,7 @@ function resourceLocalizedJoin(): SQL {
 		LEFT JOIN LATERAL (
 			SELECT lang, title, summary, content, keywords, translation_source
 			FROM resources_localized
-			WHERE id = r.id
-			ORDER BY ${resourceTranslationOrderSql({ lang: sql`lang`, originalLang: sql`r.original_lang` })}
+			WHERE id = r.id AND lang = r.original_lang
 			LIMIT 1
 		) rt ON TRUE
 	`;

@@ -4,7 +4,7 @@ import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, toIsoString } from '@db/sql';
 import { sql } from 'drizzle-orm';
-import { resourceContentAccessSql, resourceTranslationOrderSql } from './resource-query-policy';
+import { resourceContentAccessSql } from './resource-query-policy';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;
@@ -132,11 +132,7 @@ async function readCollectionResources(
 		     SELECT rl.lang, rl.title, rl.summary, rl.content, rl.keywords
 		     FROM resources_localized rl
 		     WHERE rl.id = r.id
-		     ORDER BY ${resourceTranslationOrderSql({
-						lang: sql`rl.lang`,
-						originalLang: sql`r.original_lang`,
-						requestedLocale: sql`${primaryLocale}::text`,
-					})}
+		       AND rl.lang = COALESCE(${primaryLocale}::text, r.original_lang)
 		     LIMIT 1
 		   ) localized ON TRUE
 			   WHERE link.from_type = 'collection'
