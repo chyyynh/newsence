@@ -98,7 +98,18 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 
 async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
 	const { YoutubeTranscript } = await import('youtube-transcript');
-	const items = await YoutubeTranscript.fetchTranscript(videoId, { fetch: transcriptFetch });
+	let items: Array<{ offset: number; duration: number; text: string }>;
+	try {
+		items = await YoutubeTranscript.fetchTranscript(videoId, { fetch: transcriptFetch });
+	} catch (error) {
+		console.warn({
+			tag: 'YOUTUBE',
+			msg: 'Transcript unavailable; using video description',
+			videoId,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return [];
+	}
 
 	if (!items?.length) {
 		console.info({ tag: 'YOUTUBE', msg: 'Transcript unavailable; using video description', videoId });
