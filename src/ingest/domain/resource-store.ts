@@ -13,13 +13,13 @@ import {
 	type ResourceScope,
 	type ResourceTranslationSource,
 } from '@core-shared/resource-types';
-import type { ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
+import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { textArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
-import { buildResourceUpdate, mergePlatformMetadata, type ResourceUpdate } from './resource-update';
+import { buildResourceUpdate, type ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
@@ -654,16 +654,16 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 export async function reopenResourceForReprocessing(
 	env: CoreEnv,
 	resourceId: string,
-	update: { summary: string; content: string; platformMetadata: unknown },
+	update: { summary: string; content: string; platformMetadata: PlatformMetadata },
 ): Promise<boolean> {
 	return withCoreTx(env, async (db) => {
 		const resourceResult = await db.execute(sql`
-			SELECT original_lang, platform_metadata
+			SELECT original_lang
 			FROM resources
 			WHERE id = ${resourceId}::uuid
 			FOR UPDATE
 		`);
-		const resource = (resourceResult.rows as Array<{ original_lang: string; platform_metadata: unknown }>)[0];
+		const resource = (resourceResult.rows as Array<{ original_lang: string }>)[0];
 		if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
 
 		const translationResult = await db.execute(sql`
@@ -691,7 +691,7 @@ export async function reopenResourceForReprocessing(
 		await db
 			.update(resources)
 			.set({
-				platformMetadata: mergePlatformMetadata(resource.platform_metadata, update.platformMetadata),
+				platformMetadata: update.platformMetadata,
 				enrichmentStatus: 'pending',
 				updatedAt: sql`NOW()`,
 			})
