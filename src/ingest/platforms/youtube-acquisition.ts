@@ -64,11 +64,10 @@ const transcriptFetch: typeof fetch = (input, init) => {
 	return fetchWithTimeout(url, init, TRANSCRIPT_FETCH_TIMEOUT_MS);
 };
 
-function toSeconds(value: string | number | undefined): number {
-	if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-	if (!value) return 0;
-	const parsed = Number.parseFloat(value);
-	return Number.isFinite(parsed) ? parsed : 0;
+function toSeconds(value: string | number | undefined, field: string, videoId: string): number {
+	const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number.parseFloat(value) : Number.NaN;
+	if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`YouTube transcript ${videoId} has invalid ${field}`);
+	return parsed;
 }
 
 async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Promise<YouTubeVideosResponse> {
@@ -100,10 +99,10 @@ async function fetchTranscriptViaCaptionExtractor(videoId: string): Promise<Tran
 	if (!items?.length) throw new Error(`YouTube transcript is unavailable for ${videoId}`);
 
 	const segments: TranscriptSegment[] = items.map((item: { start: string; dur: string; text: string }) => {
-		const startTime = toSeconds(item.start);
+		const startTime = toSeconds(item.start, 'start', videoId);
 		return {
 			startTime,
-			endTime: startTime + toSeconds(item.dur),
+			endTime: startTime + toSeconds(item.dur, 'duration', videoId),
 			text: item.text,
 		};
 	});
