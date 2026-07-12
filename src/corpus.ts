@@ -435,7 +435,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 				.filter((resource): resource is ResourceSummaryRow => !!resource);
 			const entries = colResources.map((resource) => ({
 				id: resource.id,
-				title: resource.title || 'Untitled resource',
+				title: requiredCorpusText(resource.title, 'title', resource.id),
 				summary: resource.summary ? truncate(resource.summary, SUMMARY_MAX) : null,
 			}));
 			return [
