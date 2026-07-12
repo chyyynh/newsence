@@ -1,7 +1,7 @@
 import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, toIsoString, uuidArraySql } from '@db/sql';
+import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 import { resourceContentAccessSql } from './resource-query-policy';
@@ -169,13 +169,26 @@ function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const summary = resource.summary ?? undefined;
 	return {
 		id: resource.id,
-		title: resource.title || resource.url || 'Untitled resource',
-		url: resource.url ?? '',
-		publishedDate: toIsoString(resource.published_date),
-		source: resource.source ?? undefined,
+		title: requiredCorpusText(resource.title, 'title', resource.id),
+		url: requiredCorpusText(resource.url, 'url', resource.id),
+		publishedDate: requiredCorpusDate(resource.published_date, resource.id),
+		source: requiredCorpusText(resource.source, 'source', resource.id),
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: resource.tags ?? undefined,
 	};
+}
+
+function requiredCorpusText(value: string | null, field: string, resourceId: string): string {
+	const text = value?.trim();
+	if (!text) throw new Error(`Corpus resource ${resourceId} is missing ${field}`);
+	return text;
+}
+
+function requiredCorpusDate(value: Date | string | null, resourceId: string): string {
+	if (!value) throw new Error(`Corpus resource ${resourceId} is missing published_date`);
+	const date = value instanceof Date ? value : new Date(value);
+	if (Number.isNaN(date.getTime())) throw new Error(`Corpus resource ${resourceId} has invalid published_date`);
+	return date.toISOString();
 }
 
 async function relatedSeedText(db: CoreDb, resourceId: string): Promise<string | null> {
@@ -197,7 +210,7 @@ async function relatedSeedText(db: CoreDb, resourceId: string): Promise<string |
 }
 
 function recencySql(): SQL {
-	return sql`COALESCE(r.published_date, r.scraped_date, r.created_at)`;
+	return sql`r.published_date`;
 }
 
 function corpusEnrichedSql(): SQL {
@@ -292,7 +305,7 @@ function resourceSearchSelect(): SQL {
 		rt.title AS title,
 		r.url,
 		${recencySql()} AS published_date,
-		r.type AS source,
+		NULLIF(r.platform_metadata->>'sourceName', '') AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
@@ -313,17 +326,15 @@ function resourceAccessPredicate(userId: string): SQL {
 }
 
 function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {
-	const title = resource.title || resource.url || 'Untitled resource';
-	const publishedDate = resource.published_date ?? resource.scraped_date;
 	return {
 		type: 'resource',
 		id: resource.id,
-		title,
-		content: truncate(resource.content || resource.summary, CONTENT_MAX),
+		title: requiredCorpusText(resource.title, 'title', resource.id),
+		content: resource.content ? truncate(resource.content, CONTENT_MAX) : undefined,
 		metadata: {
 			url: resource.url,
 			source: resource.type,
-			publishedDate,
+			publishedDate: requiredCorpusDate(resource.published_date, resource.id),
 			tags: resource.tags,
 			keywords: resource.keywords,
 			scope: resource.scope,
