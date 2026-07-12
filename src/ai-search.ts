@@ -66,8 +66,8 @@ function requiredDocumentText(value: string | null, field: string, resourceId: s
 	return text;
 }
 
-function documentPublishedAt(row: CorpusDocumentRow): string {
-	if (!row.published_at) throw new Error(`AI Search document ${row.id} is missing published_at`);
+function documentPublishedAt(row: CorpusDocumentRow): string | undefined {
+	if (row.published_at === null) return undefined;
 	const date = new Date(row.published_at);
 	if (Number.isNaN(date.getTime())) throw new Error(`AI Search document ${row.id} has invalid published_at`);
 	return date.toISOString();
@@ -128,7 +128,7 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 	const source = requiredDocumentText(document.source, 'source', document.id);
 	const result = await env.AI_SEARCH.get(INSTANCE_NAME).items.upload(itemKey(resourceId), serializeDocument(document), {
 		metadata: {
-			published_at: publishedAt,
+			...(publishedAt ? { published_at: publishedAt } : {}),
 			language: document.original_lang,
 			source,
 			type: document.type,

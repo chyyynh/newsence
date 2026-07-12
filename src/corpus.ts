@@ -173,11 +173,12 @@ function clampInt(value: number | undefined, min: number, max: number, defaultVa
 
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const summary = resource.summary ?? undefined;
+	const publishedDate = optionalCorpusDate(resource.published_date, resource.id);
 	return {
 		id: resource.id,
 		title: requiredCorpusText(resource.title, 'title', resource.id),
 		url: requiredCorpusText(resource.url, 'url', resource.id),
-		publishedDate: requiredCorpusDate(resource.published_date, resource.id),
+		...(publishedDate ? { publishedDate } : {}),
 		source: requiredCorpusText(resource.source, 'source', resource.id),
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: resource.tags ?? undefined,
@@ -190,8 +191,8 @@ function requiredCorpusText(value: string | null, field: string, resourceId: str
 	return text;
 }
 
-function requiredCorpusDate(value: Date | string | null, resourceId: string): string {
-	if (!value) throw new Error(`Corpus resource ${resourceId} is missing published_date`);
+function optionalCorpusDate(value: Date | string | null, resourceId: string): string | undefined {
+	if (value === null) return undefined;
 	const date = value instanceof Date ? value : new Date(value);
 	if (Number.isNaN(date.getTime())) throw new Error(`Corpus resource ${resourceId} has invalid published_date`);
 	return date.toISOString();
@@ -328,6 +329,7 @@ function resourceAccessPredicate(userId: string): SQL {
 }
 
 function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {
+	const publishedDate = optionalCorpusDate(resource.published_date, resource.id);
 	return {
 		type: 'resource',
 		id: resource.id,
@@ -336,7 +338,7 @@ function formatResourceReadResult(resource: ResourceContentRow): ReadContextResu
 		metadata: {
 			url: resource.url,
 			source: resource.type,
-			publishedDate: requiredCorpusDate(resource.published_date, resource.id),
+			...(publishedDate ? { publishedDate } : {}),
 			tags: resource.tags,
 			keywords: resource.keywords,
 			scope: resource.scope,
