@@ -1,6 +1,6 @@
 import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
-import { extractFromHtml } from '@extractus/article-extractor';
+import { addTransformations, extractFromHtml } from '@extractus/article-extractor';
 import { type PdfTextArtifact, parsePdfBytes } from './platforms/pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -9,6 +9,19 @@ const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
+
+addTransformations({
+	patterns: [/^https:\/\/(?:www\.)?lesswrong\.com\/posts\//],
+	pre(document) {
+		const postContent = document.querySelector('.PostsPage-postContent');
+		let container = postContent?.parentElement;
+		while (container) {
+			container.removeAttribute('hidden');
+			container = container.parentElement;
+		}
+		return document;
+	},
+});
 
 type ExtractedHtmlArticle = {
 	html: string;
