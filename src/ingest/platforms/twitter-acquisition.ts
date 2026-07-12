@@ -359,7 +359,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 
 	if (longformUrl) {
 		console.info({ tag: 'TWITTER', msg: 'Detected Twitter longform', longformUrl });
-		const tweetId = tweet.id ?? extractTweetId(tweet.url);
+		const tweetId = tweet.id?.trim();
 		if (!tweetId) throw new Error(`Could not resolve tweet id for longform URL ${longformUrl}`);
 		const longformContent = await scrapeTwitterLongform(tweetId, apiKey, tweet.lang);
 		return {
