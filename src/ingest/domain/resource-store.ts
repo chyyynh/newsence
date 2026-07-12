@@ -19,7 +19,7 @@ import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema'
 import { textArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
-import { buildResourceUpdate, type ResourceUpdate } from './resource-update';
+import type { ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
@@ -238,7 +238,7 @@ export interface SourceResourceDraft {
 	type: ContentResourceType;
 	originalLang?: string;
 	content: string | null;
-	platformMetadata: unknown | null;
+	platformMetadata: PlatformMetadata | null;
 	previewImageUrl?: string | null;
 	keywords?: string[];
 	tags?: string[];
@@ -390,7 +390,7 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 		'source',
 		crypto.randomUUID(),
 		resource,
-		buildResourceUpdate(resource, { previewImageUrl: resource.og_image_url ?? null }),
+		pendingResourceUpdate(resource, base.platformMetadata),
 		'pending',
 	);
 	const result = await db.execute(resourceUpsertStatement(record));
@@ -399,6 +399,20 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
 	if (row.enrichment_status !== 'enriched') await syncOriginalResourceTranslation(db, resourceId, record);
 	return resourceId;
+}
+
+function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata: PlatformMetadata | null): ResourceUpdate {
+	return {
+		type: resource.type,
+		title: resource.title,
+		summary: resource.summary,
+		content: resource.content,
+		tags: resource.tags,
+		keywords: resource.keywords,
+		entities: undefined,
+		og_image_url: resource.og_image_url?.trim() || null,
+		platform_metadata: platformMetadata,
+	};
 }
 
 function resourceMirrorRecord(

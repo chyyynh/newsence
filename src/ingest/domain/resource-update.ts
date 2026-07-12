@@ -12,7 +12,7 @@ export type ResourceUpdate = {
 	keywords: string[];
 	entities: ProcessorResult['updateData']['entities'];
 	og_image_url: string | null;
-	platform_metadata: PlatformMetadata;
+	platform_metadata: PlatformMetadata | null;
 };
 
 type ResourceMetadataPatch = Record<string, unknown>;
