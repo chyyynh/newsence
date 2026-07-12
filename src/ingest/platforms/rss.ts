@@ -52,17 +52,20 @@ function canonicalFeedItemUrl(item: FeedEntry): string | null {
 }
 
 function feedPublishedDate(value: string | undefined): Date {
-	if (!value) return new Date();
+	if (!value) throw new Error('RSS item has no published date');
 	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? new Date() : date;
+	if (Number.isNaN(date.getTime())) throw new Error(`RSS item has invalid published date: ${value}`);
+	return date;
 }
 
 async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
 	const description = item.description?.trim() ?? '';
+	const title = item.title?.trim();
+	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
 	const resourceId = await withCoreDb(env, (db) =>
 		upsertPendingSourceResource(db, {
 			url,
-			title: item.title || 'No Title',
+			title,
 			source: feed.name,
 			publishedDate: feedPublishedDate(item.published),
 			summary: description.slice(0, FEED_SUMMARY_MAX_CHARS),
