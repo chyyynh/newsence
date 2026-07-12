@@ -204,17 +204,16 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 	const map: ResourceTranslationMap = {};
 	if (!Array.isArray(row.translations)) throw new Error(`Invalid translations for resource ${row.id}: expected array`);
 	for (const item of row.translations) {
-		if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+		if (!item || typeof item !== 'object' || Array.isArray(item)) {
+			throw new Error(`Invalid translation for resource ${row.id}: expected object`);
+		}
 		const translation = item as ResourceStoreTranslationRow;
 		const lang = canonicalizeResourceLang(translation.lang);
 		const compact = compactLocaleText({
 			title: translation.title as ResourceLocaleText['title'],
 			summary: translation.summary as ResourceLocaleText['summary'],
 			content: translation.content as ResourceLocaleText['content'],
-			keywords:
-				translation.keywords === null || translation.keywords === undefined
-					? null
-					: stringArrayValue(translation.keywords, 'translation keywords'),
+			keywords: stringArrayValue(translation.keywords, 'translation keywords'),
 			source: translation.source as ResourceLocaleText['source'],
 		});
 		if (compact) map[lang] = compact;
