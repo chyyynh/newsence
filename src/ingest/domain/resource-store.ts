@@ -234,7 +234,7 @@ export interface SourceResourceDraft {
 	title: string;
 	source: string;
 	publishedDate: Date | string;
-	summary: string;
+	summary: string | null;
 	type: ContentResourceType;
 	originalLang?: string;
 	content: string | null;

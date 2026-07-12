@@ -15,7 +15,7 @@ async function enqueueTwitterResource(
 		title: string;
 		source: string;
 		publishedDate: Date;
-		summary: string;
+		summary: string | null;
 		originalLang?: string;
 		content: string | null;
 		platformMetadata: PlatformMetadata;
@@ -42,6 +42,19 @@ async function enqueueTwitterResource(
 }
 
 const MIN_TWEET_LENGTH = 150;
+
+function requiredTweetText(value: string | null | undefined, field: string, tweetId: string): string {
+	const text = value?.trim();
+	if (!text) throw new Error(`Tweet ${tweetId} is missing ${field}`);
+	return text;
+}
+
+function requiredTweetDate(value: string | null, tweetId: string): Date {
+	if (!value) throw new Error(`Tweet ${tweetId} is missing publishedDate`);
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) throw new Error(`Tweet ${tweetId} has invalid publishedDate`);
+	return date;
+}
 
 async function reuseExistingTweet(env: CoreEnv, url: string): Promise<boolean> {
 	const [existing] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [url]));
@@ -71,19 +84,17 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 	if (resourceUrl !== knownUrl && (await reuseExistingTweet(env, resourceUrl))) return true;
 
 	const { scraped } = resolved;
-	const title = scraped.title || buildTweetTitle(tweet);
-	const source =
-		resolved.kind === 'share'
-			? scraped.metadata.siteName || scraped.metadata.author || 'External'
-			: tweet.author?.name || scraped.metadata.author || 'Twitter';
+	const tweetId = tweet.id ?? resourceUrl;
+	const title = requiredTweetText(scraped.title, 'title', tweetId);
+	const source = requiredTweetText(scraped.metadata.siteName, 'siteName', tweetId);
 	await enqueueTwitterResource(env, {
 		url: resourceUrl,
 		title,
 		source,
-		publishedDate: new Date(scraped.metadata.publishedDate || tweet.createdAt),
-		summary: resolved.kind === 'tweet' ? resolved.eventText : scraped.metadata.description || '',
+		publishedDate: requiredTweetDate(scraped.metadata.publishedDate, tweetId),
+		summary: scraped.metadata.description,
 		originalLang: scraped.metadata.language ?? undefined,
-		content: resolved.kind === 'tweet' ? resolved.eventText || null : scraped.markdown,
+		content: scraped.markdown,
 		platformMetadata: scraped.platformMetadata,
 		previewImageUrl: scraped.previewImageUrl,
 		hashTags: tweet.hashTags,
