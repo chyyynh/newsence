@@ -157,8 +157,9 @@ function parseFeedVideos(xml: string) {
 	}).entries ?? []) as Array<FeedEntry & { videoId?: unknown }>;
 
 	return entries.flatMap((entry) => {
-		if (typeof entry.videoId !== 'string') return [];
-		const url = normalizeUrl(entry.link ?? `https://youtube.com/watch?v=${entry.videoId}`);
+		if (typeof entry.videoId !== 'string' || !entry.videoId.trim()) throw new Error('YouTube feed entry is missing videoId');
+		if (!entry.link?.trim()) throw new Error(`YouTube feed entry ${entry.videoId} is missing link`);
+		const url = normalizeUrl(entry.link);
 		return new URL(url).pathname.startsWith('/shorts/') ? [] : [{ videoId: entry.videoId, url }];
 	});
 }
@@ -177,7 +178,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 			title,
 			source: youtubeMetadata.channelName,
 			publishedDate,
-			summary: scraped.metadata.description ?? '',
+			summary: scraped.metadata.description,
 			type: 'youtube',
 			originalLang: scraped.metadata.language ?? undefined,
 			content: scraped.markdown,
