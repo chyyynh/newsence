@@ -15,6 +15,10 @@ interface YouTubeVideoItem {
 		defaultAudioLanguage?: string;
 		publishedAt: string;
 		thumbnails: {
+			default?: { url: string };
+			medium?: { url: string };
+			high?: { url: string };
+			standard?: { url: string };
 			maxres?: { url: string };
 		};
 		tags?: string[];
@@ -129,7 +133,13 @@ export async function scrapeYouTube(
 	const snippet = video.snippet;
 	const stats = video.statistics;
 
-	const thumbnailUrl = snippet.thumbnails.maxres?.url ?? null;
+	const thumbnailUrl =
+		snippet.thumbnails.maxres?.url ??
+		snippet.thumbnails.standard?.url ??
+		snippet.thumbnails.high?.url ??
+		snippet.thumbnails.medium?.url ??
+		snippet.thumbnails.default?.url ??
+		null;
 
 	const chapters = parseChaptersFromDescription(snippet.description);
 
