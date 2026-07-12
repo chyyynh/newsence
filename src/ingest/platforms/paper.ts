@@ -166,9 +166,19 @@ export async function stagePaperEnrichment(
 	const url = candidate.url?.trim();
 	if (!url || !detectPaperId(url)) return null;
 
-	return step.do(
-		'enrich-paper-metadata',
-		{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-		() => enrichPaperMetadata(url, env.S2_API_KEY),
-	);
+	try {
+		return await step.do(
+			'enrich-paper-metadata',
+			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => enrichPaperMetadata(url, env.S2_API_KEY),
+		);
+	} catch (error) {
+		console.warn({
+			tag: 'S2',
+			msg: 'Paper enrichment failed after retries; continuing without academic metadata',
+			url,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return null;
+	}
 }
