@@ -433,7 +433,7 @@ function resourceMirrorRecord(
 		scrapedDate: new Date(),
 		keywords,
 		tags,
-		category: deriveResourceCategory(storedPlatformMetadata, tags),
+		category: deriveResourceCategory(storedPlatformMetadata),
 		ogImageUrl: cleanString(updatePayload.og_image_url),
 		platformMetadataJson: jsonbParam(storedPlatformMetadata),
 		enrichmentStatus,
@@ -597,12 +597,12 @@ function platformMetadataValue(value: unknown): PlatformMetadata {
 	return value as PlatformMetadata;
 }
 
-function deriveResourceCategory(platformMetadata: unknown, tags: string[]): ResourceCategory | null {
+function deriveResourceCategory(platformMetadata: unknown): ResourceCategory | null {
 	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
 		const category = (platformMetadata as { classification?: { category?: unknown } }).classification?.category;
 		if (isResourceCategory(category)) return category;
 	}
-	return tags.find(isResourceCategory) ?? null;
+	return null;
 }
 
 function parseResourceType(value: unknown): ContentResourceType {
