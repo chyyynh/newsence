@@ -136,7 +136,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 				`,
 			);
 			return rows
-				.sort((a, b) => (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0))
+				.sort((a, b) => requiredRank(ranks, b.id) - requiredRank(ranks, a.id))
 				.slice(0, limit)
 				.map(formatSummary);
 		}
@@ -154,6 +154,12 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 		);
 		return rows.map(formatSummary);
 	});
+}
+
+function requiredRank(ranks: Map<string, number>, resourceId: string): number {
+	const rank = ranks.get(resourceId);
+	if (rank === undefined) throw new Error(`Corpus resource ${resourceId} has no search rank`);
+	return rank;
 }
 
 export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
