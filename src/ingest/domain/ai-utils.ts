@@ -123,16 +123,22 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
-	const content = resource.content || resource.summary || resource.title;
+	const content = requiredResourceContent(resource);
 	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
+	const summaryLine = resource.summary?.trim() ? `\n摘要: ${resource.summary.trim()}` : '';
 	return `文章資訊:
 標題: ${resource.title}
 來源: ${resource.source}
-資源類型: ${resource.type}${excludedLine}
-摘要: ${resource.summary || '無摘要'}
+資源類型: ${resource.type}${excludedLine}${summaryLine}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
+}
+
+function requiredResourceContent(resource: ResourceForProcessing): string {
+	const content = resource.content?.trim();
+	if (!content) throw new Error(`Resource ${resource.id} has no content`);
+	return content;
 }
 
 function cjkRatio(text: string): number {
@@ -162,12 +168,13 @@ export async function generateZhHantMetadataTranslation(
 	resource: ResourceForProcessing,
 	env: CoreEnv,
 ): Promise<z.infer<typeof ZhHantMetadataTranslationSchema>> {
+	const content = requiredResourceContent(resource);
+	const summaryLine = resource.summary?.trim() ? `\n摘要：${resource.summary.trim()}` : '';
 	const prompt = `原文資訊：
 	資源類型：${resource.type}
-	標題：${resource.title}
-摘要：${resource.summary || '無摘要'}
+	標題：${resource.title}${summaryLine}
 內容：
-${(resource.content || resource.summary || resource.title).slice(0, MAX_CONTENT_LENGTH)}`;
+${content.slice(0, MAX_CONTENT_LENGTH)}`;
 	const translation = await generateObject(env.AI, prompt, {
 		schema: ZhHantMetadataTranslationSchema,
 		task: 'resource-metadata-localization',
