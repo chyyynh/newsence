@@ -59,8 +59,8 @@ export async function persistYouTubeWorkflowData(
 				videoId: input.transcript.videoId,
 				transcript: input.transcript.segments,
 				language: input.transcript.language,
-				chapters: input.transcript.chapters ?? [],
-				chaptersFromDescription: input.transcript.chaptersFromDescription ?? false,
+				chapters: input.transcript.chapters,
+				chaptersFromDescription: input.transcript.chaptersFromDescription,
 				fetchedAt: new Date(),
 			})
 			.onConflictDoUpdate({
