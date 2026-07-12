@@ -86,7 +86,7 @@ async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity:
 				set: {
 					name: sql`CASE
 						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.name}
-						ELSE COALESCE(NULLIF(excluded.name, ''), ${entityTranslations.name})
+						ELSE excluded.name
 					END`,
 					source: sql`CASE
 						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.source}

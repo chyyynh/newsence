@@ -65,10 +65,10 @@ function normalizeResourceEntity(entity: ResourceEntityInput): NormalizedResourc
 	const name = entity.name.trim();
 	const nameCn = entity.name_cn.trim();
 	const type = normalizeEntityType(entity.type);
-	if (!type) return null;
+	if (!name || !nameCn || !type) return null;
 	return {
 		name,
-		name_cn: nameCn || name,
+		name_cn: nameCn,
 		type,
 	};
 }
