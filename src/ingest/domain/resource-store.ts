@@ -157,7 +157,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			) AS translations,
 			rl.url AS url,
 			rl.og_image_url AS og_image_url,
-			COALESCE(NULLIF(rl.platform_metadata->>'sourceName', ''), rl.type) AS source,
+			NULLIF(rl.platform_metadata->>'sourceName', '') AS source,
 			rl.type AS type,
 			rl.scope AS scope,
 			rl.published_date AS published_date,
@@ -181,19 +181,19 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 	const resource: StoredResourceForProcessing = {
 		id: row.id,
 		original_lang: canonicalizeResourceLang(row.original_lang),
-		title: row.title ?? '',
+		title: requiredString(row.title, 'title'),
 		summary: row.summary,
 		content: row.content,
 		translations: resourceStoreTranslations(row),
 		url: row.url ?? '',
 		og_image_url: row.og_image_url,
-		source: row.source ?? '',
+		source: requiredString(row.source, 'source'),
 		published_date: formatPublishedDate(row.published_date),
 		tags: row.tags,
 		keywords: row.keywords,
 		type: parseResourceType(row.type),
 		scope: parseResourceScope(row.scope),
-		platform_metadata: (row.platform_metadata ?? undefined) as ResourceForProcessing['platform_metadata'],
+		platform_metadata: platformMetadataValue(row.platform_metadata),
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
@@ -226,8 +226,7 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 }
 
 function formatPublishedDate(value: Date | string | null): string {
-	if (value instanceof Date) return value.toISOString();
-	return value ?? '';
+	return dateValue(value, 'published_date').toISOString();
 }
 
 export interface SourceResourceDraft {
@@ -570,6 +569,12 @@ function cleanString(value: unknown): string | null {
 	return trimmed.length ? trimmed : null;
 }
 
+function requiredString(value: unknown, field: string): string {
+	const text = cleanString(value);
+	if (!text) throw new Error(`Invalid ${field}: expected non-empty string`);
+	return text;
+}
+
 function stringOrNull(value: unknown): string | null {
 	if (value === null || value === undefined) return null;
 	if (typeof value !== 'string') throw new Error(`Invalid resource field: expected string`);
@@ -584,6 +589,16 @@ function optionalDateValue(value: unknown, field: string): Date | null {
 function jsonbParam(value: unknown): string | null {
 	if (value === null || value === undefined) return null;
 	return JSON.stringify(value);
+}
+
+function platformMetadataValue(value: unknown): PlatformMetadata {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		throw new Error('Invalid platform_metadata: expected object');
+	}
+	const metadata = value as Record<string, unknown>;
+	requiredString(metadata.fetchedAt, 'platform_metadata.fetchedAt');
+	if (!Object.hasOwn(metadata, 'data')) throw new Error('Invalid platform_metadata: missing data');
+	return value as PlatformMetadata;
 }
 
 function deriveResourceCategory(platformMetadata: unknown, tags: string[]): ResourceCategory | null {
