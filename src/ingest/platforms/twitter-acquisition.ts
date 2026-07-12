@@ -469,10 +469,14 @@ async function fetchTwitterThreadContext(tweetId: string, apiKey: string): Promi
 			has_next_page?: boolean;
 			next_cursor?: string;
 		};
-		tweets.push(...(data.tweets ?? []));
+		if (!Array.isArray(data.tweets)) throw new Error(`Twitter thread context ${tweetId} omitted tweets`);
+		tweets.push(...data.tweets);
 		if (!data.has_next_page) break;
-		cursor = data.next_cursor ?? '';
-		if (!cursor || seenCursors.has(cursor)) break;
+		if (page === 4) throw new Error(`Twitter thread context ${tweetId} exceeded 5 pages`);
+		const nextCursor = data.next_cursor?.trim();
+		if (!nextCursor) throw new Error(`Twitter thread context ${tweetId} omitted the next cursor`);
+		cursor = nextCursor;
+		if (seenCursors.has(cursor)) throw new Error(`Twitter thread context ${tweetId} returned a repeated cursor`);
 		seenCursors.add(cursor);
 		await scheduler.wait(250);
 	}
