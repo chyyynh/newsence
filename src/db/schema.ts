@@ -95,6 +95,7 @@ export const sources = pgTable(
 		avatarUrl: text('avatar_url'),
 		category: text('category'),
 		displayGroup: text('display_group'),
+		contentMode: text('content_mode'),
 		enabled: boolean('enabled').default(true).notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),

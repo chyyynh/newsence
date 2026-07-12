@@ -93,7 +93,7 @@ function stripLeadingFrontmatter(markdown: string): string {
 	return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
 }
 
-async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
+export async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
 	const result = await env.AI.toMarkdown(
 		{
 			name: `${urlHost(url)}.html`,
@@ -104,7 +104,7 @@ async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promis
 		},
 	);
 	if (result.format === 'error') throw new Error(`Workers AI toMarkdown failed: ${result.error}`);
-	return result.data.trim();
+	return stripLeadingFrontmatter(result.data);
 }
 
 async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string): Promise<AcquiredWebContent> {
@@ -138,8 +138,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Prom
 	const article = await extractHtmlArticle(html, url);
 	if (!article) throw new Error(`No readable article content found: ${url}`);
 
-	const markdown = await markdownFromHtml(env, article.html, url);
-	const content = stripLeadingFrontmatter(markdown);
+	const content = await markdownFromHtml(env, article.html, url);
 	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
