@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql } from '@db/sql';
+import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
@@ -228,6 +228,68 @@ type SearchIndexRebuildPayload = { revision: string };
 const SEARCH_INDEX_REVISION = 'v4';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
+const REINDEX_DELETE_CONCURRENCY = 10;
+
+type SearchItemPageAudit = {
+	deleted: number;
+	scanned: number;
+};
+
+async function loadSearchItemPageCount(env: CoreEnv): Promise<number> {
+	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({
+		page: 1,
+		per_page: REINDEX_PAGE_SIZE,
+		sort_by: 'modified_at',
+		source: 'builtin',
+	});
+	const totalCount = listed.result_info?.total_count;
+	if (totalCount === undefined) throw new Error('AI Search item listing did not return total_count');
+	return Math.ceil(totalCount / REINDEX_PAGE_SIZE);
+}
+
+async function loadEligibleCorpusIds(env: CoreEnv, resourceIds: readonly string[]): Promise<Set<string>> {
+	if (!resourceIds.length) return new Set();
+	return withCoreDb(env, async (db) => {
+		const rows = await queryRows<{ id: string }>(
+			db,
+			sql`
+				SELECT id::text
+				FROM resources
+				WHERE id = ANY(${uuidArraySql(resourceIds)})
+				  AND scope = 'corpus'
+				  AND enrichment_status = 'enriched'
+				  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+			`,
+		);
+		return new Set(rows.map((row) => row.id));
+	});
+}
+
+async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchItemPageAudit> {
+	const instance = env.AI_SEARCH.get(INSTANCE_NAME);
+	const listed = await instance.items.list({
+		page,
+		per_page: REINDEX_PAGE_SIZE,
+		sort_by: 'modified_at',
+		source: 'builtin',
+	});
+	const ownedItems = listed.result.filter((item) => item.source_id === 'builtin' && item.key.startsWith(ITEM_PREFIX));
+	const resourceIds = ownedItems.map((item) => idFromItemKey(item.key)).filter((id): id is string => id !== null);
+	const eligibleIds = await loadEligibleCorpusIds(env, resourceIds);
+	const staleItems = ownedItems.filter((item) => {
+		const resourceId = idFromItemKey(item.key);
+		return resourceId === null || !eligibleIds.has(resourceId);
+	});
+
+	for (let offset = 0; offset < staleItems.length; offset += REINDEX_DELETE_CONCURRENCY) {
+		const batch = staleItems.slice(offset, offset + REINDEX_DELETE_CONCURRENCY);
+		await Promise.all(batch.map((item) => instance.items.delete(item.id)));
+	}
+	if (staleItems.length) {
+		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', page, count: staleItems.length });
+	}
+	return { deleted: staleItems.length, scanned: listed.result.length };
+}
 
 async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
 	const instance = env.AI_SEARCH.get(INSTANCE_NAME);
@@ -256,6 +318,25 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		const itemPageCount = await step.do(
+			'load-search-item-page-count',
+			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			() => loadSearchItemPageCount(this.env),
+		);
+		let deleted = 0;
+		let scanned = 0;
+		// Deleting from the last page first prevents pagination shifts from
+		// skipping stale items that have not been inspected yet.
+		for (let itemPage = itemPageCount; itemPage >= 1; itemPage--) {
+			const audit = await step.do(
+				`prune-search-item-page-${itemPage}`,
+				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
+				() => pruneSearchItemPage(this.env, itemPage),
+			);
+			deleted += audit.deleted;
+			scanned += audit.scanned;
+		}
+
 		const instanceConfig = await step.do(
 			'ensure-search-instance-config',
 			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
@@ -293,6 +374,6 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			console.info({ tag: 'AI_SEARCH', msg: 'Index rebuild page complete', revision: event.payload.revision, page, cursor, uploaded });
 		}
 
-		return { revision: event.payload.revision, instanceConfig, uploaded, pages: page, cursor };
+		return { revision: event.payload.revision, instanceConfig, scanned, deleted, uploaded, pages: page, cursor };
 	}
 }
