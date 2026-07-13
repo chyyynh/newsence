@@ -242,8 +242,7 @@ export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promis
 
 function searchFilters(instanceName: SearchInstanceName, options: CorpusSearchOptions): VectorizeVectorMetadataFilter | undefined {
 	const filters: VectorizeVectorMetadataFilter = {};
-	if (options.sourceIds?.length) {
-		if (instanceName !== SHADOW_INSTANCE_NAME) throw new Error('Canonical source filters require the v5 corpus index');
+	if (instanceName === SHADOW_INSTANCE_NAME && options.sourceIds?.length) {
 		filters.source_id = { $in: [...options.sourceIds] };
 	}
 	if (options.types?.length) filters.type = { $in: [...options.types] };
