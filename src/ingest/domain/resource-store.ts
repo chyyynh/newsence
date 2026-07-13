@@ -424,7 +424,6 @@ function resourceMirrorRecord(
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
 	const storedPlatformMetadata = updatePayload.platform_metadata;
-	const fileType = stringOrNull(resource.file_type);
 	const url = cleanString(resource.url);
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
@@ -439,12 +438,15 @@ function resourceMirrorRecord(
 		url,
 		normalizedUrl: cleanString(resource.normalized_url),
 		storageKey: cleanString(resource.storage_key),
-		fileType,
+		fileType: cleanString(resource.file_type),
 		originalLang: canonicalizeResourceLang(resource.original_lang),
 		title,
 		summary,
 		content,
-		publishedDate: optionalDateValue(resource.published_date, 'published_date'),
+		publishedDate:
+			resource.published_date === null || resource.published_date === undefined || resource.published_date === ''
+				? null
+				: dateValue(resource.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
 		tags,
@@ -576,9 +578,9 @@ async function syncOriginalResourceTranslation(db: CoreDb, resourceId: string, r
 }
 
 function cleanString(value: unknown): string | null {
-	const str = stringOrNull(value);
-	if (!str) return null;
-	const trimmed = str.trim();
+	if (value === null || value === undefined) return null;
+	if (typeof value !== 'string') throw new Error(`Invalid resource field: expected string`);
+	const trimmed = value.trim();
 	return trimmed.length ? trimmed : null;
 }
 
@@ -586,17 +588,6 @@ function requiredString(value: unknown, field: string): string {
 	const text = cleanString(value);
 	if (!text) throw new Error(`Invalid ${field}: expected non-empty string`);
 	return text;
-}
-
-function stringOrNull(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value !== 'string') throw new Error(`Invalid resource field: expected string`);
-	return value;
-}
-
-function optionalDateValue(value: unknown, field: string): Date | null {
-	if (value === null || value === undefined || value === '') return null;
-	return dateValue(value, field);
 }
 
 function platformMetadataValue(value: unknown): PlatformMetadata {
