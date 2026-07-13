@@ -25,12 +25,6 @@ export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
 
 export type ResourceContentSurface = 'app' | 'ai-tools' | 'export';
 
-// AI and exports stay library-gated so stored or paywalled corpus content is
-// not redistributed by default.
-export function resourceContentSurfaceAllowsCorpus(surface: ResourceContentSurface): boolean {
-	return surface === 'app';
-}
-
 export function hasResourceContentAccess(input: {
 	surface: ResourceContentSurface;
 	hasViewer: boolean;
@@ -38,7 +32,9 @@ export function hasResourceContentAccess(input: {
 	inViewerLibrary: boolean;
 }): boolean {
 	if (!input.hasViewer) return false;
-	return input.inViewerLibrary || (input.scope === 'corpus' && resourceContentSurfaceAllowsCorpus(input.surface));
+	// AI and exports stay library-gated so stored or paywalled corpus content is
+	// not redistributed by default.
+	return input.inViewerLibrary || (input.scope === 'corpus' && input.surface === 'app');
 }
 
 export const DEFAULT_RESOURCE_LANG = 'en';

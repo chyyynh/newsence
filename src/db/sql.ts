@@ -1,4 +1,4 @@
-import { type ResourceContentSurface, resourceContentSurfaceAllowsCorpus } from '@core-shared/resource-types';
+import type { ResourceContentSurface } from '@core-shared/resource-types';
 import { type SQL, sql } from 'drizzle-orm';
 import type { CoreDb } from './client';
 
@@ -31,7 +31,7 @@ export function resourceContentAccessSql(
 	surface: ResourceContentSurface,
 	input: { hasViewer: SQL; inViewerLibrary: SQL; scope: SQL },
 ): SQL {
-	return resourceContentSurfaceAllowsCorpus(surface)
+	return surface === 'app'
 		? sql`(${input.hasViewer} AND (${input.inViewerLibrary} OR ${input.scope} = 'corpus'))`
 		: sql`(${input.hasViewer} AND ${input.inViewerLibrary})`;
 }
