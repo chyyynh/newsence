@@ -14,6 +14,7 @@ export function selectPreferredResourceTranslation<T extends { lang: string }>(
 		const locale = canonicalizeOptionalResourceLang(translation.lang);
 		if (locale && !byLocale.has(locale)) byLocale.set(locale, translation);
 	}
-	const locale = targetResourceLocale(requestedLocale, originalLang);
-	return locale ? (byLocale.get(locale) ?? null) : null;
+	const requested = canonicalizeOptionalResourceLang(requestedLocale);
+	const original = canonicalizeOptionalResourceLang(originalLang);
+	return (requested ? byLocale.get(requested) : null) ?? (original ? byLocale.get(original) : null) ?? null;
 }

@@ -18,12 +18,6 @@ export interface ResourceSummary {
 
 export type ResourceSearchInput = {
 	query: string;
-	daysAgo?: number;
-	limit?: number;
-};
-
-export type ResourceRankSearchInput = {
-	query: string;
 	limit?: number;
 	publishedAfter?: string;
 };
@@ -91,14 +85,11 @@ const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
 const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
 
-export async function searchCorpusResourceRanks(
-	env: CoreEnv,
-	input: ResourceRankSearchInput,
-): Promise<Array<{ id: string; score: number }>> {
+export async function searchCorpusResourceRanks(env: CoreEnv, input: ResourceSearchInput): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
-	const publishedAfter = optionalDate(input.publishedAfter, 'publishedAfter');
+	const publishedAfter = optionalPublishedAfter(input.publishedAfter);
 	return (await searchCorpusRanks(env, query, { fromDate: publishedAfter })).slice(0, limit);
 }
 
@@ -119,8 +110,7 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 1, 3650, 1);
-	const fromDate = daysAgo === null ? null : new Date(Date.now() - daysAgo * 86_400_000);
+	const fromDate = optionalPublishedAfter(input.publishedAfter);
 	const ranks = query ? new Map((await searchCorpusRanks(env, query, { fromDate })).map(({ id, score }) => [id, score])) : null;
 	return withCoreDb(env, async (db) => {
 		if (ranks) {
@@ -173,10 +163,10 @@ function clampInt(value: number | undefined, min: number, max: number, defaultVa
 	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
-function optionalDate(value: string | undefined, field: string): Date | null {
+function optionalPublishedAfter(value: string | undefined): Date | null {
 	if (value === undefined) return null;
 	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}`);
+	if (Number.isNaN(date.getTime())) throw new Error('Invalid publishedAfter');
 	return date;
 }
 
