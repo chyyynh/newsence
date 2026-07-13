@@ -9,11 +9,13 @@ const drizzlePath = resolve(root, 'src/db/schema.ts');
 const prismaPath = resolve(root, '../../web-tanstack/prisma/schema.prisma');
 const manualIndexesPath = resolve(root, '../../web-tanstack/prisma/manual-indexes.sql');
 const resourceTypesPath = resolve(root, '../../packages/resource-types/index.ts');
+const coreResourceTypesPath = resolve(root, 'src/shared/resource-types.ts');
 
 const drizzleSource = readFileSync(drizzlePath, 'utf8');
 const prismaSource = readFileSync(prismaPath, 'utf8');
 const manualIndexesSource = readFileSync(manualIndexesPath, 'utf8');
 const resourceTypesSource = readFileSync(resourceTypesPath, 'utf8');
+const coreResourceTypesSource = readFileSync(coreResourceTypesPath, 'utf8');
 
 const PRISMA_SCALARS = new Set(['String', 'Int', 'BigInt', 'Boolean', 'DateTime', 'Decimal', 'Json', 'Bytes', 'Unsupported']);
 
@@ -107,6 +109,10 @@ function sameValues(actual, expected) {
 	return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
 
+function sameMembers(actual, expected) {
+	return sameValues([...actual].sort(), [...expected].sort());
+}
+
 const prismaTables = parsePrismaModels(prismaSource);
 const drizzleTables = parseDrizzleTables(drizzleSource);
 const errors = [];
@@ -156,6 +162,40 @@ if (!contentResourceTypes || !mediaResourceTypes) {
 	}
 }
 
+const sourcePlatforms = parseStringArray(coreResourceTypesSource, 'SOURCE_PLATFORMS');
+const sourceAcquisitionModes = parseStringArray(coreResourceTypesSource, 'SOURCE_ACQUISITION_MODES');
+if (!sourcePlatforms || !sourceAcquisitionModes) {
+	errors.push(`Unable to parse canonical source policy domains from ${coreResourceTypesPath}`);
+} else {
+	if (!/platform:\s*text\('platform',\s*\{\s*enum:\s*SOURCE_PLATFORMS\s*\}\)/.test(drizzleSource)) {
+		errors.push('Drizzle sources.platform must use the canonical SOURCE_PLATFORMS domain');
+	}
+	if (!/acquisitionMode:\s*text\('content_mode',\s*\{\s*enum:\s*SOURCE_ACQUISITION_MODES\s*\}\)/.test(drizzleSource)) {
+		errors.push('Drizzle sources.acquisitionMode must use the canonical SOURCE_ACQUISITION_MODES domain');
+	}
+	const platformConstraint = manualIndexesSource.match(/ADD CONSTRAINT sources_platform_check\s+CHECK \(platform IN \(([^)]+)\)\);/);
+	const constrainedPlatforms = platformConstraint ? [...platformConstraint[1].matchAll(/'([^']+)'/g)].map((match) => match[1]) : null;
+	if (!constrainedPlatforms || !sameMembers(constrainedPlatforms, sourcePlatforms)) {
+		errors.push('sources_platform_check differs from canonical SOURCE_PLATFORMS');
+	}
+	const acquisitionConstraint = manualIndexesSource.match(
+		/ADD CONSTRAINT sources_acquisition_mode_check\s+CHECK \(([\s\S]*?)\n {2}\);/,
+	)?.[1];
+	const constrainedModes = acquisitionConstraint
+		? [
+				...new Set(
+					[...acquisitionConstraint.matchAll(/content_mode\s+(?:IN\s+\(([^)]+)\)|=\s*'([^']+)')/g)].flatMap((match) => {
+						if (match[2]) return [match[2]];
+						return [...match[1].matchAll(/'([^']+)'/g)].map((value) => value[1]);
+					}),
+				),
+			]
+		: null;
+	if (!constrainedModes || !sameMembers(constrainedModes, sourceAcquisitionModes)) {
+		errors.push('sources_acquisition_mode_check differs from canonical SOURCE_ACQUISITION_MODES');
+	}
+}
+
 if (errors.length > 0) {
 	console.error('Drizzle/Prisma schema drift detected:\n');
 	for (const error of errors) console.error(`- ${error}`);
@@ -163,5 +203,5 @@ if (errors.length > 0) {
 }
 
 process.stdout.write(
-	`Drizzle/Prisma drift check passed for ${drizzleTables.length} complete table definitions and the canonical resource type domain.\n`,
+	`Drizzle/Prisma drift check passed for ${drizzleTables.length} complete table definitions and canonical resource/source domains.\n`,
 );

@@ -3,6 +3,7 @@ import {
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
 	RESOURCE_TYPES,
+	SOURCE_ACQUISITION_MODES,
 	SOURCE_PLATFORMS,
 } from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
@@ -96,8 +97,8 @@ export const sources = pgTable(
 		avatarUrl: text('avatar_url'),
 		category: text('category'),
 		displayGroup: text('display_group'),
-		contentMode: text('content_mode'),
-		enabled: boolean('enabled').default(true).notNull(),
+		acquisitionMode: text('content_mode', { enum: SOURCE_ACQUISITION_MODES }).default('platform').notNull(),
+		monitoringEnabled: boolean('enabled').default(true).notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),

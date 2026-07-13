@@ -1,5 +1,5 @@
 import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
-import type { NormalizedContent, RssMetadata } from '@core-shared/types';
+import type { NormalizedContent } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from '@ingest/domain/content-sanitization';
 import { parseFeed } from 'feedsmith';
@@ -42,7 +42,7 @@ export interface FeedItem {
 	previewImageUrl?: string;
 }
 
-export interface RssFeedAcquisitionInput extends RssMetadata {
+export interface RssFeedAcquisitionInput {
 	feedUrl: string;
 	articleUrl: string;
 	sourceName: string;
@@ -255,7 +255,7 @@ export async function acquireRssFeedItem(env: CoreEnv, input: RssFeedAcquisition
 		},
 		platformMetadata: {
 			fetchedAt: new Date().toISOString(),
-			data: { sourceId: input.sourceId },
+			data: null,
 		},
 	};
 }

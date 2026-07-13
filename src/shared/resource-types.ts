@@ -15,6 +15,10 @@ export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies
 
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
 
+export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
+
+export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
+
 export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 
 export type ResourceScope = (typeof RESOURCE_SCOPES)[number];

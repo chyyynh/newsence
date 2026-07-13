@@ -12,6 +12,7 @@ export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefin
 
 export interface ResourceForProcessing {
 	id: string;
+	source_id: string | null;
 	type: ContentResourceType;
 	scope: ResourceScope;
 	original_lang: string;
@@ -180,13 +181,9 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-export interface RssMetadata {
-	sourceId: string;
-}
-
 export interface PlatformMetadataDataByResourceType {
 	web: null;
-	rss: RssMetadata | null;
+	rss: null;
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;

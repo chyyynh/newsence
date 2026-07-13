@@ -5,8 +5,8 @@ import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadEnabledSources, markSourceScraped } from '@ingest/domain/source-store';
+import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import { loadMonitoredSources, markSourceScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -166,7 +166,11 @@ function parseFeedVideos(xml: string) {
 	});
 }
 
-async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video: { videoId: string; url: string }): Promise<void> {
+async function queueYouTubeVideo(
+	env: CoreEnv,
+	channel: { id: string; name: string },
+	video: { videoId: string; url: string },
+): Promise<void> {
 	const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY);
 	const youtubeMetadata = scraped.platformMetadata.data;
 	const title = scraped.title?.trim();
@@ -176,6 +180,7 @@ async function queueYouTubeVideo(env: CoreEnv, channel: { name: string }, video:
 
 	const resourceId = await withCoreDb(env, async (db) => {
 		const resourceId = await upsertPendingSourceResource(db, {
+			sourceId: channel.id,
 			url: video.url,
 			title,
 			source: youtubeMetadata.channelName,
@@ -220,7 +225,7 @@ async function retryExistingYouTubeVideos(
 
 async function queueNewYouTubeVideos(
 	env: CoreEnv,
-	channel: { name: string },
+	channel: { id: string; name: string },
 	videos: Array<{ videoId: string; url: string }>,
 ): Promise<number> {
 	let queued = 0;
@@ -245,7 +250,7 @@ async function queueNewYouTubeVideos(
 export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 	if (!env.YOUTUBE_API_KEY) throw new Error('YOUTUBE_API_KEY is not configured');
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const channels = await loadEnabledSources(env, 'youtube');
+	const channels = await loadMonitoredSources(env, 'youtube');
 
 	let totalQueued = 0;
 	for (const channel of channels) {
@@ -264,6 +269,14 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 
 		const videoUrls = videos.map(({ url }) => url);
 		const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
+		await withCoreDb(env, (db) =>
+			attachSourceToResources(
+				db,
+				existingRecords.map((record) => record.id),
+				channel.id,
+				'youtube',
+			),
+		);
 		const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
 		const newVideos = videos.filter(({ url }) => !existingSet.has(url));
 		totalQueued += await retryExistingYouTubeVideos(env, channel.name, existingRecords);

@@ -2,14 +2,20 @@ import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PlatformMetadata } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
-import { getExistingResourcesByUrl, reopenResourceForReprocessing, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadEnabledSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';
+import {
+	attachSourceToResources,
+	getExistingResourcesByUrl,
+	reopenResourceForReprocessing,
+	upsertPendingSourceResource,
+} from '@ingest/domain/resource-store';
+import { loadMonitoredSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
 async function enqueueTwitterResource(
 	env: CoreEnv,
 	data: {
+		sourceId: string;
 		url: string;
 		title: string;
 		source: string;
@@ -23,6 +29,7 @@ async function enqueueTwitterResource(
 ): Promise<void> {
 	const resourceId = await withCoreDb(env, (db) =>
 		upsertPendingSourceResource(db, {
+			sourceId: data.sourceId,
 			url: data.url,
 			title: data.title,
 			source: data.source,
@@ -54,22 +61,23 @@ function requiredTweetDate(value: string | null, tweetId: string): Date {
 	return date;
 }
 
-async function reuseExistingTweet(env: CoreEnv, url: string): Promise<boolean> {
+async function reuseExistingTweet(env: CoreEnv, url: string, sourceId: string): Promise<boolean> {
 	const [existing] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [url]));
 	if (!existing) return false;
+	await withCoreDb(env, (db) => attachSourceToResources(db, [existing.id], sourceId, 'twitter'));
 	if (existing.shouldRetryEnrichment) await enqueueProcessing(env, existing.id);
 	console.info({ tag: 'TWITTER', msg: 'Resource already exists (dedup)', url });
 	return true;
 }
 
-async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
+async function saveTweet(tweet: Tweet, env: CoreEnv, monitoredSource: MonitoredSource): Promise<boolean> {
 	let knownUrl: string | null = null;
 	try {
 		knownUrl = tweet.url ? normalizeUrl(tweet.url) : null;
 	} catch {
 		// Let content resolution surface a useful error for malformed API data.
 	}
-	if (knownUrl && (await reuseExistingTweet(env, knownUrl))) return true;
+	if (knownUrl && (await reuseExistingTweet(env, knownUrl, monitoredSource.id))) return true;
 
 	const resolved = await resolveTweetContent(tweet, env.KAITO_API_KEY);
 
@@ -79,13 +87,14 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 	}
 
 	const resourceUrl = normalizeUrl(resolved.canonicalUrl);
-	if (resourceUrl !== knownUrl && (await reuseExistingTweet(env, resourceUrl))) return true;
+	if (resourceUrl !== knownUrl && (await reuseExistingTweet(env, resourceUrl, monitoredSource.id))) return true;
 
 	const { scraped } = resolved;
 	const tweetId = tweet.id ?? resourceUrl;
 	const title = requiredTweetText(scraped.title, 'title', tweetId);
 	const source = requiredTweetText(scraped.metadata.siteName, 'siteName', tweetId);
 	await enqueueTwitterResource(env, {
+		sourceId: monitoredSource.id,
 		url: resourceUrl,
 		title,
 		source,
@@ -100,7 +109,7 @@ async function saveTweet(tweet: Tweet, env: CoreEnv): Promise<boolean> {
 	return true;
 }
 
-async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
+async function saveThread(tweets: Tweet[], env: CoreEnv, monitoredSource: MonitoredSource): Promise<boolean> {
 	const { first, combinedText, platformMetadata } = buildThreadResourceParts(tweets);
 	const firstUrl = normalizeUrl(first.url);
 	const tweetCount = tweets.length;
@@ -109,6 +118,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 
 	if (existing) {
 		const existingId = existing.id;
+		await withCoreDb(env, (db) => attachSourceToResources(db, [existingId], monitoredSource.id, 'twitter'));
 		const changed = await reopenResourceForReprocessing(env, existingId, {
 			content: combinedText,
 			platformMetadata,
@@ -124,6 +134,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv): Promise<boolean> {
 	}
 
 	await enqueueTwitterResource(env, {
+		sourceId: monitoredSource.id,
 		url: firstUrl,
 		title: buildTweetTitle(first),
 		source: first.author.name,
@@ -322,7 +333,18 @@ type TweetSaveResult = {
 	hasUnattributedFailure: boolean;
 };
 
-async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<TweetSaveResult> {
+function requiredMonitoredTwitterSource(tweet: Tweet, identities: MonitoredTwitterIdentity[]): MonitoredSource {
+	const userName = monitoredAuthorUserName(tweet);
+	if (!userName) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no monitored author identity`);
+	const identity = identities.find((candidate) => candidate.twitterUserName === userName);
+	if (!identity) throw new Error(`Tweet ${tweet.id ?? tweet.url} is not attributed to a monitored source`);
+	if (identity.sources.length !== 1) {
+		throw new Error(`Twitter identity @${userName} maps to ${identity.sources.length} Source rows`);
+	}
+	return identity.sources[0]!;
+}
+
+async function saveTweetGroups(env: CoreEnv, tweets: Tweet[], identities: MonitoredTwitterIdentity[]): Promise<TweetSaveResult> {
 	let processed = 0;
 	const failedUserNames = new Set<string>();
 	let hasUnattributedFailure = false;
@@ -330,7 +352,8 @@ async function saveTweetGroups(env: CoreEnv, tweets: Tweet[]): Promise<TweetSave
 		const first = group[0];
 		if (!first) continue;
 		try {
-			const saved = group.length >= 2 ? await saveThread(group, env) : await saveTweet(first, env);
+			const monitoredSource = requiredMonitoredTwitterSource(first, identities);
+			const saved = group.length >= 2 ? await saveThread(group, env, monitoredSource) : await saveTweet(first, env, monitoredSource);
 			if (saved) processed++;
 		} catch (error) {
 			const userName = monitoredAuthorUserName(first);
@@ -376,7 +399,7 @@ async function processTwitterBatches(
 			continue;
 		}
 
-		const saved = await saveTweetGroups(env, tweets);
+		const saved = await saveTweetGroups(env, tweets, batch);
 		processed += saved.processed;
 		if (saved.hasUnattributedFailure) {
 			incompleteBatches++;
@@ -409,7 +432,7 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	if (!env.KAITO_API_KEY) throw new Error('KAITO_API_KEY is not configured');
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const runStartedAt = new Date();
-	const users = await loadEnabledSources(env, 'twitter');
+	const users = await loadMonitoredSources(env, 'twitter');
 	if (!users.length) {
 		console.info({ tag: 'TWITTER', msg: 'No twitter sources configured' });
 		return;

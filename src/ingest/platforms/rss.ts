@@ -1,7 +1,7 @@
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
-import { getExistingResourcesByUrl, recordRssFeedProvenance, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadEnabledSources, type MonitoredSource, markSourceScraped, parseRssContentMode } from '@ingest/domain/source-store';
+import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import { loadMonitoredSources, type MonitoredSource, markSourceScraped, parseRssAcquisitionMode } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { canonicalFeedItemUrl, type FeedItem, feedItemMarkdown, feedPublishedDate, feedSummary, loadFeedEntries } from './rss-feed';
 
@@ -13,10 +13,11 @@ type RssSource = MonitoredSource;
 async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, url: string): Promise<void> {
 	const title = item.title?.trim();
 	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
-	const mode = parseRssContentMode(feed.contentMode, feed.name);
+	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
 	const content = mode === 'feed' ? await feedItemMarkdown(env, item, url) : null;
 	const resourceId = await withCoreDb(env, (db) =>
 		upsertPendingSourceResource(db, {
+			sourceId: feed.id,
 			url,
 			title,
 			source: feed.name,
@@ -25,7 +26,7 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 			type: 'rss',
 			originalLang: item.language,
 			content,
-			platformMetadata: mode === 'feed' ? { fetchedAt: new Date().toISOString(), data: { sourceId: feed.id } } : null,
+			platformMetadata: mode === 'feed' ? { fetchedAt: new Date().toISOString(), data: null } : null,
 			previewImageUrl: item.previewImageUrl,
 		}),
 	);
@@ -33,7 +34,7 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 }
 
 async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
-	const mode = parseRssContentMode(feed.contentMode, feed.name);
+	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
 	const items = await loadFeedEntries(feed.handle);
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
@@ -51,17 +52,12 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	if (skippedInvalid) console.warn({ tag: 'RSS', msg: 'Skipped invalid or duplicate feed items', feed: feed.name, count: skippedInvalid });
 	const urls = itemUrls.map(({ url }) => url);
 	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, urls));
-	if (mode === 'feed') {
-		const rssResourceIds = existingRecords.filter((resource) => resource.type === 'rss').map((resource) => resource.id);
-		await withCoreDb(env, (db) => recordRssFeedProvenance(db, rssResourceIds, feed.name, { sourceId: feed.id })).catch((error) =>
-			console.error({
-				tag: 'RSS',
-				msg: 'Feed provenance backfill failed',
-				feed: feed.name,
-				error: error instanceof Error ? error.message : String(error),
-			}),
-		);
-	}
+	const rssResourceIds = existingRecords.filter((resource) => resource.type === 'rss').map((resource) => resource.id);
+	const hackerNewsResourceIds = existingRecords.filter((resource) => resource.type === 'hackernews').map((resource) => resource.id);
+	await withCoreDb(env, async (db) => {
+		await attachSourceToResources(db, rssResourceIds, feed.id, 'rss');
+		await attachSourceToResources(db, hackerNewsResourceIds, feed.id, 'hackernews');
+	});
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 	let retried = 0;
@@ -106,7 +102,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const feeds = await loadEnabledSources(env, 'rss');
+	const feeds = await loadMonitoredSources(env, 'rss');
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);
 		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));

@@ -1,4 +1,4 @@
-import type { SourcePlatform } from '@core-shared/resource-types';
+import type { SourceAcquisitionMode, SourcePlatform } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { sources } from '@db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -7,38 +7,38 @@ export type MonitoredSource = {
 	id: string;
 	name: string;
 	handle: string;
-	contentMode: string | null;
+	acquisitionMode: SourceAcquisitionMode;
 	scrapedAt: Date | null;
 	createdAt: Date;
 };
 
-export type RssContentMode = 'feed' | 'web';
+export type RssAcquisitionMode = Extract<SourceAcquisitionMode, 'feed' | 'web'>;
 
 export type RssSourcePolicy = {
 	id: string;
 	name: string;
 	handle: string;
-	contentMode: RssContentMode;
+	acquisitionMode: RssAcquisitionMode;
 };
 
-export function parseRssContentMode(value: unknown, source: string): RssContentMode {
+export function parseRssAcquisitionMode(value: unknown, source: string): RssAcquisitionMode {
 	if (value === 'feed' || value === 'web') return value;
-	throw new Error(`RSS source ${source} has invalid content mode: ${String(value)}`);
+	throw new Error(`RSS source ${source} has invalid acquisition mode: ${String(value)}`);
 }
 
-export async function loadEnabledSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
+export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
 	return withCoreDb(env, async (db: CoreDb) =>
 		db
 			.select({
 				id: sources.id,
 				name: sources.name,
 				handle: sources.handle,
-				contentMode: sources.contentMode,
+				acquisitionMode: sources.acquisitionMode,
 				scrapedAt: sources.scrapedAt,
 				createdAt: sources.createdAt,
 			})
 			.from(sources)
-			.where(and(eq(sources.enabled, true), eq(sources.platform, platform))),
+			.where(and(eq(sources.monitoringEnabled, true), eq(sources.platform, platform))),
 	);
 }
 
@@ -50,13 +50,13 @@ export async function loadRssSourcePolicy(env: CoreEnv, sourceId: string): Promi
 	return withCoreDb(env, async (db) => {
 		const source = (
 			await db
-				.select({ id: sources.id, name: sources.name, handle: sources.handle, contentMode: sources.contentMode })
+				.select({ id: sources.id, name: sources.name, handle: sources.handle, acquisitionMode: sources.acquisitionMode })
 				.from(sources)
 				.where(and(eq(sources.id, sourceId), eq(sources.platform, 'rss')))
 				.limit(1)
 		)[0];
 		if (!source) throw new Error(`RSS source ${sourceId} was not found`);
-		return { ...source, contentMode: parseRssContentMode(source.contentMode, source.name) };
+		return { ...source, acquisitionMode: parseRssAcquisitionMode(source.acquisitionMode, source.name) };
 	});
 }
 

@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
+import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
 import { loadRssSourcePolicy } from '@ingest/domain/source-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
@@ -67,11 +67,7 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 }
 
 function rssSourceId(resource: ResourceForProcessing): string | null {
-	const data = platformMetadataFor(resource, 'rss')?.data;
-	if (!data) return null;
-	const sourceId = data.sourceId?.trim();
-	if (!sourceId) throw new Error(`RSS resource ${resource.id} has invalid source provenance`);
-	return sourceId;
+	return resource.type === 'rss' ? resource.source_id : null;
 }
 
 async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
@@ -97,10 +93,9 @@ async function acquireResourceForOperation(
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			() => loadRssSourcePolicy(env, sourceId),
 		);
-		if (source.contentMode === 'feed') {
+		if (source.acquisitionMode === 'feed') {
 			if (!resource.url) throw new Error(`RSS resource ${resource.id} has no article URL`);
 			return stageRssFeedAcquisition(env, step, {
-				sourceId: source.id,
 				feedUrl: source.handle,
 				articleUrl: resource.url,
 				sourceName: source.name,

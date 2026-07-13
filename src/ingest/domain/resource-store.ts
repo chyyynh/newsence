@@ -13,7 +13,7 @@ import {
 	type ResourceScope,
 	type ResourceTranslationSource,
 } from '@core-shared/resource-types';
-import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap, RssMetadata } from '@core-shared/types';
+import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { textArraySql, uuidArraySql } from '@db/sql';
@@ -28,6 +28,7 @@ type StoredResourceForProcessing = ResourceForProcessing & {
 
 interface ResourceStoreRow {
 	id: string;
+	source_id: string | null;
 	title: string | null;
 	summary: string | null;
 	content: string | null;
@@ -127,6 +128,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 	const result = await db.execute(sql`
 		SELECT
 			rl.id::text AS id,
+			rl.source_id::text AS source_id,
 			rl.title AS title,
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
@@ -161,7 +163,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			) AS translations,
 			rl.url AS url,
 			rl.og_image_url AS og_image_url,
-			NULLIF(rl.platform_metadata->>'sourceName', '') AS source,
+			COALESCE(NULLIF(monitored_source.name, ''), NULLIF(rl.platform_metadata->>'sourceName', '')) AS source,
 			rl.type AS type,
 			rl.scope AS scope,
 			rl.published_date AS published_date,
@@ -172,6 +174,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.file_type AS file_type,
 			rl.normalized_url AS normalized_url
 		FROM resources_localized rl
+		LEFT JOIN sources monitored_source ON monitored_source.id = rl.source_id
 		WHERE rl.id = ${resourceId}::uuid
 		  AND rl.lang = rl.original_lang
 		LIMIT 1
@@ -183,6 +186,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
 	const resource: StoredResourceForProcessing = {
 		id: row.id,
+		source_id: row.source_id,
 		original_lang: canonicalizeResourceLang(row.original_lang),
 		title: requiredString(row.title, 'title'),
 		summary: row.summary,
@@ -236,6 +240,7 @@ function formatOptionalPublishedDate(value: Date | string | null): string | null
 }
 
 export interface SourceResourceDraft {
+	sourceId: string;
 	url: string;
 	title: string;
 	source: string;
@@ -255,6 +260,7 @@ type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
 interface ResourceMirrorRecord {
 	id: string;
+	sourceId: string | null;
 	type: ContentResourceType;
 	scope: ResourceScope;
 	url: string | null;
@@ -306,7 +312,8 @@ export async function updateResourceAfterProcessing(
 	const tags = textArraySql(record.tags);
 	const result = await db.execute(sql`
 		UPDATE resources
-		   SET type = ${record.type},
+		   SET source_id = COALESCE(source_id, ${record.sourceId}::uuid),
+		       type = ${record.type},
 		       url = ${record.url},
 		       normalized_url = ${record.normalizedUrl},
 		       storage_key = ${record.storageKey},
@@ -373,6 +380,7 @@ async function invalidateChangedMachineTranslationFields(db: CoreDb, resourceId:
 function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {
 	return {
 		id: base.url,
+		source_id: base.sourceId,
 		original_lang: canonicalizeOptionalResourceLang(base.originalLang) ?? DEFAULT_RESOURCE_LANG,
 		title: base.title,
 		scope: 'corpus',
@@ -440,6 +448,7 @@ function resourceMirrorRecord(
 	const content = cleanString(updatePayload.content);
 	return {
 		id: resourceId,
+		sourceId: cleanString(resource.source_id),
 		type: parseResourceType(updatePayload.type),
 		scope: origin === 'source' ? 'corpus' : resource.scope,
 		url,
@@ -496,13 +505,14 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 	const tags = textArraySql(record.tags);
 	return sql`
 		INSERT INTO resources (
-			id, type, scope, url, normalized_url, storage_key, file_type,
+			id, source_id, type, scope, url, normalized_url, storage_key, file_type,
 			original_lang, published_date, scraped_date, tags, category,
 			og_image_url, platform_metadata, enrichment_status,
 			created_at, updated_at
 		)
 		VALUES (
 			${record.id}::uuid,
+			${record.sourceId}::uuid,
 			${record.type},
 			${record.scope},
 			${record.url},
@@ -528,6 +538,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 function resourceConflictSetSql(): SQL {
 	const preserveEnriched = sql`excluded.enrichment_status = 'pending' AND resources.enrichment_status = 'enriched'`;
 	return sql`
+		source_id = COALESCE(resources.source_id, excluded.source_id),
 		type = CASE WHEN ${preserveEnriched} THEN resources.type ELSE excluded.type END,
 		scope = CASE
 			WHEN resources.scope = 'corpus' OR excluded.scope = 'private' THEN resources.scope
@@ -683,19 +694,19 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 	return result.rows as unknown as ExistingResourceRecord[];
 }
 
-export async function recordRssFeedProvenance(db: CoreDb, resourceIds: string[], sourceName: string, data: RssMetadata): Promise<void> {
+export async function attachSourceToResources(
+	db: CoreDb,
+	resourceIds: string[],
+	sourceId: string,
+	resourceType: ContentResourceType,
+): Promise<void> {
 	if (!resourceIds.length) return;
-	const dataJson = JSON.stringify(data);
 	await db.execute(sql`
 		UPDATE resources
-		SET platform_metadata = COALESCE(platform_metadata, '{}'::jsonb)
-			|| jsonb_build_object('sourceName', ${sourceName}::text, 'data', ${dataJson}::jsonb)
+		SET source_id = ${sourceId}::uuid
 		WHERE id = ANY(${uuidArraySql(resourceIds)})
-		  AND type = 'rss'
-		  AND (
-			platform_metadata->>'sourceName' IS DISTINCT FROM ${sourceName}
-			OR platform_metadata->'data' IS DISTINCT FROM ${dataJson}::jsonb
-		  )
+		  AND type = ${resourceType}
+		  AND source_id IS NULL
 	`);
 }
 
