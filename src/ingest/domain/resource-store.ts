@@ -235,7 +235,7 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 	return map;
 }
 
-export interface SourceResourceDraft {
+interface SourceResourceDraft {
 	sourceId: string;
 	url: string;
 	title: string;

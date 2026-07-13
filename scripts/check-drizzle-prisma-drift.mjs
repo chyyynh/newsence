@@ -98,7 +98,7 @@ function findMatchingBrace(source, openIndex) {
 }
 
 function parseStringArray(source, name) {
-	const declaration = source.match(new RegExp(`export const ${name} = \\[([^\\]]*)\\] as const`));
+	const declaration = source.match(new RegExp(`(?:export )?const ${name} = \\[([^\\]]*)\\] as const`));
 	if (!declaration) return null;
 	return [...declaration[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
 }

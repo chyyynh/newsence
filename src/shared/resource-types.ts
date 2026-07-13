@@ -2,9 +2,7 @@ export const CONTENT_RESOURCE_TYPES = ['web', 'rss', 'twitter', 'youtube', 'hack
 
 export type ContentResourceType = (typeof CONTENT_RESOURCE_TYPES)[number];
 
-export const MEDIA_RESOURCE_TYPES = ['image', 'file'] as const;
-
-export type MediaResourceType = (typeof MEDIA_RESOURCE_TYPES)[number];
+const MEDIA_RESOURCE_TYPES = ['image', 'file'] as const;
 
 export const RESOURCE_TYPES = [...CONTENT_RESOURCE_TYPES, ...MEDIA_RESOURCE_TYPES] as const;
 
