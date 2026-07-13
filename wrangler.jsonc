@@ -71,10 +71,7 @@
 		{
 			"binding": "SEARCH_INDEX_REBUILD_WORKFLOW",
 			"name": "newsence-search-index-rebuild",
-			"class_name": "SearchIndexRebuildWorkflow",
-			"limits": {
-				"steps": 25000
-			}
+			"class_name": "SearchIndexRebuildWorkflow"
 		}
 	],
 	/**

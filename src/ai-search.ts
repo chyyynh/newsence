@@ -223,13 +223,20 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	return [...ranks.values()];
 }
 
-type SearchIndexRebuildPayload = { revision: string };
+type SearchIndexRebuildPayload = {
+	revision: string;
+	skipPrune?: boolean;
+	startCursor?: string | null;
+};
 
 const SEARCH_INDEX_REVISION = 'v4';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
 const REINDEX_MAX_PRUNE_PASSES = 3;
+// Batch prune pages and combine corpus reads/uploads below so the current full
+// rebuild stays under the 1,024-step Workflow limit on Workers Free.
+const REINDEX_PRUNE_PAGES_PER_STEP = 10;
 
 type SearchItemPageAudit = {
 	deleted: number;
@@ -292,6 +299,33 @@ async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchIt
 	return { deleted: staleItems.length, scanned: listed.result.length };
 }
 
+async function pruneSearchItemPages(env: CoreEnv, firstPage: number, lastPage: number): Promise<SearchItemPageAudit> {
+	let deleted = 0;
+	let scanned = 0;
+	for (let page = lastPage; page >= firstPage; page--) {
+		const audit = await pruneSearchItemPage(env, page);
+		deleted += audit.deleted;
+		scanned += audit.scanned;
+	}
+	return { deleted, scanned };
+}
+
+async function syncCorpusPageAfter(
+	env: CoreEnv,
+	cursor: string | null,
+): Promise<{ cursor: string | null; done: boolean; uploaded: number }> {
+	const ids = await listCorpusIdsAfter(env, cursor, REINDEX_PAGE_SIZE);
+	if (!ids.length) return { cursor, done: true, uploaded: 0 };
+
+	let uploaded = 0;
+	for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
+		const batch = ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY);
+		const synced = await Promise.all(batch.map((id) => syncCorpusItem(env, id)));
+		uploaded += synced.filter((result) => result === 'uploaded').length;
+	}
+	return { cursor: ids.at(-1)!, done: false, uploaded };
+}
+
 async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
 	const instance = env.AI_SEARCH.get(INSTANCE_NAME);
 	const info = await instance.info();
@@ -312,17 +346,21 @@ async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | '
 }
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_REVISION}`, {
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_REVISION}-batched`, {
 		revision: SEARCH_INDEX_REVISION,
+		skipPrune: false,
+		startCursor: null,
 	});
 }
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		const startCursor = event.payload.startCursor ?? null;
+		if (startCursor !== null && !isValidUuid(startCursor)) throw new Error('Invalid search rebuild start cursor');
 		let deleted = 0;
 		let scanned = 0;
 		let prunePasses = 0;
-		while (prunePasses < REINDEX_MAX_PRUNE_PASSES) {
+		while (!event.payload.skipPrune && prunePasses < REINDEX_MAX_PRUNE_PASSES) {
 			const itemPageCount = await step.do(
 				`load-search-item-page-count-${prunePasses}`,
 				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
@@ -332,11 +370,12 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			// Deleting from the last page first prevents ordinary pagination
 			// shifts from skipping items. Repeating until a zero-delete pass also
 			// covers undocumented tie ordering and concurrent item movement.
-			for (let itemPage = itemPageCount; itemPage >= 1; itemPage--) {
+			for (let lastPage = itemPageCount; lastPage >= 1; lastPage -= REINDEX_PRUNE_PAGES_PER_STEP) {
+				const firstPage = Math.max(1, lastPage - REINDEX_PRUNE_PAGES_PER_STEP + 1);
 				const audit = await step.do(
-					`prune-search-item-page-${prunePasses}-${itemPage}`,
+					`prune-search-item-pages-${prunePasses}-${firstPage}-${lastPage}`,
 					{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-					() => pruneSearchItemPage(this.env, itemPage),
+					() => pruneSearchItemPages(this.env, firstPage, lastPage),
 				);
 				passDeleted += audit.deleted;
 				scanned += audit.scanned;
@@ -354,38 +393,35 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			() => ensureSearchInstanceConfig(this.env),
 		);
-		let cursor: string | null = null;
+		let cursor = startCursor;
 		let uploaded = 0;
 		let page = 0;
 
 		while (true) {
-			const ids = await step.do(
-				`load-corpus-page-${page}`,
-				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-				() => listCorpusIdsAfter(this.env, cursor, REINDEX_PAGE_SIZE),
-			);
-			if (!ids.length) break;
-
-			const pageUploaded = await step.do(
-				`upload-corpus-page-${page}`,
+			const result = await step.do(
+				`sync-corpus-page-${page}`,
 				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				async () => {
-					let count = 0;
-					for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
-						const batch = ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY);
-						const synced = await Promise.all(batch.map((id) => syncCorpusItem(this.env, id)));
-						count += synced.filter((result) => result === 'uploaded').length;
-					}
-					return count;
-				},
+				() => syncCorpusPageAfter(this.env, cursor),
 			);
-			uploaded += pageUploaded;
+			if (result.done) break;
+			if (!result.cursor) throw new Error(`AI Search rebuild page ${page} did not return a cursor`);
+			uploaded += result.uploaded;
 
-			cursor = ids.at(-1)!;
+			cursor = result.cursor;
 			page++;
 			console.info({ tag: 'AI_SEARCH', msg: 'Index rebuild page complete', revision: event.payload.revision, page, cursor, uploaded });
 		}
 
-		return { revision: event.payload.revision, instanceConfig, prunePasses, scanned, deleted, uploaded, pages: page, cursor };
+		return {
+			revision: event.payload.revision,
+			instanceConfig,
+			prunePasses,
+			scanned,
+			deleted,
+			uploaded,
+			pages: page,
+			startCursor,
+			cursor,
+		};
 	}
 }
