@@ -229,6 +229,7 @@ const SEARCH_INDEX_REVISION = 'v4';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
+const REINDEX_MAX_PRUNE_PASSES = 3;
 
 type SearchItemPageAudit = {
 	deleted: number;
@@ -318,23 +319,34 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		const itemPageCount = await step.do(
-			'load-search-item-page-count',
-			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			() => loadSearchItemPageCount(this.env),
-		);
 		let deleted = 0;
 		let scanned = 0;
-		// Deleting from the last page first prevents pagination shifts from
-		// skipping stale items that have not been inspected yet.
-		for (let itemPage = itemPageCount; itemPage >= 1; itemPage--) {
-			const audit = await step.do(
-				`prune-search-item-page-${itemPage}`,
-				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => pruneSearchItemPage(this.env, itemPage),
+		let prunePasses = 0;
+		while (prunePasses < REINDEX_MAX_PRUNE_PASSES) {
+			const itemPageCount = await step.do(
+				`load-search-item-page-count-${prunePasses}`,
+				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+				() => loadSearchItemPageCount(this.env),
 			);
-			deleted += audit.deleted;
-			scanned += audit.scanned;
+			let passDeleted = 0;
+			// Deleting from the last page first prevents ordinary pagination
+			// shifts from skipping items. Repeating until a zero-delete pass also
+			// covers undocumented tie ordering and concurrent item movement.
+			for (let itemPage = itemPageCount; itemPage >= 1; itemPage--) {
+				const audit = await step.do(
+					`prune-search-item-page-${prunePasses}-${itemPage}`,
+					{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
+					() => pruneSearchItemPage(this.env, itemPage),
+				);
+				passDeleted += audit.deleted;
+				scanned += audit.scanned;
+			}
+			deleted += passDeleted;
+			prunePasses++;
+			if (passDeleted === 0) break;
+			if (prunePasses === REINDEX_MAX_PRUNE_PASSES) {
+				throw new Error(`AI Search stale-item reconciliation did not converge after ${prunePasses} passes`);
+			}
 		}
 
 		const instanceConfig = await step.do(
@@ -374,6 +386,6 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			console.info({ tag: 'AI_SEARCH', msg: 'Index rebuild page complete', revision: event.payload.revision, page, cursor, uploaded });
 		}
 
-		return { revision: event.payload.revision, instanceConfig, scanned, deleted, uploaded, pages: page, cursor };
+		return { revision: event.payload.revision, instanceConfig, prunePasses, scanned, deleted, uploaded, pages: page, cursor };
 	}
 }
