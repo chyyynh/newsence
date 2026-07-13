@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
+import { CONTENT_RESOURCE_TYPES, type ContentResourceType } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
@@ -23,7 +23,7 @@ type CorpusTranslationRow = {
 
 type CorpusDocument = {
 	id: string;
-	type: string;
+	type: ContentResourceType;
 	original_lang: string;
 	published_at: Date | string | null;
 	tags: string[] | null;

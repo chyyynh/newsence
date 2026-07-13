@@ -43,11 +43,10 @@ export interface ReadContextResult {
 	error?: string;
 }
 
-type ResourceType = ReadContextItem['type'];
+type ReadContextType = ReadContextItem['type'];
 
 interface ResourceContentRow {
 	id: string;
-	type: string;
 	url: string | null;
 	normalized_url: string | null;
 	scope: string;
@@ -275,7 +274,6 @@ function resourceReadSelect(userId: string): SQL {
 	});
 	return sql`
 		r.id::text,
-		r.type,
 		r.url,
 		r.normalized_url,
 		r.scope,
@@ -507,7 +505,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 }
 
 async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
-	const groups = new Map<ResourceType, string[]>();
+	const groups = new Map<ReadContextType, string[]>();
 	for (const item of items) {
 		const list = groups.get(item.type) ?? [];
 		list.push(item.id);
@@ -526,7 +524,7 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): 
 			return [type, results] as const;
 		}),
 	);
-	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>(loaded);
+	const resultMaps = new Map<ReadContextType, Map<string, ReadContextResult>>(loaded);
 
 	return capReadContextContent(
 		items.map(
