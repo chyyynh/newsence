@@ -5,11 +5,7 @@ import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
-const LEGACY_INSTANCE_NAME = 'newsence-corpus';
-const SHADOW_INSTANCE_NAME = 'newsence-corpus-v5';
-const WRITE_INSTANCE_NAMES = [LEGACY_INSTANCE_NAME, SHADOW_INSTANCE_NAME] as const;
-type SearchInstanceName = (typeof WRITE_INSTANCE_NAMES)[number];
-const READ_INSTANCE_NAME: SearchInstanceName = LEGACY_INSTANCE_NAME;
+const SEARCH_INSTANCE_NAME = 'newsence-corpus-v5';
 
 const CANONICAL_CUSTOM_METADATA = [
 	{ field_name: 'effective_at', data_type: 'datetime' },
@@ -37,7 +33,7 @@ type CorpusDocument = {
 	source_id: string | null;
 	type: ContentResourceType;
 	original_lang: string;
-	published_at: Date | string | null;
+	effective_at: Date | string | null;
 	tags: string[] | null;
 	category: string | null;
 	source: string | null;
@@ -96,8 +92,8 @@ function requiredDocumentText(value: string | null, field: string, resourceId: s
 }
 
 function documentEffectiveAt(row: CorpusDocument): string | undefined {
-	if (row.published_at === null) return undefined;
-	const date = new Date(row.published_at);
+	if (row.effective_at === null) return undefined;
+	const date = new Date(row.effective_at);
 	if (Number.isNaN(date.getTime())) throw new Error(`AI Search document ${row.id} has invalid effective date`);
 	return date.toISOString();
 }
@@ -139,7 +135,7 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 				       r.source_id::text,
 				       r.type,
 				       r.original_lang,
-				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_at,
+				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS effective_at,
 				       r.tags,
 				       r.category,
 				       COALESCE(NULLIF(s.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
@@ -172,17 +168,8 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 	return (await loadCorpusDocuments(db, [resourceId]))[0] ?? null;
 }
 
-function corpusItemMetadata(instanceName: SearchInstanceName, document: CorpusDocument): Record<string, unknown> {
+function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	const effectiveAt = documentEffectiveAt(document);
-	if (instanceName === LEGACY_INSTANCE_NAME) {
-		return {
-			...(effectiveAt ? { published_at: effectiveAt } : {}),
-			language: document.original_lang,
-			source: requiredDocumentText(document.source, 'source', document.id),
-			type: document.type,
-			...(document.category ? { category: document.category } : {}),
-		};
-	}
 	return {
 		...(effectiveAt ? { effective_at: effectiveAt } : {}),
 		...(document.source_id ? { source_id: document.source_id } : {}),
@@ -191,15 +178,15 @@ function corpusItemMetadata(instanceName: SearchInstanceName, document: CorpusDo
 	};
 }
 
-async function uploadCorpusDocument(env: CoreEnv, instanceName: SearchInstanceName, document: CorpusDocument): Promise<void> {
+async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<void> {
 	const startedAt = Date.now();
-	const result = await env.AI_SEARCH.get(instanceName).items.upload(itemKey(document.id), serializeDocument(document), {
-		metadata: corpusItemMetadata(instanceName, document),
+	const result = await env.AI_SEARCH.get(SEARCH_INSTANCE_NAME).items.upload(itemKey(document.id), serializeDocument(document), {
+		metadata: corpusItemMetadata(document),
 	});
 	console.info({
 		tag: 'AI_SEARCH',
 		msg: 'Corpus item queued',
-		instance: instanceName,
+		instance: SEARCH_INSTANCE_NAME,
 		resource_id: document.id,
 		item_id: result.id,
 		latency_ms: Date.now() - startedAt,
@@ -213,43 +200,41 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 		await deleteCorpusItem(env, resourceId);
 		return 'deleted';
 	}
-	await Promise.all(WRITE_INSTANCE_NAMES.map((instanceName) => uploadCorpusDocument(env, instanceName, document)));
+	await uploadCorpusDocument(env, document);
 	return 'uploaded';
 }
 
-async function deleteCorpusItemFromInstance(env: CoreEnv, instanceName: SearchInstanceName, resourceId: string): Promise<boolean> {
+export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
 	// Exact-key filtering shipped on 2026-07-08; the Workers binding type has
 	// not caught up with the documented `key` parameter yet.
-	const instance = env.AI_SEARCH.get(instanceName);
+	const instance = env.AI_SEARCH.get(SEARCH_INSTANCE_NAME);
 	const listed = await instance.items.list({ key, source: 'builtin', per_page: 1 } as AiSearchListItemsParams & {
 		key: string;
 	});
 	const matches = listed.result.filter((item) => item.key === key && item.source_id === 'builtin');
 	await Promise.all(matches.map((item) => instance.items.delete(item.id)));
 	if (matches.length) {
-		console.info({ tag: 'AI_SEARCH', msg: 'Corpus item deleted', instance: instanceName, resource_id: resourceId, count: matches.length });
+		console.info({
+			tag: 'AI_SEARCH',
+			msg: 'Corpus item deleted',
+			instance: SEARCH_INSTANCE_NAME,
+			resource_id: resourceId,
+			count: matches.length,
+		});
 	}
 	return matches.length > 0;
 }
 
-export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
-	const deleted = await Promise.all(
-		WRITE_INSTANCE_NAMES.map((instanceName) => deleteCorpusItemFromInstance(env, instanceName, resourceId)),
-	);
-	return deleted.some(Boolean);
-}
-
-function searchFilters(instanceName: SearchInstanceName, options: CorpusSearchOptions): VectorizeVectorMetadataFilter | undefined {
+function searchFilters(options: CorpusSearchOptions): VectorizeVectorMetadataFilter | undefined {
 	const filters: VectorizeVectorMetadataFilter = {};
-	if (instanceName === SHADOW_INSTANCE_NAME && options.sourceIds?.length) {
+	if (options.sourceIds?.length) {
 		filters.source_id = { $in: [...options.sourceIds] };
 	}
 	if (options.types?.length) filters.type = { $in: [...options.types] };
 	if (options.categories?.length) filters.category = { $in: [...options.categories] };
 	if (options.effectiveAfter || options.effectiveBefore) {
-		const field = instanceName === SHADOW_INSTANCE_NAME ? 'effective_at' : 'published_at';
-		filters[field] = {
+		filters.effective_at = {
 			...(options.effectiveAfter ? { $gte: options.effectiveAfter.toISOString() } : {}),
 			...(options.effectiveBefore ? { $lte: options.effectiveBefore.toISOString() } : {}),
 		};
@@ -260,9 +245,8 @@ function searchFilters(instanceName: SearchInstanceName, options: CorpusSearchOp
 export async function searchCorpusRanks(env: CoreEnv, query: string, options: CorpusSearchOptions = {}): Promise<AiSearchRank[]> {
 	const profile = options.profile ?? 'discovery';
 	const retrievalType = profile === 'related' ? 'vector' : 'hybrid';
-	const filters = searchFilters(READ_INSTANCE_NAME, options);
-	const effectiveAtField = READ_INSTANCE_NAME === SHADOW_INSTANCE_NAME ? 'effective_at' : 'published_at';
-	const response = await env.AI_SEARCH.get(READ_INSTANCE_NAME).search({
+	const filters = searchFilters(options);
+	const response = await env.AI_SEARCH.get(SEARCH_INSTANCE_NAME).search({
 		query,
 		ai_search_options: {
 			query_rewrite: { enabled: false },
@@ -274,7 +258,7 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 				max_num_results: MAX_RESULTS,
 				metadata_only: true,
 				return_on_failure: false,
-				...(profile === 'related' ? {} : { boost_by: [{ field: effectiveAtField, direction: 'desc' as const }] }),
+				...(profile === 'related' ? {} : { boost_by: [{ field: 'effective_at', direction: 'desc' as const }] }),
 				...(filters ? { filters } : {}),
 			},
 		},
@@ -295,10 +279,9 @@ type SearchIndexRebuildPayload = {
 	skipPrune?: boolean;
 	startCursor?: string | null;
 	startedAt: string;
-	targetInstance: SearchInstanceName;
 };
 
-const SEARCH_INDEX_REVISION = 'v5-shadow-2';
+const SEARCH_INDEX_REVISION = 'v5-canonical-1';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
@@ -312,8 +295,8 @@ type SearchItemPageAudit = {
 	scanned: number;
 };
 
-async function loadSearchItemPageCount(env: CoreEnv, instanceName: SearchInstanceName): Promise<number> {
-	const listed = await env.AI_SEARCH.get(instanceName).items.list({
+async function loadSearchItemPageCount(env: CoreEnv): Promise<number> {
+	const listed = await env.AI_SEARCH.get(SEARCH_INSTANCE_NAME).items.list({
 		page: 1,
 		per_page: REINDEX_PAGE_SIZE,
 		sort_by: 'modified_at',
@@ -342,8 +325,8 @@ async function loadEligibleCorpusIds(env: CoreEnv, resourceIds: readonly string[
 	});
 }
 
-async function pruneSearchItemPage(env: CoreEnv, instanceName: SearchInstanceName, page: number): Promise<SearchItemPageAudit> {
-	const instance = env.AI_SEARCH.get(instanceName);
+async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchItemPageAudit> {
+	const instance = env.AI_SEARCH.get(SEARCH_INSTANCE_NAME);
 	const listed = await instance.items.list({
 		page,
 		per_page: REINDEX_PAGE_SIZE,
@@ -363,21 +346,16 @@ async function pruneSearchItemPage(env: CoreEnv, instanceName: SearchInstanceNam
 		await Promise.all(batch.map((item) => instance.items.delete(item.id)));
 	}
 	if (staleItems.length) {
-		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', instance: instanceName, page, count: staleItems.length });
+		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', instance: SEARCH_INSTANCE_NAME, page, count: staleItems.length });
 	}
 	return { deleted: staleItems.length, scanned: listed.result.length };
 }
 
-async function pruneSearchItemPages(
-	env: CoreEnv,
-	instanceName: SearchInstanceName,
-	firstPage: number,
-	lastPage: number,
-): Promise<SearchItemPageAudit> {
+async function pruneSearchItemPages(env: CoreEnv, firstPage: number, lastPage: number): Promise<SearchItemPageAudit> {
 	let deleted = 0;
 	let scanned = 0;
 	for (let page = lastPage; page >= firstPage; page--) {
-		const audit = await pruneSearchItemPage(env, instanceName, page);
+		const audit = await pruneSearchItemPage(env, page);
 		deleted += audit.deleted;
 		scanned += audit.scanned;
 	}
@@ -386,7 +364,6 @@ async function pruneSearchItemPages(
 
 async function syncCorpusPageAfter(
 	env: CoreEnv,
-	instanceName: SearchInstanceName,
 	cursor: string | null,
 ): Promise<{ cursor: string | null; done: boolean; uploaded: number }> {
 	const ids = await listCorpusIdsAfter(env, cursor, REINDEX_PAGE_SIZE);
@@ -396,7 +373,7 @@ async function syncCorpusPageAfter(
 	for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
 		const batch = ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY);
 		const documents = await withCoreDb(env, (db) => loadCorpusDocuments(db, batch));
-		await Promise.all(documents.map((document) => uploadCorpusDocument(env, instanceName, document)));
+		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
 		uploaded += documents.length;
 	}
 	return { cursor: ids.at(-1)!, done: false, uploaded };
@@ -448,7 +425,6 @@ async function listCorpusDeltaAfter(
 
 async function syncCorpusDeltaAfter(
 	env: CoreEnv,
-	instanceName: SearchInstanceName,
 	startedAt: string,
 	cursor: SearchDeltaCursor | null,
 ): Promise<{ cursor: SearchDeltaCursor | null; done: boolean; uploaded: number }> {
@@ -464,7 +440,7 @@ async function syncCorpusDeltaAfter(
 				batch.map((row) => row.id),
 			),
 		);
-		await Promise.all(documents.map((document) => uploadCorpusDocument(env, instanceName, document)));
+		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
 		uploaded += documents.length;
 	}
 	const last = rows.at(-1)!;
@@ -479,8 +455,8 @@ async function syncCorpusDeltaAfter(
 	};
 }
 
-async function ensureSearchInstanceConfig(env: CoreEnv, instanceName: SearchInstanceName): Promise<'unchanged' | 'updated'> {
-	const instance = env.AI_SEARCH.get(instanceName);
+async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
+	const instance = env.AI_SEARCH.get(SEARCH_INSTANCE_NAME);
 	const info = await instance.info();
 	if (
 		info.index_method?.vector === true &&
@@ -506,12 +482,7 @@ type SearchReconciliation = {
 	scanned: number;
 };
 
-async function reconcileSearchItems(
-	env: CoreEnv,
-	step: WorkflowStep,
-	instanceName: SearchInstanceName,
-	phase: 'pre' | 'final',
-): Promise<SearchReconciliation> {
+async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, phase: 'pre' | 'final'): Promise<SearchReconciliation> {
 	let deleted = 0;
 	let scanned = 0;
 	let passes = 0;
@@ -519,7 +490,7 @@ async function reconcileSearchItems(
 		const itemPageCount = await step.do(
 			`${phase}-load-search-item-page-count-${passes}`,
 			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			() => loadSearchItemPageCount(env, instanceName),
+			() => loadSearchItemPageCount(env),
 		);
 		let passDeleted = 0;
 		// Delete from the last page first to avoid ordinary pagination shifts.
@@ -529,7 +500,7 @@ async function reconcileSearchItems(
 			const audit = await step.do(
 				`${phase}-prune-search-item-pages-${passes}-${firstPage}-${lastPage}`,
 				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => pruneSearchItemPages(env, instanceName, firstPage, lastPage),
+				() => pruneSearchItemPages(env, firstPage, lastPage),
 			);
 			passDeleted += audit.deleted;
 			scanned += audit.scanned;
@@ -550,7 +521,6 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 		skipPrune: false,
 		startCursor: null,
 		startedAt: new Date().toISOString(),
-		targetInstance: SHADOW_INSTANCE_NAME,
 	});
 }
 
@@ -558,17 +528,16 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
 		const startCursor = event.payload.startCursor ?? null;
 		if (startCursor !== null && !isValidUuid(startCursor)) throw new Error('Invalid search rebuild start cursor');
-		if (event.payload.targetInstance !== SHADOW_INSTANCE_NAME) throw new Error('Search rebuild target must be the v5 shadow index');
 		const startedAt = isoDate(event.payload.startedAt, 'search rebuild startedAt');
 
 		const instanceConfig = await step.do(
 			'ensure-search-instance-config',
 			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			() => ensureSearchInstanceConfig(this.env, event.payload.targetInstance),
+			() => ensureSearchInstanceConfig(this.env),
 		);
 		const preReconciliation = event.payload.skipPrune
 			? { deleted: 0, passes: 0, scanned: 0 }
-			: await reconcileSearchItems(this.env, step, event.payload.targetInstance, 'pre');
+			: await reconcileSearchItems(this.env, step, 'pre');
 		let cursor = startCursor;
 		let uploaded = 0;
 		let page = 0;
@@ -577,7 +546,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			const result = await step.do(
 				`sync-corpus-page-${page}`,
 				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => syncCorpusPageAfter(this.env, event.payload.targetInstance, cursor),
+				() => syncCorpusPageAfter(this.env, cursor),
 			);
 			if (result.done) break;
 			if (!result.cursor) throw new Error(`AI Search rebuild page ${page} did not return a cursor`);
@@ -588,7 +557,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			console.info({
 				tag: 'AI_SEARCH',
 				msg: 'Index rebuild page complete',
-				instance: event.payload.targetInstance,
+				instance: SEARCH_INSTANCE_NAME,
 				revision: event.payload.revision,
 				page,
 				cursor,
@@ -603,7 +572,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			const result = await step.do(
 				`sync-corpus-delta-page-${deltaPage}`,
 				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => syncCorpusDeltaAfter(this.env, event.payload.targetInstance, startedAt, deltaCursor),
+				() => syncCorpusDeltaAfter(this.env, startedAt, deltaCursor),
 			);
 			if (result.done) break;
 			if (!result.cursor) throw new Error(`AI Search delta page ${deltaPage} did not return a cursor`);
@@ -611,11 +580,11 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			deltaCursor = result.cursor;
 			deltaPage++;
 		}
-		const finalReconciliation = await reconcileSearchItems(this.env, step, event.payload.targetInstance, 'final');
+		const finalReconciliation = await reconcileSearchItems(this.env, step, 'final');
 
 		return {
 			revision: event.payload.revision,
-			targetInstance: event.payload.targetInstance,
+			instance: SEARCH_INSTANCE_NAME,
 			startedAt,
 			instanceConfig,
 			preReconciliation,
