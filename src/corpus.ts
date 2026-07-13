@@ -145,7 +145,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 				sql`
 					SELECT ${resourceSearchSelect()}
 					FROM resources r
-					${resourceLocalizedJoin()}
+					${resourceReadJoins()}
 					WHERE r.id = ANY(${uuidArraySql(candidateIds)})
 						AND ${corpusEnrichedSql()}${searchFiltersSql(filters)}
 					ORDER BY array_position(${uuidArraySql(candidateIds)}, r.id)
@@ -160,7 +160,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 			sql`
 				SELECT ${resourceSearchSelect()}
 				FROM resources r
-				${resourceLocalizedJoin()}
+				${resourceReadJoins()}
 				WHERE ${corpusEnrichedSql()}${searchFiltersSql(filters)}
 				ORDER BY ${recencySql()} DESC, r.id DESC
 				LIMIT ${limit}
@@ -311,8 +311,9 @@ function capReadContextContent(results: ReadContextResult[]): ReadContextResult[
 	});
 }
 
-function resourceLocalizedJoin(): SQL {
+function resourceReadJoins(): SQL {
 	return sql`
+		LEFT JOIN sources monitored_source ON monitored_source.id = r.source_id
 		LEFT JOIN LATERAL (
 			SELECT lang, title, summary, content, keywords, translation_source
 			FROM resources_localized
@@ -340,7 +341,7 @@ function resourceReadSelect(userId: string): SQL {
 		r.file_type,
 		r.original_lang,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 		r.tags,
 		rt.title AS title,
 		rt.summary AS summary,
@@ -367,7 +368,7 @@ function resourceSearchSelect(): SQL {
 		rt.title AS title,
 		r.url,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
@@ -417,7 +418,7 @@ async function readResources(db: CoreDb, ids: string[], userId: string): Promise
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
-			${resourceLocalizedJoin()}
+			${resourceReadJoins()}
 				WHERE r.id = ANY(${uuidArraySql(validIds)})
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -434,7 +435,7 @@ async function readResourceSummaries(db: CoreDb, ids: string[], userId: string):
 		sql`
 			SELECT ${resourceSummarySelect()}
 			FROM resources r
-			${resourceLocalizedJoin()}
+			${resourceReadJoins()}
 				WHERE r.id = ANY(${uuidArraySql(validIds)})
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -531,7 +532,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
-			${resourceLocalizedJoin()}
+			${resourceReadJoins()}
 				WHERE (r.url = ANY(${candidateUrlArray}) OR r.normalized_url = ANY(${candidateUrlArray}))
 				AND ${resourceAccessPredicate(userId)}
 		`,
