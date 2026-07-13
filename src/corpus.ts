@@ -135,11 +135,10 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	const filters = normalizeSearchFilters(input);
 	if (filters.excludeAll) return [];
-	const ranks = query ? new Map((await searchCorpusRanks(env, query, filters)).map(({ id, score }) => [id, score])) : null;
+	const rankedIds = query ? (await searchCorpusRanks(env, query, filters)).map((rank) => rank.id) : null;
 	return withCoreDb(env, async (db) => {
-		if (ranks) {
-			if (ranks.size === 0) return [];
-			const candidateIds = [...ranks.keys()].filter(isValidUuid);
+		if (rankedIds) {
+			const candidateIds = rankedIds.filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
 			const rows = await queryRows<ResourceSearchRow>(
 				db,
@@ -149,12 +148,11 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 					${resourceLocalizedJoin()}
 					WHERE r.id = ANY(${uuidArraySql(candidateIds)})
 						AND ${corpusEnrichedSql()}${searchFiltersSql(filters)}
+					ORDER BY array_position(${uuidArraySql(candidateIds)}, r.id)
+					LIMIT ${limit}
 				`,
 			);
-			return rows
-				.sort((a, b) => requiredRank(ranks, b.id) - requiredRank(ranks, a.id))
-				.slice(0, limit)
-				.map(formatSummary);
+			return rows.map(formatSummary);
 		}
 
 		const rows = await queryRows<ResourceSearchRow>(
@@ -170,12 +168,6 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 		);
 		return rows.map(formatSummary);
 	});
-}
-
-function requiredRank(ranks: Map<string, number>, resourceId: string): number {
-	const rank = ranks.get(resourceId);
-	if (rank === undefined) throw new Error(`Corpus resource ${resourceId} has no search rank`);
-	return rank;
 }
 
 export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
