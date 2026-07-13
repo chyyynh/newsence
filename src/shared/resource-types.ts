@@ -38,10 +38,9 @@ export function hasResourceContentAccess(input: {
 	scope: string;
 	inViewerLibrary: boolean;
 }): boolean {
-	if (!input.hasViewer) return false;
 	// AI and exports stay library-gated so stored or paywalled corpus content is
 	// not redistributed by default.
-	return input.inViewerLibrary || (input.scope === 'corpus' && input.surface === 'app');
+	return (input.scope === 'corpus' && input.surface === 'app') || (input.hasViewer && input.inViewerLibrary);
 }
 
 export const DEFAULT_RESOURCE_LANG = 'en';

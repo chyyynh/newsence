@@ -32,7 +32,7 @@ export function resourceContentAccessSql(
 	input: { hasViewer: SQL; inViewerLibrary: SQL; scope: SQL },
 ): SQL {
 	return surface === 'app'
-		? sql`(${input.hasViewer} AND (${input.inViewerLibrary} OR ${input.scope} = 'corpus'))`
+		? sql`(${input.scope} = 'corpus' OR (${input.hasViewer} AND ${input.inViewerLibrary}))`
 		: sql`(${input.hasViewer} AND ${input.inViewerLibrary})`;
 }
 
