@@ -175,14 +175,3 @@ export const collections = pgTable('collections', {
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });
-
-export const citations = pgTable('resource_links', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	fromType: text('from_type').notNull(),
-	fromId: text('from_id').notNull(),
-	toType: text('to_type').notNull(),
-	toId: uuid('to_id').notNull(),
-	userId: text('user_id').notNull(),
-	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-});
