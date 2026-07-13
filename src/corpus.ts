@@ -447,7 +447,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
-	const [collectionRows, citationRows] = await Promise.all([
+	const [collectionRows, linkRows] = await Promise.all([
 		queryRows<{ id: string; name: string; description: string | null }>(
 			db,
 			sql`
@@ -481,7 +481,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 	]);
 
 	const resourceIdsByCollection = new Map<string, string[]>();
-	for (const row of citationRows) {
+	for (const row of linkRows) {
 		const list = resourceIdsByCollection.get(row.from_id) ?? [];
 		list.push(row.to_id);
 		resourceIdsByCollection.set(row.from_id, list);
