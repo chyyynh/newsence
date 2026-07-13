@@ -299,7 +299,7 @@ type SearchIndexRebuildPayload = {
 	targetInstance: SearchInstanceName;
 };
 
-const SEARCH_INDEX_REVISION = 'v5-shadow-1';
+const SEARCH_INDEX_REVISION = 'v5-shadow-2';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
