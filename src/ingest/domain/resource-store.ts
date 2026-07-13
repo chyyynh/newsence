@@ -195,12 +195,13 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		url: row.url,
 		og_image_url: row.og_image_url,
 		source: cleanString(row.source),
-		published_date: formatOptionalPublishedDate(row.published_date),
+		published_date: row.published_date === null ? null : dateValue(row.published_date, 'published_date').toISOString(),
 		tags: row.tags,
 		keywords: row.keywords,
 		type: parseResourceType(row.type),
 		scope: parseResourceScope(row.scope),
-		platform_metadata: optionalPlatformMetadataValue(row.platform_metadata),
+		platform_metadata:
+			row.platform_metadata === null || row.platform_metadata === undefined ? undefined : platformMetadataValue(row.platform_metadata),
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
@@ -231,14 +232,6 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 	return map;
 }
 
-function formatPublishedDate(value: Date | string | null): string {
-	return dateValue(value, 'published_date').toISOString();
-}
-
-function formatOptionalPublishedDate(value: Date | string | null): string | null {
-	return value === null ? null : formatPublishedDate(value);
-}
-
 export interface SourceResourceDraft {
 	sourceId: string;
 	url: string;
@@ -255,7 +248,6 @@ export interface SourceResourceDraft {
 	tags?: string[];
 }
 
-type ResourceMirrorOrigin = 'source' | 'resource';
 type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
 interface ResourceMirrorRecord {
@@ -307,7 +299,7 @@ export async function updateResourceAfterProcessing(
 	resource: ResourceForProcessing,
 	updatePayload: ResourceUpdate,
 ): Promise<string> {
-	const record = resourceMirrorRecord('resource', resourceId, resource, updatePayload);
+	const record = resourceMirrorRecord(resourceId, resource, updatePayload);
 	await invalidateChangedMachineTranslationFields(db, resourceId, record);
 	const tags = textArraySql(record.tags);
 	const result = await db.execute(sql`
@@ -388,9 +380,10 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		content: base.content,
 		translations: {},
 		url: base.url,
+		normalized_url: base.url,
 		og_image_url: base.previewImageUrl ?? null,
 		source: base.source,
-		published_date: formatPublishedDate(base.publishedDate),
+		published_date: dateValue(base.publishedDate, 'published_date').toISOString(),
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
 		type: base.type,
@@ -400,13 +393,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
 	const resource = preparedRecordToResource(base);
-	const record = resourceMirrorRecord(
-		'source',
-		crypto.randomUUID(),
-		resource,
-		pendingResourceUpdate(resource, base.platformMetadata),
-		'pending',
-	);
+	const record = resourceMirrorRecord(crypto.randomUUID(), resource, pendingResourceUpdate(resource, base.platformMetadata), 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
 	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
 	const resourceId = row?.id;
@@ -431,7 +418,6 @@ function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata
 }
 
 function resourceMirrorRecord(
-	origin: ResourceMirrorOrigin,
 	resourceId: string,
 	resource: ResourceForProcessing,
 	updatePayload: ResourceUpdate,
@@ -440,7 +426,6 @@ function resourceMirrorRecord(
 	const storedPlatformMetadata = updatePayload.platform_metadata;
 	const fileType = stringOrNull(resource.file_type);
 	const url = cleanString(resource.url);
-	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_url) : url;
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
 	const title = cleanString(updatePayload.title);
@@ -450,9 +435,9 @@ function resourceMirrorRecord(
 		id: resourceId,
 		sourceId: cleanString(resource.source_id),
 		type: parseResourceType(updatePayload.type),
-		scope: origin === 'source' ? 'corpus' : resource.scope,
+		scope: resource.scope,
 		url,
-		normalizedUrl,
+		normalizedUrl: cleanString(resource.normalized_url),
 		storageKey: cleanString(resource.storage_key),
 		fileType,
 		originalLang: canonicalizeResourceLang(resource.original_lang),
@@ -465,7 +450,7 @@ function resourceMirrorRecord(
 		tags,
 		category: deriveResourceCategory(storedPlatformMetadata),
 		ogImageUrl: cleanString(updatePayload.og_image_url),
-		platformMetadataJson: jsonbParam(storedPlatformMetadata),
+		platformMetadataJson: storedPlatformMetadata === null ? null : JSON.stringify(storedPlatformMetadata),
 		enrichmentStatus,
 	};
 }
@@ -614,11 +599,6 @@ function optionalDateValue(value: unknown, field: string): Date | null {
 	return dateValue(value, field);
 }
 
-function jsonbParam(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
-	return JSON.stringify(value);
-}
-
 function platformMetadataValue(value: unknown): PlatformMetadata {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error('Invalid platform_metadata: expected object');
@@ -629,14 +609,10 @@ function platformMetadataValue(value: unknown): PlatformMetadata {
 	return value as PlatformMetadata;
 }
 
-function optionalPlatformMetadataValue(value: unknown): PlatformMetadata | undefined {
-	return value === null || value === undefined ? undefined : platformMetadataValue(value);
-}
-
 function deriveResourceCategory(platformMetadata: unknown): ResourceCategory | null {
 	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
 		const category = (platformMetadata as { classification?: { category?: unknown } }).classification?.category;
-		if (isResourceCategory(category)) return category;
+		if (typeof category === 'string' && (RESOURCE_CATEGORIES as readonly string[]).includes(category)) return category as ResourceCategory;
 	}
 	return null;
 }
@@ -646,27 +622,19 @@ function parseResourceType(value: unknown): ContentResourceType {
 	return value;
 }
 
-function isResourceScope(value: unknown): value is ResourceScope {
-	return typeof value === 'string' && (RESOURCE_SCOPES as readonly string[]).includes(value);
-}
-
 function parseResourceScope(value: unknown): ResourceScope {
-	if (!isResourceScope(value)) throw new Error(`Invalid resource scope: ${String(value)}`);
-	return value;
-}
-
-function isTranslationSource(value: unknown): value is ResourceTranslationSource {
-	return typeof value === 'string' && (RESOURCE_TRANSLATION_SOURCES as readonly string[]).includes(value);
+	if (typeof value !== 'string' || !(RESOURCE_SCOPES as readonly string[]).includes(value)) {
+		throw new Error(`Invalid resource scope: ${String(value)}`);
+	}
+	return value as ResourceScope;
 }
 
 function parseTranslationSource(value: unknown): ResourceTranslationSource | null {
 	if (value === null || value === undefined) return null;
-	if (!isTranslationSource(value)) throw new Error(`Invalid translation source: ${String(value)}`);
-	return value;
-}
-
-function isResourceCategory(value: unknown): value is ResourceCategory {
-	return typeof value === 'string' && (RESOURCE_CATEGORIES as readonly string[]).includes(value);
+	if (typeof value !== 'string' || !(RESOURCE_TRANSLATION_SOURCES as readonly string[]).includes(value)) {
+		throw new Error(`Invalid translation source: ${String(value)}`);
+	}
+	return value as ResourceTranslationSource;
 }
 
 type ExistingResourceRecord = {
