@@ -11,7 +11,7 @@ import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArr
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 
-export interface ResourceSummary {
+interface ResourceSummary {
 	id: string;
 	title: string;
 	url: string;
@@ -27,7 +27,7 @@ export type ResourceSearchInput = {
 	filters?: ResourceSearchFilters;
 };
 
-export type ResourceSearchFilters = {
+type ResourceSearchFilters = {
 	categories?: ResourceCategory[];
 	effectiveAfter?: string;
 	effectiveBefore?: string;
@@ -46,7 +46,7 @@ export interface ReadContextItem {
 	id: string;
 }
 
-export interface ReadContextResult {
+interface ReadContextResult {
 	type: 'collection' | 'resource' | 'url' | 'document' | 'error';
 	id: string;
 	title?: string;
