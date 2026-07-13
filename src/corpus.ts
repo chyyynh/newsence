@@ -487,22 +487,6 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 	}
 
 	const allResourceIds = [...new Set([...resourceIdsByCollection.values()].flat().filter(isValidUuid))];
-	if (allResourceIds.length === 0) {
-		return new Map(
-			collectionRows.map((col) => [
-				col.id,
-				{
-					type: 'collection' as const,
-					id: col.id,
-					title: col.name,
-					content: col.description || undefined,
-					resources: [],
-					metadata: { resourceCount: 0 },
-				},
-			]),
-		);
-	}
-
 	const resourceMap = await readResourceSummaries(db, allResourceIds, userId);
 
 	return new Map(
