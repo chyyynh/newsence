@@ -1,4 +1,4 @@
-import { type ResourceContentSurface, resourceContentSurfaceAllowsCorpus } from '@core-shared/resource-content-access';
+import { type ResourceContentSurface, resourceContentSurfaceAllowsCorpus } from '@core-shared/resource-types';
 import { type SQL, sql } from 'drizzle-orm';
 import type { CoreDb } from './client';
 

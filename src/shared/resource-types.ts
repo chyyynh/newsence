@@ -23,6 +23,24 @@ export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 
 export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
 
+export type ResourceContentSurface = 'app' | 'ai-tools' | 'export';
+
+// AI and exports stay library-gated so stored or paywalled corpus content is
+// not redistributed by default.
+export function resourceContentSurfaceAllowsCorpus(surface: ResourceContentSurface): boolean {
+	return surface === 'app';
+}
+
+export function hasResourceContentAccess(input: {
+	surface: ResourceContentSurface;
+	hasViewer: boolean;
+	scope: string;
+	inViewerLibrary: boolean;
+}): boolean {
+	if (!input.hasViewer) return false;
+	return input.inViewerLibrary || (input.scope === 'corpus' && resourceContentSurfaceAllowsCorpus(input.surface));
+}
+
 export const DEFAULT_RESOURCE_LANG = 'en';
 
 export const ZH_HANT_RESOURCE_LANG = 'zh-Hant';
