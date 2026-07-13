@@ -276,8 +276,6 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 
 type SearchIndexRebuildPayload = {
 	revision: string;
-	skipPrune?: boolean;
-	startCursor?: string | null;
 	startedAt: string;
 };
 
@@ -518,16 +516,12 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, phase: 'pr
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_REVISION}-batched`, {
 		revision: SEARCH_INDEX_REVISION,
-		skipPrune: false,
-		startCursor: null,
 		startedAt: new Date().toISOString(),
 	});
 }
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		const startCursor = event.payload.startCursor ?? null;
-		if (startCursor !== null && !isValidUuid(startCursor)) throw new Error('Invalid search rebuild start cursor');
 		const startedAt = isoDate(event.payload.startedAt, 'search rebuild startedAt');
 
 		const instanceConfig = await step.do(
@@ -535,10 +529,8 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
 			() => ensureSearchInstanceConfig(this.env),
 		);
-		const preReconciliation = event.payload.skipPrune
-			? { deleted: 0, passes: 0, scanned: 0 }
-			: await reconcileSearchItems(this.env, step, 'pre');
-		let cursor = startCursor;
+		const preReconciliation = await reconcileSearchItems(this.env, step, 'pre');
+		let cursor: string | null = null;
 		let uploaded = 0;
 		let page = 0;
 
@@ -590,7 +582,6 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			preReconciliation,
 			uploaded,
 			pages: page,
-			startCursor,
 			cursor,
 			deltaUploaded,
 			deltaPages: deltaPage,
