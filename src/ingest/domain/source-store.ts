@@ -12,9 +12,9 @@ export type MonitoredSource = {
 	createdAt: Date;
 };
 
-export type RssAcquisitionMode = Extract<SourceAcquisitionMode, 'feed' | 'web'>;
+type RssAcquisitionMode = Extract<SourceAcquisitionMode, 'feed' | 'web'>;
 
-export type RssSourcePolicy = {
+type RssSourcePolicy = {
 	id: string;
 	name: string;
 	handle: string;
