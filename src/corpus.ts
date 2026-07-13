@@ -25,6 +25,7 @@ export type ResourceSearchInput = {
 export type ResourceRankSearchInput = {
 	query: string;
 	limit?: number;
+	publishedAfter?: string;
 };
 
 export type RelatedResourceSearchInput = {
@@ -97,7 +98,8 @@ export async function searchCorpusResourceRanks(
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
-	return (await searchCorpusRanks(env, query)).slice(0, limit);
+	const publishedAfter = optionalDate(input.publishedAfter, 'publishedAfter');
+	return (await searchCorpusRanks(env, query, { fromDate: publishedAfter })).slice(0, limit);
 }
 
 export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
@@ -169,6 +171,13 @@ export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], us
 function clampInt(value: number | undefined, min: number, max: number, defaultValue: number): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) return defaultValue;
 	return Math.min(Math.max(Math.trunc(value), min), max);
+}
+
+function optionalDate(value: string | undefined, field: string): Date | null {
+	if (value === undefined) return null;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}`);
+	return date;
 }
 
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
