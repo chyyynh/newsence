@@ -15,8 +15,6 @@ export type ResourceUpdate = {
 	platform_metadata: PlatformMetadata | null;
 };
 
-type ResourceMetadataPatch = Record<string, unknown>;
-
 export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
 	return {
@@ -25,7 +23,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		summary: acquired.metadata.description,
 		content: acquired.markdown,
 		source: acquired.metadata.siteName,
-		type: resourceTypeAfterAcquisition(resource.type, acquired.type),
+		type: acquired.type === 'web' && resource.type !== 'web' ? resource.type : acquired.type,
 		og_image_url: acquired.previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: mergeAcquiredPlatformMetadata(resource.platform_metadata, acquired.platformMetadata, acquired.metadata.siteName),
 		file_type: acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : resource.file_type,
@@ -47,10 +45,6 @@ function mergeAcquiredPlatformMetadata(
 	};
 }
 
-function resourceTypeAfterAcquisition(currentType: ContentResourceType, acquiredType: ContentResourceType): ContentResourceType {
-	return acquiredType === 'web' && currentType !== 'web' ? currentType : acquiredType;
-}
-
 type BuildResourceUpdateInput = {
 	processorResult: ProcessorResult;
 	extraction?: PdfExtractionMetadata;
@@ -62,8 +56,6 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
 	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
 	const updateData = processorResult.updateData;
-	const metadataPatch: ResourceMetadataPatch = {};
-	if (extraction) metadataPatch.extraction = extraction;
 	let platformMetadata = resource.platform_metadata;
 	if (paperEnrichment) {
 		platformMetadata = {
@@ -91,7 +83,9 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 			},
 		};
 	}
-	platformMetadata = platformMetadataWithSourceName({ ...platformMetadata, ...metadataPatch }, resource.source);
+	const sourceName = resource.source?.trim();
+	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
+	platformMetadata = { ...platformMetadata, ...(extraction ? { extraction } : {}), sourceName };
 
 	return {
 		type: resource.type,
@@ -104,10 +98,4 @@ export function buildResourceUpdate(resource: ResourceForProcessing, input: Buil
 		og_image_url: previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata,
 	};
-}
-
-function platformMetadataWithSourceName(platformMetadata: PlatformMetadata, source: string | null): PlatformMetadata {
-	const sourceName = source?.trim();
-	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
-	return { ...platformMetadata, sourceName };
 }
