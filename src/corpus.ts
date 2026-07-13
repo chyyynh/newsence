@@ -25,8 +25,6 @@ export type ResourceSearchInput = {
 	query: string;
 	limit?: number;
 	filters?: ResourceSearchFilters;
-	/** @deprecated Use filters.effectiveAfter. */
-	publishedAfter?: string;
 };
 
 export type ResourceSearchFilters = {
@@ -198,7 +196,7 @@ function optionalSearchDate(value: string | undefined, field: string): Date | nu
 
 function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFilters {
 	const filters = input.filters ?? {};
-	const effectiveAfter = optionalSearchDate(filters.effectiveAfter ?? input.publishedAfter, 'effectiveAfter');
+	const effectiveAfter = optionalSearchDate(filters.effectiveAfter, 'effectiveAfter');
 	const effectiveBefore = optionalSearchDate(filters.effectiveBefore, 'effectiveBefore');
 	if (effectiveAfter && effectiveBefore && effectiveAfter > effectiveBefore)
 		throw new Error('effectiveAfter must not exceed effectiveBefore');
