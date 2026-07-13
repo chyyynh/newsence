@@ -70,8 +70,6 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 	platformMetadata = { ...platformMetadata, ...(extraction ? { extraction } : {}), sourceName };
 
 	return {
-		type: resource.type,
-		title: resource.title,
 		summary: updateData.summary !== undefined ? updateData.summary : resource.summary,
 		content: updateData.content !== undefined ? updateData.content : resource.content,
 		tags: [...(updateData.tags ?? resource.tags)],
@@ -123,7 +121,7 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 		if (!updatePayload.content?.trim()) {
 			throw new Error(`Refusing to persist enriched resource ${input.resourceId} without content`);
 		}
-		const resourceType = updatePayload.type;
+		const resourceType = input.resource.type;
 		const platformMetadata = updatePayload.platform_metadata;
 		const entityInputs = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
 		const resourceId = await updateResourceAfterProcessing(db, input.resourceId, input.resource, updatePayload);

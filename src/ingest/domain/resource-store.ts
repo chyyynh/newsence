@@ -24,7 +24,7 @@ type StoredResourceForProcessing = ResourceForProcessing & {
 	has_youtube_transcript?: boolean;
 };
 
-type ResourceUpdate = Pick<ResourceForProcessing, 'type' | 'title' | 'summary' | 'content' | 'tags' | 'keywords'> & {
+type ResourceUpdate = Pick<ResourceForProcessing, 'summary' | 'content' | 'tags' | 'keywords'> & {
 	og_image_url: string | null;
 	platform_metadata: PlatformMetadata | null;
 };
@@ -408,8 +408,6 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata: PlatformMetadata | null): ResourceUpdate {
 	const sourceName = requiredString(resource.source, 'source');
 	return {
-		type: resource.type,
-		title: resource.title,
 		summary: resource.summary,
 		content: resource.content,
 		tags: resource.tags,
@@ -429,20 +427,19 @@ function resourceMirrorRecord(
 	const url = cleanString(resource.url);
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
-	const title = cleanString(updatePayload.title);
 	const summary = cleanString(updatePayload.summary);
 	const content = cleanString(updatePayload.content);
 	return {
 		id: resourceId,
 		sourceId: cleanString(resource.source_id),
-		type: parseResourceType(updatePayload.type),
+		type: parseResourceType(resource.type),
 		scope: resource.scope,
 		url,
 		normalizedUrl: cleanString(resource.normalized_url),
 		storageKey: cleanString(resource.storage_key),
 		fileType: cleanString(resource.file_type),
 		originalLang: canonicalizeResourceLang(resource.original_lang),
-		title,
+		title: cleanString(resource.title),
 		summary,
 		content,
 		publishedDate:
