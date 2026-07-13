@@ -181,7 +181,7 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-export interface PlatformMetadataDataByResourceType {
+interface PlatformMetadataDataByResourceType {
 	web: null;
 	rss: null;
 	twitter: TwitterMetadata;
