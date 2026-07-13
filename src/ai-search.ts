@@ -410,7 +410,7 @@ type SearchDeltaCursor = {
 
 type SearchDeltaRow = {
 	id: string;
-	updated_at: Date | string;
+	updated_at: string;
 };
 
 function isoDate(value: Date | string, field: string): string {
@@ -429,7 +429,7 @@ async function listCorpusDeltaAfter(
 		queryRows<SearchDeltaRow>(
 			db,
 			sql`
-				SELECT id::text, updated_at
+				SELECT id::text, updated_at::text AS updated_at
 				FROM resources
 				WHERE scope = 'corpus'
 				  AND enrichment_status = 'enriched'
@@ -469,8 +469,12 @@ async function syncCorpusDeltaAfter(
 		uploaded += documents.length;
 	}
 	const last = rows.at(-1)!;
+	const nextCursor = { id: last.id, updatedAt: last.updated_at };
+	if (cursor && nextCursor.id === cursor.id && nextCursor.updatedAt === cursor.updatedAt) {
+		throw new Error('AI Search delta cursor did not advance');
+	}
 	return {
-		cursor: { id: last.id, updatedAt: isoDate(last.updated_at, 'resource updated_at') },
+		cursor: nextCursor,
 		done: false,
 		uploaded,
 	};
