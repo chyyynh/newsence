@@ -1,13 +1,22 @@
-export {
-	CONTENT_RESOURCE_TYPES,
-	type ContentResourceType,
-	isContentResourceType,
-	isResourceType,
-	RESOURCE_TYPES,
-	type ResourceType,
-} from '@resource-types';
+export const CONTENT_RESOURCE_TYPES = ['web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf'] as const;
 
-import type { ContentResourceType } from '@resource-types';
+export type ContentResourceType = (typeof CONTENT_RESOURCE_TYPES)[number];
+
+export const MEDIA_RESOURCE_TYPES = ['image', 'file'] as const;
+
+export type MediaResourceType = (typeof MEDIA_RESOURCE_TYPES)[number];
+
+export const RESOURCE_TYPES = [...CONTENT_RESOURCE_TYPES, ...MEDIA_RESOURCE_TYPES] as const;
+
+export type ResourceType = (typeof RESOURCE_TYPES)[number];
+
+export function isContentResourceType(value: unknown): value is ContentResourceType {
+	return typeof value === 'string' && (CONTENT_RESOURCE_TYPES as readonly string[]).includes(value);
+}
+
+export function isResourceType(value: unknown): value is ResourceType {
+	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
+}
 
 export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const satisfies readonly ContentResourceType[];
 

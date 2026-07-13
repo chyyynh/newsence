@@ -8,14 +8,12 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const drizzlePath = resolve(root, 'src/db/schema.ts');
 const prismaPath = resolve(root, '../../web-tanstack/prisma/schema.prisma');
 const manualIndexesPath = resolve(root, '../../web-tanstack/prisma/manual-indexes.sql');
-const resourceTypesPath = resolve(root, '../../packages/resource-types/index.ts');
-const coreResourceTypesPath = resolve(root, 'src/shared/resource-types.ts');
+const resourceTypesPath = resolve(root, 'src/shared/resource-types.ts');
 
 const drizzleSource = readFileSync(drizzlePath, 'utf8');
 const prismaSource = readFileSync(prismaPath, 'utf8');
 const manualIndexesSource = readFileSync(manualIndexesPath, 'utf8');
 const resourceTypesSource = readFileSync(resourceTypesPath, 'utf8');
-const coreResourceTypesSource = readFileSync(coreResourceTypesPath, 'utf8');
 
 const PRISMA_SCALARS = new Set(['String', 'Int', 'BigInt', 'Boolean', 'DateTime', 'Decimal', 'Json', 'Bytes', 'Unsupported']);
 
@@ -162,10 +160,10 @@ if (!contentResourceTypes || !mediaResourceTypes) {
 	}
 }
 
-const sourcePlatforms = parseStringArray(coreResourceTypesSource, 'SOURCE_PLATFORMS');
-const sourceAcquisitionModes = parseStringArray(coreResourceTypesSource, 'SOURCE_ACQUISITION_MODES');
+const sourcePlatforms = parseStringArray(resourceTypesSource, 'SOURCE_PLATFORMS');
+const sourceAcquisitionModes = parseStringArray(resourceTypesSource, 'SOURCE_ACQUISITION_MODES');
 if (!sourcePlatforms || !sourceAcquisitionModes) {
-	errors.push(`Unable to parse canonical source policy domains from ${coreResourceTypesPath}`);
+	errors.push(`Unable to parse canonical source policy domains from ${resourceTypesPath}`);
 } else {
 	if (!/platform:\s*text\('platform',\s*\{\s*enum:\s*SOURCE_PLATFORMS\s*\}\)/.test(drizzleSource)) {
 		errors.push('Drizzle sources.platform must use the canonical SOURCE_PLATFORMS domain');
