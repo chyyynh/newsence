@@ -16,9 +16,9 @@ interface ResourceSummary {
 	title: string;
 	url: string;
 	publishedDate?: string;
-	source?: string | null;
+	source: string;
 	summary?: string;
-	tags?: string[] | null;
+	tags?: string[];
 }
 
 export type ResourceSearchInput = {
