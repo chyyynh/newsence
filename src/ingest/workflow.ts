@@ -7,6 +7,7 @@ import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
+	applyAcquiredContent,
 	PDF_MIME,
 	readAcquiredContentArtifact,
 	scrapeRssFeedItemArtifact,
@@ -14,7 +15,6 @@ import {
 } from './acquisition';
 import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
-import { applyAcquiredContent } from './domain/resource-update';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';

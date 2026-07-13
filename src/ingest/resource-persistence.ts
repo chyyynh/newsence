@@ -12,7 +12,6 @@ import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
-import { buildResourceUpdate } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
 import { persistYouTubeWorkflowData, type YouTubeHighlightsUpdate } from './platforms/youtube';
 
@@ -27,6 +26,61 @@ type PersistProcessedResourceInput = {
 	youtubeTranscript?: YoutubeTranscript;
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 };
+
+type BuildResourceUpdateInput = {
+	processorResult: ProcessorResult;
+	extraction?: PdfExtractionMetadata;
+	paperEnrichment?: PaperMetadata | null;
+	previewImageUrl: string | null;
+};
+
+function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput) {
+	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
+	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
+	const updateData = processorResult.updateData;
+	let platformMetadata = resource.platform_metadata;
+	if (paperEnrichment) {
+		platformMetadata = {
+			...platformMetadata,
+			enrichments: { ...(platformMetadata.enrichments || {}), academic: paperEnrichment },
+		};
+	}
+	if (processorResult.enrichments && Object.keys(processorResult.enrichments).length) {
+		platformMetadata = {
+			...platformMetadata,
+			enrichments: {
+				...(platformMetadata.enrichments || {}),
+				...processorResult.enrichments,
+				processedAt: new Date().toISOString(),
+			},
+		};
+	}
+	if (processorResult.classificationCategory) {
+		platformMetadata = {
+			...platformMetadata,
+			classification: {
+				...(platformMetadata.classification ?? {}),
+				category: processorResult.classificationCategory,
+				classifiedAt: new Date().toISOString(),
+			},
+		};
+	}
+	const sourceName = resource.source?.trim();
+	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
+	platformMetadata = { ...platformMetadata, ...(extraction ? { extraction } : {}), sourceName };
+
+	return {
+		type: resource.type,
+		title: resource.title,
+		summary: updateData.summary !== undefined ? updateData.summary : resource.summary,
+		content: updateData.content !== undefined ? updateData.content : resource.content,
+		tags: [...(updateData.tags ?? resource.tags)],
+		keywords: [...(updateData.keywords ?? resource.keywords)],
+		entities: updateData.entities,
+		og_image_url: previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
+		platform_metadata: platformMetadata,
+	};
+}
 
 export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<void> {
 	await withCoreDb(env, async (db) => {

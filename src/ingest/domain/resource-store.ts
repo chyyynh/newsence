@@ -19,11 +19,15 @@ import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema'
 import { textArraySql, uuidArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 import { upsertResourceTranslation } from './resource-translation-store';
-import type { ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
+};
+
+type ResourceUpdate = Pick<ResourceForProcessing, 'type' | 'title' | 'summary' | 'content' | 'tags' | 'keywords'> & {
+	og_image_url: string | null;
+	platform_metadata: PlatformMetadata | null;
 };
 
 interface ResourceStoreRow {
@@ -411,7 +415,6 @@ function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata
 		content: resource.content,
 		tags: resource.tags,
 		keywords: resource.keywords,
-		entities: undefined,
 		og_image_url: resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata ? { ...platformMetadata, sourceName } : null,
 	};
