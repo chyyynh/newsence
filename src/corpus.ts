@@ -326,7 +326,7 @@ function resourceAccessPredicate(userId: string): SQL {
 	return sql`
 		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 		AND (
-			r.scope = 'corpus'
+			(r.scope = 'corpus' AND r.enrichment_status = 'enriched')
 			OR EXISTS (
 				SELECT 1
 				FROM library l

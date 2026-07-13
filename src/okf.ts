@@ -147,7 +147,10 @@ async function readCollectionResources(
 			     AND link.from_id = ${collectionId}::text
 			     AND link.user_id = ${collectionOwnerId}
 			     AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
-			     AND (r.scope = 'corpus' OR viewer_library.id IS NOT NULL)
+			     AND (
+			       (r.scope = 'corpus' AND r.enrichment_status = 'enriched')
+			       OR viewer_library.id IS NOT NULL
+			     )
 		   ORDER BY link.created_at ASC, link.id ASC`,
 	);
 }
