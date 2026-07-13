@@ -176,7 +176,7 @@ export function needsZhHantContentTranslation(resource: ResourceForProcessing): 
 
 export function needsZhHantMetadataTranslation(resource: ResourceForProcessing): boolean {
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
-	const translation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	const translation = resource.translations[ZH_HANT_RESOURCE_LANG];
 	if (translation?.source === 'human') return false;
 	return isEmpty(translation?.title) || (resource.type !== 'twitter' && isEmpty(translation?.summary));
 }
@@ -220,7 +220,7 @@ export function hasTranslatableContent(content: string): boolean {
 }
 
 function shouldWriteResourceContentTranslation(resource: ResourceForProcessing): boolean {
-	const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	const zhHantTranslation = resource.translations[ZH_HANT_RESOURCE_LANG];
 	if (zhHantTranslation?.source === 'human') return false;
 	const zhHantContent = zhHantTranslation?.content;
 	if (isEmpty(zhHantContent)) return true;

@@ -165,7 +165,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 		const initialContent = initial.content?.trim();
 		if (!initialContent) throw new Error(`Resource ${resourceId} has no persisted original content`);
 
-		const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+		const zhHantTranslation = resource.translations[ZH_HANT_RESOURCE_LANG];
 		const zhHantContent = zhHantTranslation?.source === 'human' ? null : zhHantTranslation?.content?.trim();
 		if (resource.content && !hasTranslatableContent(resource.content) && zhHantContent) {
 			resource = {
@@ -217,7 +217,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 				translations: {
 					...resource.translations,
 					[ZH_HANT_RESOURCE_LANG]: {
-						...resource.translations?.[ZH_HANT_RESOURCE_LANG],
+						...resource.translations[ZH_HANT_RESOURCE_LANG],
 						...translatedMetadata,
 						source: 'machine',
 					},
