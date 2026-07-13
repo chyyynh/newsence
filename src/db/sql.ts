@@ -1,3 +1,4 @@
+import { type ResourceContentSurface, resourceContentSurfaceAllowsCorpus } from '@core-shared/resource-content-access';
 import { type SQL, sql } from 'drizzle-orm';
 import type { CoreDb } from './client';
 
@@ -24,6 +25,15 @@ export function uuidArraySql(values: readonly string[]): SQL {
 export async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
 	const result = await db.execute(statement);
 	return result.rows as T[];
+}
+
+export function resourceContentAccessSql(
+	surface: ResourceContentSurface,
+	input: { hasViewer: SQL; inViewerLibrary: SQL; scope: SQL },
+): SQL {
+	return resourceContentSurfaceAllowsCorpus(surface)
+		? sql`(${input.hasViewer} AND (${input.inViewerLibrary} OR ${input.scope} = 'corpus'))`
+		: sql`(${input.hasViewer} AND ${input.inViewerLibrary})`;
 }
 
 export function toIsoString(value: Date | string | null): string | undefined {

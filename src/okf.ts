@@ -2,9 +2,8 @@
 
 import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, toIsoString } from '@db/sql';
+import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, toIsoString } from '@db/sql';
 import { sql } from 'drizzle-orm';
-import { resourceContentAccessSql } from './resource-query-policy';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;

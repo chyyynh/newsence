@@ -7,10 +7,9 @@ import {
 } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
+import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
-import { resourceContentAccessSql } from './resource-query-policy';
 
 export interface ResourceSummary {
 	id: string;
