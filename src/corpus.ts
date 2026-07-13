@@ -1,4 +1,10 @@
-import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
+import {
+	CONTENT_RESOURCE_TYPES,
+	type ContentResourceType,
+	isContentResourceType,
+	RESOURCE_CATEGORIES,
+	type ResourceCategory,
+} from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
@@ -19,7 +25,17 @@ export interface ResourceSummary {
 export type ResourceSearchInput = {
 	query: string;
 	limit?: number;
+	filters?: ResourceSearchFilters;
+	/** @deprecated Use filters.effectiveAfter. */
 	publishedAfter?: string;
+};
+
+export type ResourceSearchFilters = {
+	categories?: ResourceCategory[];
+	effectiveAfter?: string;
+	effectiveBefore?: string;
+	sourceIds?: string[];
+	types?: ContentResourceType[];
 };
 
 export type RelatedResourceSearchInput = {
@@ -83,13 +99,24 @@ const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
 const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
+const SOURCE_FILTER_LIMIT = 50;
+
+type NormalizedSearchFilters = {
+	categories?: ResourceCategory[];
+	effectiveAfter: Date | null;
+	effectiveBefore: Date | null;
+	excludeAll: boolean;
+	sourceIds?: string[];
+	types?: ContentResourceType[];
+};
 
 export async function searchCorpusResourceRanks(env: CoreEnv, input: ResourceSearchInput): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
-	const publishedAfter = optionalPublishedAfter(input.publishedAfter);
-	return (await searchCorpusRanks(env, query, { fromDate: publishedAfter })).slice(0, limit);
+	const filters = normalizeSearchFilters(input);
+	if (filters.excludeAll) return [];
+	return (await searchCorpusRanks(env, query, filters)).slice(0, limit);
 }
 
 export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
@@ -109,8 +136,9 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	const fromDate = optionalPublishedAfter(input.publishedAfter);
-	const ranks = query ? new Map((await searchCorpusRanks(env, query, { fromDate })).map(({ id, score }) => [id, score])) : null;
+	const filters = normalizeSearchFilters(input);
+	if (filters.excludeAll) return [];
+	const ranks = query ? new Map((await searchCorpusRanks(env, query, filters)).map(({ id, score }) => [id, score])) : null;
 	return withCoreDb(env, async (db) => {
 		if (ranks) {
 			if (ranks.size === 0) return [];
@@ -123,7 +151,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 					FROM resources r
 					${resourceLocalizedJoin()}
 					WHERE r.id = ANY(${uuidArraySql(candidateIds)})
-						AND ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
+						AND ${corpusEnrichedSql()}${searchFiltersSql(filters)}
 				`,
 			);
 			return rows
@@ -138,7 +166,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 				SELECT ${resourceSearchSelect()}
 				FROM resources r
 				${resourceLocalizedJoin()}
-				WHERE ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
+				WHERE ${corpusEnrichedSql()}${searchFiltersSql(filters)}
 				ORDER BY ${recencySql()} DESC, r.id DESC
 				LIMIT ${limit}
 			`,
@@ -162,11 +190,50 @@ function clampInt(value: number | undefined, min: number, max: number, defaultVa
 	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
-function optionalPublishedAfter(value: string | undefined): Date | null {
+function optionalSearchDate(value: string | undefined, field: string): Date | null {
 	if (value === undefined) return null;
 	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) throw new Error('Invalid publishedAfter');
+	if (Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}`);
 	return date;
+}
+
+function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFilters {
+	const filters = input.filters ?? {};
+	const effectiveAfter = optionalSearchDate(filters.effectiveAfter ?? input.publishedAfter, 'effectiveAfter');
+	const effectiveBefore = optionalSearchDate(filters.effectiveBefore, 'effectiveBefore');
+	if (effectiveAfter && effectiveBefore && effectiveAfter > effectiveBefore)
+		throw new Error('effectiveAfter must not exceed effectiveBefore');
+	const sourceIds = optionalSourceIds(filters.sourceIds);
+	const types = optionalResourceTypes(filters.types);
+	const categories = optionalResourceCategories(filters.categories);
+	return {
+		categories,
+		effectiveAfter,
+		effectiveBefore,
+		excludeAll: sourceIds?.length === 0 || types?.length === 0 || categories?.length === 0,
+		sourceIds,
+		types,
+	};
+}
+
+function optionalSourceIds(values: string[] | undefined): string[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.length > SOURCE_FILTER_LIMIT) throw new Error(`sourceIds cannot contain more than ${SOURCE_FILTER_LIMIT} values`);
+	const unique = [...new Set(values.map((value) => value.trim()))];
+	if (unique.some((value) => !isValidUuid(value))) throw new Error('Invalid sourceIds');
+	return unique;
+}
+
+function optionalResourceTypes(values: ContentResourceType[] | undefined): ContentResourceType[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.some((value) => !isContentResourceType(value))) throw new Error('Invalid resource types');
+	return [...new Set(values)];
+}
+
+function optionalResourceCategories(values: ResourceCategory[] | undefined): ResourceCategory[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.some((value) => !(RESOURCE_CATEGORIES as readonly string[]).includes(value))) throw new Error('Invalid resource categories');
+	return [...new Set(values)];
 }
 
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
@@ -227,8 +294,12 @@ function corpusEnrichedSql(): SQL {
 		AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})`;
 }
 
-function publishedSinceSql(fromDate: Date | null | undefined): SQL {
-	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
+function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
+	return sql`${filters.effectiveAfter ? sql` AND ${recencySql()} >= ${filters.effectiveAfter}` : sql``}
+		${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
+		${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
+		${filters.types ? sql` AND r.type = ANY(${textArraySql(filters.types)})` : sql``}
+		${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
 }
 
 function truncate(content: string | null | undefined, max: number): string {
