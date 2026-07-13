@@ -27,13 +27,8 @@ export async function queryRows<T>(db: CoreDb, statement: SQL): Promise<T[]> {
 	return result.rows as T[];
 }
 
-export function resourceContentAccessSql(
-	surface: ResourceContentSurface,
-	input: { hasViewer: SQL; inViewerLibrary: SQL; scope: SQL },
-): SQL {
-	return surface === 'app'
-		? sql`(${input.scope} = 'corpus' OR (${input.hasViewer} AND ${input.inViewerLibrary}))`
-		: sql`(${input.hasViewer} AND ${input.inViewerLibrary})`;
+export function resourceContentAccessSql(surface: ResourceContentSurface, input: { inViewerLibrary: SQL; scope: SQL }): SQL {
+	return surface === 'app' ? sql`(${input.scope} = 'corpus' OR ${input.inViewerLibrary})` : input.inViewerLibrary;
 }
 
 export function toIsoString(value: Date | string | null): string | undefined {

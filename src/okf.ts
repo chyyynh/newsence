@@ -108,7 +108,6 @@ async function readCollectionResources(
 	primaryLocale: string | null,
 ): Promise<ResourceRow[]> {
 	const canReadContent = resourceContentAccessSql('export', {
-		hasViewer: sql`${viewerId}::text IS NOT NULL`,
 		inViewerLibrary: sql`viewer_library.id IS NOT NULL`,
 		scope: sql`r.scope`,
 	});

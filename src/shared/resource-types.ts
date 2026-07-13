@@ -32,15 +32,10 @@ export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
 
 export type ResourceContentSurface = 'app' | 'ai-tools' | 'export';
 
-export function hasResourceContentAccess(input: {
-	surface: ResourceContentSurface;
-	hasViewer: boolean;
-	scope: string;
-	inViewerLibrary: boolean;
-}): boolean {
+export function hasResourceContentAccess(input: { surface: ResourceContentSurface; scope: string; inViewerLibrary: boolean }): boolean {
 	// AI and exports stay library-gated so stored or paywalled corpus content is
 	// not redistributed by default.
-	return (input.scope === 'corpus' && input.surface === 'app') || (input.hasViewer && input.inViewerLibrary);
+	return (input.scope === 'corpus' && input.surface === 'app') || input.inViewerLibrary;
 }
 
 export const DEFAULT_RESOURCE_LANG = 'en';

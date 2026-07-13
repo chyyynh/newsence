@@ -324,7 +324,6 @@ function resourceLocalizedJoin(): SQL {
 
 function resourceReadSelect(userId: string): SQL {
 	const canReadContent = resourceContentAccessSql('ai-tools', {
-		hasViewer: sql`TRUE`,
 		inViewerLibrary: sql`EXISTS (
 			SELECT 1
 			FROM library content_library
