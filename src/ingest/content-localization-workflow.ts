@@ -3,8 +3,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { RESOURCE_ORIGINAL_CONTENT_TYPES, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { withCoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
-import { loadResourceForProcessing } from '@ingest/domain/resource-store';
-import { upsertResourceTranslation } from '@ingest/domain/resource-translation-store';
+import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
