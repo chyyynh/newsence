@@ -8,10 +8,20 @@ import { enqueueOrRestartWorkflow } from './workflow-control';
 const INSTANCE_NAME = 'newsence-corpus';
 const ITEM_PREFIX = 'resources/';
 const ITEM_SUFFIX = '.md';
-const CONTENT_MAX_CHARS = 8_000;
+const ORIGINAL_CONTENT_MAX_CHARS = 8_000;
+const TRANSLATED_CONTENT_MAX_CHARS = 4_000;
 const MAX_RESULTS = 50;
+const INDEX_TRANSLATION_LANGS = ['en', 'zh-Hant'] as const;
 
-type CorpusDocumentRow = {
+type CorpusTranslationRow = {
+	lang: string;
+	title: string | null;
+	summary: string | null;
+	content: string | null;
+	keywords: string[] | null;
+};
+
+type CorpusDocument = {
 	id: string;
 	type: string;
 	original_lang: string;
@@ -19,14 +29,16 @@ type CorpusDocumentRow = {
 	tags: string[] | null;
 	category: string | null;
 	source: string | null;
-	title: string | null;
-	summary: string | null;
-	content: string | null;
-	keywords: string[] | null;
+	translations: CorpusTranslationRow[];
 };
 
 type AiSearchRank = { id: string; score: number };
-type SearchRetrievalType = 'hybrid' | 'keyword';
+type CorpusSearchProfile = 'discovery' | 'related';
+
+type CorpusSearchOptions = {
+	fromDate?: Date | null;
+	profile?: CorpusSearchProfile;
+};
 
 async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null, limit = 50): Promise<string[]> {
 	return withCoreDb(env, async (db) => {
@@ -67,30 +79,43 @@ function requiredDocumentText(value: string | null, field: string, resourceId: s
 	return text;
 }
 
-function documentPublishedAt(row: CorpusDocumentRow): string | undefined {
+function documentPublishedAt(row: CorpusDocument): string | undefined {
 	if (row.published_at === null) return undefined;
 	const date = new Date(row.published_at);
 	if (Number.isNaN(date.getTime())) throw new Error(`AI Search document ${row.id} has invalid published_at`);
 	return date.toISOString();
 }
 
-function serializeDocument(row: CorpusDocumentRow): string {
-	const title = requiredDocumentText(row.title, 'title', row.id);
-	const source = requiredDocumentText(row.source, 'source', row.id);
+function serializeTranslation(translation: CorpusTranslationRow, originalLang: string): string {
+	const contentLimit = translation.lang === originalLang ? ORIGINAL_CONTENT_MAX_CHARS : TRANSLATED_CONTENT_MAX_CHARS;
 	return [
-		`# ${title}`,
-		source,
-		row.tags?.length ? `Tags: ${row.tags.join(', ')}` : '',
-		row.keywords?.length ? `Keywords: ${row.keywords.join(', ')}` : '',
-		markdownSection('Summary', row.summary),
-		markdownSection('Content', row.content?.slice(0, CONTENT_MAX_CHARS)),
+		`## ${translation.lang}`,
+		translation.title?.trim() ? `Title: ${translation.title.trim()}` : '',
+		translation.keywords?.length ? `Keywords: ${translation.keywords.join(', ')}` : '',
+		markdownSection('Summary', translation.summary),
+		markdownSection('Content', translation.content?.slice(0, contentLimit)),
 	]
 		.filter(Boolean)
 		.join('\n\n');
 }
 
-async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocumentRow | null> {
-	const rows = await queryRows<CorpusDocumentRow>(
+function serializeDocument(row: CorpusDocument): string {
+	const original = row.translations.find((translation) => translation.lang === row.original_lang);
+	if (!original) throw new Error(`AI Search document ${row.id} is missing its ${row.original_lang} translation`);
+	const title = requiredDocumentText(original.title, 'title', row.id);
+	const source = requiredDocumentText(row.source, 'source', row.id);
+	return [
+		`# ${title}`,
+		source,
+		row.tags?.length ? `Tags: ${row.tags.join(', ')}` : '',
+		...row.translations.map((translation) => serializeTranslation(translation, row.original_lang)),
+	]
+		.filter(Boolean)
+		.join('\n\n');
+}
+
+async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocument | null> {
+	const rows = await queryRows<CorpusDocument>(
 		db,
 		sql`
 				SELECT r.id::text,
@@ -100,14 +125,22 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 				       r.tags,
 				       r.category,
 				       COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
-				       rt.title,
-				       rt.summary,
-				       rt.content,
-				       rt.keywords
+				       COALESCE((
+				         SELECT jsonb_agg(
+				           jsonb_build_object(
+				             'lang', rt.lang,
+				             'title', rt.title,
+				             'summary', rt.summary,
+				             'content', rt.content,
+				             'keywords', rt.keywords
+				           )
+				           ORDER BY (rt.lang = r.original_lang) DESC, rt.lang
+				         )
+				         FROM resource_translations rt
+				         WHERE rt.resource_id = r.id
+				           AND (rt.lang = r.original_lang OR rt.lang = ANY(${textArraySql(INDEX_TRANSLATION_LANGS)}))
+				       ), '[]'::jsonb) AS translations
 				FROM resources r
-				JOIN resource_translations rt
-				  ON rt.resource_id = r.id
-				 AND rt.lang = r.original_lang
 				WHERE r.id = ${resourceId}::uuid
 					  AND r.scope = 'corpus'
 					  AND r.enrichment_status = 'enriched'
@@ -148,19 +181,20 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
-	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({ search: key, source: 'builtin', per_page: 50 });
+	// Exact-key filtering shipped on 2026-07-08; the Workers binding type has
+	// not caught up with the documented `key` parameter yet.
+	const listed = await env.AI_SEARCH.get(INSTANCE_NAME).items.list({ key, source: 'builtin', per_page: 1 } as AiSearchListItemsParams & {
+		key: string;
+	});
 	const matches = listed.result.filter((item) => item.key === key && item.source_id === 'builtin');
 	await Promise.all(matches.map((item) => env.AI_SEARCH.get(INSTANCE_NAME).items.delete(item.id)));
 	if (matches.length) console.info({ tag: 'AI_SEARCH', msg: 'Corpus item deleted', resource_id: resourceId, count: matches.length });
 	return matches.length > 0;
 }
 
-export async function searchCorpusRanks(
-	env: CoreEnv,
-	query: string,
-	fromDate?: Date | null,
-	retrievalType: SearchRetrievalType = 'hybrid',
-): Promise<AiSearchRank[]> {
+export async function searchCorpusRanks(env: CoreEnv, query: string, options: CorpusSearchOptions = {}): Promise<AiSearchRank[]> {
+	const profile = options.profile ?? 'discovery';
+	const retrievalType = profile === 'related' ? 'vector' : 'hybrid';
 	const response = await env.AI_SEARCH.get(INSTANCE_NAME).search({
 		query,
 		ai_search_options: {
@@ -173,26 +207,46 @@ export async function searchCorpusRanks(
 				max_num_results: MAX_RESULTS,
 				metadata_only: true,
 				return_on_failure: false,
-				boost_by: [{ field: 'published_at', direction: 'desc' }],
-				...(fromDate ? { filters: { published_at: { $gte: fromDate.toISOString() } } } : {}),
+				...(profile === 'related' ? {} : { boost_by: [{ field: 'published_at', direction: 'desc' as const }] }),
+				...(options.fromDate ? { filters: { published_at: { $gte: options.fromDate.toISOString() } } } : {}),
 			},
 		},
 	});
-	const scores = new Map<string, number>();
-	for (const chunk of response.chunks) {
+	const ranks = new Map<string, AiSearchRank>();
+	for (const [index, chunk] of response.chunks.entries()) {
 		const id = idFromItemKey(chunk.item.key);
-		if (!id) continue;
-		const previousScore = scores.get(id);
-		scores.set(id, previousScore === undefined ? chunk.score : Math.max(previousScore, chunk.score));
+		if (!id || ranks.has(id)) continue;
+		// Consumers hydrate rows in PostgreSQL, so return a unique order-preserving
+		// score instead of the tied scores commonly produced by RRF.
+		ranks.set(id, { id, score: response.chunks.length - index });
 	}
-	return [...scores].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score);
+	return [...ranks.values()];
 }
 
 type SearchIndexRebuildPayload = { revision: string };
 
-const SEARCH_INDEX_REVISION = 'v3';
+const SEARCH_INDEX_REVISION = 'v4';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
+
+async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
+	const instance = env.AI_SEARCH.get(INSTANCE_NAME);
+	const info = await instance.info();
+	if (
+		info.index_method?.vector === true &&
+		info.index_method.keyword === true &&
+		info.fusion_method === 'rrf' &&
+		info.indexing_options?.keyword_tokenizer === 'trigram'
+	) {
+		return 'unchanged';
+	}
+	await instance.update({
+		index_method: { vector: true, keyword: true },
+		fusion_method: 'rrf',
+		indexing_options: { keyword_tokenizer: 'trigram' },
+	});
+	return 'updated';
+}
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_REVISION}`, {
@@ -202,6 +256,11 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		const instanceConfig = await step.do(
+			'ensure-search-instance-config',
+			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+			() => ensureSearchInstanceConfig(this.env),
+		);
 		let cursor: string | null = null;
 		let uploaded = 0;
 		let page = 0;
@@ -234,6 +293,6 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			console.info({ tag: 'AI_SEARCH', msg: 'Index rebuild page complete', revision: event.payload.revision, page, cursor, uploaded });
 		}
 
-		return { revision: event.payload.revision, uploaded, pages: page, cursor };
+		return { revision: event.payload.revision, instanceConfig, uploaded, pages: page, cursor };
 	}
 }

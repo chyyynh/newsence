@@ -107,7 +107,7 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
 	const seedText = await withCoreDb(env, (db) => relatedSeedText(db, seed.id));
 	if (!seedText) return [];
-	const ranks = await searchCorpusRanks(env, seedText);
+	const ranks = await searchCorpusRanks(env, seedText, { profile: 'related' });
 	return ranks
 		.map((rank) => rank.id)
 		.filter((id) => id !== seed.id)
@@ -119,7 +119,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
 	const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 1, 3650, 1);
 	const fromDate = daysAgo === null ? null : new Date(Date.now() - daysAgo * 86_400_000);
-	const ranks = query ? new Map((await searchSummaryRanks(env, query, fromDate)).map(({ id, score }) => [id, score])) : null;
+	const ranks = query ? new Map((await searchCorpusRanks(env, query, { fromDate })).map(({ id, score }) => [id, score])) : null;
 	return withCoreDb(env, async (db) => {
 		if (ranks) {
 			if (ranks.size === 0) return [];
@@ -154,11 +154,6 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 		);
 		return rows.map(formatSummary);
 	});
-}
-
-async function searchSummaryRanks(env: CoreEnv, query: string, fromDate: Date | null) {
-	const keywordRanks = await searchCorpusRanks(env, query, fromDate, 'keyword');
-	return keywordRanks.length ? keywordRanks : searchCorpusRanks(env, query, fromDate);
 }
 
 function requiredRank(ranks: Map<string, number>, resourceId: string): number {
