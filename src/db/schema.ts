@@ -12,6 +12,7 @@ export const resources = pgTable(
 	'resources',
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
+		sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
 		type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
 		scope: text('scope', { enum: RESOURCE_SCOPES }).default('private').notNull(),
 		url: text('url'),
