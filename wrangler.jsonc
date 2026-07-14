@@ -81,10 +81,10 @@
 	"ai": {
 		"binding": "AI"
 	},
-	"ai_search_namespaces": [
+	"ai_search": [
 		{
 			"binding": "AI_SEARCH",
-			"namespace": "default",
+			"instance_name": "newsence-corpus-v5",
 			"remote": true
 		}
 	],

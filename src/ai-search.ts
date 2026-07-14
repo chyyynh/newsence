@@ -5,8 +5,6 @@ import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
-const CORPUS_SEARCH_INSTANCE = 'newsence-corpus-v5';
-
 const CANONICAL_CUSTOM_METADATA = [
 	{ field_name: 'effective_at', data_type: 'datetime' },
 	{ field_name: 'source_id', data_type: 'text' },
@@ -51,25 +49,6 @@ type CorpusSearchOptions = {
 	sourceIds?: readonly string[];
 	types?: readonly ContentResourceType[];
 };
-
-async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null, limit = 50): Promise<string[]> {
-	return withCoreDb(env, async (db) => {
-		const rows = await queryRows<{ id: string }>(
-			db,
-			sql`
-				SELECT id::text
-				FROM resources
-					WHERE scope = 'corpus'
-					  AND enrichment_status = 'enriched'
-					  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
-				  AND (${cursor}::uuid IS NULL OR id > ${cursor}::uuid)
-				ORDER BY id
-				LIMIT ${Math.min(Math.max(limit, 1), 50)}
-			`,
-		);
-		return rows.map((row) => row.id);
-	});
-}
 
 function itemKey(id: string): string {
 	return `${ITEM_PREFIX}${id}${ITEM_SUFFIX}`;
@@ -180,13 +159,12 @@ function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 
 async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<void> {
 	const startedAt = Date.now();
-	const result = await env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE).items.upload(itemKey(document.id), serializeDocument(document), {
+	const result = await env.AI_SEARCH.items.upload(itemKey(document.id), serializeDocument(document), {
 		metadata: corpusItemMetadata(document),
 	});
 	console.info({
 		tag: 'AI_SEARCH',
 		msg: 'Corpus item queued',
-		instance: CORPUS_SEARCH_INSTANCE,
 		resource_id: document.id,
 		item_id: result.id,
 		latency_ms: Date.now() - startedAt,
@@ -206,19 +184,13 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
-	// Exact-key filtering shipped on 2026-07-08; the Workers binding type has
-	// not caught up with the documented `key` parameter yet.
-	const instance = env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE);
-	const listed = await instance.items.list({ key, source: 'builtin', per_page: 1 } as AiSearchListItemsParams & {
-		key: string;
-	});
+	const listed = await env.AI_SEARCH.items.list({ search: key, source: 'builtin', per_page: 1 });
 	const matches = listed.result.filter((item) => item.key === key && item.source_id === 'builtin');
-	await Promise.all(matches.map((item) => instance.items.delete(item.id)));
+	await Promise.all(matches.map((item) => env.AI_SEARCH.items.delete(item.id)));
 	if (matches.length) {
 		console.info({
 			tag: 'AI_SEARCH',
 			msg: 'Corpus item deleted',
-			instance: CORPUS_SEARCH_INSTANCE,
 			resource_id: resourceId,
 			count: matches.length,
 		});
@@ -246,7 +218,7 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	const profile = options.profile ?? 'discovery';
 	const retrievalType = profile === 'related' ? 'vector' : 'hybrid';
 	const filters = searchFilters(options);
-	const response = await env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE).search({
+	const response = await env.AI_SEARCH.search({
 		query,
 		ai_search_options: {
 			query_rewrite: { enabled: false },
@@ -278,7 +250,7 @@ type SearchIndexRebuildPayload = {
 	startedAt: string;
 };
 
-const SEARCH_INDEX_GENERATION = 'canonical-1';
+const SEARCH_INDEX_GENERATION = 'canonical-2';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
@@ -286,14 +258,31 @@ const REINDEX_MAX_PRUNE_PASSES = 3;
 // Batch prune pages and combine corpus reads/uploads below so the current full
 // rebuild stays under the 1,024-step Workflow limit on Workers Free.
 const REINDEX_PRUNE_PAGES_PER_STEP = 10;
+const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } as const;
+const SHORT_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '60 seconds' } as const;
+const BATCH_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '300 seconds' } as const;
 
-type SearchItemPageAudit = {
-	deleted: number;
-	scanned: number;
-};
+async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null): Promise<string[]> {
+	return withCoreDb(env, async (db) => {
+		const rows = await queryRows<{ id: string }>(
+			db,
+			sql`
+				SELECT id::text
+				FROM resources
+				WHERE scope = 'corpus'
+				  AND enrichment_status = 'enriched'
+				  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+				  AND (${cursor}::uuid IS NULL OR id > ${cursor}::uuid)
+				ORDER BY id
+				LIMIT ${REINDEX_PAGE_SIZE}
+			`,
+		);
+		return rows.map((row) => row.id);
+	});
+}
 
 async function loadSearchItemPageCount(env: CoreEnv): Promise<number> {
-	const listed = await env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE).items.list({
+	const listed = await env.AI_SEARCH.items.list({
 		page: 1,
 		per_page: REINDEX_PAGE_SIZE,
 		sort_by: 'modified_at',
@@ -322,9 +311,8 @@ async function loadEligibleCorpusIds(env: CoreEnv, resourceIds: readonly string[
 	});
 }
 
-async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchItemPageAudit> {
-	const instance = env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE);
-	const listed = await instance.items.list({
+async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<number> {
+	const listed = await env.AI_SEARCH.items.list({
 		page,
 		per_page: REINDEX_PAGE_SIZE,
 		sort_by: 'modified_at',
@@ -340,40 +328,39 @@ async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchIt
 
 	for (let offset = 0; offset < staleItems.length; offset += REINDEX_DELETE_CONCURRENCY) {
 		const batch = staleItems.slice(offset, offset + REINDEX_DELETE_CONCURRENCY);
-		await Promise.all(batch.map((item) => instance.items.delete(item.id)));
+		await Promise.all(batch.map((item) => env.AI_SEARCH.items.delete(item.id)));
 	}
 	if (staleItems.length) {
-		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', instance: CORPUS_SEARCH_INSTANCE, page, count: staleItems.length });
+		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', page, count: staleItems.length });
 	}
-	return { deleted: staleItems.length, scanned: listed.result.length };
+	return staleItems.length;
 }
 
-async function pruneSearchItemPages(env: CoreEnv, firstPage: number, lastPage: number): Promise<SearchItemPageAudit> {
+async function pruneSearchItemPages(env: CoreEnv, firstPage: number, lastPage: number): Promise<number> {
 	let deleted = 0;
-	let scanned = 0;
 	for (let page = lastPage; page >= firstPage; page--) {
-		const audit = await pruneSearchItemPage(env, page);
-		deleted += audit.deleted;
-		scanned += audit.scanned;
+		deleted += await pruneSearchItemPage(env, page);
 	}
-	return { deleted, scanned };
+	return deleted;
+}
+
+async function uploadCorpusIds(env: CoreEnv, ids: readonly string[]): Promise<number> {
+	let uploaded = 0;
+	for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
+		const documents = await withCoreDb(env, (db) => loadCorpusDocuments(db, ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY)));
+		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
+		uploaded += documents.length;
+	}
+	return uploaded;
 }
 
 async function syncCorpusPageAfter(
 	env: CoreEnv,
 	cursor: string | null,
 ): Promise<{ cursor: string | null; done: boolean; uploaded: number }> {
-	const ids = await listCorpusIdsAfter(env, cursor, REINDEX_PAGE_SIZE);
+	const ids = await listCorpusIdsAfter(env, cursor);
 	if (!ids.length) return { cursor, done: true, uploaded: 0 };
-
-	let uploaded = 0;
-	for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
-		const batch = ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY);
-		const documents = await withCoreDb(env, (db) => loadCorpusDocuments(db, batch));
-		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
-		uploaded += documents.length;
-	}
-	return { cursor: ids.at(-1)!, done: false, uploaded };
+	return { cursor: ids.at(-1)!, done: false, uploaded: await uploadCorpusIds(env, ids) };
 }
 
 type SearchDeltaCursor = {
@@ -392,12 +379,7 @@ function isoDate(value: Date | string, field: string): string {
 	return date.toISOString();
 }
 
-async function listCorpusDeltaAfter(
-	env: CoreEnv,
-	startedAt: string,
-	cursor: SearchDeltaCursor | null,
-	limit = REINDEX_PAGE_SIZE,
-): Promise<SearchDeltaRow[]> {
+async function listCorpusDeltaAfter(env: CoreEnv, startedAt: string, cursor: SearchDeltaCursor | null): Promise<SearchDeltaRow[]> {
 	return withCoreDb(env, (db) =>
 		queryRows<SearchDeltaRow>(
 			db,
@@ -414,7 +396,7 @@ async function listCorpusDeltaAfter(
 				    OR (updated_at = ${cursor?.updatedAt ?? null}::timestamptz AND id > ${cursor?.id ?? null}::uuid)
 				  )
 				ORDER BY updated_at, id
-				LIMIT ${Math.min(Math.max(limit, 1), REINDEX_PAGE_SIZE)}
+				LIMIT ${REINDEX_PAGE_SIZE}
 			`,
 		),
 	);
@@ -427,19 +409,6 @@ async function syncCorpusDeltaAfter(
 ): Promise<{ cursor: SearchDeltaCursor | null; done: boolean; uploaded: number }> {
 	const rows = await listCorpusDeltaAfter(env, startedAt, cursor);
 	if (!rows.length) return { cursor, done: true, uploaded: 0 };
-
-	let uploaded = 0;
-	for (let offset = 0; offset < rows.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
-		const batch = rows.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY);
-		const documents = await withCoreDb(env, (db) =>
-			loadCorpusDocuments(
-				db,
-				batch.map((row) => row.id),
-			),
-		);
-		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
-		uploaded += documents.length;
-	}
 	const last = rows.at(-1)!;
 	const nextCursor = { id: last.id, updatedAt: last.updated_at };
 	if (cursor && nextCursor.id === cursor.id && nextCursor.updatedAt === cursor.updatedAt) {
@@ -448,13 +417,15 @@ async function syncCorpusDeltaAfter(
 	return {
 		cursor: nextCursor,
 		done: false,
-		uploaded,
+		uploaded: await uploadCorpusIds(
+			env,
+			rows.map((row) => row.id),
+		),
 	};
 }
 
 async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
-	const instance = env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE);
-	const info = await instance.info();
+	const info = await env.AI_SEARCH.info();
 	if (
 		info.index_method?.vector === true &&
 		info.index_method.keyword === true &&
@@ -464,7 +435,7 @@ async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | '
 	) {
 		return 'unchanged';
 	}
-	await instance.update({
+	await env.AI_SEARCH.update({
 		index_method: { vector: true, keyword: true },
 		fusion_method: 'rrf',
 		indexing_options: { keyword_tokenizer: 'trigram' },
@@ -473,43 +444,24 @@ async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | '
 	return 'updated';
 }
 
-type SearchReconciliation = {
-	deleted: number;
-	passes: number;
-	scanned: number;
-};
-
-async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, phase: 'pre' | 'final'): Promise<SearchReconciliation> {
+async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep) {
 	let deleted = 0;
-	let scanned = 0;
-	let passes = 0;
-	while (passes < REINDEX_MAX_PRUNE_PASSES) {
-		const itemPageCount = await step.do(
-			`${phase}-load-search-item-page-count-${passes}`,
-			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			() => loadSearchItemPageCount(env),
-		);
+	for (let pass = 0; pass < REINDEX_MAX_PRUNE_PASSES; pass++) {
+		const itemPageCount = await step.do(`load-search-item-page-count-${pass}`, SHORT_STEP_OPTIONS, () => loadSearchItemPageCount(env));
 		let passDeleted = 0;
 		// Delete from the last page first to avoid ordinary pagination shifts.
 		// Repeat until a zero-delete pass to cover tie ordering and item movement.
 		for (let lastPage = itemPageCount; lastPage >= 1; lastPage -= REINDEX_PRUNE_PAGES_PER_STEP) {
 			const firstPage = Math.max(1, lastPage - REINDEX_PRUNE_PAGES_PER_STEP + 1);
-			const audit = await step.do(
-				`${phase}-prune-search-item-pages-${passes}-${firstPage}-${lastPage}`,
-				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => pruneSearchItemPages(env, firstPage, lastPage),
+			const batchDeleted = await step.do(`prune-search-item-pages-${pass}-${firstPage}-${lastPage}`, BATCH_STEP_OPTIONS, () =>
+				pruneSearchItemPages(env, firstPage, lastPage),
 			);
-			passDeleted += audit.deleted;
-			scanned += audit.scanned;
+			passDeleted += batchDeleted;
 		}
 		deleted += passDeleted;
-		passes++;
-		if (passDeleted === 0) break;
-		if (passes === REINDEX_MAX_PRUNE_PASSES) {
-			throw new Error(`AI Search ${phase} stale-item reconciliation did not converge after ${passes} passes`);
-		}
+		if (passDeleted === 0) return { deleted, passes: pass + 1 };
 	}
-	return { deleted, passes, scanned };
+	throw new Error(`AI Search stale-item reconciliation did not converge after ${REINDEX_MAX_PRUNE_PASSES} passes`);
 }
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
@@ -522,22 +474,13 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
 		const startedAt = isoDate(event.payload.startedAt, 'search rebuild startedAt');
 
-		const instanceConfig = await step.do(
-			'ensure-search-instance-config',
-			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-			() => ensureSearchInstanceConfig(this.env),
-		);
-		const preReconciliation = await reconcileSearchItems(this.env, step, 'pre');
+		const instanceConfig = await step.do('ensure-search-instance-config', SHORT_STEP_OPTIONS, () => ensureSearchInstanceConfig(this.env));
 		let cursor: string | null = null;
 		let uploaded = 0;
 		let page = 0;
 
 		while (true) {
-			const result = await step.do(
-				`sync-corpus-page-${page}`,
-				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => syncCorpusPageAfter(this.env, cursor),
-			);
+			const result = await step.do(`sync-corpus-page-${page}`, BATCH_STEP_OPTIONS, () => syncCorpusPageAfter(this.env, cursor));
 			if (result.done) break;
 			if (!result.cursor) throw new Error(`AI Search rebuild page ${page} did not return a cursor`);
 			uploaded += result.uploaded;
@@ -547,7 +490,6 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			console.info({
 				tag: 'AI_SEARCH',
 				msg: 'Index rebuild page complete',
-				instance: CORPUS_SEARCH_INSTANCE,
 				page,
 				cursor,
 				uploaded,
@@ -558,10 +500,8 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		let deltaPage = 0;
 		let deltaUploaded = 0;
 		while (true) {
-			const result = await step.do(
-				`sync-corpus-delta-page-${deltaPage}`,
-				{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => syncCorpusDeltaAfter(this.env, startedAt, deltaCursor),
+			const result = await step.do(`sync-corpus-delta-page-${deltaPage}`, BATCH_STEP_OPTIONS, () =>
+				syncCorpusDeltaAfter(this.env, startedAt, deltaCursor),
 			);
 			if (result.done) break;
 			if (!result.cursor) throw new Error(`AI Search delta page ${deltaPage} did not return a cursor`);
@@ -569,20 +509,16 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			deltaCursor = result.cursor;
 			deltaPage++;
 		}
-		const finalReconciliation = await reconcileSearchItems(this.env, step, 'final');
+		const reconciliation = await reconcileSearchItems(this.env, step);
 
 		return {
-			instance: CORPUS_SEARCH_INSTANCE,
 			startedAt,
 			instanceConfig,
-			preReconciliation,
 			uploaded,
 			pages: page,
-			cursor,
 			deltaUploaded,
 			deltaPages: deltaPage,
-			deltaCursor,
-			finalReconciliation,
+			reconciliation,
 		};
 	}
 }
