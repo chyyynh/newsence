@@ -5,7 +5,7 @@ import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
-const SEARCH_INSTANCE_NAME = 'newsence-corpus-v5';
+const CORPUS_SEARCH_INSTANCE = 'newsence-corpus-v5';
 
 const CANONICAL_CUSTOM_METADATA = [
 	{ field_name: 'effective_at', data_type: 'datetime' },
@@ -180,13 +180,13 @@ function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 
 async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<void> {
 	const startedAt = Date.now();
-	const result = await env.AI_SEARCH.get(SEARCH_INSTANCE_NAME).items.upload(itemKey(document.id), serializeDocument(document), {
+	const result = await env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE).items.upload(itemKey(document.id), serializeDocument(document), {
 		metadata: corpusItemMetadata(document),
 	});
 	console.info({
 		tag: 'AI_SEARCH',
 		msg: 'Corpus item queued',
-		instance: SEARCH_INSTANCE_NAME,
+		instance: CORPUS_SEARCH_INSTANCE,
 		resource_id: document.id,
 		item_id: result.id,
 		latency_ms: Date.now() - startedAt,
@@ -208,7 +208,7 @@ export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promis
 	const key = itemKey(resourceId);
 	// Exact-key filtering shipped on 2026-07-08; the Workers binding type has
 	// not caught up with the documented `key` parameter yet.
-	const instance = env.AI_SEARCH.get(SEARCH_INSTANCE_NAME);
+	const instance = env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE);
 	const listed = await instance.items.list({ key, source: 'builtin', per_page: 1 } as AiSearchListItemsParams & {
 		key: string;
 	});
@@ -218,7 +218,7 @@ export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promis
 		console.info({
 			tag: 'AI_SEARCH',
 			msg: 'Corpus item deleted',
-			instance: SEARCH_INSTANCE_NAME,
+			instance: CORPUS_SEARCH_INSTANCE,
 			resource_id: resourceId,
 			count: matches.length,
 		});
@@ -246,7 +246,7 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	const profile = options.profile ?? 'discovery';
 	const retrievalType = profile === 'related' ? 'vector' : 'hybrid';
 	const filters = searchFilters(options);
-	const response = await env.AI_SEARCH.get(SEARCH_INSTANCE_NAME).search({
+	const response = await env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE).search({
 		query,
 		ai_search_options: {
 			query_rewrite: { enabled: false },
@@ -275,11 +275,10 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 }
 
 type SearchIndexRebuildPayload = {
-	revision: string;
 	startedAt: string;
 };
 
-const SEARCH_INDEX_REVISION = 'v5-canonical-1';
+const SEARCH_INDEX_GENERATION = 'canonical-1';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
@@ -294,7 +293,7 @@ type SearchItemPageAudit = {
 };
 
 async function loadSearchItemPageCount(env: CoreEnv): Promise<number> {
-	const listed = await env.AI_SEARCH.get(SEARCH_INSTANCE_NAME).items.list({
+	const listed = await env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE).items.list({
 		page: 1,
 		per_page: REINDEX_PAGE_SIZE,
 		sort_by: 'modified_at',
@@ -324,7 +323,7 @@ async function loadEligibleCorpusIds(env: CoreEnv, resourceIds: readonly string[
 }
 
 async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchItemPageAudit> {
-	const instance = env.AI_SEARCH.get(SEARCH_INSTANCE_NAME);
+	const instance = env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE);
 	const listed = await instance.items.list({
 		page,
 		per_page: REINDEX_PAGE_SIZE,
@@ -344,7 +343,7 @@ async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<SearchIt
 		await Promise.all(batch.map((item) => instance.items.delete(item.id)));
 	}
 	if (staleItems.length) {
-		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', instance: SEARCH_INSTANCE_NAME, page, count: staleItems.length });
+		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', instance: CORPUS_SEARCH_INSTANCE, page, count: staleItems.length });
 	}
 	return { deleted: staleItems.length, scanned: listed.result.length };
 }
@@ -454,7 +453,7 @@ async function syncCorpusDeltaAfter(
 }
 
 async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
-	const instance = env.AI_SEARCH.get(SEARCH_INSTANCE_NAME);
+	const instance = env.AI_SEARCH.get(CORPUS_SEARCH_INSTANCE);
 	const info = await instance.info();
 	if (
 		info.index_method?.vector === true &&
@@ -514,8 +513,7 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, phase: 'pr
 }
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_REVISION}-batched`, {
-		revision: SEARCH_INDEX_REVISION,
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_GENERATION}`, {
 		startedAt: new Date().toISOString(),
 	});
 }
@@ -549,8 +547,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			console.info({
 				tag: 'AI_SEARCH',
 				msg: 'Index rebuild page complete',
-				instance: SEARCH_INSTANCE_NAME,
-				revision: event.payload.revision,
+				instance: CORPUS_SEARCH_INSTANCE,
 				page,
 				cursor,
 				uploaded,
@@ -575,8 +572,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		const finalReconciliation = await reconcileSearchItems(this.env, step, 'final');
 
 		return {
-			revision: event.payload.revision,
-			instance: SEARCH_INSTANCE_NAME,
+			instance: CORPUS_SEARCH_INSTANCE,
 			startedAt,
 			instanceConfig,
 			preReconciliation,
