@@ -22,6 +22,17 @@ export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies
 
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
 
+// Editorial kind of an article-family source. Distinguishes reader-facing Blog
+// vs News, which resources.type (web/rss) can't express since both come from the
+// same ingest kinds. Only meaningful for rss/web sources.
+export const SOURCE_KINDS = ['blog', 'news'] as const;
+
+export type SourceKind = (typeof SOURCE_KINDS)[number];
+
+export function isSourceKind(value: unknown): value is SourceKind {
+	return typeof value === 'string' && (SOURCE_KINDS as readonly string[]).includes(value);
+}
+
 export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
 
 export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];

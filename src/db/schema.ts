@@ -4,6 +4,7 @@ import {
 	RESOURCE_TRANSLATION_SOURCES,
 	RESOURCE_TYPES,
 	SOURCE_ACQUISITION_MODES,
+	SOURCE_KINDS,
 	SOURCE_PLATFORMS,
 } from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
@@ -96,6 +97,7 @@ export const sources = pgTable(
 		siteUrl: text('site_url'),
 		avatarUrl: text('avatar_url'),
 		category: text('category'),
+		kind: text('kind', { enum: SOURCE_KINDS }).default('blog').notNull(),
 		displayGroup: text('display_group'),
 		acquisitionMode: text('content_mode', { enum: SOURCE_ACQUISITION_MODES }).default('platform').notNull(),
 		monitoringEnabled: boolean('enabled').default(true).notNull(),
