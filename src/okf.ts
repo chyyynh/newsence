@@ -54,7 +54,7 @@ export async function exportCollectionOkf(env: CoreEnv, input: ExportCollectionO
 		return new Response(tarGzipStream(bundle.files), {
 			headers: {
 				'Content-Type': 'application/gzip',
-				'Content-Disposition': `attachment; filename="${bundle.slug}.okf.tar.gz"`,
+				'Content-Disposition': attachmentDisposition(bundle.slug),
 				'Cache-Control': 'no-store',
 			},
 		});
@@ -216,13 +216,31 @@ function assignResourcePaths(resources: ResourceRow[]): Map<string, string> {
 }
 
 function slugify(value: string): string {
-	return value
+	const normalized = value
 		.toLowerCase()
 		.normalize('NFKD')
 		.replace(/[\u0300-\u036f]/g, '')
 		.replace(/[^\p{L}\p{N}]+/gu, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 72);
+		.replace(/^-+|-+$/g, '');
+	return utf8Prefix(normalized, 72);
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+	let result = '';
+	let byteLength = 0;
+	for (const character of value) {
+		const characterBytes = encoder.encode(character).byteLength;
+		if (byteLength + characterBytes > maxBytes) break;
+		result += character;
+		byteLength += characterBytes;
+	}
+	return result;
+}
+
+function attachmentDisposition(slug: string): string {
+	const filename = `${slug}.okf.tar.gz`;
+	const fallback = filename.replace(/[^\x20-\x7e]+/g, '-').replace(/["\\]/g, '-');
+	return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 function markdownLink(label: string, target: string): string {
@@ -314,7 +332,9 @@ function tarHeader(path: string, size: number): Uint8Array {
 }
 
 function writeTarString(header: Uint8Array, offset: number, length: number, value: string): void {
-	header.set(encoder.encode(value).slice(0, length), offset);
+	const bytes = encoder.encode(value);
+	if (bytes.byteLength > length) throw new Error(`Tar header field exceeds ${length} bytes`);
+	header.set(bytes, offset);
 }
 
 function writeTarOctal(header: Uint8Array, offset: number, length: number, value: number): void {
