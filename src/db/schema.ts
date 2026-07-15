@@ -100,7 +100,7 @@ export const sources = pgTable(
 		category: text('category'),
 		kind: text('kind', { enum: SOURCE_KINDS }).default('blog').notNull(),
 		displayGroup: text('display_group'),
-		acquisitionMode: text('content_mode', { enum: SOURCE_ACQUISITION_MODES }).default('platform').notNull(),
+		acquisitionMode: text('content_mode', { enum: SOURCE_ACQUISITION_MODES }).notNull(),
 		monitoringEnabled: boolean('enabled').default(true).notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),
