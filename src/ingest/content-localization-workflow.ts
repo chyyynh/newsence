@@ -5,6 +5,7 @@ import { withCoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
 import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
+import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	assembleZhHantContentTranslation,
@@ -241,6 +242,11 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 				() => persistMachineZhHantContent(this.env, resourceId, sourceTranslationHash, translated),
 			);
 		}
+		await step.do(
+			'sync-translated-resource-to-ai-search',
+			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => syncCorpusItem(this.env, resourceId),
+		);
 		console.info({
 			tag: 'RESOURCE_TRANSLATION',
 			msg: 'Completed',
