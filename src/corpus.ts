@@ -94,7 +94,6 @@ const RELATED_LIMIT_MAX = RESULT_LIMIT_MAX;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
-const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
 
 type NormalizedSearchFilters = {
@@ -291,21 +290,31 @@ function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
 
 function truncate(content: string | null | undefined, max: number): string {
 	if (!content) return '';
-	return content.length > max ? `${content.slice(0, max)}\n\n[Content truncated]` : content;
+	if (content.length <= max) return content;
+	const marker = '\n\n[Content truncated]';
+	return max > marker.length ? `${content.slice(0, max - marker.length)}${marker}` : content.slice(0, max);
 }
 
 function capReadContextContent(results: ReadContextResult[]): ReadContextResult[] {
-	const contentCount = results.filter((r) => r.content).length;
-	if (contentCount === 0) return results;
+	const readableCount = results.filter((result) => result.content || result.resources?.length).length;
+	if (readableCount === 0) return results;
 
-	const perItemMax = Math.min(
-		CONTENT_MAX,
-		Math.max(READ_CONTEXT_MIN_ITEM_CONTENT_MAX, Math.floor(READ_CONTEXT_TOTAL_CONTENT_MAX / contentCount)),
-	);
+	const perItemMax = Math.min(CONTENT_MAX, Math.floor(READ_CONTEXT_TOTAL_CONTENT_MAX / readableCount));
 	return results.map((result) => {
-		const content = result.content;
-		if (!content || content.length <= perItemMax) return result;
-		return { ...result, content: truncate(content, perItemMax) };
+		const content = truncate(result.content, perItemMax) || undefined;
+		let used = content?.length ?? 0;
+		const resources = result.resources?.filter((resource) => {
+			const size = resource.title.length + (resource.summary?.length ?? 0);
+			if (used + size > perItemMax) return false;
+			used += size;
+			return true;
+		});
+		if (content === result.content && resources?.length === result.resources?.length) return result;
+		return {
+			...result,
+			content,
+			...(resources ? { resources, metadata: { ...result.metadata, resourceCount: resources.length } } : {}),
+		};
 	});
 }
 
