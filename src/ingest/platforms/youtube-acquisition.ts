@@ -128,9 +128,13 @@ async function fetchYouTubeChannelAvatar(channelId: string, youtubeApiKey: strin
 		return bestThumbnailUrl(channelData.items[0].snippet.thumbnails);
 	} catch (error) {
 		const message = String(error);
-		throw new Error(
-			`YouTube channel API request failed for ${channelId}: ${youtubeApiKey ? message.replaceAll(youtubeApiKey, '[redacted]') : message}`,
-		);
+		console.warn({
+			tag: 'YOUTUBE',
+			msg: 'Channel avatar unavailable',
+			channelId,
+			error: youtubeApiKey ? message.replaceAll(youtubeApiKey, '[redacted]') : message,
+		});
+		return null;
 	}
 }
 
@@ -183,12 +187,13 @@ export async function scrapeYouTube(
 	const stats = video.statistics;
 
 	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
-	const channelAvatar = await fetchYouTubeChannelAvatar(snippet.channelId, youtubeApiKey);
-
 	const chapters = parseChaptersFromDescription(snippet.description);
 
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-	const transcript = await fetchTranscript(videoId);
+	const [channelAvatar, transcript] = await Promise.all([
+		fetchYouTubeChannelAvatar(snippet.channelId, youtubeApiKey),
+		fetchTranscript(videoId),
+	]);
 	const transcriptMarkdown = transcript
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)
