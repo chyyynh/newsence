@@ -223,11 +223,21 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
 			resourceType === 'youtube'
-				? await step.do(
-						'prepare-youtube-highlights',
-						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-						async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
-					)
+				? await step
+						.do(
+							'prepare-youtube-highlights',
+							{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+							async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
+						)
+						.catch((error) => {
+							console.error({
+								tag: 'YOUTUBE',
+								msg: 'Optional YouTube highlights failed after retries',
+								resource_id: resourceId,
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return null;
+						})
 				: null;
 		const persistedResourceId = await step.do(
 			'update-db',
