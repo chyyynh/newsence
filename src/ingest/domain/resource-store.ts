@@ -16,18 +16,22 @@ import {
 import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
-import { textArraySql } from '@db/sql';
+import { textArraySql, uuidArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
-import { upsertResourceTranslation } from './resource-translation-store';
-import type { ResourceUpdate } from './resource-update';
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
 };
 
+type ResourceUpdate = Pick<ResourceForProcessing, 'summary' | 'content' | 'tags' | 'keywords'> & {
+	og_image_url: string | null;
+	platform_metadata: PlatformMetadata | null;
+};
+
 interface ResourceStoreRow {
 	id: string;
+	source_id: string | null;
 	title: string | null;
 	summary: string | null;
 	content: string | null;
@@ -42,12 +46,11 @@ interface ResourceStoreRow {
 	tags: string[];
 	keywords: string[];
 	platform_metadata: unknown;
-	enrichment_status?: string;
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
 	storage_key?: string | null;
-	file_type?: string;
-	normalized_source_url?: string | null;
+	file_type?: string | null;
+	normalized_url?: string | null;
 }
 
 type ResourceStoreTranslationRow = {
@@ -59,7 +62,15 @@ type ResourceStoreTranslationRow = {
 	source?: unknown;
 };
 
-export async function loadResourceForProcessing(env: CoreEnv, resourceId: string, shell = false): Promise<StoredResourceForProcessing> {
+export async function loadResourceForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
+	return loadResource(env, resourceId, false);
+}
+
+export async function loadResourceShellForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
+	return loadResource(env, resourceId, true);
+}
+
+async function loadResource(env: CoreEnv, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing> {
 	return withCoreDb(env, async (db) => {
 		const row = await loadStoredResourceRow(db, resourceId, shell);
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
@@ -120,6 +131,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 	const result = await db.execute(sql`
 		SELECT
 			rl.id::text AS id,
+			rl.source_id::text AS source_id,
 			rl.title AS title,
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
@@ -154,18 +166,18 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			) AS translations,
 			rl.url AS url,
 			rl.og_image_url AS og_image_url,
-			NULLIF(rl.platform_metadata->>'sourceName', '') AS source,
+			COALESCE(NULLIF(monitored_source.name, ''), NULLIF(rl.platform_metadata->>'sourceName', '')) AS source,
 			rl.type AS type,
 			rl.scope AS scope,
 			rl.published_date AS published_date,
 			rl.tags AS tags,
 			rl.keywords AS keywords,
 			rl.platform_metadata AS platform_metadata,
-			rl.enrichment_status AS enrichment_status,
 			rl.storage_key AS storage_key,
 			rl.file_type AS file_type,
-			rl.normalized_url AS normalized_source_url
+			rl.normalized_url AS normalized_url
 		FROM resources_localized rl
+		LEFT JOIN sources monitored_source ON monitored_source.id = rl.source_id
 		WHERE rl.id = ${resourceId}::uuid
 		  AND rl.lang = rl.original_lang
 		LIMIT 1
@@ -177,6 +189,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
 	const resource: StoredResourceForProcessing = {
 		id: row.id,
+		source_id: row.source_id,
 		original_lang: canonicalizeResourceLang(row.original_lang),
 		title: requiredString(row.title, 'title'),
 		summary: row.summary,
@@ -185,18 +198,19 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		url: row.url,
 		og_image_url: row.og_image_url,
 		source: cleanString(row.source),
-		published_date: formatOptionalPublishedDate(row.published_date),
+		published_date: row.published_date === null ? null : dateValue(row.published_date, 'published_date').toISOString(),
 		tags: row.tags,
 		keywords: row.keywords,
 		type: parseResourceType(row.type),
 		scope: parseResourceScope(row.scope),
-		platform_metadata: optionalPlatformMetadataValue(row.platform_metadata),
+		platform_metadata:
+			row.platform_metadata === null || row.platform_metadata === undefined ? undefined : platformMetadataValue(row.platform_metadata),
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
-	if ('storage_key' in row) resource.storage_key = row.storage_key ?? null;
+	resource.storage_key = row.storage_key ?? null;
 	if (row.file_type) resource.file_type = row.file_type;
-	if ('normalized_source_url' in row) resource.normalized_source_url = row.normalized_source_url ?? null;
+	resource.normalized_url = row.normalized_url ?? null;
 	return resource;
 }
 
@@ -221,15 +235,8 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 	return map;
 }
 
-function formatPublishedDate(value: Date | string | null): string {
-	return dateValue(value, 'published_date').toISOString();
-}
-
-function formatOptionalPublishedDate(value: Date | string | null): string | null {
-	return value === null ? null : formatPublishedDate(value);
-}
-
-export interface SourceResourceDraft {
+interface SourceResourceDraft {
+	sourceId: string;
 	url: string;
 	title: string;
 	source: string;
@@ -244,11 +251,11 @@ export interface SourceResourceDraft {
 	tags?: string[];
 }
 
-type ResourceMirrorOrigin = 'source' | 'resource';
 type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
 interface ResourceMirrorRecord {
 	id: string;
+	sourceId: string | null;
 	type: ContentResourceType;
 	scope: ResourceScope;
 	url: string | null;
@@ -295,12 +302,13 @@ export async function updateResourceAfterProcessing(
 	resource: ResourceForProcessing,
 	updatePayload: ResourceUpdate,
 ): Promise<string> {
-	const record = resourceMirrorRecord('resource', resourceId, resource, updatePayload);
+	const record = resourceMirrorRecord(resourceId, resource, updatePayload);
 	await invalidateChangedMachineTranslationFields(db, resourceId, record);
 	const tags = textArraySql(record.tags);
 	const result = await db.execute(sql`
 		UPDATE resources
-		   SET type = ${record.type},
+		   SET source_id = COALESCE(source_id, ${record.sourceId}::uuid),
+		       type = ${record.type},
 		       url = ${record.url},
 		       normalized_url = ${record.normalizedUrl},
 		       storage_key = ${record.storageKey},
@@ -367,6 +375,7 @@ async function invalidateChangedMachineTranslationFields(db: CoreDb, resourceId:
 function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {
 	return {
 		id: base.url,
+		source_id: base.sourceId,
 		original_lang: canonicalizeOptionalResourceLang(base.originalLang) ?? DEFAULT_RESOURCE_LANG,
 		title: base.title,
 		scope: 'corpus',
@@ -374,9 +383,10 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		content: base.content,
 		translations: {},
 		url: base.url,
+		normalized_url: base.url,
 		og_image_url: base.previewImageUrl ?? null,
 		source: base.source,
-		published_date: formatPublishedDate(base.publishedDate),
+		published_date: dateValue(base.publishedDate, 'published_date').toISOString(),
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
 		type: base.type,
@@ -386,13 +396,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
 	const resource = preparedRecordToResource(base);
-	const record = resourceMirrorRecord(
-		'source',
-		crypto.randomUUID(),
-		resource,
-		pendingResourceUpdate(resource, base.platformMetadata),
-		'pending',
-	);
+	const record = resourceMirrorRecord(crypto.randomUUID(), resource, pendingResourceUpdate(resource, base.platformMetadata), 'pending');
 	const result = await db.execute(resourceUpsertStatement(record));
 	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
 	const resourceId = row?.id;
@@ -404,53 +408,50 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata: PlatformMetadata | null): ResourceUpdate {
 	const sourceName = requiredString(resource.source, 'source');
 	return {
-		type: resource.type,
-		title: resource.title,
 		summary: resource.summary,
 		content: resource.content,
 		tags: resource.tags,
 		keywords: resource.keywords,
-		entities: undefined,
 		og_image_url: resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata ? { ...platformMetadata, sourceName } : null,
 	};
 }
 
 function resourceMirrorRecord(
-	origin: ResourceMirrorOrigin,
 	resourceId: string,
 	resource: ResourceForProcessing,
 	updatePayload: ResourceUpdate,
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
 	const storedPlatformMetadata = updatePayload.platform_metadata;
-	const fileType = stringOrNull(resource.file_type);
 	const url = cleanString(resource.url);
-	const normalizedUrl = origin === 'resource' ? cleanString(resource.normalized_source_url) : url;
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
-	const title = cleanString(updatePayload.title);
 	const summary = cleanString(updatePayload.summary);
 	const content = cleanString(updatePayload.content);
 	return {
 		id: resourceId,
-		type: parseResourceType(updatePayload.type),
-		scope: origin === 'source' ? 'corpus' : resource.scope,
+		sourceId: cleanString(resource.source_id),
+		type: parseResourceType(resource.type),
+		scope: resource.scope,
 		url,
-		normalizedUrl,
+		normalizedUrl: cleanString(resource.normalized_url),
 		storageKey: cleanString(resource.storage_key),
-		fileType,
+		fileType: cleanString(resource.file_type),
 		originalLang: canonicalizeResourceLang(resource.original_lang),
-		title,
+		title: cleanString(resource.title),
 		summary,
 		content,
-		publishedDate: optionalDateValue(resource.published_date, 'published_date'),
+		publishedDate:
+			resource.published_date === null || resource.published_date === undefined || resource.published_date === ''
+				? null
+				: dateValue(resource.published_date, 'published_date'),
 		scrapedDate: new Date(),
 		keywords,
 		tags,
 		category: deriveResourceCategory(storedPlatformMetadata),
 		ogImageUrl: cleanString(updatePayload.og_image_url),
-		platformMetadataJson: jsonbParam(storedPlatformMetadata),
+		platformMetadataJson: storedPlatformMetadata === null ? null : JSON.stringify(storedPlatformMetadata),
 		enrichmentStatus,
 	};
 }
@@ -490,13 +491,14 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 	const tags = textArraySql(record.tags);
 	return sql`
 		INSERT INTO resources (
-			id, type, scope, url, normalized_url, storage_key, file_type,
+			id, source_id, type, scope, url, normalized_url, storage_key, file_type,
 			original_lang, published_date, scraped_date, tags, category,
 			og_image_url, platform_metadata, enrichment_status,
 			created_at, updated_at
 		)
 		VALUES (
 			${record.id}::uuid,
+			${record.sourceId}::uuid,
 			${record.type},
 			${record.scope},
 			${record.url},
@@ -522,6 +524,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 function resourceConflictSetSql(): SQL {
 	const preserveEnriched = sql`excluded.enrichment_status = 'pending' AND resources.enrichment_status = 'enriched'`;
 	return sql`
+		source_id = COALESCE(resources.source_id, excluded.source_id),
 		type = CASE WHEN ${preserveEnriched} THEN resources.type ELSE excluded.type END,
 		scope = CASE
 			WHEN resources.scope = 'corpus' OR excluded.scope = 'private' THEN resources.scope
@@ -573,10 +576,94 @@ async function syncOriginalResourceTranslation(db: CoreDb, resourceId: string, r
 	}
 }
 
+type ResourceTranslationWrite = {
+	resourceId: string;
+	lang: string;
+	title?: string | null;
+	summary?: string | null;
+	content?: string | null;
+	keywords?: string[];
+	source: ResourceTranslationSource;
+	expectedOriginalTranslationHash?: string;
+};
+
+/**
+ * Row ownership is human > original > machine. Within the winning owner,
+ * explicitly supplied fields replace current values; omitted fields are patches.
+ */
+export async function upsertResourceTranslation(db: CoreDb, input: ResourceTranslationWrite): Promise<boolean> {
+	const keywords = textArraySql(input.keywords ?? []);
+	const preserveCurrent = sql`
+		(current_translation.source = 'human' AND excluded.source <> 'human')
+		OR (current_translation.source = 'original' AND excluded.source = 'machine')
+	`;
+	const result = await db.execute(sql`
+		WITH target_resource AS (
+			SELECT resource.id
+			FROM resources resource
+			WHERE resource.id = ${input.resourceId}::uuid
+			  AND (${input.source} <> 'original' OR resource.original_lang = ${input.lang})
+			  AND (
+					${input.expectedOriginalTranslationHash ?? null}::text IS NULL
+				OR EXISTS (
+					SELECT 1
+					FROM resource_translations original
+					WHERE original.resource_id = resource.id
+					  AND original.lang = resource.original_lang
+					  AND md5(jsonb_build_array(original.title, original.summary, original.content)::text) = ${input.expectedOriginalTranslationHash ?? null}
+					FOR SHARE
+				)
+			  )
+		), demoted_originals AS (
+			UPDATE resource_translations translation
+			SET source = 'machine', updated_at = NOW()
+			FROM target_resource
+			WHERE ${input.source} = 'original'
+			  AND translation.resource_id = target_resource.id
+			  AND translation.lang <> ${input.lang}
+			  AND translation.source = 'original'
+			RETURNING translation.resource_id
+		)
+		INSERT INTO resource_translations AS current_translation (
+			resource_id, lang, title, summary, content, keywords, source
+		)
+		SELECT
+			target_resource.id,
+			${input.lang},
+			${input.title ?? null},
+			${input.summary ?? null},
+			${input.content ?? null},
+			${keywords},
+			${input.source}
+		FROM target_resource
+		ON CONFLICT (resource_id, lang) DO UPDATE SET
+			title = CASE
+				WHEN ${preserveCurrent} OR ${input.title === undefined} THEN current_translation.title
+				ELSE excluded.title
+			END,
+			summary = CASE
+				WHEN ${preserveCurrent} OR ${input.summary === undefined} THEN current_translation.summary
+				ELSE excluded.summary
+			END,
+			content = CASE
+				WHEN ${preserveCurrent} OR ${input.content === undefined} THEN current_translation.content
+				ELSE excluded.content
+			END,
+			keywords = CASE
+				WHEN ${preserveCurrent} OR ${input.keywords === undefined} THEN current_translation.keywords
+				ELSE excluded.keywords
+			END,
+			source = CASE WHEN ${preserveCurrent} THEN current_translation.source ELSE excluded.source END,
+			updated_at = NOW()
+		RETURNING resource_id::text AS resource_id
+	`);
+	return result.rows.length > 0;
+}
+
 function cleanString(value: unknown): string | null {
-	const str = stringOrNull(value);
-	if (!str) return null;
-	const trimmed = str.trim();
+	if (value === null || value === undefined) return null;
+	if (typeof value !== 'string') throw new Error(`Invalid resource field: expected string`);
+	const trimmed = value.trim();
 	return trimmed.length ? trimmed : null;
 }
 
@@ -584,22 +671,6 @@ function requiredString(value: unknown, field: string): string {
 	const text = cleanString(value);
 	if (!text) throw new Error(`Invalid ${field}: expected non-empty string`);
 	return text;
-}
-
-function stringOrNull(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value !== 'string') throw new Error(`Invalid resource field: expected string`);
-	return value;
-}
-
-function optionalDateValue(value: unknown, field: string): Date | null {
-	if (value === null || value === undefined || value === '') return null;
-	return dateValue(value, field);
-}
-
-function jsonbParam(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
-	return JSON.stringify(value);
 }
 
 function platformMetadataValue(value: unknown): PlatformMetadata {
@@ -612,14 +683,10 @@ function platformMetadataValue(value: unknown): PlatformMetadata {
 	return value as PlatformMetadata;
 }
 
-function optionalPlatformMetadataValue(value: unknown): PlatformMetadata | undefined {
-	return value === null || value === undefined ? undefined : platformMetadataValue(value);
-}
-
 function deriveResourceCategory(platformMetadata: unknown): ResourceCategory | null {
 	if (platformMetadata && typeof platformMetadata === 'object' && !Array.isArray(platformMetadata)) {
 		const category = (platformMetadata as { classification?: { category?: unknown } }).classification?.category;
-		if (isResourceCategory(category)) return category;
+		if (typeof category === 'string' && (RESOURCE_CATEGORIES as readonly string[]).includes(category)) return category as ResourceCategory;
 	}
 	return null;
 }
@@ -629,27 +696,19 @@ function parseResourceType(value: unknown): ContentResourceType {
 	return value;
 }
 
-function isResourceScope(value: unknown): value is ResourceScope {
-	return typeof value === 'string' && (RESOURCE_SCOPES as readonly string[]).includes(value);
-}
-
 function parseResourceScope(value: unknown): ResourceScope {
-	if (!isResourceScope(value)) throw new Error(`Invalid resource scope: ${String(value)}`);
-	return value;
-}
-
-function isTranslationSource(value: unknown): value is ResourceTranslationSource {
-	return typeof value === 'string' && (RESOURCE_TRANSLATION_SOURCES as readonly string[]).includes(value);
+	if (typeof value !== 'string' || !(RESOURCE_SCOPES as readonly string[]).includes(value)) {
+		throw new Error(`Invalid resource scope: ${String(value)}`);
+	}
+	return value as ResourceScope;
 }
 
 function parseTranslationSource(value: unknown): ResourceTranslationSource | null {
 	if (value === null || value === undefined) return null;
-	if (!isTranslationSource(value)) throw new Error(`Invalid translation source: ${String(value)}`);
-	return value;
-}
-
-function isResourceCategory(value: unknown): value is ResourceCategory {
-	return typeof value === 'string' && (RESOURCE_CATEGORIES as readonly string[]).includes(value);
+	if (typeof value !== 'string' || !(RESOURCE_TRANSLATION_SOURCES as readonly string[]).includes(value)) {
+		throw new Error(`Invalid translation source: ${String(value)}`);
+	}
+	return value as ResourceTranslationSource;
 }
 
 type ExistingResourceRecord = {
@@ -661,10 +720,6 @@ type ExistingResourceRecord = {
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
 	if (urls.length === 0) return [];
-	const urlArray = sql`ARRAY[${sql.join(
-		urls.map((url) => sql`${url}`),
-		sql`, `,
-	)}]::text[]`;
 	const result = await db.execute(sql`
 		SELECT
 			r.id::text AS id,
@@ -675,18 +730,34 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 				OR (r.enrichment_status = 'failed' AND r.updated_at < NOW() - INTERVAL '30 minutes')
 			) AS "shouldRetryEnrichment"
 		FROM resources r
-			WHERE r.normalized_url = ANY(${urlArray})
+			WHERE r.normalized_url = ANY(${textArraySql(urls)})
 			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 	`);
 	return result.rows as unknown as ExistingResourceRecord[];
 }
 
+export async function attachSourceToResources(
+	db: CoreDb,
+	resourceIds: string[],
+	sourceId: string,
+	resourceType: ContentResourceType,
+): Promise<void> {
+	if (!resourceIds.length) return;
+	await db.execute(sql`
+		UPDATE resources
+		SET source_id = ${sourceId}::uuid
+		WHERE id = ANY(${uuidArraySql(resourceIds)})
+		  AND type = ${resourceType}
+		  AND source_id IS NULL
+	`);
+}
+
 export async function reopenResourceForReprocessing(
 	env: CoreEnv,
 	resourceId: string,
-	update: { summary: string; content: string; platformMetadata: PlatformMetadata },
+	update: { content: string; platformMetadata: PlatformMetadata },
 ): Promise<boolean> {
-	if (!update.summary.trim() || !update.content.trim()) {
+	if (!update.content.trim()) {
 		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
 	}
 	return withCoreTx(env, async (db) => {
@@ -716,10 +787,10 @@ export async function reopenResourceForReprocessing(
 		if (!original) throw new Error(`Failed to reopen resource ${resourceId}: original translation not found`);
 
 		const preserveOwnedTranslation = original.source === 'human';
-		const effectiveSummary = preserveOwnedTranslation ? original.summary : update.summary;
 		const effectiveContent = preserveOwnedTranslation ? original.content : update.content;
+		const sourceSummaryChanged = !preserveOwnedTranslation && original.summary !== null;
 		const sourceContentChanged = original.content !== effectiveContent;
-		if (original.summary === effectiveSummary && !sourceContentChanged) return false;
+		if (!sourceSummaryChanged && !sourceContentChanged) return false;
 
 		await db
 			.update(resources)
@@ -733,7 +804,7 @@ export async function reopenResourceForReprocessing(
 			!(await upsertResourceTranslation(db, {
 				resourceId,
 				lang: resource.original_lang,
-				summary: update.summary,
+				summary: null,
 				content: update.content,
 				keywords: [],
 				source: 'original',

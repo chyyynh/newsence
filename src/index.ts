@@ -5,7 +5,7 @@ import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
 import { SearchIndexRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
-import type { ReadContextItem, RelatedResourceSearchInput, ResourceRankSearchInput, ResourceSearchInput } from './corpus';
+import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
@@ -54,7 +54,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	}
 
 	/** Hybrid rank search for app-side feed/context lookup. */
-	searchResourceRanks(input: ResourceRankSearchInput) {
+	searchResourceRanks(input: ResourceSearchInput) {
 		return searchCorpusResourceRanks(this.env, input);
 	}
 

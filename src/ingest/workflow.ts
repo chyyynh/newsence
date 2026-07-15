@@ -1,16 +1,24 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import type { ResourceForProcessing } from '@core-shared/types';
-import { loadResourceForProcessing } from '@ingest/domain/resource-store';
+import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
+import { loadRssSourcePolicy } from '@ingest/domain/source-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
-import { type AcquiredContent, PDF_MIME, readAcquiredContentArtifact, scrapeSavedUrlArtifact } from './acquisition';
+import {
+	type AcquiredContent,
+	applyAcquiredContent,
+	PDF_MIME,
+	readAcquiredContentArtifact,
+	scrapeRssFeedItemArtifact,
+	scrapeSavedUrlArtifact,
+} from './acquisition';
 import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
-import { applyAcquiredContent } from './domain/resource-update';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
+import type { RssFeedAcquisitionInput } from './platforms/rss-feed';
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import { markResourceEnrichmentFailed, persistProcessedResource, persistUnchangedResourceResync } from './resource-persistence';
 
@@ -58,6 +66,19 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	return readAcquiredContentArtifact(artifact);
 }
 
+function rssSourceId(resource: ResourceForProcessing): string | null {
+	return resource.type === 'rss' ? resource.source_id : null;
+}
+
+async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
+	const artifact = await step.do(
+		'acquire-rss-feed-content',
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		() => scrapeRssFeedItemArtifact(input, env),
+	);
+	return readAcquiredContentArtifact(artifact);
+}
+
 async function acquireResourceForOperation(
 	env: CoreEnv,
 	step: WorkflowStep,
@@ -65,6 +86,22 @@ async function acquireResourceForOperation(
 	operation: WorkflowOperation,
 ): Promise<AcquiredContent | undefined> {
 	if (!shouldAcquireContent(resource, operation === 'resync')) return undefined;
+	const sourceId = rssSourceId(resource);
+	if (sourceId) {
+		const source = await step.do(
+			'load-rss-source-policy',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => loadRssSourcePolicy(env, sourceId),
+		);
+		if (source.acquisitionMode === 'feed') {
+			if (!resource.url) throw new Error(`RSS resource ${resource.id} has no article URL`);
+			return stageRssFeedAcquisition(env, step, {
+				feedUrl: source.handle,
+				articleUrl: resource.url,
+				sourceName: source.name,
+			});
+		}
+	}
 	return stageSavedUrlAcquisition(env, step, resource);
 }
 
@@ -93,7 +130,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const initialResource = await step.do(
 			'fetch-resource-shell',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			async () => loadResourceForProcessing(this.env, resourceId, true),
+			async () => loadResourceShellForProcessing(this.env, resourceId),
 		);
 		if (operation === 'resync' && !initialResource.url) {
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
@@ -196,7 +233,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			'update-db',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
-				const resourceToPersist = pdfTextArtifact?.text || acquiredContent ? await loadFull() : resource;
+				const resourceToPersist = await loadFull();
 				return persistProcessedResource(this.env, {
 					resourceId,
 					resource: resourceToPersist,

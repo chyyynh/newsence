@@ -2,9 +2,8 @@
 
 import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, toIsoString } from '@db/sql';
+import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, toIsoString } from '@db/sql';
 import { sql } from 'drizzle-orm';
-import { resourceContentAccessSql } from './resource-query-policy';
 
 export type ExportCollectionOkfInput = {
 	collectionId: string;
@@ -16,6 +15,7 @@ type CollectionRow = {
 	id: string;
 	name: string;
 	description: string | null;
+	user_id: string | null;
 };
 
 type ResourceRow = {
@@ -75,7 +75,7 @@ async function buildCollectionOkfBundle(
 		const collection = (
 			await queryRows<CollectionRow>(
 				db,
-				sql`SELECT id, name, description
+				sql`SELECT id, name, description, user_id
 					 FROM collections
 					 WHERE id = ${input.collectionId}
 					   AND (visibility = 'public' OR (${input.viewerId}::text IS NOT NULL AND user_id = ${input.viewerId}))
@@ -84,7 +84,7 @@ async function buildCollectionOkfBundle(
 		)[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const resources = await readCollectionResources(db, collection.id, input.viewerId, input.primaryLocale);
+		const resources = await readCollectionResources(db, collection.id, collection.user_id, input.viewerId, input.primaryLocale);
 		const collectionSlug = slugify(collection.name);
 		if (!collectionSlug) throw new Error(`Collection ${collection.id} has no valid slug`);
 		return {
@@ -103,11 +103,11 @@ function normalizePrimaryLocale(value: string | null | undefined): string | null
 async function readCollectionResources(
 	db: CoreDb,
 	collectionId: string,
+	collectionOwnerId: string | null,
 	viewerId: string | null,
 	primaryLocale: string | null,
 ): Promise<ResourceRow[]> {
 	const canReadContent = resourceContentAccessSql('export', {
-		hasViewer: sql`${viewerId}::text IS NOT NULL`,
 		inViewerLibrary: sql`viewer_library.id IS NOT NULL`,
 		scope: sql`r.scope`,
 	});
@@ -121,7 +121,7 @@ async function readCollectionResources(
 		     r.url,
 		     localized.summary,
 		     CASE WHEN ${canReadContent} THEN localized.content ELSE NULL END AS content,
-		     r.published_date,
+		     COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_date,
 		     r.tags,
 		     localized.keywords,
 		     r.category
@@ -134,14 +134,22 @@ async function readCollectionResources(
 		     SELECT rl.lang, rl.title, rl.summary, rl.content, rl.keywords
 		     FROM resources_localized rl
 		     WHERE rl.id = r.id
-		       AND rl.lang = COALESCE(${primaryLocale}::text, r.original_lang)
+		       AND rl.lang IN (r.original_lang, COALESCE(${primaryLocale}::text, r.original_lang))
+		     ORDER BY CASE
+		       WHEN rl.lang = COALESCE(${primaryLocale}::text, r.original_lang) THEN 0
+		       ELSE 1
+		     END
 		     LIMIT 1
 		   ) localized ON TRUE
 			   WHERE link.from_type = 'collection'
 			     AND link.from_id = ${collectionId}::text
+			     AND link.user_id = ${collectionOwnerId}
 			     AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
-			     AND (r.scope = 'corpus' OR viewer_library.id IS NOT NULL)
-		   ORDER BY link.created_at ASC`,
+			     AND (
+			       (r.scope = 'corpus' AND r.enrichment_status = 'enriched')
+			       OR viewer_library.id IS NOT NULL
+			     )
+		   ORDER BY link.created_at ASC, link.id ASC`,
 	);
 }
 

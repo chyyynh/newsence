@@ -1,91 +1,48 @@
-import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
-import { extractFromJson, extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadEnabledSources, type MonitoredSource, markSourceScraped } from '@ingest/domain/source-store';
+import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import { loadMonitoredSources, type MonitoredSource, markSourceScraped, parseRssAcquisitionMode } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
-import { hackerNewsDiscussionUrl } from './hackernews';
+import { canonicalFeedItemUrl, type FeedItem, feedItemMarkdown, feedPublishedDate, feedSummary, loadFeedEntries } from './rss-feed';
 
-const MAX_FEED_BYTES = 3 * 1024 * 1024;
 const FEED_CONCURRENCY = 4;
 const ITEM_CONCURRENCY = 5;
-const FEED_SUMMARY_MAX_CHARS = 500;
 
 type RssSource = MonitoredSource;
 
-async function loadFeedEntries(feed: RssSource): Promise<FeedEntry[]> {
-	const response = await fetchWithTimeout(feed.handle, {
-		headers: {
-			'User-Agent': WEB_FETCH_USER_AGENT,
-			Accept: 'application/rss+xml, application/xml, text/xml, */*',
-		},
-	});
-
-	if (response.ok) {
-		const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-		const body = await readTextWithLimit(response, MAX_FEED_BYTES);
-		const options = { descriptionMaxLen: 0 };
-		const parsedFeed =
-			contentType.includes('json') || body.trimStart().startsWith('{') ? extractFromJson(body, options) : extractFromXml(body, options);
-		if (!Array.isArray(parsedFeed.entries)) throw new Error(`Feed parser returned no entries for ${feed.handle}`);
-		return parsedFeed.entries.slice(0, 30) as FeedEntry[];
-	}
-
-	const status = response.status;
-	await response.body?.cancel();
-	throw new Error(`RSS feed ${feed.name} failed with HTTP ${status}`);
-}
-
-function normalizeFeedItemUrl(value: string | undefined): string | null {
-	if (!value) return null;
-	try {
-		const parsed = new URL(value);
-		if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-		return normalizeUrl(parsed.toString());
-	} catch {
-		return null;
-	}
-}
-
-function canonicalFeedItemUrl(item: FeedEntry): string | null {
-	return normalizeFeedItemUrl(hackerNewsDiscussionUrl(item.id) ?? item.link);
-}
-
-function feedPublishedDate(value: string | undefined): Date {
-	if (!value) return new Date();
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? new Date() : date;
-}
-
-async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedEntry, url: string): Promise<void> {
-	const description = item.description?.trim();
+async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, url: string): Promise<void> {
 	const title = item.title?.trim();
 	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
+	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
+	const content = mode === 'feed' ? await feedItemMarkdown(env, item, url) : null;
 	const resourceId = await withCoreDb(env, (db) =>
 		upsertPendingSourceResource(db, {
+			sourceId: feed.id,
 			url,
 			title,
 			source: feed.name,
 			publishedDate: feedPublishedDate(item.published),
-			summary: description ? description.slice(0, FEED_SUMMARY_MAX_CHARS) : null,
+			summary: feedSummary(item.summary),
 			type: 'rss',
-			content: null,
-			platformMetadata: null,
+			originalLang: item.language,
+			content,
+			platformMetadata: mode === 'feed' ? { fetchedAt: new Date().toISOString(), data: null } : null,
+			previewImageUrl: item.previewImageUrl,
 		}),
 	);
 	await enqueueProcessing(env, resourceId);
 }
 
 async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
-	const items = await loadFeedEntries(feed);
+	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
+	const items = await loadFeedEntries(feed.handle);
 	if (!items.length) {
 		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
 		await markSourceScraped(env, feed.id);
 		return;
 	}
 
-	const itemUrlsByUrl = new Map<string, { item: FeedEntry; url: string }>();
+	const itemUrlsByUrl = new Map<string, { item: FeedItem; url: string }>();
 	for (const item of items) {
 		const url = canonicalFeedItemUrl(item);
 		if (url && !itemUrlsByUrl.has(url)) itemUrlsByUrl.set(url, { item, url });
@@ -95,6 +52,12 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 	if (skippedInvalid) console.warn({ tag: 'RSS', msg: 'Skipped invalid or duplicate feed items', feed: feed.name, count: skippedInvalid });
 	const urls = itemUrls.map(({ url }) => url);
 	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, urls));
+	const rssResourceIds = existingRecords.filter((resource) => resource.type === 'rss').map((resource) => resource.id);
+	const hackerNewsResourceIds = existingRecords.filter((resource) => resource.type === 'hackernews').map((resource) => resource.id);
+	await withCoreDb(env, async (db) => {
+		await attachSourceToResources(db, rssResourceIds, feed.id, 'rss');
+		await attachSourceToResources(db, hackerNewsResourceIds, feed.id, 'hackernews');
+	});
 	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
 	let retried = 0;
@@ -114,7 +77,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 		}
 	}
 
-	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, newCount: newItems.length, retried, totalCount: items.length });
+	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, mode, newCount: newItems.length, retried, totalCount: items.length });
 	let queued = 0;
 	for (let index = 0; index < newItems.length; index += ITEM_CONCURRENCY) {
 		const batch = newItems.slice(index, index + ITEM_CONCURRENCY);
@@ -139,7 +102,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const feeds = await loadEnabledSources(env, 'rss');
+	const feeds = await loadMonitoredSources(env, 'rss');
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);
 		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));

@@ -1,13 +1,17 @@
+import type { ContentResourceType, ResourceTranslationSource } from '@core-shared/resource-types';
 import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
-import { withCoreDb, withCoreTx } from '@db/client';
-import { resources } from '@db/schema';
-import { normalizeResourceEntityUpdatePayload } from '@entities/normalize';
-import { syncResourceEntities } from '@ingest/domain/resource-entity-store';
+import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
+import { entities, entityTranslations, resourceEntities, resources } from '@db/schema';
+import {
+	canonicalizeEntityName,
+	normalizeResourceEntitiesForStorage,
+	normalizeResourceEntityUpdatePayload,
+	type ResourceEntityInput,
+} from '@entities/normalize';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, not, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
-import { buildResourceUpdate } from './domain/resource-update';
 import type { PdfTextArtifact } from './platforms/pdf';
 import { persistYouTubeWorkflowData, type YouTubeHighlightsUpdate } from './platforms/youtube';
 
@@ -23,6 +27,59 @@ type PersistProcessedResourceInput = {
 	youtubeHighlights: YouTubeHighlightsUpdate | null;
 };
 
+type BuildResourceUpdateInput = {
+	processorResult: ProcessorResult;
+	extraction?: PdfExtractionMetadata;
+	paperEnrichment?: PaperMetadata | null;
+	previewImageUrl: string | null;
+};
+
+function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput) {
+	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
+	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
+	const updateData = processorResult.updateData;
+	let platformMetadata = resource.platform_metadata;
+	if (paperEnrichment) {
+		platformMetadata = {
+			...platformMetadata,
+			enrichments: { ...(platformMetadata.enrichments || {}), academic: paperEnrichment },
+		};
+	}
+	if (processorResult.enrichments && Object.keys(processorResult.enrichments).length) {
+		platformMetadata = {
+			...platformMetadata,
+			enrichments: {
+				...(platformMetadata.enrichments || {}),
+				...processorResult.enrichments,
+				processedAt: new Date().toISOString(),
+			},
+		};
+	}
+	if (processorResult.classificationCategory) {
+		platformMetadata = {
+			...platformMetadata,
+			classification: {
+				...(platformMetadata.classification ?? {}),
+				category: processorResult.classificationCategory,
+				classifiedAt: new Date().toISOString(),
+			},
+		};
+	}
+	const sourceName = resource.source?.trim();
+	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
+	platformMetadata = { ...platformMetadata, ...(extraction ? { extraction } : {}), sourceName };
+
+	return {
+		summary: updateData.summary !== undefined ? updateData.summary : resource.summary,
+		content: updateData.content !== undefined ? updateData.content : resource.content,
+		tags: [...(updateData.tags ?? resource.tags)],
+		keywords: [...(updateData.keywords ?? resource.keywords)],
+		entities: updateData.entities,
+		og_image_url: previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
+		platform_metadata: platformMetadata,
+	};
+}
+
 export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		const updated = await db
@@ -36,19 +93,19 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 
 export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
 	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
-	const platformMetadataJson = JSON.stringify(resource.platform_metadata);
 	const previewImageUrl = resource.og_image_url?.trim() || null;
 	await withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
-			UPDATE resources
-			SET scraped_date = NOW(),
-					og_image_url = ${previewImageUrl},
-				platform_metadata = ${platformMetadataJson}::jsonb,
-				updated_at = NOW()
-			WHERE id = ${resourceId}::uuid
-			RETURNING id
-		`);
-		if (!result.rows.length) throw new Error(`Failed to record resource ${resourceId} resync: not found`);
+		const updated = await db
+			.update(resources)
+			.set({
+				scrapedDate: new Date(),
+				ogImageUrl: previewImageUrl,
+				platformMetadata: resource.platform_metadata,
+				updatedAt: new Date(),
+			})
+			.where(eq(resources.id, resourceId))
+			.returning({ id: resources.id });
+		if (!updated.length) throw new Error(`Failed to record resource ${resourceId} resync: not found`);
 	});
 }
 
@@ -64,12 +121,12 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 		if (!updatePayload.content?.trim()) {
 			throw new Error(`Refusing to persist enriched resource ${input.resourceId} without content`);
 		}
-		const resourceType = updatePayload.type;
+		const resourceType = input.resource.type;
 		const platformMetadata = updatePayload.platform_metadata;
-		const resourceEntities = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
+		const entityInputs = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
 		const resourceId = await updateResourceAfterProcessing(db, input.resourceId, input.resource, updatePayload);
-		if (resourceEntities) {
-			await syncResourceEntities(db, resourceId, resourceEntities, resourceType, input.resource.source, platformMetadata);
+		if (entityInputs) {
+			await syncResourceEntities(db, resourceId, entityInputs, resourceType, input.resource.source, platformMetadata);
 		}
 		if (input.youtubeTranscript || input.youtubeHighlights) {
 			await persistYouTubeWorkflowData(db, {
@@ -79,4 +136,85 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 		}
 		return resourceId;
 	});
+}
+
+async function syncResourceEntities(
+	db: CoreDb,
+	resourceId: string,
+	inputEntities: ResourceEntityInput[],
+	resourceType: ContentResourceType,
+	source?: string | null,
+	platformMetadata?: unknown,
+): Promise<void> {
+	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, resourceType, source, platformMetadata);
+	const entityIds: string[] = [];
+
+	for (const entity of normalizedEntities) {
+		const canonical = canonicalizeEntityName(entity.name);
+		if (!canonical) continue;
+
+		const [row] = await db
+			.insert(entities)
+			.values({ canonicalName: canonical, name: entity.name, type: entity.type })
+			.onConflictDoUpdate({
+				target: entities.canonicalName,
+				set: {
+					name: entity.name,
+					type: entity.type,
+					updatedAt: sql`NOW()`,
+				},
+			})
+			.returning({ id: entities.id });
+		const entityId = row?.id;
+		if (!entityId) throw new Error(`Failed to sync entity ${canonical}: no entity id returned`);
+		entityIds.push(entityId);
+		await upsertEntityTranslationRows(db, entityId, entity);
+	}
+
+	if (entityIds.length) {
+		await db
+			.delete(resourceEntities)
+			.where(and(eq(resourceEntities.resourceId, resourceId), not(inArray(resourceEntities.entityId, entityIds))));
+		await db
+			.insert(resourceEntities)
+			.values(entityIds.map((entityId) => ({ resourceId, entityId })))
+			.onConflictDoNothing();
+	} else {
+		await db.delete(resourceEntities).where(eq(resourceEntities.resourceId, resourceId));
+	}
+
+	console.info({
+		tag: 'ENTITIES',
+		msg: 'Synced resource links',
+		resourceId,
+		inputCount: inputEntities.length,
+		count: normalizedEntities.length,
+		filteredCount: inputEntities.length - normalizedEntities.length,
+	});
+}
+
+async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity: ResourceEntityInput): Promise<void> {
+	const labels: Array<{ lang: string; name: string; source: ResourceTranslationSource }> = [
+		{ lang: 'en', name: entity.name, source: 'original' },
+	];
+	if (entity.name_cn.trim()) labels.push({ lang: 'zh-Hant', name: entity.name_cn, source: 'machine' });
+
+	await db
+		.insert(entityTranslations)
+		.values(labels.map((label) => ({ entityId, lang: label.lang, name: label.name, source: label.source })))
+		.onConflictDoUpdate({
+			target: [entityTranslations.entityId, entityTranslations.lang],
+			set: {
+				name: sql`CASE
+						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.name}
+						ELSE excluded.name
+					END`,
+				source: sql`CASE
+						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.source}
+						WHEN ${entityTranslations.source} = 'original' THEN ${entityTranslations.source}
+						ELSE excluded.source
+					END`,
+				updatedAt: sql`NOW()`,
+			},
+		});
 }

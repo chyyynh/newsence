@@ -1,6 +1,6 @@
 import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
-import { extractFromHtml } from '@extractus/article-extractor';
+import { addTransformations, extractFromHtml } from '@extractus/article-extractor';
 import { type PdfTextArtifact, parsePdfBytes } from './platforms/pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -9,6 +9,31 @@ const GENERIC_FETCH_TIMEOUT_MS = 8_000;
 const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
+
+type TransformElement = {
+	parentElement: TransformElement | null;
+	removeAttribute(name: string): void;
+};
+
+// Direct saved LessWrong URLs still use web acquisition. RSS sources in feed mode never reach this transformation.
+addTransformations({
+	patterns: [/^https:\/\/(?:www\.)?lesswrong\.com\/posts\//],
+	pre(document) {
+		// article-extractor relies on the ambient DOM Document type, while Workers
+		// exposes a different global Document in service-binding consumers.
+		const postContent = (
+			document as typeof document & {
+				querySelector(selector: string): TransformElement | null;
+			}
+		).querySelector('.PostsPage-postContent');
+		let container = postContent?.parentElement;
+		while (container) {
+			container.removeAttribute('hidden');
+			container = container.parentElement;
+		}
+		return document;
+	},
+});
 
 type ExtractedHtmlArticle = {
 	html: string;
@@ -80,7 +105,7 @@ function stripLeadingFrontmatter(markdown: string): string {
 	return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
 }
 
-async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
+export async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
 	const result = await env.AI.toMarkdown(
 		{
 			name: `${urlHost(url)}.html`,
@@ -91,7 +116,7 @@ async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promis
 		},
 	);
 	if (result.format === 'error') throw new Error(`Workers AI toMarkdown failed: ${result.error}`);
-	return result.data.trim();
+	return stripLeadingFrontmatter(result.data);
 }
 
 async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string): Promise<AcquiredWebContent> {
@@ -125,8 +150,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Prom
 	const article = await extractHtmlArticle(html, url);
 	if (!article) throw new Error(`No readable article content found: ${url}`);
 
-	const markdown = await markdownFromHtml(env, article.html, url);
-	const content = stripLeadingFrontmatter(markdown);
+	const content = await markdownFromHtml(env, article.html, url);
 	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}

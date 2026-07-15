@@ -3,8 +3,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { RESOURCE_ORIGINAL_CONTENT_TYPES, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { withCoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
-import { loadResourceForProcessing } from '@ingest/domain/resource-store';
-import { upsertResourceTranslation } from '@ingest/domain/resource-translation-store';
+import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
@@ -166,7 +165,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 		const initialContent = initial.content?.trim();
 		if (!initialContent) throw new Error(`Resource ${resourceId} has no persisted original content`);
 
-		const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+		const zhHantTranslation = resource.translations[ZH_HANT_RESOURCE_LANG];
 		const zhHantContent = zhHantTranslation?.source === 'human' ? null : zhHantTranslation?.content?.trim();
 		if (resource.content && !hasTranslatableContent(resource.content) && zhHantContent) {
 			resource = {
@@ -218,7 +217,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 				translations: {
 					...resource.translations,
 					[ZH_HANT_RESOURCE_LANG]: {
-						...resource.translations?.[ZH_HANT_RESOURCE_LANG],
+						...resource.translations[ZH_HANT_RESOURCE_LANG],
 						...translatedMetadata,
 						source: 'machine',
 					},

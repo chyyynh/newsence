@@ -1,6 +1,6 @@
 import { generateObject, generateText } from '@core-ai/generation';
 import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
-import { ENTITY_TYPES, type PlatformEnrichments, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
+import { ENTITY_TYPES, type PlatformEnrichments, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 
@@ -63,6 +63,10 @@ const ZhHantMetadataTranslationSchema = z.object({
 	summary: z.string().min(1),
 });
 
+const ZhHantTitleTranslationSchema = z.object({
+	title: z.string().min(1),
+});
+
 const ResourceClassificationSchema = z.object({
 	tags: z.array(z.string().min(1)).min(1),
 	keywords: z.array(z.string().min(1)).min(1),
@@ -71,16 +75,22 @@ const ResourceClassificationSchema = z.object({
 });
 
 function zhHantMetadataTranslationSystemPrompt(resource: ResourceForProcessing): string {
-	const twitterMetadata = platformMetadataFor(resource, 'twitter');
-	const preservesSocialPost = resource.type === 'twitter' && twitterMetadata?.data.variant !== 'longform';
-	const summaryInstruction = preservesSocialPost
-		? '忠實完整翻譯原貼文或 thread，保留第一人稱、段落與語氣，不要摘要或改寫成新聞報導'
-		: '根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要';
+	if (resource.type === 'twitter') {
+		return `你是專業的新聞翻譯編輯。請只輸出符合 schema 的繁體中文結果。
+
+任務：
+- title: 將標題翻譯成自然流暢的繁體中文
+
+規則：
+- 忠實保留原文語氣，不要新增資訊
+- 若原文已是繁體中文，保留自然表達；若是簡體中文，轉為自然繁體中文
+- 不要使用 Markdown。`;
+	}
 	return `你是專業的新聞翻譯和摘要編輯。請只輸出符合 schema 的繁體中文結果。
 
 任務：
 - title: 將標題翻譯成自然流暢的繁體中文
-- summary: ${summaryInstruction}
+- summary: 根據原文標題、摘要與內容，產生 1-2 句繁體中文摘要
 
 規則：
 - 忠實保留原文語氣，不要新增資訊
@@ -166,15 +176,15 @@ export function needsZhHantContentTranslation(resource: ResourceForProcessing): 
 
 export function needsZhHantMetadataTranslation(resource: ResourceForProcessing): boolean {
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
-	const translation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	const translation = resource.translations[ZH_HANT_RESOURCE_LANG];
 	if (translation?.source === 'human') return false;
-	return isEmpty(translation?.title) || isEmpty(translation?.summary);
+	return isEmpty(translation?.title) || (resource.type !== 'twitter' && isEmpty(translation?.summary));
 }
 
 export async function generateZhHantMetadataTranslation(
 	resource: ResourceForProcessing,
 	env: CoreEnv,
-): Promise<z.infer<typeof ZhHantMetadataTranslationSchema>> {
+): Promise<z.infer<typeof ZhHantMetadataTranslationSchema> | z.infer<typeof ZhHantTitleTranslationSchema>> {
 	const content = requiredResourceContent(resource);
 	const summaryLine = resource.summary?.trim() ? `\n摘要：${resource.summary.trim()}` : '';
 	const prompt = `原文資訊：
@@ -182,6 +192,15 @@ export async function generateZhHantMetadataTranslation(
 	標題：${resource.title}${summaryLine}
 內容：
 ${content.slice(0, MAX_CONTENT_LENGTH)}`;
+	if (resource.type === 'twitter') {
+		return generateObject(env.AI, prompt, {
+			schema: ZhHantTitleTranslationSchema,
+			task: 'resource-metadata-localization',
+			gatewayId: env.AI_GATEWAY_NAME,
+			maxTokens: 400,
+			systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
+		});
+	}
 	const translation = await generateObject(env.AI, prompt, {
 		schema: ZhHantMetadataTranslationSchema,
 		task: 'resource-metadata-localization',
@@ -201,7 +220,7 @@ export function hasTranslatableContent(content: string): boolean {
 }
 
 function shouldWriteResourceContentTranslation(resource: ResourceForProcessing): boolean {
-	const zhHantTranslation = resource.translations?.[ZH_HANT_RESOURCE_LANG];
+	const zhHantTranslation = resource.translations[ZH_HANT_RESOURCE_LANG];
 	if (zhHantTranslation?.source === 'human') return false;
 	const zhHantContent = zhHantTranslation?.content;
 	if (isEmpty(zhHantContent)) return true;

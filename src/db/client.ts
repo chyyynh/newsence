@@ -5,7 +5,6 @@ import * as schema from './schema';
 export type CoreDb = NodePgDatabase<typeof schema>;
 
 type CoreDbOperation<T> = (db: CoreDb, client: Client) => Promise<T>;
-type CoreDbOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 export async function withCoreDb<T>(env: CoreEnv, operation: CoreDbOperation<T>): Promise<T> {
 	return withCoreDbClient(env, operation);
@@ -30,26 +29,12 @@ export async function withCoreTx<T>(env: CoreEnv, operation: CoreDbOperation<T>)
 }
 
 async function withCoreDbClient<T>(env: CoreEnv, operation: CoreDbOperation<T>): Promise<T> {
+	// Keep the edge client scoped to this invocation. Hyperdrive owns the
+	// underlying origin pool and automatically cleans up the edge connection
+	// when the request, Workflow, Queue consumer, or Durable Object ends.
 	const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-	let outcome: CoreDbOutcome<T>;
-	try {
-		await client.connect();
-		outcome = { ok: true, value: await operation(createCoreDb(client), client) };
-	} catch (error) {
-		outcome = { ok: false, error };
-	}
-	try {
-		await client.end();
-	} catch (closeError) {
-		if (!outcome.ok) throw new AggregateError([outcome.error, closeError], 'Database operation and client close both failed');
-		console.warn({
-			tag: 'DB',
-			msg: 'Database client close failed after a successful operation',
-			error: closeError instanceof Error ? closeError.message : String(closeError),
-		});
-	}
-	if (!outcome.ok) throw outcome.error;
-	return outcome.value;
+	await client.connect();
+	return operation(createCoreDb(client), client);
 }
 
 function createCoreDb(client: Client): CoreDb {

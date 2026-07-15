@@ -1,8 +1,10 @@
 import {
-	CONTENT_RESOURCE_TYPES,
 	RESOURCE_CATEGORIES,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
+	RESOURCE_TYPES,
+	SOURCE_ACQUISITION_MODES,
+	SOURCE_KINDS,
 	SOURCE_PLATFORMS,
 } from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
@@ -12,7 +14,8 @@ export const resources = pgTable(
 	'resources',
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
-		type: text('type', { enum: CONTENT_RESOURCE_TYPES }).default('web').notNull(),
+		sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
+		type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
 		scope: text('scope', { enum: RESOURCE_SCOPES }).default('private').notNull(),
 		url: text('url'),
 		normalizedUrl: text('normalized_url'),
@@ -94,8 +97,10 @@ export const sources = pgTable(
 		siteUrl: text('site_url'),
 		avatarUrl: text('avatar_url'),
 		category: text('category'),
+		kind: text('kind', { enum: SOURCE_KINDS }).default('blog').notNull(),
 		displayGroup: text('display_group'),
-		enabled: boolean('enabled').default(true).notNull(),
+		acquisitionMode: text('content_mode', { enum: SOURCE_ACQUISITION_MODES }).default('platform').notNull(),
+		monitoringEnabled: boolean('enabled').default(true).notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
@@ -169,17 +174,6 @@ export const collections = pgTable('collections', {
 	description: varchar('description', { length: 500 }),
 	visibility: text('visibility').notNull(),
 	resourceCount: integer('resource_count').default(0).notNull(),
-	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-});
-
-export const citations = pgTable('resource_links', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	fromType: text('from_type').notNull(),
-	fromId: text('from_id').notNull(),
-	toType: text('to_type').notNull(),
-	toId: uuid('to_id').notNull(),
-	userId: text('user_id').notNull(),
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });

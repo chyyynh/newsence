@@ -16,7 +16,6 @@
 		/* Path aliases for the feature-first src layout.
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
-			"@resource-types": ["../../packages/resource-types/index.ts"],
 			"@core-ai/*": ["./src/ai/*"],
 			"@db/*": ["./src/db/*"],
 			"@core-shared/*": ["./src/shared/*"],

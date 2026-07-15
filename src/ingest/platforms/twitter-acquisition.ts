@@ -184,7 +184,6 @@ export function buildThreadResourceParts(tweets: Tweet[]): {
 	const media = sorted.flatMap(extractTweetMedia);
 	const quotedTweet = sorted.map(extractQuotedTweet).find(Boolean);
 	const platformMetadata = buildTweetPlatformMetadata(first, { media, quotedTweet });
-	platformMetadata.data.threadTweetCount = sorted.length;
 	return {
 		first,
 		combinedText: uniqueTexts.join('\n\n'),
@@ -196,31 +195,24 @@ function buildTweetPlatformMetadata(
 	tweet: Tweet,
 	options: {
 		externalUrl?: string;
-		originalTweetUrl?: string;
-		tweetText?: string;
 		media?: TwitterMedia[];
 		quotedTweet?: QuotedTweetData;
 	} = {},
 ): PlatformMetadata<'twitter'> {
 	const media = options.media ?? extractTweetMedia(tweet);
-	const tweetText = options.tweetText ?? stripTweetUrls(tweet.text);
 	const base = {
 		tweetId: tweet.id,
 		...extractTweetAuthor(tweet),
 		media,
 		createdAt: tweet.createdAt,
-		retweetedBy: tweet.retweetedBy,
 	};
 
 	if (options.externalUrl) {
 		return {
 			fetchedAt: new Date().toISOString(),
 			data: {
-				variant: 'shared',
 				...base,
-				tweetText,
 				externalUrl: options.externalUrl,
-				originalTweetUrl: options.originalTweetUrl,
 			},
 		};
 	}
@@ -239,12 +231,12 @@ function buildTwitterLongformPlatformMetadata(
 	return {
 		fetchedAt: new Date().toISOString(),
 		data: {
-			variant: 'longform',
 			tweetId,
 			authorName: author.name,
 			authorUserName: author.userName,
 			authorProfilePicture: author.profilePicture,
 			authorVerified: author.isBlueVerified,
+			coverImageUrl,
 			media: coverImageUrl ? [{ url: coverImageUrl, type: 'photo' }] : [],
 		},
 	};
@@ -252,7 +244,6 @@ function buildTwitterLongformPlatformMetadata(
 
 interface TwitterLongform {
 	title?: string;
-	preview_text?: string;
 	cover_media_img_url?: string;
 	contents?: Array<{ text?: string }>;
 	author?: {
@@ -261,9 +252,6 @@ interface TwitterLongform {
 		isBlueVerified?: boolean;
 		profilePicture?: string;
 	};
-	viewCount?: number;
-	likeCount?: number;
-	replyCount?: number;
 	createdAt?: string;
 }
 
@@ -304,28 +292,18 @@ async function scrapeTwitterLongform(
 		throw new Error(`Twitter longform ${tweetId} requires a valid published date`);
 	}
 
-	let md = `# ${title}\n\n`;
-	md += `**Author:** ${author.name}`;
-	if (author.isBlueVerified) md += ' ✓';
-	md += ` (@${author.userName})\n\n`;
-	if (longform.cover_media_img_url) md += `![Cover](${longform.cover_media_img_url})\n\n`;
-	md += `${contentText}\n\n---\n\n**Engagement:**\n`;
-	if (longform.viewCount !== undefined) md += `- Views: ${longform.viewCount.toLocaleString()}\n`;
-	if (longform.likeCount !== undefined) md += `- Likes: ${longform.likeCount.toLocaleString()}\n`;
-	if (longform.replyCount !== undefined) md += `- Replies: ${longform.replyCount.toLocaleString()}\n`;
-
 	console.info({ tag: 'TWITTER', msg: 'Longform fetched', title });
 
 	return {
 		type: 'twitter',
 		title,
-		markdown: md,
+		markdown: contentText,
 		metadata: {
 			author: author.userName,
 			language: language ?? null,
 			publishedDate,
 			siteName: 'Twitter',
-			description: longform.preview_text?.trim() || null,
+			description: null,
 		},
 		previewImageUrl: longform.cover_media_img_url ?? null,
 		platformMetadata: buildTwitterLongformPlatformMetadata(tweetId, author, longform.cover_media_img_url),
@@ -350,13 +328,11 @@ function buildExternalLinkTweet(
 			language: tweet.lang ?? null,
 			publishedDate: tweet.createdAt,
 			siteName: new URL(externalUrl).hostname.replace(/^www\./, ''),
-			description: tweetText,
+			description: null,
 		},
 		platformMetadata: buildTweetPlatformMetadata(tweet, {
 			media,
-			tweetText,
 			externalUrl,
-			originalTweetUrl: tweet.url,
 		}),
 	};
 }
@@ -407,7 +383,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 				language: tweet.lang ?? null,
 				publishedDate: tweet.createdAt,
 				siteName: 'Twitter',
-				description: tweet.text,
+				description: null,
 			},
 			previewImageUrl: mediaPreviewImageUrl,
 			platformMetadata: buildTweetPlatformMetadata(tweet),
@@ -458,7 +434,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 			language: parts.first.lang ?? null,
 			publishedDate: parts.first.createdAt,
 			siteName: 'Twitter',
-			description: parts.combinedText,
+			description: null,
 		},
 		previewImageUrl: parts.platformMetadata.data.media?.[0]?.url ?? null,
 		platformMetadata: parts.platformMetadata,

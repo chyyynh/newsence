@@ -86,7 +86,7 @@
 
 需要一個 PostgreSQL。正式環境目前透過 Cloudflare Hyperdrive 連到 PlanetScale Postgres。
 
-需要的表：`resources`、`resource_translations`、`library`、`rss_list`、`youtube_transcripts`，以及 entity / citation / paper 相關表格。完整 schema 定義在 `web-tanstack/prisma/schema.prisma`，並在 worker 的 `src/db/schema.ts` 中同步。目前可以參考這兩份 schema，或在 Issues 聯絡我。
+Core 使用的 app-owned tables 會同步定義在 `src/db/schema.ts`；canonical schema 位於 `web-tanstack/prisma/schema.prisma`，DB-only constraints 與 indexes 則位於 `web-tanstack/prisma/manual-indexes.sql`。任一 schema 變更後請執行 `pnpm check:db-schema`。
 
 ### 2. Hyperdrive binding
 

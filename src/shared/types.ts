@@ -12,13 +12,14 @@ export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefin
 
 export interface ResourceForProcessing {
 	id: string;
+	source_id: string | null;
 	type: ContentResourceType;
 	scope: ResourceScope;
 	original_lang: string;
 	title: string;
 	summary: string | null;
 	content: string | null;
-	translations?: ResourceTranslationMap;
+	translations: ResourceTranslationMap;
 	url: string | null;
 	og_image_url?: string | null;
 	source: string | null;
@@ -29,8 +30,7 @@ export interface ResourceForProcessing {
 	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;
 	file_type?: string;
-	normalized_source_url?: string | null;
-	origin_type?: string;
+	normalized_url?: string | null;
 }
 
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
@@ -107,18 +107,14 @@ export interface RetweetedByData {
 }
 
 interface TwitterMetadata extends TwitterAuthorFields {
-	variant?: 'shared' | 'longform';
 	tweetId?: string;
-	threadTweetCount?: number;
+	coverImageUrl?: string;
 	media?: TwitterMedia[];
 	createdAt?: string;
 	quotedTweet?: QuotedTweetData;
-	retweetedBy?: RetweetedByData;
-	tweetText?: string;
 	externalUrl?: string;
 	externalOgImage?: string | null;
 	externalTitle?: string | null;
-	originalTweetUrl?: string;
 }
 
 interface YouTubeMetadata {
@@ -185,7 +181,7 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-export interface PlatformMetadataDataByResourceType {
+interface PlatformMetadataDataByResourceType {
 	web: null;
 	rss: null;
 	twitter: TwitterMetadata;

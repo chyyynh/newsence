@@ -20,6 +20,9 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260131.0)(@types/pg@8.18.0)(pg@8.20.0)
+      feedsmith:
+        specifier: 2.9.5
+        version: 2.9.5
       html-entities:
         specifier: ^2.6.0
         version: 2.6.0
@@ -56,6 +59,11 @@ packages:
 
   '@biomejs/biome@2.4.4':
     resolution: {integrity: sha512-tigwWS5KfJf0cABVd52NVaXyAVv4qpUXOWJ1rxFL8xF1RVoeS2q/LK+FHgYoKMclJCuRoCWAPy1IXaN9/mS61Q==}
+    engines: {node: '>=14.21.3'}
+    hasBin: true
+
+  '@biomejs/biome@2.5.3':
+    resolution: {integrity: sha512-MrJswFdei9EfDwwUy2tQrPDpK0AO+RmMFvBoaaJ6ayBc3sUbHdCE+XG5N8vp+5So41ZupZJQm0roHFFhMGVD7A==}
     engines: {node: '>=14.21.3'}
     hasBin: true
 
@@ -716,6 +724,9 @@ packages:
     resolution: {integrity: sha512-brCNCeScma/kqa54J4PIDriSSSLssRkuYaUCpvHJulGc3HGI/xxKUCTDcYkAdqJsyb//ydpbxecjC3hB9+tb/g==}
     hasBin: true
 
+  feedsmith@2.9.5:
+    resolution: {integrity: sha512-mxPP+yAB4jBDzE6fe6ZhC3PRoAUe9bQv4+Mfwme510iCo1LXv5e0dzxOsLJGhrQL5vv6APP0DUvvILBdEB6hig==}
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -950,6 +961,8 @@ snapshots:
       '@biomejs/cli-linux-x64-musl': 2.4.4
       '@biomejs/cli-win32-arm64': 2.4.4
       '@biomejs/cli-win32-x64': 2.4.4
+
+  '@biomejs/biome@2.5.3': {}
 
   '@biomejs/cli-darwin-arm64@2.4.4':
     optional: true
@@ -1361,6 +1374,12 @@ snapshots:
       path-expression-matcher: 1.6.1
       strnum: 2.4.1
       xml-naming: 0.1.0
+
+  feedsmith@2.9.5:
+    dependencies:
+      '@biomejs/biome': 2.5.3
+      entities: 7.0.1
+      fast-xml-parser: 5.9.3
 
   fsevents@2.3.3:
     optional: true

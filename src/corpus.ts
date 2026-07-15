@@ -1,30 +1,38 @@
-import { CONTENT_RESOURCE_TYPES } from '@core-shared/resource-types';
+import {
+	CONTENT_RESOURCE_TYPES,
+	type ContentResourceType,
+	isContentResourceType,
+	RESOURCE_CATEGORIES,
+	type ResourceCategory,
+} from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
+import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
-import { resourceContentAccessSql } from './resource-query-policy';
 
-export interface ResourceSummary {
+interface ResourceSummary {
 	id: string;
 	title: string;
 	url: string;
 	publishedDate?: string;
-	source?: string | null;
+	source: string;
 	summary?: string;
-	tags?: string[] | null;
+	tags?: string[];
 }
 
 export type ResourceSearchInput = {
 	query: string;
-	daysAgo?: number;
 	limit?: number;
+	filters?: ResourceSearchFilters;
 };
 
-export type ResourceRankSearchInput = {
-	query: string;
-	limit?: number;
+type ResourceSearchFilters = {
+	categories?: ResourceCategory[];
+	effectiveAfter?: string;
+	effectiveBefore?: string;
+	sourceIds?: string[];
+	types?: ContentResourceType[];
 };
 
 export type RelatedResourceSearchInput = {
@@ -38,7 +46,7 @@ export interface ReadContextItem {
 	id: string;
 }
 
-export interface ReadContextResult {
+interface ReadContextResult {
 	type: 'collection' | 'resource' | 'url' | 'document' | 'error';
 	id: string;
 	title?: string;
@@ -48,11 +56,10 @@ export interface ReadContextResult {
 	error?: string;
 }
 
-type ResourceType = ReadContextItem['type'];
+type ReadContextType = ReadContextItem['type'];
 
 interface ResourceContentRow {
 	id: string;
-	type: string;
 	url: string | null;
 	normalized_url: string | null;
 	scope: string;
@@ -60,7 +67,7 @@ interface ResourceContentRow {
 	file_type: string | null;
 	original_lang: string;
 	published_date: Date | string | null;
-	scraped_date: Date | string | null;
+	source: string | null;
 	tags: string[] | null;
 	title: string | null;
 	summary: string | null;
@@ -83,21 +90,30 @@ type ResourceSummaryRow = Pick<ResourceContentRow, 'id' | 'title' | 'summary'>;
 const RESULT_LIMIT = 10;
 const RESULT_LIMIT_MAX = 50;
 const RELATED_LIMIT_DEFAULT = 12;
-const RELATED_LIMIT_MAX = 500;
+const RELATED_LIMIT_MAX = RESULT_LIMIT_MAX;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
 const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
+const SOURCE_FILTER_LIMIT = 50;
 
-export async function searchCorpusResourceRanks(
-	env: CoreEnv,
-	input: ResourceRankSearchInput,
-): Promise<Array<{ id: string; score: number }>> {
+type NormalizedSearchFilters = {
+	categories?: ResourceCategory[];
+	effectiveAfter: Date | null;
+	effectiveBefore: Date | null;
+	excludeAll: boolean;
+	sourceIds?: string[];
+	types?: ContentResourceType[];
+};
+
+export async function searchCorpusResourceRanks(env: CoreEnv, input: ResourceSearchInput): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
 	if (!query) return [];
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
-	return (await searchCorpusRanks(env, query)).slice(0, limit);
+	const filters = normalizeSearchFilters(input);
+	if (filters.excludeAll) return [];
+	return (await searchCorpusRanks(env, query, filters)).slice(0, limit);
 }
 
 export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
@@ -107,7 +123,7 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 	const offset = clampInt(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
 	const seedText = await withCoreDb(env, (db) => relatedSeedText(db, seed.id));
 	if (!seedText) return [];
-	const ranks = await searchCorpusRanks(env, seedText);
+	const ranks = await searchCorpusRanks(env, seedText, { profile: 'related' });
 	return ranks
 		.map((rank) => rank.id)
 		.filter((id) => id !== seed.id)
@@ -117,28 +133,26 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchInput): Promise<ResourceSummary[]> {
 	const query = input.query.trim();
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT);
-	const daysAgo = input.daysAgo === undefined ? null : clampInt(input.daysAgo, 0, 3650, 0);
-	const fromDate = daysAgo ? new Date(Date.now() - daysAgo * 86_400_000) : null;
-	const ranks = query ? new Map((await searchCorpusRanks(env, query, fromDate)).map(({ id, score }) => [id, score])) : null;
+	const filters = normalizeSearchFilters(input);
+	if (filters.excludeAll) return [];
+	const rankedIds = query ? (await searchCorpusRanks(env, query, filters)).map((rank) => rank.id) : null;
 	return withCoreDb(env, async (db) => {
-		if (ranks) {
-			if (ranks.size === 0) return [];
-			const candidateIds = [...ranks.keys()].filter(isValidUuid);
+		if (rankedIds) {
+			const candidateIds = rankedIds.filter(isValidUuid);
 			if (candidateIds.length === 0) return [];
 			const rows = await queryRows<ResourceSearchRow>(
 				db,
 				sql`
 					SELECT ${resourceSearchSelect()}
 					FROM resources r
-					${resourceLocalizedJoin()}
+					${resourceReadJoins()}
 					WHERE r.id = ANY(${uuidArraySql(candidateIds)})
-						AND ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
+						AND ${corpusEnrichedSql()}${searchFiltersSql(filters)}
+					ORDER BY array_position(${uuidArraySql(candidateIds)}, r.id)
+					LIMIT ${limit}
 				`,
 			);
-			return rows
-				.sort((a, b) => requiredRank(ranks, b.id) - requiredRank(ranks, a.id))
-				.slice(0, limit)
-				.map(formatSummary);
+			return rows.map(formatSummary);
 		}
 
 		const rows = await queryRows<ResourceSearchRow>(
@@ -146,20 +160,14 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 			sql`
 				SELECT ${resourceSearchSelect()}
 				FROM resources r
-				${resourceLocalizedJoin()}
-				WHERE ${corpusEnrichedSql()}${publishedSinceSql(fromDate)}
-				ORDER BY ${recencySql()} DESC
+				${resourceReadJoins()}
+				WHERE ${corpusEnrichedSql()}${searchFiltersSql(filters)}
+				ORDER BY ${recencySql()} DESC, r.id DESC
 				LIMIT ${limit}
 			`,
 		);
 		return rows.map(formatSummary);
 	});
-}
-
-function requiredRank(ranks: Map<string, number>, resourceId: string): number {
-	const rank = ranks.get(resourceId);
-	if (rank === undefined) throw new Error(`Corpus resource ${resourceId} has no search rank`);
-	return rank;
 }
 
 export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
@@ -171,9 +179,55 @@ function clampInt(value: number | undefined, min: number, max: number, defaultVa
 	return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
+function optionalSearchDate(value: string | undefined, field: string): Date | null {
+	if (value === undefined) return null;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}`);
+	return date;
+}
+
+function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFilters {
+	const filters = input.filters ?? {};
+	const effectiveAfter = optionalSearchDate(filters.effectiveAfter, 'effectiveAfter');
+	const effectiveBefore = optionalSearchDate(filters.effectiveBefore, 'effectiveBefore');
+	if (effectiveAfter && effectiveBefore && effectiveAfter > effectiveBefore)
+		throw new Error('effectiveAfter must not exceed effectiveBefore');
+	const sourceIds = optionalSourceIds(filters.sourceIds);
+	const types = optionalResourceTypes(filters.types);
+	const categories = optionalResourceCategories(filters.categories);
+	return {
+		categories,
+		effectiveAfter,
+		effectiveBefore,
+		excludeAll: sourceIds?.length === 0 || types?.length === 0 || categories?.length === 0,
+		sourceIds,
+		types,
+	};
+}
+
+function optionalSourceIds(values: string[] | undefined): string[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.length > SOURCE_FILTER_LIMIT) throw new Error(`sourceIds cannot contain more than ${SOURCE_FILTER_LIMIT} values`);
+	const unique = [...new Set(values.map((value) => value.trim()))];
+	if (unique.some((value) => !isValidUuid(value))) throw new Error('Invalid sourceIds');
+	return unique;
+}
+
+function optionalResourceTypes(values: ContentResourceType[] | undefined): ContentResourceType[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.some((value) => !isContentResourceType(value))) throw new Error('Invalid resource types');
+	return [...new Set(values)];
+}
+
+function optionalResourceCategories(values: ResourceCategory[] | undefined): ResourceCategory[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.some((value) => !(RESOURCE_CATEGORIES as readonly string[]).includes(value))) throw new Error('Invalid resource categories');
+	return [...new Set(values)];
+}
+
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const summary = resource.summary ?? undefined;
-	const publishedDate = optionalCorpusDate(resource.published_date, resource.id);
+	const publishedDate = optionalIsoDate(resource.published_date, resource.id);
 	return {
 		id: resource.id,
 		title: requiredCorpusText(resource.title, 'title', resource.id),
@@ -191,10 +245,10 @@ function requiredCorpusText(value: string | null, field: string, resourceId: str
 	return text;
 }
 
-function optionalCorpusDate(value: Date | string | null, resourceId: string): string | undefined {
+function optionalIsoDate(value: Date | string | null, resourceId: string): string | undefined {
 	if (value === null) return undefined;
 	const date = value instanceof Date ? value : new Date(value);
-	if (Number.isNaN(date.getTime())) throw new Error(`Corpus resource ${resourceId} has invalid published_date`);
+	if (Number.isNaN(date.getTime())) throw new Error(`Corpus resource ${resourceId} has invalid date`);
 	return date.toISOString();
 }
 
@@ -206,7 +260,10 @@ async function relatedSeedText(db: CoreDb, resourceId: string): Promise<string |
 			SELECT rt.title, rt.summary, r.tags
 			FROM resources r
 			LEFT JOIN LATERAL (
-				SELECT title, summary FROM resources_localized WHERE id = r.id LIMIT 1
+				SELECT title, summary
+				FROM resources_localized
+				WHERE id = r.id AND lang = r.original_lang
+				LIMIT 1
 			) rt ON TRUE
 			WHERE r.id = ${resourceId}::uuid AND ${corpusEnrichedSql()}
 			LIMIT 1
@@ -217,7 +274,7 @@ async function relatedSeedText(db: CoreDb, resourceId: string): Promise<string |
 }
 
 function recencySql(): SQL {
-	return sql`r.published_date`;
+	return sql`COALESCE(r.published_date, r.scraped_date, r.created_at)`;
 }
 
 function corpusEnrichedSql(): SQL {
@@ -226,8 +283,12 @@ function corpusEnrichedSql(): SQL {
 		AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})`;
 }
 
-function publishedSinceSql(fromDate: Date | null | undefined): SQL {
-	return fromDate ? sql` AND ${recencySql()} >= ${fromDate}` : sql``;
+function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
+	return sql`${filters.effectiveAfter ? sql` AND ${recencySql()} >= ${filters.effectiveAfter}` : sql``}
+		${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
+		${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
+		${filters.types ? sql` AND r.type = ANY(${textArraySql(filters.types)})` : sql``}
+		${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
 }
 
 function truncate(content: string | null | undefined, max: number): string {
@@ -250,8 +311,9 @@ function capReadContextContent(results: ReadContextResult[]): ReadContextResult[
 	});
 }
 
-function resourceLocalizedJoin(): SQL {
+function resourceReadJoins(): SQL {
 	return sql`
+		LEFT JOIN sources monitored_source ON monitored_source.id = r.source_id
 		LEFT JOIN LATERAL (
 			SELECT lang, title, summary, content, keywords, translation_source
 			FROM resources_localized
@@ -263,7 +325,6 @@ function resourceLocalizedJoin(): SQL {
 
 function resourceReadSelect(userId: string): SQL {
 	const canReadContent = resourceContentAccessSql('ai-tools', {
-		hasViewer: sql`TRUE`,
 		inViewerLibrary: sql`EXISTS (
 			SELECT 1
 			FROM library content_library
@@ -273,15 +334,14 @@ function resourceReadSelect(userId: string): SQL {
 	});
 	return sql`
 		r.id::text,
-		r.type,
 		r.url,
 		r.normalized_url,
 		r.scope,
 		r.storage_key,
 		r.file_type,
 		r.original_lang,
-		r.published_date,
-		r.scraped_date,
+		${recencySql()} AS published_date,
+		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 		r.tags,
 		rt.title AS title,
 		rt.summary AS summary,
@@ -308,7 +368,7 @@ function resourceSearchSelect(): SQL {
 		rt.title AS title,
 		r.url,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
@@ -318,7 +378,7 @@ function resourceAccessPredicate(userId: string): SQL {
 	return sql`
 		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 		AND (
-			r.scope = 'corpus'
+			(r.scope = 'corpus' AND r.enrichment_status = 'enriched')
 			OR EXISTS (
 				SELECT 1
 				FROM library l
@@ -329,7 +389,7 @@ function resourceAccessPredicate(userId: string): SQL {
 }
 
 function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {
-	const publishedDate = optionalCorpusDate(resource.published_date, resource.id);
+	const publishedDate = optionalIsoDate(resource.published_date, resource.id);
 	return {
 		type: 'resource',
 		id: resource.id,
@@ -337,7 +397,7 @@ function formatResourceReadResult(resource: ResourceContentRow): ReadContextResu
 		content: resource.content ? truncate(resource.content, CONTENT_MAX) : undefined,
 		metadata: {
 			url: resource.url,
-			source: resource.type,
+			source: requiredCorpusText(resource.source, 'source', resource.id),
 			...(publishedDate ? { publishedDate } : {}),
 			tags: resource.tags,
 			keywords: resource.keywords,
@@ -358,7 +418,7 @@ async function readResources(db: CoreDb, ids: string[], userId: string): Promise
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
-			${resourceLocalizedJoin()}
+			${resourceReadJoins()}
 				WHERE r.id = ANY(${uuidArraySql(validIds)})
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -375,7 +435,7 @@ async function readResourceSummaries(db: CoreDb, ids: string[], userId: string):
 		sql`
 			SELECT ${resourceSummarySelect()}
 			FROM resources r
-			${resourceLocalizedJoin()}
+			${resourceReadJoins()}
 				WHERE r.id = ANY(${uuidArraySql(validIds)})
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -387,7 +447,7 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
-	const [collectionRows, citationRows] = await Promise.all([
+	const [collectionRows, linkRows] = await Promise.all([
 		queryRows<{ id: string; name: string; description: string | null }>(
 			db,
 			sql`
@@ -400,40 +460,34 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 			db,
 			sql`
 				SELECT from_id, to_id
-				FROM resource_links
-				WHERE user_id = ${userId}
-					AND from_type = 'collection'
+				FROM (
+					SELECT id AS link_id,
+					       from_id,
+					       to_id,
+					       created_at,
+					       ROW_NUMBER() OVER (
+					         PARTITION BY from_id ORDER BY created_at DESC, id DESC
+					       ) AS row_number
+					FROM resource_links
+					WHERE user_id = ${userId}
+						AND from_type = 'collection'
 						AND from_id = ANY(${textArraySql(validIds)})
-					AND to_type = 'resource'
-				ORDER BY created_at DESC
+						AND to_type = 'resource'
+				) ranked_links
+				WHERE row_number <= ${COLLECTION_LIMIT}
+				ORDER BY created_at DESC, link_id DESC
 			`,
 		),
 	]);
 
 	const resourceIdsByCollection = new Map<string, string[]>();
-	for (const row of citationRows) {
+	for (const row of linkRows) {
 		const list = resourceIdsByCollection.get(row.from_id) ?? [];
-		if (list.length < COLLECTION_LIMIT) list.push(row.to_id);
+		list.push(row.to_id);
 		resourceIdsByCollection.set(row.from_id, list);
 	}
 
-	const allResourceIds = [...new Set(citationRows.map((r) => r.to_id).filter(isValidUuid))];
-	if (allResourceIds.length === 0) {
-		return new Map(
-			collectionRows.map((col) => [
-				col.id,
-				{
-					type: 'collection' as const,
-					id: col.id,
-					title: col.name,
-					content: col.description || undefined,
-					resources: [],
-					metadata: { resourceCount: 0 },
-				},
-			]),
-		);
-	}
-
+	const allResourceIds = [...new Set([...resourceIdsByCollection.values()].flat().filter(isValidUuid))];
 	const resourceMap = await readResourceSummaries(db, allResourceIds, userId);
 
 	return new Map(
@@ -462,7 +516,14 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 }
 
 async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map<string, ReadContextResult>> {
-	const urlPairs = urls.map((u) => [u, normalizeUrl(u)] as const);
+	const urlPairs = urls.flatMap((url) => {
+		try {
+			return [[url, normalizeUrl(url)] as const];
+		} catch {
+			return [];
+		}
+	});
+	if (urlPairs.length === 0) return new Map();
 	const candidateUrls = [...new Set(urlPairs.flat())];
 	const candidateUrlArray = textArraySql(candidateUrls);
 
@@ -471,7 +532,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 		sql`
 			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
-			${resourceLocalizedJoin()}
+			${resourceReadJoins()}
 				WHERE (r.url = ANY(${candidateUrlArray}) OR r.normalized_url = ANY(${candidateUrlArray}))
 				AND ${resourceAccessPredicate(userId)}
 		`,
@@ -488,7 +549,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map
 }
 
 async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
-	const groups = new Map<ResourceType, string[]>();
+	const groups = new Map<ReadContextType, string[]>();
 	for (const item of items) {
 		const list = groups.get(item.type) ?? [];
 		list.push(item.id);
@@ -507,7 +568,7 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): 
 			return [type, results] as const;
 		}),
 	);
-	const resultMaps = new Map<ResourceType, Map<string, ReadContextResult>>(loaded);
+	const resultMaps = new Map<ReadContextType, Map<string, ReadContextResult>>(loaded);
 
 	return capReadContextContent(
 		items.map(

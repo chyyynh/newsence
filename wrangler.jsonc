@@ -14,6 +14,13 @@
 	 */
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
 	/**
+	 * A full AI Search rebuild performs one upload subrequest per corpus item.
+	 * Keep enough headroom for the 500k-file hybrid-search instance limit.
+	 */
+	"limits": {
+		"subrequests": 1000000
+	},
+	/**
 	 * Bundle `.wasm` files as compiled `WebAssembly.Module` imports. Used by the
 	 * PDF text-extraction stage (`@llamaindex/liteparse-wasm`) in
 	 * `src/ingest/platforms/pdf.ts`. `fallthrough` keeps default rules for any
@@ -74,10 +81,10 @@
 	"ai": {
 		"binding": "AI"
 	},
-	"ai_search_namespaces": [
+	"ai_search": [
 		{
 			"binding": "AI_SEARCH",
-			"namespace": "default",
+			"instance_name": "newsence-corpus-v5",
 			"remote": true
 		}
 	],
