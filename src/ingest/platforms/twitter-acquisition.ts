@@ -118,12 +118,64 @@ function extractTweetMedia(tweet: Tweet): TwitterMedia[] {
 	);
 }
 
+function tweetUrlEntities(tweet: Tweet): Array<{ expanded_url?: string; url?: string }> {
+	return tweet.urls ?? tweet.entities?.urls ?? [];
+}
+
 function extractExpandedUrls(tweet: Tweet): string[] {
-	const urls = tweet.urls ?? tweet.entities?.urls ?? [];
-	return urls.flatMap((url) => {
+	return tweetUrlEntities(tweet).flatMap((url) => {
 		const expandedUrl = url.expanded_url?.trim();
 		return expandedUrl ? [expandedUrl] : [];
 	});
+}
+
+const TCO_TOKEN_RE = /https?:\/\/t\.co\/[A-Za-z0-9]+/g;
+
+function isTweetMediaPageUrl(url: string): boolean {
+	return /\/status\/\d+\/(?:photo|video)\/\d+/.test(url);
+}
+
+/**
+ * Rewrite tweet text the way Twitter renders it: each t.co token becomes its
+ * expanded URL. Tokens are dropped when Twitter hides them — media links
+ * (expansions pointing at the tweet's own photo/video pages, or t.co with no
+ * url entity at all) and a trailing link to the quoted tweet (the quote box
+ * renders instead).
+ */
+function expandTweetUrls(text: string, tweet: Tweet): string {
+	const replacements = new Map<string, string>();
+	for (const entity of tweetUrlEntities(tweet)) {
+		const token = entity.url?.trim();
+		const expanded = entity.expanded_url?.trim();
+		if (!token || !expanded) continue;
+		replacements.set(token, isTweetMediaPageUrl(expanded) ? '' : expanded);
+	}
+	const quoted = tweet.quoted_tweet;
+	const quotedTweetId = quoted ? quoted.id?.trim() || extractTweetId(quoted.url) : null;
+	const trailing = text.match(/(https?:\/\/\S+)\s*$/)?.[1];
+	if (quotedTweetId && trailing) {
+		const expandedTrailing = replacements.get(trailing) ?? trailing;
+		if (extractTweetId(expandedTrailing) === quotedTweetId) replacements.set(trailing, '');
+	}
+	return collapseRemovedUrlGaps(text.replace(TCO_TOKEN_RE, (token) => replacements.get(token) ?? ''));
+}
+
+/** Expand mapped t.co tokens only — for longform bodies, where unmapped t.co are the article's own links. */
+function expandKnownTweetUrls(text: string, tweet: Tweet): string {
+	const replacements = new Map<string, string>();
+	for (const entity of tweetUrlEntities(tweet)) {
+		const token = entity.url?.trim();
+		const expanded = entity.expanded_url?.trim();
+		if (token && expanded) replacements.set(token, expanded);
+	}
+	return text.replace(TCO_TOKEN_RE, (token) => replacements.get(token) ?? token);
+}
+
+function collapseRemovedUrlGaps(text: string): string {
+	return text
+		.replace(/[^\S\n]+\n/g, '\n')
+		.replace(/[^\S\n]{2,}/g, ' ')
+		.trim();
 }
 
 function stripTweetUrls(text: string): string {
@@ -135,7 +187,7 @@ function extractQuotedTweet(tweet: Tweet): QuotedTweetData | undefined {
 	if (!q) return undefined;
 	const authorName = q.author?.name?.trim();
 	const authorUserName = q.author?.userName?.trim();
-	const text = typeof q.text === 'string' ? stripTweetUrls(q.text) : '';
+	const text = typeof q.text === 'string' ? expandTweetUrls(q.text, q) : '';
 	if (!authorName || !authorUserName || !text) return undefined;
 	return {
 		authorName,
@@ -155,9 +207,11 @@ function findLinkedContentUrl(urls: string[]): string | undefined {
 
 export function buildTweetTitle(tweet: Tweet, maxLength = 100): string {
 	const author = requiredTweetAuthor(tweet);
-	const text = tweet.text.trim();
+	// Titles are display/search strings: drop URLs entirely (expanded ones would
+	// blow the length cap); URL-only tweets fall back to the raw text.
+	const text = stripTweetUrls(tweet.text) || tweet.text.trim();
 	if (!text) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
-	const suffix = tweet.text.length > maxLength ? '...' : '';
+	const suffix = text.length > maxLength ? '...' : '';
 	return `@${author.userName}: ${text.substring(0, maxLength)}${suffix}`;
 }
 
@@ -174,7 +228,7 @@ export function buildThreadResourceParts(tweets: Tweet[]): {
 	const seen = new Set<string>();
 	const uniqueTexts: string[] = [];
 	for (const tweet of sorted) {
-		const text = stripTweetUrls(tweet.text);
+		const text = expandTweetUrls(tweet.text, tweet);
 		if (text && !seen.has(text)) {
 			seen.add(text);
 			uniqueTexts.push(text);
@@ -318,11 +372,11 @@ function buildExternalLinkTweet(
 	const author = requiredTweetAuthor(tweet);
 	const tweetText = tweet.text.trim();
 	if (!tweetText) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
-	const title = `@${author.userName}: ${tweetText}`.slice(0, 120);
+	const title = `@${author.userName}: ${stripTweetUrls(tweetText) || tweetText}`.slice(0, 120);
 	return {
 		type: 'twitter',
 		title,
-		markdown: tweetText,
+		markdown: expandTweetUrls(tweetText, tweet),
 		metadata: {
 			author: author.userName,
 			language: tweet.lang ?? null,
@@ -351,11 +405,12 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		const tweetId = tweet.id?.trim();
 		if (!tweetId) throw new Error(`Could not resolve tweet id for longform URL ${longformUrl}`);
 		const longformContent = await scrapeTwitterLongform(tweetId, apiKey, tweet.lang);
+		const scraped = { ...longformContent, markdown: expandKnownTweetUrls(longformContent.markdown, tweet) };
 		return {
 			kind: 'longform' as const,
-			scraped: longformContent,
+			scraped,
 			canonicalUrl: tweet.url,
-			eventText: longformContent.markdown,
+			eventText: scraped.markdown,
 		};
 	}
 
@@ -377,7 +432,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		scraped: {
 			type: 'twitter' as const,
 			title,
-			markdown: tweet.text,
+			markdown: expandTweetUrls(tweet.text, tweet),
 			metadata: {
 				author: author.userName,
 				language: tweet.lang ?? null,
