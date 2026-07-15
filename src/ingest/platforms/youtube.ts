@@ -157,13 +157,23 @@ function parseFeedVideos(xml: string) {
 	});
 	if (!Array.isArray(feed.entries)) throw new Error('YouTube feed parser returned no entries');
 	const entries = feed.entries as Array<FeedEntry & { videoId?: unknown }>;
-
-	return entries.flatMap((entry) => {
-		if (typeof entry.videoId !== 'string' || !entry.videoId.trim()) throw new Error('YouTube feed entry is missing videoId');
-		if (!entry.link?.trim()) throw new Error(`YouTube feed entry ${entry.videoId} is missing link`);
-		const url = normalizeUrl(entry.link);
-		return new URL(url).pathname.startsWith('/shorts/') ? [] : [{ videoId: entry.videoId, url }];
-	});
+	const videos: Array<{ videoId: string; url: string }> = [];
+	for (const entry of entries) {
+		try {
+			if (typeof entry.videoId !== 'string' || !entry.videoId.trim()) throw new Error('Feed entry is missing videoId');
+			if (!entry.link?.trim()) throw new Error(`Feed entry ${entry.videoId} is missing link`);
+			const url = normalizeUrl(entry.link);
+			if (!new URL(url).pathname.startsWith('/shorts/')) videos.push({ videoId: entry.videoId, url });
+		} catch (error) {
+			console.error({
+				tag: 'YOUTUBE-CRON',
+				msg: 'Skipped invalid feed entry',
+				videoId: typeof entry.videoId === 'string' ? entry.videoId : undefined,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	return videos;
 }
 
 async function queueYouTubeVideo(
