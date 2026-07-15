@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
+import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory, type SourceKind } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
 import { sql } from 'drizzle-orm';
@@ -8,6 +8,7 @@ import { enqueueOrRestartWorkflow } from './workflow-control';
 const CANONICAL_CUSTOM_METADATA = [
 	{ field_name: 'effective_at', data_type: 'datetime' },
 	{ field_name: 'source_id', data_type: 'text' },
+	{ field_name: 'source_kind', data_type: 'text' },
 	{ field_name: 'type', data_type: 'text' },
 	{ field_name: 'category', data_type: 'text' },
 ] as const satisfies NonNullable<AiSearchConfig['custom_metadata']>;
@@ -29,6 +30,7 @@ type CorpusTranslationRow = {
 type CorpusDocument = {
 	id: string;
 	source_id: string | null;
+	source_kind: SourceKind | null;
 	type: ContentResourceType;
 	original_lang: string;
 	effective_at: Date | string | null;
@@ -47,6 +49,7 @@ type CorpusSearchOptions = {
 	effectiveBefore?: Date | null;
 	profile?: CorpusSearchProfile;
 	sourceIds?: readonly string[];
+	sourceKind?: SourceKind;
 	types?: readonly ContentResourceType[];
 };
 
@@ -112,6 +115,7 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 		sql`
 				SELECT r.id::text,
 				       r.source_id::text,
+				       s.kind AS source_kind,
 				       r.type,
 				       r.original_lang,
 				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS effective_at,
@@ -152,6 +156,7 @@ function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	return {
 		...(effectiveAt ? { effective_at: effectiveAt } : {}),
 		...(document.source_id ? { source_id: document.source_id } : {}),
+		...(document.source_kind ? { source_kind: document.source_kind } : {}),
 		type: document.type,
 		...(document.category ? { category: document.category } : {}),
 	};
@@ -203,6 +208,7 @@ function searchFilters(options: CorpusSearchOptions): VectorizeVectorMetadataFil
 	if (options.sourceIds?.length) {
 		filters.source_id = { $in: [...options.sourceIds] };
 	}
+	if (options.sourceKind) filters.source_kind = options.sourceKind;
 	if (options.types?.length) filters.type = { $in: [...options.types] };
 	if (options.categories?.length) filters.category = { $in: [...options.categories] };
 	if (options.effectiveAfter || options.effectiveBefore) {
@@ -250,7 +256,7 @@ type SearchIndexRebuildPayload = {
 	startedAt: string;
 };
 
-const SEARCH_INDEX_GENERATION = 'canonical-2';
+const SEARCH_INDEX_GENERATION = 'canonical-3';
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;

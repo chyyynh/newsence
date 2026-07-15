@@ -21,6 +21,7 @@ export const resources = pgTable(
 		normalizedUrl: text('normalized_url'),
 		storageKey: text('storage_key').unique(),
 		fileType: text('file_type'),
+		contentHash: varchar('content_hash', { length: 64 }),
 		originalLang: varchar('original_lang', { length: 35 }).default('en').notNull(),
 		publishedDate: timestamp('published_date', { mode: 'date' }),
 		scrapedDate: timestamp('scraped_date', { mode: 'date' }),
