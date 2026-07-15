@@ -53,15 +53,13 @@ export function normalizeUrl(url: string): string {
 export function extractYouTubeId(url: string): string | null {
 	const parsed = parseUrl(url);
 	if (!parsed) return null;
+	const hostname = canonicalHost(parsed.hostname);
+	if (!isYouTubeHost(hostname)) return null;
 
 	const watchId = parsed.searchParams.get('v');
 	if (watchId?.match(YOUTUBE_VIDEO_ID_RE)) return watchId;
 
 	const [kind, maybeId] = parsed.pathname.split('/').filter(Boolean);
-	const pathId = hostMatches(canonicalHost(parsed.hostname), YOUTUBE_SHORT_HOSTS)
-		? kind
-		: ['embed', 'shorts', 'live', 'v'].includes(kind ?? '')
-			? maybeId
-			: null;
+	const pathId = hostMatches(hostname, YOUTUBE_SHORT_HOSTS) ? kind : ['embed', 'shorts', 'live', 'v'].includes(kind ?? '') ? maybeId : null;
 	return pathId?.match(YOUTUBE_VIDEO_ID_RE)?.[0] ?? null;
 }
