@@ -2,10 +2,8 @@ import {
 	CONTENT_RESOURCE_TYPES,
 	type ContentResourceType,
 	isContentResourceType,
-	isSourceKind,
 	RESOURCE_CATEGORIES,
 	type ResourceCategory,
-	type SourceKind,
 } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
@@ -34,7 +32,6 @@ type ResourceSearchFilters = {
 	effectiveAfter?: string;
 	effectiveBefore?: string;
 	sourceIds?: string[];
-	sourceKind?: SourceKind;
 	types?: ContentResourceType[];
 };
 
@@ -99,7 +96,6 @@ const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
 const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
-const SOURCE_FILTER_LIMIT = 50;
 
 type NormalizedSearchFilters = {
 	categories?: ResourceCategory[];
@@ -107,7 +103,6 @@ type NormalizedSearchFilters = {
 	effectiveBefore: Date | null;
 	excludeAll: boolean;
 	sourceIds?: string[];
-	sourceKind?: SourceKind;
 	types?: ContentResourceType[];
 };
 
@@ -197,7 +192,6 @@ function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFil
 	if (effectiveAfter && effectiveBefore && effectiveAfter > effectiveBefore)
 		throw new Error('effectiveAfter must not exceed effectiveBefore');
 	const sourceIds = optionalSourceIds(filters.sourceIds);
-	const sourceKind = optionalSourceKind(filters.sourceKind);
 	const types = optionalResourceTypes(filters.types);
 	const categories = optionalResourceCategories(filters.categories);
 	return {
@@ -206,20 +200,12 @@ function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFil
 		effectiveBefore,
 		excludeAll: sourceIds?.length === 0 || types?.length === 0 || categories?.length === 0,
 		sourceIds,
-		sourceKind,
 		types,
 	};
 }
 
-function optionalSourceKind(value: SourceKind | undefined): SourceKind | undefined {
-	if (value === undefined) return undefined;
-	if (!isSourceKind(value)) throw new Error('Invalid source kind');
-	return value;
-}
-
 function optionalSourceIds(values: string[] | undefined): string[] | undefined {
 	if (values === undefined) return undefined;
-	if (values.length > SOURCE_FILTER_LIMIT) throw new Error(`sourceIds cannot contain more than ${SOURCE_FILTER_LIMIT} values`);
 	const unique = [...new Set(values.map((value) => value.trim()))];
 	if (unique.some((value) => !isValidUuid(value))) throw new Error('Invalid sourceIds');
 	return unique;
@@ -299,7 +285,6 @@ function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
 	return sql`${filters.effectiveAfter ? sql` AND ${recencySql()} >= ${filters.effectiveAfter}` : sql``}
 		${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
 		${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
-		${filters.sourceKind ? sql` AND r.source_id IN (SELECT id FROM sources WHERE kind = ${filters.sourceKind})` : sql``}
 		${filters.types ? sql` AND r.type = ANY(${textArraySql(filters.types)})` : sql``}
 		${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
 }
