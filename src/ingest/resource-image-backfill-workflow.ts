@@ -33,9 +33,12 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 		);
 
 		let cursor: string | null = null;
+		let available = 0;
 		let attempted = 0;
-		let rehosted = 0;
+		let existing = 0;
+		let failed = 0;
 		let resources = 0;
+		let stored = 0;
 		for (let page = 1; page <= MAX_PAGES; page++) {
 			const result = await step.do(
 				`rehost-recent-images-page-${page}`,
@@ -47,26 +50,48 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 						limit: PAGE_SIZE,
 					}),
 			);
+			available += result.available;
 			attempted += result.attempted;
-			rehosted += result.rehosted;
+			existing += result.existing;
+			failed += result.failed;
 			resources += result.resources;
+			stored += result.stored;
 
-			console.info({
-				tag: 'OG_IMAGE',
-				msg: 'Recent resource image backfill page completed',
-				page,
-				resources: result.resources,
-				attempted: result.attempted,
-				rehosted: result.rehosted,
-			});
+			console.info(
+				JSON.stringify({
+					tag: 'OG_IMAGE',
+					event: 'recent_backfill_page_completed',
+					page,
+					resources: result.resources,
+					attempted: result.attempted,
+					available: result.available,
+					existing: result.existing,
+					stored: result.stored,
+					failed: result.failed,
+				}),
+			);
+			for (const item of result.items) {
+				if (item.failed === 0) continue;
+				console.warn(
+					JSON.stringify({
+						tag: 'OG_IMAGE',
+						event: 'recent_backfill_resource_failed',
+						page,
+						resource_id: item.resourceId,
+						failures: item.outcomes.filter((outcome) => outcome.state === 'failed'),
+					}),
+				);
+			}
 			if (!result.nextCursor) {
 				return {
 					...window,
 					days,
 					resources,
 					attempted,
-					rehosted,
-					failed: attempted - rehosted,
+					available,
+					existing,
+					stored,
+					failed,
 				};
 			}
 			cursor = result.nextCursor;

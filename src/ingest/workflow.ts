@@ -56,19 +56,25 @@ async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resour
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 			async () => {
 				const result = await env.DOMAIN.rehostResourceImages(resourceId);
-				if (result.rehosted !== result.attempted) {
-					throw new Error(`Rehosted ${result.rehosted} of ${result.attempted} resource images`);
+				if (result.failed > 0) {
+					const failures = result.outcomes
+						.filter((outcome) => outcome.state === 'failed')
+						.map((outcome) => `${outcome.sourceHost}:${outcome.failureCode}`)
+						.join(', ');
+					throw new Error(`Failed to rehost ${result.failed} of ${result.attempted} resource images (${failures})`);
 				}
 				return result;
 			},
 		)
 		.catch((error) =>
-			console.error({
-				tag: 'OG_IMAGE',
-				msg: 'Eager resource image rehost failed',
-				resource_id: resourceId,
-				error: error instanceof Error ? error.message : String(error),
-			}),
+			console.error(
+				JSON.stringify({
+					tag: 'OG_IMAGE',
+					event: 'eager_rehost_failed',
+					resource_id: resourceId,
+					error: error instanceof Error ? error.message : String(error),
+				}),
+			),
 		);
 }
 
