@@ -109,6 +109,21 @@ export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: s
 	});
 }
 
+export async function persistResourceImageSnapshot(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
+	await withCoreDb(env, async (db) => {
+		const updated = await db
+			.update(resources)
+			.set({
+				type: resource.type,
+				ogImageUrl: resource.og_image_url?.trim() || null,
+				platformMetadata: resource.platform_metadata ?? null,
+			})
+			.where(eq(resources.id, resourceId))
+			.returning({ id: resources.id });
+		if (!updated.length) throw new Error(`Failed to persist resource ${resourceId} image snapshot: not found`);
+	});
+}
+
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {
 		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;

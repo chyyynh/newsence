@@ -20,7 +20,12 @@ import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
 import type { RssFeedAcquisitionInput } from './platforms/rss-feed';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import { markResourceEnrichmentFailed, persistProcessedResource, persistUnchangedResourceResync } from './resource-persistence';
+import {
+	markResourceEnrichmentFailed,
+	persistProcessedResource,
+	persistResourceImageSnapshot,
+	persistUnchangedResourceResync,
+} from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
@@ -175,6 +180,14 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const logContext = { resource_id: resourceId, table: 'resources' };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', resourceType, ...logContext });
+		if (operation === 'ingest') {
+			await step.do(
+				'persist-resource-image-snapshot',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => persistResourceImageSnapshot(this.env, resourceId, resource),
+			);
+			await stageResourceImageRehost(this.env, step, resourceId);
+		}
 
 		const hasContent = 'has_content' in resource && !!resource.has_content;
 		const pdfTextArtifact =
@@ -281,7 +294,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
-		await stageResourceImageRehost(this.env, step, persistedResourceId);
+		if (operation === 'resync') await stageResourceImageRehost(this.env, step, persistedResourceId);
 		const translationSourceHash = await step
 			.do(
 				'load-resource-translation-source-hash',
