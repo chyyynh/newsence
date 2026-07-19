@@ -111,6 +111,13 @@
 			"bucket_name": "newsence"
 		}
 	],
+	"services": [
+		{
+			"binding": "DOMAIN",
+			"service": "newsence-web-tanstack",
+			"entrypoint": "DomainRpc"
+		}
+	],
 	/**
 	 * Smart Placement — run close to database
 	 */

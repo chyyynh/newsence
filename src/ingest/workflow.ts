@@ -44,6 +44,29 @@ function storedWorkflowId(resourceId: string): string {
 	return ['resource', workflowIdPart(resourceId)].join('-');
 }
 
+async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resourceId: string): Promise<void> {
+	await step
+		.do(
+			'rehost-resource-images',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			async () => {
+				const result = await env.DOMAIN.rehostResourceImages(resourceId);
+				if (result.rehosted !== result.attempted) {
+					throw new Error(`Rehosted ${result.rehosted} of ${result.attempted} resource images`);
+				}
+				return result;
+			},
+		)
+		.catch((error) =>
+			console.error({
+				tag: 'OG_IMAGE',
+				msg: 'Eager resource image rehost failed',
+				resource_id: resourceId,
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		);
+}
+
 function shouldAcquireContent(
 	resource: ResourceForProcessing & { has_content?: boolean; has_youtube_transcript?: boolean },
 	force = false,
@@ -145,6 +168,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() => persistUnchangedResourceResync(this.env, resourceId, resource),
 			);
+			await stageResourceImageRehost(this.env, step, resourceId);
 			return { success: true, resource_id: resourceId, operation, changed: false };
 		}
 		const resourceType = resource.type;
@@ -257,6 +281,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
+		await stageResourceImageRehost(this.env, step, persistedResourceId);
 		const translationSourceHash = await step
 			.do(
 				'load-resource-translation-source-hash',
