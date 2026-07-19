@@ -72,6 +72,11 @@
 			"binding": "SEARCH_INDEX_REBUILD_WORKFLOW",
 			"name": "newsence-search-index-rebuild",
 			"class_name": "SearchIndexRebuildWorkflow"
+		},
+		{
+			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW",
+			"name": "newsence-recent-resource-image-backfill",
+			"class_name": "RecentResourceImageBackfillWorkflow"
 		}
 	],
 	/**

@@ -179,6 +179,7 @@ Bindings (in `wrangler.jsonc`):
 | `RESOURCE_PROCESSING_WORKFLOW` | Fetch, parse, classify, and persist a resource |
 | `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
 | `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
+| `RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW` | Warm recent public resource images into app-owned R2 |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
 | `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |
@@ -190,6 +191,21 @@ Secrets (via `wrangler secret put`):
 | `KAITO_API_KEY`                | Yes      | Enables Twitter monitoring               |
 | `YOUTUBE_API_KEY`              | Yes      | Enables YouTube channel monitoring       |
 | `S2_API_KEY`                   | Yes      | Increases Semantic Scholar quota for paper enrichment |
+
+### Recent resource image warmup
+
+New ingest eagerly rehosts every trusted resource image through the app Worker's
+`DomainRpc`. After deploying a change to this pipeline, warm the homepage window
+with a bounded Workflow run:
+
+```sh
+pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill '{"days":7}'
+```
+
+The Workflow accepts only 1–7 days, pages through enriched public corpus rows by
+effective date, and is safe to rerun because R2 keys are content-addressed. Older
+rows are intentionally not scanned; their first image request uses the resource
+row to validate and lazily rehost an R2 miss.
 
 ## Adding a Platform
 

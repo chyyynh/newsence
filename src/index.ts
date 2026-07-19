@@ -3,6 +3,7 @@ import { ResourceTranslationWorkflow } from '@ingest/content-localization-workfl
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
+import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
 import { SearchIndexRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
@@ -10,7 +11,7 @@ import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, s
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
-export { ResourceProcessingWorkflow, ResourceTranslationWorkflow, SearchIndexRebuildWorkflow };
+export { RecentResourceImageBackfillWorkflow, ResourceProcessingWorkflow, ResourceTranslationWorkflow, SearchIndexRebuildWorkflow };
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {
