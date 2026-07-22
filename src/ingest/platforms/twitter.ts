@@ -8,7 +8,7 @@ import {
 	reopenResourceForReprocessing,
 	upsertPendingSourceResource,
 } from '@ingest/domain/resource-store';
-import { loadMonitoredSources, type MonitoredSource, markSourcesScraped } from '@ingest/domain/source-store';
+import { loadMonitoredSources, type MonitoredSource, markSourcesScraped, recordSourceFailure } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { buildThreadResourceParts, buildTweetTitle, resolveTweetContent, type Tweet } from './twitter-acquisition';
 
@@ -404,6 +404,17 @@ async function saveTweetGroups(env: CoreEnv, tweets: Tweet[], identities: Monito
 	return { processed, failedUserNames, hasUnattributedFailure };
 }
 
+// Per-user failures are attributable (unlike batch-level fetch errors), so
+// they feed the same pending-validation lifecycle as RSS/YouTube.
+async function settleFailedTwitterSources(env: CoreEnv, batch: MonitoredTwitterIdentity[], failedUserNames: Set<string>): Promise<void> {
+	for (const identity of batch) {
+		if (!failedUserNames.has(identity.twitterUserName)) continue;
+		for (const source of identity.sources) {
+			await recordSourceFailure(env, source.id, new Error(`Twitter fetch/persist failed for @${identity.twitterUserName}`));
+		}
+	}
+}
+
 async function processTwitterBatches(
 	env: CoreEnv,
 	batches: MonitoredTwitterIdentity[][],
@@ -439,6 +450,7 @@ async function processTwitterBatches(
 			continue;
 		}
 		const failedUserNames = new Set([...fetched.failedUserNames, ...saved.failedUserNames]);
+		await settleFailedTwitterSources(env, batch, failedUserNames);
 
 		const completedSourceIds = batch
 			.filter((identity) => !failedUserNames.has(identity.twitterUserName))

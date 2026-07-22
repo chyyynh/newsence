@@ -1,7 +1,7 @@
 import type { SourceAcquisitionMode, SourcePlatform } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { sources } from '@db/schema';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 
 export type MonitoredSource = {
 	id: string;
@@ -74,38 +74,31 @@ export async function markSourcesScraped(env: CoreEnv, sourceIds: string[], scra
 
 const PENDING_VALIDATION_FAILURE_LIMIT = 3;
 
-function parseFailureCount(state: unknown): number {
-	if (typeof state !== 'object' || state === null) return 0;
-	const count = (state as { consecutiveFailures?: unknown }).consecutiveFailures;
-	return typeof count === 'number' && Number.isFinite(count) ? count : 0;
-}
-
 // Never throws: failure bookkeeping must not break cron error isolation.
+// Single statement: bumps the counter and flips a pending source to failed
+// (and off) once it exhausts validation attempts; active sources ride out
+// transient outages — only the counters move.
 export async function recordSourceFailure(env: CoreEnv, sourceId: string, error: unknown): Promise<void> {
 	const failedAt = new Date();
+	const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
 	try {
 		await withCoreDb(env, async (db) => {
-			const row = (
-				await db.select({ status: sources.status, scrapeState: sources.scrapeState }).from(sources).where(eq(sources.id, sourceId)).limit(1)
-			)[0];
-			if (!row) return;
-			const consecutiveFailures = parseFailureCount(row.scrapeState) + 1;
-			// A pending source that keeps failing never validated — stop burning
-			// cron fetches on it. Active sources ride out transient outages;
-			// only the counters move.
-			const neverValidated = row.status === 'pending' && consecutiveFailures >= PENDING_VALIDATION_FAILURE_LIMIT;
-			await db
-				.update(sources)
-				.set({
-					scrapeState: {
-						consecutiveFailures,
-						lastError: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-						lastFailureAt: failedAt.toISOString(),
-					},
-					updatedAt: failedAt,
-					...(neverValidated ? { status: 'failed' as const, monitoringEnabled: false } : {}),
-				})
-				.where(eq(sources.id, sourceId));
+			await db.execute(sql`
+				UPDATE sources SET
+					scrape_state = jsonb_build_object(
+						'consecutiveFailures', COALESCE((scrape_state->>'consecutiveFailures')::int, 0) + 1,
+						'lastError', ${message}::text,
+						'lastFailureAt', ${failedAt.toISOString()}::text
+					),
+					status = CASE
+						WHEN status = 'pending' AND COALESCE((scrape_state->>'consecutiveFailures')::int, 0) + 1 >= ${PENDING_VALIDATION_FAILURE_LIMIT}
+						THEN 'failed' ELSE status END,
+					enabled = CASE
+						WHEN status = 'pending' AND COALESCE((scrape_state->>'consecutiveFailures')::int, 0) + 1 >= ${PENDING_VALIDATION_FAILURE_LIMIT}
+						THEN false ELSE enabled END,
+					updated_at = ${failedAt}
+				WHERE id = ${sourceId}
+			`);
 		});
 	} catch (recordError) {
 		console.error({
