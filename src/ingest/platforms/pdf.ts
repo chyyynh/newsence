@@ -1,15 +1,16 @@
 import type { WorkflowStep } from 'cloudflare:workers';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
+import { z } from 'zod';
 
-type PdfTextStatus = 'ok' | 'needs_ocr';
+const PdfTextArtifactSchema = z.object({
+	text: z.string(),
+	status: z.enum(['ok', 'needs_ocr']),
+	pages: z.number().int().positive(),
+	chars: z.number().int().nonnegative(),
+});
 
-export interface PdfTextArtifact {
-	text: string;
-	status: PdfTextStatus;
-	pages: number;
-	chars: number;
-}
+export type PdfTextArtifact = z.infer<typeof PdfTextArtifactSchema>;
 
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
@@ -56,5 +57,5 @@ export async function stagePdfTextExtraction(
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 		() => extractPdfText(env, input),
 	);
-	return (await new Response(artifact).json()) as PdfTextArtifact;
+	return PdfTextArtifactSchema.parse(await new Response(artifact).json());
 }
