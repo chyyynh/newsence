@@ -21,7 +21,7 @@ import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 
 export async function getPersistedResourceTranslationHash(env: CoreEnv, resourceId: string): Promise<string | null> {
 	return withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
+		const result = await db.execute<{ source_translation_hash: string }>(sql`
 			SELECT md5(jsonb_build_array(original.title, original.summary, original.content)::text) AS source_translation_hash
 			FROM resources resource
 			JOIN resource_translations original
@@ -36,7 +36,7 @@ export async function getPersistedResourceTranslationHash(env: CoreEnv, resource
 			  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
 			LIMIT 1
 		`);
-		return (result.rows as Array<{ source_translation_hash: string }>)[0]?.source_translation_hash ?? null;
+		return result.rows[0]?.source_translation_hash ?? null;
 	});
 }
 
@@ -77,7 +77,7 @@ function persistMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTra
 
 async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTranslationHash: string): Promise<void> {
 	const sourceIsCurrent = await withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
+		const result = await db.execute<{ source_is_current: boolean }>(sql`
 			WITH target_resource AS (
 				SELECT resource.id
 				FROM resources resource
@@ -98,7 +98,7 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourc
 			)
 			SELECT EXISTS (SELECT 1 FROM target_resource) AS source_is_current
 		`);
-		return (result.rows as Array<{ source_is_current: boolean }>)[0]?.source_is_current ?? false;
+		return result.rows[0]?.source_is_current ?? false;
 	});
 	if (!sourceIsCurrent) throw new ResourceTranslationSourceChangedError(resourceId);
 }

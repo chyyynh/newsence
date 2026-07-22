@@ -29,7 +29,7 @@ type ResourceUpdate = Pick<ResourceForProcessing, 'summary' | 'content' | 'tags'
 	platform_metadata: PlatformMetadata | null;
 };
 
-interface ResourceStoreRow {
+type ResourceStoreRow = {
 	id: string;
 	source_id: string | null;
 	title: string | null;
@@ -51,7 +51,7 @@ interface ResourceStoreRow {
 	storage_key?: string | null;
 	file_type?: string | null;
 	normalized_url?: string | null;
-}
+};
 
 type ResourceStoreTranslationRow = {
 	lang?: unknown;
@@ -128,7 +128,7 @@ export async function assertResourceProcessable(env: CoreEnv, resourceId: string
 }
 
 async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing | undefined> {
-	const result = await db.execute(sql`
+	const result = await db.execute<ResourceStoreRow>(sql`
 		SELECT
 			rl.id::text AS id,
 			rl.source_id::text AS source_id,
@@ -182,7 +182,7 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 		  AND rl.lang = rl.original_lang
 		LIMIT 1
 	`);
-	const row = (result.rows as unknown as ResourceStoreRow[])[0];
+	const row = result.rows[0];
 	return row ? resourceStoreRowToProcessing(row) : undefined;
 }
 
@@ -305,7 +305,7 @@ export async function updateResourceAfterProcessing(
 	const record = resourceMirrorRecord(resourceId, resource, updatePayload);
 	await invalidateChangedMachineTranslationFields(db, resourceId, record);
 	const tags = textArraySql(record.tags);
-	const result = await db.execute(sql`
+	const result = await db.execute<{ id: string }>(sql`
 		UPDATE resources
 		   SET source_id = COALESCE(source_id, ${record.sourceId}::uuid),
 		       type = ${record.type},
@@ -325,7 +325,7 @@ export async function updateResourceAfterProcessing(
 		 WHERE id = ${resourceId}::uuid
 		 RETURNING id::text AS id
 	`);
-	const updatedId = (result.rows as Array<{ id?: string }>)[0]?.id;
+	const updatedId = result.rows[0]?.id;
 	if (!updatedId) throw new Error(`Failed to update resource ${resourceId}: no rows matched`);
 	await syncOriginalResourceTranslation(db, updatedId, record);
 	return updatedId;
@@ -397,8 +397,8 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
 	const resource = preparedRecordToResource(base);
 	const record = resourceMirrorRecord(crypto.randomUUID(), resource, pendingResourceUpdate(resource, base.platformMetadata), 'pending');
-	const result = await db.execute(resourceUpsertStatement(record));
-	const row = (result.rows as Array<{ enrichment_status?: string; id?: string }>)[0];
+	const result = await db.execute<{ enrichment_status: string; id: string }>(resourceUpsertStatement(record));
+	const row = result.rows[0];
 	const resourceId = row?.id;
 	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
 	if (row.enrichment_status !== 'enriched') await syncOriginalResourceTranslation(db, resourceId, record);
@@ -720,7 +720,7 @@ type ExistingResourceRecord = {
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
 	if (urls.length === 0) return [];
-	const result = await db.execute(sql`
+	const result = await db.execute<ExistingResourceRecord>(sql`
 		SELECT
 			r.id::text AS id,
 			r.normalized_url AS url,
@@ -733,7 +733,7 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			WHERE r.normalized_url = ANY(${textArraySql(urls)})
 			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 	`);
-	return result.rows as unknown as ExistingResourceRecord[];
+	return result.rows;
 }
 
 export async function attachSourceToResources(
@@ -761,29 +761,27 @@ export async function reopenResourceForReprocessing(
 		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
 	}
 	return withCoreTx(env, async (db) => {
-		const resourceResult = await db.execute(sql`
+		const resourceResult = await db.execute<{ original_lang: string }>(sql`
 			SELECT original_lang
 			FROM resources
 			WHERE id = ${resourceId}::uuid
 			FOR UPDATE
 		`);
-		const resource = (resourceResult.rows as Array<{ original_lang: string }>)[0];
+		const resource = resourceResult.rows[0];
 		if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
 
-		const translationResult = await db.execute(sql`
+		const translationResult = await db.execute<{
+			summary: string | null;
+			content: string | null;
+			source: ResourceTranslationSource;
+		}>(sql`
 			SELECT summary, content, source
 			FROM resource_translations
 			WHERE resource_id = ${resourceId}::uuid
 			  AND lang = ${resource.original_lang}
 			FOR UPDATE
 		`);
-		const original = (
-			translationResult.rows as Array<{
-				summary: string | null;
-				content: string | null;
-				source: ResourceTranslationSource;
-			}>
-		)[0];
+		const original = translationResult.rows[0];
 		if (!original) throw new Error(`Failed to reopen resource ${resourceId}: original translation not found`);
 
 		const preserveOwnedTranslation = original.source === 'human';
