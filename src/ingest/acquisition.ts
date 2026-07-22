@@ -8,8 +8,8 @@ import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 import { acquireWebResource, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
 
-export { PDF_MIME, pdfExtractionMetadata };
 export type { PdfExtractionMetadata } from '@core-shared/types';
+export { PDF_MIME, pdfExtractionMetadata };
 
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
