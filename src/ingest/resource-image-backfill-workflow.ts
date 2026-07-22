@@ -57,30 +57,26 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 			resources += result.resources;
 			stored += result.stored;
 
-			console.info(
-				JSON.stringify({
-					tag: 'OG_IMAGE',
-					event: 'recent_backfill_page_completed',
-					page,
-					resources: result.resources,
-					attempted: result.attempted,
-					available: result.available,
-					existing: result.existing,
-					stored: result.stored,
-					failed: result.failed,
-				}),
-			);
+			console.info({
+				tag: 'OG_IMAGE',
+				event: 'recent_backfill_page_completed',
+				page,
+				resources: result.resources,
+				attempted: result.attempted,
+				available: result.available,
+				existing: result.existing,
+				stored: result.stored,
+				failed: result.failed,
+			});
 			for (const item of result.items) {
 				if (item.failed === 0) continue;
-				console.warn(
-					JSON.stringify({
-						tag: 'OG_IMAGE',
-						event: 'recent_backfill_resource_failed',
-						page,
-						resource_id: item.resourceId,
-						failures: item.outcomes.filter((outcome) => outcome.state === 'failed'),
-					}),
-				);
+				console.warn({
+					tag: 'OG_IMAGE',
+					event: 'recent_backfill_resource_failed',
+					page,
+					resource_id: item.resourceId,
+					failures: item.outcomes.filter((outcome) => outcome.state === 'failed'),
+				});
 			}
 			if (!result.nextCursor) {
 				return {

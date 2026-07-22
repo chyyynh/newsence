@@ -67,14 +67,12 @@ async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resour
 			},
 		)
 		.catch((error) =>
-			console.error(
-				JSON.stringify({
-					tag: 'OG_IMAGE',
-					event: 'eager_rehost_failed',
-					resource_id: resourceId,
-					error: error instanceof Error ? error.message : String(error),
-				}),
-			),
+			console.error({
+				tag: 'OG_IMAGE',
+				event: 'eager_rehost_failed',
+				resource_id: resourceId,
+				error: error instanceof Error ? error.message : String(error),
+			}),
 		);
 }
 
