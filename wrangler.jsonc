@@ -7,7 +7,7 @@
 	"name": "newsence-core",
 	"main": "src/index.ts",
 	"workers_dev": false,
-	"compatibility_date": "2026-07-07",
+	"compatibility_date": "2026-07-22",
 	/**
 	 * Keep request abort signals available to fetch-heavy ingest endpoints and
 	 * propagate them into subrequests.
