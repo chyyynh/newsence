@@ -4,6 +4,7 @@ import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
+import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
 import { SearchIndexRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
@@ -78,5 +79,10 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Read collection/resource/url entries from the core corpus. */
 	readCorpusItems(items: ReadContextItem[], userId: string) {
 		return readCorpusItems(this.env, items, userId);
+	}
+
+	/** Resolve user input (site/feed/channel URL or handle) into a monitorable source candidate (#237). */
+	resolveSourceCandidate(input: ResolveSourceCandidateInput) {
+		return resolveSourceCandidate(this.env, input);
 	}
 }
