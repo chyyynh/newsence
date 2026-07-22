@@ -5,6 +5,7 @@
 import type { WorkflowStep } from 'cloudflare:workers';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PaperMetadata, PaperReference } from '@core-shared/types';
+import { z } from 'zod';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -30,30 +31,30 @@ const PAPER_FIELDS = [
 
 type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string };
 
-interface S2Author {
-	name?: string;
-}
-interface S2ExternalIds {
-	DOI?: string;
-}
-interface S2Ref {
-	title?: string;
-	year?: number | null;
-	externalIds?: S2ExternalIds | null;
-	authors?: S2Author[];
-}
-interface S2Paper {
-	paperId?: string;
-	title?: string | null;
-	year?: number | null;
-	abstract?: string | null;
-	venue?: string | null;
-	citationCount?: number | null;
-	referenceCount?: number | null;
-	externalIds?: S2ExternalIds | null;
-	authors?: S2Author[];
-	references?: S2Ref[];
-}
+const S2AuthorSchema = z.object({ name: z.string().nullish() });
+const S2ExternalIdsSchema = z.object({ DOI: z.string().nullish() });
+const S2ReferenceSchema = z.object({
+	title: z.string().nullish(),
+	year: z.number().int().nullish(),
+	externalIds: S2ExternalIdsSchema.nullish(),
+	authors: z.array(S2AuthorSchema).nullish(),
+});
+const S2PaperSchema = z.object({
+	paperId: z.string().nullish(),
+	title: z.string().nullish(),
+	year: z.number().int().nullish(),
+	abstract: z.string().nullish(),
+	venue: z.string().nullish(),
+	citationCount: z.number().int().nonnegative().nullish(),
+	referenceCount: z.number().int().nonnegative().nullish(),
+	externalIds: S2ExternalIdsSchema.nullish(),
+	authors: z.array(S2AuthorSchema).nullish(),
+	references: z.array(S2ReferenceSchema).nullish(),
+});
+
+type S2Author = z.infer<typeof S2AuthorSchema>;
+type S2Ref = z.infer<typeof S2ReferenceSchema>;
+type S2Paper = z.infer<typeof S2PaperSchema>;
 function trimDoi(doi: string): string {
 	return doi.replace(/[.,;)\]]+$/, '');
 }
@@ -98,23 +99,23 @@ function detectPaperId(url: string | null | undefined): PaperId | null {
 	return null;
 }
 
-async function fetchS2<T>(path: string, apiKey?: string): Promise<T | null> {
+async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (apiKey) headers['x-api-key'] = apiKey;
 	const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
-	if (res.ok) return JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)) as T;
+	if (res.ok) return S2PaperSchema.parse(JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)));
 	const status = res.status;
 	await res.body?.cancel();
 	if (status === 404) return null;
 	throw new Error(`Semantic Scholar request failed with HTTP ${status}`);
 }
 
-function authorNames(authors: S2Author[] | undefined): string[] {
+function authorNames(authors: S2Author[] | null | undefined): string[] {
 	if (!authors) return [];
 	return authors.map((a) => a.name).filter((name): name is string => !!name);
 }
 
-function normalizeReferences(references: S2Ref[] | undefined): PaperReference[] {
+function normalizeReferences(references: S2Ref[] | null | undefined): PaperReference[] {
 	if (!references) return [];
 	return references.slice(0, MAX_REFERENCES).map((ref) => ({
 		doi: ref.externalIds?.DOI?.toLowerCase(),
@@ -146,7 +147,7 @@ function idPath(id: PaperId): string {
 
 /** Resolve a paper by DOI or arXiv id. Returns null when Semantic Scholar has no match. */
 async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetadata | null> {
-	const paper = await fetchS2<S2Paper>(`/paper/${idPath(id)}?fields=${PAPER_FIELDS}`, apiKey);
+	const paper = await fetchS2Paper(`/paper/${idPath(id)}?fields=${PAPER_FIELDS}`, apiKey);
 	if (!paper?.paperId) return null;
 	return normalizePaper(paper);
 }
