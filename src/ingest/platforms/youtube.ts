@@ -6,7 +6,7 @@ import { type CoreDb, withCoreDb } from '@db/client';
 import { youtubeTranscripts } from '@db/schema';
 import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
 import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadMonitoredSources, type MonitoredSource, markSourceScraped } from '@ingest/domain/source-store';
+import { loadMonitoredSources, type MonitoredSource, markSourceScraped, recordSourceFailure } from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -310,6 +310,7 @@ export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
 				channel: channel.name,
 				error: error instanceof Error ? error.message : String(error),
 			});
+			await recordSourceFailure(env, channel.id, error);
 		}
 	}
 	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });

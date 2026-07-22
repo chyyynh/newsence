@@ -63,6 +63,56 @@ export async function loadRssSourcePolicy(env: CoreEnv, sourceId: string): Promi
 export async function markSourcesScraped(env: CoreEnv, sourceIds: string[], scrapedAt: Date = new Date()): Promise<void> {
 	if (!sourceIds.length) return;
 	await withCoreDb(env, async (db) => {
-		await db.update(sources).set({ scrapedAt, updatedAt: scrapedAt }).where(inArray(sources.id, sourceIds));
+		// Success also settles the #237 lifecycle: pending/failed rows become
+		// active and the scrape_state failure counters reset.
+		await db
+			.update(sources)
+			.set({ scrapedAt, updatedAt: scrapedAt, status: 'active', scrapeState: null })
+			.where(inArray(sources.id, sourceIds));
 	});
+}
+
+const PENDING_VALIDATION_FAILURE_LIMIT = 3;
+
+function parseFailureCount(state: unknown): number {
+	if (typeof state !== 'object' || state === null) return 0;
+	const count = (state as { consecutiveFailures?: unknown }).consecutiveFailures;
+	return typeof count === 'number' && Number.isFinite(count) ? count : 0;
+}
+
+// Never throws: failure bookkeeping must not break cron error isolation.
+export async function recordSourceFailure(env: CoreEnv, sourceId: string, error: unknown): Promise<void> {
+	const failedAt = new Date();
+	try {
+		await withCoreDb(env, async (db) => {
+			const row = (
+				await db.select({ status: sources.status, scrapeState: sources.scrapeState }).from(sources).where(eq(sources.id, sourceId)).limit(1)
+			)[0];
+			if (!row) return;
+			const consecutiveFailures = parseFailureCount(row.scrapeState) + 1;
+			// A pending source that keeps failing never validated — stop burning
+			// cron fetches on it. Active sources ride out transient outages;
+			// only the counters move.
+			const neverValidated = row.status === 'pending' && consecutiveFailures >= PENDING_VALIDATION_FAILURE_LIMIT;
+			await db
+				.update(sources)
+				.set({
+					scrapeState: {
+						consecutiveFailures,
+						lastError: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+						lastFailureAt: failedAt.toISOString(),
+					},
+					updatedAt: failedAt,
+					...(neverValidated ? { status: 'failed' as const, monitoringEnabled: false } : {}),
+				})
+				.where(eq(sources.id, sourceId));
+		});
+	} catch (recordError) {
+		console.error({
+			tag: 'SOURCES',
+			msg: 'Failed to record source failure',
+			sourceId,
+			error: recordError instanceof Error ? recordError.message : String(recordError),
+		});
+	}
 }
