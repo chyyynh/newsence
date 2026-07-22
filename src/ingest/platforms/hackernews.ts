@@ -2,6 +2,7 @@ import { generateText } from '@core-ai/generation';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import { type HackerNewsMetadata, type NormalizedContent, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { decode } from 'html-entities';
+import { z } from 'zod';
 import { type AcquiredWebContent, acquireWebResource } from '../web-acquisition';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
@@ -25,6 +26,47 @@ export interface HackerNewsItem {
 	text?: string;
 	children?: HnComment[];
 }
+
+const optionalStringSchema = z
+	.string()
+	.nullish()
+	.transform((value) => value ?? undefined);
+const optionalNonnegativeIntegerSchema = z
+	.number()
+	.int()
+	.nonnegative()
+	.nullish()
+	.transform((value) => value ?? undefined);
+
+const HnCommentSchema: z.ZodType<HnComment> = z.lazy(() =>
+	z.object({
+		author: optionalStringSchema,
+		text: optionalStringSchema,
+		children: z
+			.array(HnCommentSchema)
+			.nullish()
+			.transform((value) => value ?? undefined),
+	}),
+);
+
+const HackerNewsItemSchema: z.ZodType<HackerNewsItem> = z.object({
+	id: z.number().int().positive(),
+	title: optionalStringSchema,
+	url: optionalStringSchema,
+	author: optionalStringSchema,
+	points: optionalNonnegativeIntegerSchema,
+	descendants: optionalNonnegativeIntegerSchema,
+	type: z
+		.enum(['story', 'ask', 'show', 'job', 'comment', 'poll'])
+		.nullish()
+		.transform((value) => value ?? undefined),
+	created_at_i: optionalNonnegativeIntegerSchema,
+	text: optionalStringSchema,
+	children: z
+		.array(HnCommentSchema)
+		.nullish()
+		.transform((value) => value ?? undefined),
+});
 
 export function extractHackerNewsId(url: string): string | null {
 	try {
@@ -64,7 +106,7 @@ async function fetchHnItem(itemId: string): Promise<HackerNewsItem> {
 		await response.body?.cancel();
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
-	return JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)) as HackerNewsItem;
+	return HackerNewsItemSchema.parse(JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)));
 }
 
 interface HnCollectedComment {
