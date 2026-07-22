@@ -37,6 +37,12 @@ export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
 
 export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
 
+// Add-source validation lifecycle for user-added sources (#237); failure
+// details live in scrape_state.
+export const SOURCE_STATUSES = ['pending', 'active', 'failed'] as const;
+
+export type SourceStatus = (typeof SOURCE_STATUSES)[number];
+
 export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 
 export type ResourceScope = (typeof RESOURCE_SCOPES)[number];

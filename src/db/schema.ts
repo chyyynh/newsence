@@ -6,6 +6,7 @@ import {
 	SOURCE_ACQUISITION_MODES,
 	SOURCE_KINDS,
 	SOURCE_PLATFORMS,
+	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
 import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
@@ -102,6 +103,9 @@ export const sources = pgTable(
 		displayGroup: text('display_group'),
 		acquisitionMode: text('content_mode', { enum: SOURCE_ACQUISITION_MODES }).notNull(),
 		monitoringEnabled: boolean('enabled').default(true).notNull(),
+		curated: boolean('curated').default(false).notNull(),
+		createdBy: text('created_by'),
+		status: text('status', { enum: SOURCE_STATUSES }).default('active').notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
