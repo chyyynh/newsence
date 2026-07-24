@@ -9,20 +9,7 @@ import {
 	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
 import type { TranscriptSegment } from '@core-shared/types';
-import {
-	bigint,
-	boolean,
-	index,
-	integer,
-	jsonb,
-	pgTable,
-	primaryKey,
-	text,
-	timestamp,
-	uniqueIndex,
-	uuid,
-	varchar,
-} from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 
 export const resources = pgTable(
 	'resources',
@@ -100,47 +87,6 @@ export const library = pgTable(
 		index('library_resource_id_idx').on(table.resourceId),
 		index('library_user_id_saved_at_idx').on(table.userId, table.savedAt),
 	],
-);
-
-// Expand-only v2 mirrors (#240). Core reads these only after the app has
-// deployed dual-writes and the production backfill has reconciled.
-export const resourceSaves = pgTable(
-	'resource_saves',
-	{
-		id: uuid('id').defaultRandom().primaryKey(),
-		userId: text('user_id').notNull(),
-		resourceId: uuid('resource_id')
-			.notNull()
-			.references(() => resources.id, { onDelete: 'cascade' }),
-		visibility: varchar('visibility', { length: 16 }).default('private').notNull(),
-		savedAt: timestamp('saved_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-		createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-		updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		uniqueIndex('resource_saves_user_id_resource_id_key').on(table.userId, table.resourceId),
-		index('resource_saves_resource_id_idx').on(table.resourceId),
-		index('resource_saves_user_id_saved_at_idx').on(table.userId, table.savedAt),
-	],
-);
-
-export const userFiles = pgTable(
-	'user_files',
-	{
-		id: uuid('id').defaultRandom().primaryKey(),
-		userId: text('user_id').notNull(),
-		resourceId: uuid('resource_id')
-			.notNull()
-			.references(() => resources.id, { onDelete: 'cascade' })
-			.unique(),
-		kind: varchar('kind', { length: 16 }).notNull(),
-		originalFileName: text('original_file_name').notNull(),
-		// Legacy rows are repaired from R2 HEAD before this becomes NOT NULL.
-		byteSize: bigint('byte_size', { mode: 'bigint' }),
-		createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-		updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [index('user_files_user_id_created_at_idx').on(table.userId, table.createdAt)],
 );
 
 export const sources = pgTable(
@@ -236,67 +182,3 @@ export const collections = pgTable('collections', {
 	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });
-
-export const collectionResources = pgTable(
-	'collection_resources',
-	{
-		collectionId: uuid('collection_id')
-			.notNull()
-			.references(() => collections.id, { onDelete: 'cascade' }),
-		resourceId: uuid('resource_id')
-			.notNull()
-			.references(() => resources.id, { onDelete: 'cascade' }),
-		addedAt: timestamp('added_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.collectionId, table.resourceId] }),
-		index('collection_resources_resource_id_idx').on(table.resourceId),
-		index('collection_resources_collection_id_added_at_idx').on(table.collectionId, table.addedAt),
-	],
-);
-
-export const workspaceResources = pgTable(
-	'workspace_resources',
-	{
-		workspaceId: uuid('workspace_id').notNull(),
-		resourceId: uuid('resource_id')
-			.notNull()
-			.references(() => resources.id, { onDelete: 'cascade' }),
-		addedAt: timestamp('added_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.workspaceId, table.resourceId] }),
-		index('workspace_resources_resource_id_idx').on(table.resourceId),
-		index('workspace_resources_workspace_id_added_at_idx').on(table.workspaceId, table.addedAt),
-	],
-);
-
-export const workspaceCollections = pgTable(
-	'workspace_collections',
-	{
-		workspaceId: uuid('workspace_id').notNull(),
-		collectionId: uuid('collection_id')
-			.notNull()
-			.references(() => collections.id, { onDelete: 'cascade' }),
-		pinnedAt: timestamp('pinned_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.workspaceId, table.collectionId] }),
-		index('workspace_collections_collection_id_idx').on(table.collectionId),
-		index('workspace_collections_workspace_id_pinned_at_idx').on(table.workspaceId, table.pinnedAt),
-	],
-);
-
-export const savedDocuments = pgTable(
-	'saved_documents',
-	{
-		userId: text('user_id').notNull(),
-		documentId: uuid('document_id').notNull(),
-		savedAt: timestamp('saved_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.userId, table.documentId] }),
-		index('saved_documents_document_id_idx').on(table.documentId),
-		index('saved_documents_user_id_saved_at_idx').on(table.userId, table.savedAt),
-	],
-);
