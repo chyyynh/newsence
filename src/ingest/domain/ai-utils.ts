@@ -1,6 +1,6 @@
 import { generateObject, generateText } from '@core-ai/generation';
 import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
-import { ENTITY_TYPES, type PlatformEnrichments, type ResourceForProcessing } from '@core-shared/types';
+import { ENTITY_TYPES, type ResourceForProcessing } from '@core-shared/types';
 import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 
@@ -8,19 +8,17 @@ export interface ProcessorResult {
 	updateData: {
 		tags?: string[];
 		keywords?: string[];
-		summary?: string;
 		content?: string;
 		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
-	enrichments?: PlatformEnrichments;
 	classificationCategory?: ResourceCategory;
 }
 
-export function isEmpty(value: string | null | undefined): boolean {
+function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
 }
 
-export type ResourceClassification = {
+type ResourceClassification = {
 	tags: string[];
 	keywords: string[];
 	category: ResourceCategory;
@@ -30,15 +28,12 @@ export type ResourceClassification = {
 export function mergeResourceClassification(
 	resource: ResourceForProcessing,
 	classification: ResourceClassification,
-	options: {
-		updateData?: ProcessorResult['updateData'];
-		extraTags?: string[];
-	} = {},
+	extraTags: string[] = [],
 ): { updateData: ProcessorResult['updateData']; classificationCategory?: ResourceCategory } {
-	const updateData = options.updateData ?? {};
-	const allTags = [...new Set([...classification.tags, classification.category, ...(options.extraTags ?? [])])];
+	const updateData: ProcessorResult['updateData'] = {};
+	const allTags = [...new Set([...classification.tags, classification.category, ...extraTags])];
 
-	if (!resource.tags?.length && allTags.length) updateData.tags = allTags;
+	if (!resource.tags?.length) updateData.tags = allTags;
 	if (!resource.keywords?.length && classification.keywords.length) updateData.keywords = classification.keywords;
 	if (classification.entities.length) updateData.entities = classification.entities;
 
@@ -293,26 +288,17 @@ function splitContentForTranslation(content: string): string[] {
 	return chunks;
 }
 
-function contentTranslationPrompt(chunk: string, index: number, total: number): string {
-	return `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`;
-}
-
-export class ContentTranslationLimitError extends Error {
-	constructor(contentLength: number, chunks: number, maxChunks: number) {
-		super(`Content translation requires ${chunks} chunks for ${contentLength} characters; limit is ${maxChunks} chunks`);
-		this.name = 'ContentTranslationLimitError';
-	}
-}
-
 export function createZhHantContentTranslationChunks(content: string, maxChunks: number): string[] {
 	const source = content.trim();
 	const chunks = splitContentForTranslation(source);
-	if (chunks.length > maxChunks) throw new ContentTranslationLimitError(source.length, chunks.length, maxChunks);
+	if (chunks.length > maxChunks) {
+		throw new Error(`Content translation requires ${chunks.length} chunks for ${source.length} characters; limit is ${maxChunks} chunks`);
+	}
 	return chunks;
 }
 
 export async function translateZhHantContentChunk(chunk: string, index: number, total: number, env: CoreEnv): Promise<string> {
-	return generateText(env.AI, contentTranslationPrompt(chunk, index, total), {
+	return generateText(env.AI, `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`, {
 		task: 'resource-content-translation',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 8000,

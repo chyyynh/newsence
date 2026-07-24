@@ -257,9 +257,11 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				const fullResource = await loadFull();
 				const resourceToClassify = hackerNewsContent ? { ...fullResource, content: hackerNewsContent } : fullResource;
 				const classification = await generateResourceClassification(resourceToClassify, this.env);
-				return mergeResourceClassification(resourceToClassify, classification, {
-					extraTags: resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
-				});
+				return mergeResourceClassification(
+					resourceToClassify,
+					classification,
+					resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
+				);
 			},
 		);
 		const processorResult = {

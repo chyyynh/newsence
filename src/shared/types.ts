@@ -180,7 +180,6 @@ export interface PaperMetadata {
 export interface PlatformEnrichments {
 	academic?: PaperMetadata | null;
 	links?: string[];
-	processedAt?: string;
 }
 
 interface ClassificationMetadata {

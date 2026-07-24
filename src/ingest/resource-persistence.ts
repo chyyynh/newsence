@@ -54,16 +54,6 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
 	const updateData = processorResult.updateData;
 	let platformMetadata = mergePaperEnrichment(resource.platform_metadata, paperEnrichment);
-	if (processorResult.enrichments && Object.keys(processorResult.enrichments).length) {
-		platformMetadata = {
-			...platformMetadata,
-			enrichments: {
-				...(platformMetadata.enrichments || {}),
-				...processorResult.enrichments,
-				processedAt: new Date().toISOString(),
-			},
-		};
-	}
 	if (processorResult.classificationCategory) {
 		platformMetadata = {
 			...platformMetadata,
@@ -79,7 +69,7 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 	platformMetadata = { ...platformMetadata, ...(extraction ? { extraction } : {}), sourceName };
 
 	return {
-		summary: updateData.summary !== undefined ? updateData.summary : resource.summary,
+		summary: resource.summary,
 		content: updateData.content !== undefined ? updateData.content : resource.content,
 		tags: [...(updateData.tags ?? resource.tags)],
 		keywords: [...(updateData.keywords ?? resource.keywords)],
