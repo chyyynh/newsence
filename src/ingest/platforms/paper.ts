@@ -4,7 +4,7 @@
 
 import type { WorkflowStep } from 'cloudflare:workers';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
-import type { PaperMetadata, PaperReference, ResourceForProcessing } from '@core-shared/types';
+import type { PaperMetadata, PaperReference, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { z } from 'zod';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
@@ -33,6 +33,17 @@ const PAPER_FIELDS = [
 ].join(',');
 
 type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string; versionedValue: string };
+type PaperEnrichmentCandidate = {
+	id: string;
+	url?: string | null;
+	platform_metadata?: Pick<PlatformMetadata, 'enrichments'>;
+	hasExistingAcademic?: boolean;
+};
+
+export type PaperEnrichmentAttempt = {
+	metadata: PaperMetadata | null;
+	outcome: 'resolved' | 'preserved' | 'not_found' | 'failed' | 'not_applicable';
+};
 
 const S2AuthorSchema = z.object({ name: z.string().nullish() });
 const S2ExternalIdsSchema = z.object({ DOI: z.string().nullish() });
@@ -104,6 +115,10 @@ function detectPaperId(url: string | null | undefined): PaperId | null {
 	}
 
 	return null;
+}
+
+export function isExplicitPaperUrl(url: string | null | undefined): boolean {
+	return detectPaperId(url) !== null;
 }
 
 async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | null> {
@@ -190,19 +205,20 @@ async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetada
 	return normalizePaper(id, paper);
 }
 
-export async function stagePaperEnrichment(
+export async function stagePaperEnrichmentAttempt(
 	env: CoreEnv,
 	step: WorkflowStep,
-	candidate: Pick<ResourceForProcessing, 'id' | 'platform_metadata' | 'url'>,
-): Promise<PaperMetadata | null> {
+	candidate: PaperEnrichmentCandidate,
+	stepName = 'enrich-paper-metadata',
+): Promise<PaperEnrichmentAttempt> {
 	const url = candidate.url?.trim();
 	const paperId = detectPaperId(url);
-	if (!url || !paperId) return null;
-	const hasExistingAcademic = !!candidate.platform_metadata?.enrichments?.academic;
+	if (!url || !paperId) return { metadata: null, outcome: 'not_applicable' };
+	const hasExistingAcademic = candidate.hasExistingAcademic ?? !!candidate.platform_metadata?.enrichments?.academic;
 
 	try {
-		return await step.do(
-			'enrich-paper-metadata',
+		const metadata = await step.do(
+			stepName,
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				const startedAt = Date.now();
@@ -219,6 +235,10 @@ export async function stagePaperEnrichment(
 				return paper;
 			},
 		);
+		return {
+			metadata,
+			outcome: metadata ? 'resolved' : hasExistingAcademic ? 'preserved' : 'not_found',
+		};
 	} catch (error) {
 		console.warn({
 			tag: 'S2',
@@ -228,6 +248,14 @@ export async function stagePaperEnrichment(
 			outcome: hasExistingAcademic ? 'preserved' : 'failed',
 			error: error instanceof Error ? error.message : String(error),
 		});
-		return null;
+		return { metadata: null, outcome: hasExistingAcademic ? 'preserved' : 'failed' };
 	}
+}
+
+export async function stagePaperEnrichment(
+	env: CoreEnv,
+	step: WorkflowStep,
+	candidate: Pick<ResourceForProcessing, 'id' | 'platform_metadata' | 'url'>,
+): Promise<PaperMetadata | null> {
+	return (await stagePaperEnrichmentAttempt(env, step, candidate)).metadata;
 }

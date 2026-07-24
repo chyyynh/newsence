@@ -126,6 +126,44 @@ export async function persistUnchangedResourceResync(
 	});
 }
 
+export async function persistAcademicMetadataBackfill(env: CoreEnv, resourceId: string, metadata: PaperMetadata): Promise<void> {
+	await withCoreDb(env, async (_db, client) => {
+		const publishedDate = metadata.publicationDate ? `${metadata.publicationDate}T00:00:00.000Z` : null;
+		const result = await client.query<{ id: string }>(
+			`
+				UPDATE resources
+				SET
+					platform_metadata =
+						CASE
+							WHEN jsonb_typeof(platform_metadata) = 'object' THEN platform_metadata
+							ELSE '{}'::jsonb
+						END
+						|| jsonb_build_object(
+							'enrichments',
+							CASE
+								WHEN jsonb_typeof(platform_metadata->'enrichments') = 'object' THEN platform_metadata->'enrichments'
+								ELSE '{}'::jsonb
+							END
+							|| jsonb_build_object('academic', $2::jsonb)
+						),
+					published_date = COALESCE(published_date, $3::timestamp),
+					updated_at = NOW()
+				WHERE id = $1::uuid
+				RETURNING id::text AS id
+			`,
+			[resourceId, JSON.stringify(metadata), publishedDate],
+		);
+		if (result.rowCount !== 1) throw new Error(`Failed to persist academic metadata for resource ${resourceId}: not found`);
+		console.info({
+			tag: 'S2',
+			event: 'academic_metadata_backfill_persisted',
+			resource_id: resourceId,
+			references_loaded: metadata.references.length,
+			publication_date_available: !!publishedDate,
+		});
+	});
+}
+
 export async function persistResourceImageSnapshot(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		const updated = await db

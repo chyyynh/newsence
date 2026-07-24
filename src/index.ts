@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { AcademicMetadataBackfillWorkflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
 import { ResourceTranslationWorkflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
@@ -12,7 +13,13 @@ import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, s
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
-export { RecentResourceImageBackfillWorkflow, ResourceProcessingWorkflow, ResourceTranslationWorkflow, SearchIndexRebuildWorkflow };
+export {
+	AcademicMetadataBackfillWorkflow,
+	RecentResourceImageBackfillWorkflow,
+	ResourceProcessingWorkflow,
+	ResourceTranslationWorkflow,
+	SearchIndexRebuildWorkflow,
+};
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {
@@ -48,6 +55,17 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Start or resume the revision-scoped public corpus AI Search rebuild. */
 	startSearchIndexRebuild() {
 		return startSearchIndexRebuild(this.env);
+	}
+
+	/** Start or resume the versioned academic metadata backfill. */
+	startAcademicMetadataBackfill() {
+		return startAcademicMetadataBackfill(this.env);
+	}
+
+	/** Read academic metadata backfill status for operator polling. */
+	async getAcademicMetadataBackfillStatus(instanceId: string) {
+		const instance = await this.env.ACADEMIC_METADATA_BACKFILL_WORKFLOW.get(instanceId);
+		return instance.status();
 	}
 
 	/** Hybrid AI Search retrieval for the chat search-news tool. */

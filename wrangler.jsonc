@@ -77,6 +77,11 @@
 			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW",
 			"name": "newsence-recent-resource-image-backfill",
 			"class_name": "RecentResourceImageBackfillWorkflow"
+		},
+		{
+			"binding": "ACADEMIC_METADATA_BACKFILL_WORKFLOW",
+			"name": "newsence-academic-metadata-backfill",
+			"class_name": "AcademicMetadataBackfillWorkflow"
 		}
 	],
 	/**

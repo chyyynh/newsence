@@ -180,6 +180,7 @@ Bindings (in `wrangler.jsonc`):
 | `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
 | `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
 | `RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW` | Warm recent public resource images into app-owned R2 |
+| `ACADEMIC_METADATA_BACKFILL_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
 | `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |
@@ -206,6 +207,24 @@ The Workflow accepts only 1–7 days, pages through enriched public corpus rows 
 effective date, and is safe to rerun because R2 keys are content-addressed. Older
 rows are intentionally not scanned; their first image request uses the resource
 row to validate and lazily rehost an R2 miss.
+
+### Academic metadata backfill
+
+After deploying an academic metadata schema change, trigger the versioned
+Workflow through the core service-binding RPC `startAcademicMetadataBackfill()`,
+or directly with Wrangler:
+
+```sh
+pnpm exec wrangler workflows trigger newsence-academic-metadata-backfill '{}'
+```
+
+The Workflow keyset-pages only through explicit `doi.org` and arXiv
+`/abs`, `/html`, or `/pdf` resources that are missing the current
+`schemaVersion`. Each Semantic Scholar request and database write is an
+independent durable step, with a one-second request interval. Successful
+provider responses atomically replace only `enrichments.academic` and fill a
+missing exact publication date. Provider failures preserve legacy metadata;
+reruns automatically skip already-upgraded rows.
 
 ## Adding a Platform
 
