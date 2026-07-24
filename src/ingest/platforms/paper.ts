@@ -215,6 +215,7 @@ export async function stagePaperEnrichmentAttempt(
 	const paperId = detectPaperId(url);
 	if (!url || !paperId) return { metadata: null, outcome: 'not_applicable' };
 	const hasExistingAcademic = candidate.hasExistingAcademic ?? !!candidate.platform_metadata?.enrichments?.academic;
+	const attemptStartedAt = Date.now();
 
 	try {
 		const metadata = await step.do(
@@ -246,6 +247,8 @@ export async function stagePaperEnrichmentAttempt(
 			resource_id: candidate.id,
 			identity_kind: paperId.kind,
 			outcome: hasExistingAcademic ? 'preserved' : 'failed',
+			references_loaded: 0,
+			latency_ms: Date.now() - attemptStartedAt,
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return { metadata: null, outcome: hasExistingAcademic ? 'preserved' : 'failed' };
