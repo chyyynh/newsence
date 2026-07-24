@@ -263,7 +263,9 @@ function shouldWriteResourceContentTranslation(resource: ResourceForProcessing):
 }
 
 function looksLikeModelExplanation(content: string): boolean {
-	return /^(以下是|這是|Here is|I've cleaned|I cleaned|清理後|已清理)/i.test(content.trim());
+	return /^(?:(?:以下是|這是)[：:\s]*(?:完整)?(?:翻譯|譯文|翻譯後的內容)(?:[：:\s]|$)|Here (?:is|are) (?:the )?(?:translation|translated (?:text|content))(?:[：:\s]|$)|(?:I've|I have|I) cleaned (?:up )?(?:the )?(?:text|content|markdown)(?:[：:\s]|$)|(?:清理後|已清理)(?:的)?(?:內容|文字|Markdown)(?:[：:\s]|$))/i.test(
+		content.trim(),
+	);
 }
 
 function splitOversizedBlock(block: string, maxLength: number): string[] {
