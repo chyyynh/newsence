@@ -178,13 +178,14 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		}
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
 		const resource = applyAcquiredContent(initialResource, acquiredContent);
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
 			await step.do(
 				'record-unchanged-resync',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistUnchangedResourceResync(this.env, resourceId, resource),
+				() => persistUnchangedResourceResync(this.env, resourceId, resource, paperEnrichment),
 			);
 			await stageResourceImageRehost(this.env, step, resourceId);
 			return { success: true, resource_id: resourceId, operation, changed: false };
@@ -228,7 +229,6 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			return extractedPdfText ? { ...base, content: extractedPdfText } : base;
 		};
 
-		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const previewImageUrl = acquiredContent?.previewImageUrl?.trim() || null;
 
 		const hackerNewsContent =

@@ -4,23 +4,26 @@
 
 import type { WorkflowStep } from 'cloudflare:workers';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
-import type { PaperMetadata, PaperReference } from '@core-shared/types';
+import type { PaperMetadata, PaperReference, ResourceForProcessing } from '@core-shared/types';
 import { z } from 'zod';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
 const RESPONSE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_REFERENCES = 50;
-const ARXIV_PATH_RE = /^\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?\/?$/i;
+const ARXIV_PATH_RE = /^\/(?:abs|html|pdf)\/(\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
 
 const PAPER_FIELDS = [
 	'title',
 	'year',
+	'publicationDate',
+	'publicationTypes',
 	'abstract',
 	'venue',
 	'citationCount',
 	'referenceCount',
+	'openAccessPdf',
 	'externalIds',
 	'authors.name',
 	'references.title',
@@ -29,7 +32,7 @@ const PAPER_FIELDS = [
 	'references.authors',
 ].join(',');
 
-type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string };
+type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string; versionedValue: string };
 
 const S2AuthorSchema = z.object({ name: z.string().nullish() });
 const S2ExternalIdsSchema = z.object({ DOI: z.string().nullish() });
@@ -43,10 +46,13 @@ const S2PaperSchema = z.object({
 	paperId: z.string().nullish(),
 	title: z.string().nullish(),
 	year: z.number().int().nullish(),
+	publicationDate: z.string().nullish(),
+	publicationTypes: z.array(z.string()).nullish(),
 	abstract: z.string().nullish(),
 	venue: z.string().nullish(),
 	citationCount: z.number().int().nonnegative().nullish(),
 	referenceCount: z.number().int().nonnegative().nullish(),
+	openAccessPdf: z.object({ url: z.string().nullish() }).nullish(),
 	externalIds: S2ExternalIdsSchema.nullish(),
 	authors: z.array(S2AuthorSchema).nullish(),
 	references: z.array(S2ReferenceSchema).nullish(),
@@ -81,8 +87,9 @@ function detectPaperId(url: string | null | undefined): PaperId | null {
 	const host = parsed.hostname.toLowerCase();
 
 	if (host === 'arxiv.org' || host.endsWith('.arxiv.org')) {
-		const arxivId = parsed.pathname.match(ARXIV_PATH_RE)?.[1];
-		if (arxivId) return { kind: 'arxiv', value: arxivId };
+		const match = parsed.pathname.match(ARXIV_PATH_RE);
+		const arxivId = match?.[1];
+		if (arxivId) return { kind: 'arxiv', value: arxivId, versionedValue: `${arxivId}${match?.[2] ?? ''}` };
 	}
 
 	if (host === 'doi.org' || host === 'dx.doi.org') {
@@ -125,19 +132,50 @@ function normalizeReferences(references: S2Ref[] | null | undefined): PaperRefer
 	}));
 }
 
-function normalizePaper(paper: S2Paper): PaperMetadata {
+function normalizePublicationDate(value: string | null | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return undefined;
+	const parsed = new Date(`${trimmed}T00:00:00.000Z`);
+	return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== trimmed ? undefined : trimmed;
+}
+
+function normalizeHttpsUrl(value: string | null | undefined): string | undefined {
+	if (!value?.trim()) return undefined;
+	try {
+		const url = new URL(value);
+		return url.protocol === 'https:' ? url.toString() : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function paperPdfUrl(id: PaperId, paper: S2Paper): string | undefined {
+	if (id.kind === 'arxiv') return `https://arxiv.org/pdf/${id.versionedValue}`;
+	return normalizeHttpsUrl(paper.openAccessPdf?.url);
+}
+
+function normalizePaper(id: PaperId, paper: S2Paper): PaperMetadata {
 	const doi = paper.externalIds?.DOI?.toLowerCase();
+	const references = normalizeReferences(paper.references);
+	const fetchedAt = new Date().toISOString();
 	return {
+		schemaVersion: 1,
 		source: 'semanticscholar',
+		resolvedAt: fetchedAt,
+		metricsUpdatedAt: fetchedAt,
 		doi,
 		title: paper.title ?? undefined,
 		authors: authorNames(paper.authors),
 		abstract: paper.abstract ?? undefined,
 		venue: paper.venue ?? undefined,
 		year: paper.year ?? undefined,
+		publicationDate: normalizePublicationDate(paper.publicationDate),
+		publicationTypes: paper.publicationTypes?.map((value) => value.trim()).filter(Boolean),
 		citedByCount: paper.citationCount ?? undefined,
 		referenceCount: paper.referenceCount ?? undefined,
-		references: normalizeReferences(paper.references),
+		pdfUrl: paperPdfUrl(id, paper),
+		references,
+		referencesTruncated: typeof paper.referenceCount === 'number' && paper.referenceCount > references.length,
 	};
 }
 
@@ -149,35 +187,45 @@ function idPath(id: PaperId): string {
 async function enrichS2FromId(id: PaperId, apiKey?: string): Promise<PaperMetadata | null> {
 	const paper = await fetchS2Paper(`/paper/${idPath(id)}?fields=${PAPER_FIELDS}`, apiKey);
 	if (!paper?.paperId) return null;
-	return normalizePaper(paper);
-}
-
-async function enrichPaperMetadata(url: string, apiKey?: string): Promise<PaperMetadata | null> {
-	const id = detectPaperId(url);
-	const paper = id ? await enrichS2FromId(id, apiKey) : null;
-	if (paper) console.info({ tag: 'S2', msg: 'Paper enriched', doi: paper.doi, refs: paper.references.length });
-	return paper;
+	return normalizePaper(id, paper);
 }
 
 export async function stagePaperEnrichment(
 	env: CoreEnv,
 	step: WorkflowStep,
-	candidate: { url?: string | null },
+	candidate: Pick<ResourceForProcessing, 'id' | 'platform_metadata' | 'url'>,
 ): Promise<PaperMetadata | null> {
 	const url = candidate.url?.trim();
-	if (!url || !detectPaperId(url)) return null;
+	const paperId = detectPaperId(url);
+	if (!url || !paperId) return null;
+	const hasExistingAcademic = !!candidate.platform_metadata?.enrichments?.academic;
 
 	try {
 		return await step.do(
 			'enrich-paper-metadata',
 			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => enrichPaperMetadata(url, env.S2_API_KEY),
+			async () => {
+				const startedAt = Date.now();
+				const paper = await enrichS2FromId(paperId, env.S2_API_KEY);
+				console.info({
+					tag: 'S2',
+					event: 'academic_enrichment',
+					resource_id: candidate.id,
+					identity_kind: paperId.kind,
+					outcome: paper ? 'resolved' : hasExistingAcademic ? 'preserved' : 'not_found',
+					references_loaded: paper?.references.length ?? 0,
+					latency_ms: Date.now() - startedAt,
+				});
+				return paper;
+			},
 		);
 	} catch (error) {
 		console.warn({
 			tag: 'S2',
-			msg: 'Paper enrichment failed after retries; continuing without academic metadata',
-			url,
+			event: 'academic_enrichment',
+			resource_id: candidate.id,
+			identity_kind: paperId.kind,
+			outcome: hasExistingAcademic ? 'preserved' : 'failed',
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return null;

@@ -154,16 +154,23 @@ export interface PaperReference {
 }
 
 export interface PaperMetadata {
+	schemaVersion: 1;
 	source: 'semanticscholar';
+	resolvedAt: string;
+	metricsUpdatedAt: string;
 	doi?: string;
 	title?: string;
 	authors: string[];
 	abstract?: string;
 	venue?: string;
 	year?: number;
+	publicationDate?: string;
+	publicationTypes?: string[];
 	citedByCount?: number;
 	referenceCount?: number;
+	pdfUrl?: string;
 	references: PaperReference[];
+	referencesTruncated: boolean;
 }
 
 export interface PlatformEnrichments {

@@ -1,5 +1,5 @@
 import type { ContentResourceType, ResourceTranslationSource } from '@core-shared/resource-types';
-import type { PaperMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
+import type { PaperMetadata, PlatformMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { entities, entityTranslations, resourceEntities, resources } from '@db/schema';
 import {
@@ -34,17 +34,26 @@ type BuildResourceUpdateInput = {
 	previewImageUrl: string | null;
 };
 
+function mergePaperEnrichment(platformMetadata: PlatformMetadata, paperEnrichment?: PaperMetadata | null): PlatformMetadata {
+	if (!paperEnrichment) return platformMetadata;
+	return {
+		...platformMetadata,
+		enrichments: { ...(platformMetadata.enrichments || {}), academic: paperEnrichment },
+	};
+}
+
+function withAcademicPublishedDate(resource: ResourceForProcessing, paperEnrichment?: PaperMetadata | null): ResourceForProcessing {
+	if (resource.published_date || !paperEnrichment?.publicationDate) return resource;
+	const publishedDate = new Date(`${paperEnrichment.publicationDate}T00:00:00.000Z`);
+	if (Number.isNaN(publishedDate.getTime())) return resource;
+	return { ...resource, published_date: publishedDate.toISOString() };
+}
+
 function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput) {
 	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
 	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
 	const updateData = processorResult.updateData;
-	let platformMetadata = resource.platform_metadata;
-	if (paperEnrichment) {
-		platformMetadata = {
-			...platformMetadata,
-			enrichments: { ...(platformMetadata.enrichments || {}), academic: paperEnrichment },
-		};
-	}
+	let platformMetadata = mergePaperEnrichment(resource.platform_metadata, paperEnrichment);
 	if (processorResult.enrichments && Object.keys(processorResult.enrichments).length) {
 		platformMetadata = {
 			...platformMetadata,
@@ -91,16 +100,24 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 	});
 }
 
-export async function persistUnchangedResourceResync(env: CoreEnv, resourceId: string, resource: ResourceForProcessing): Promise<void> {
+export async function persistUnchangedResourceResync(
+	env: CoreEnv,
+	resourceId: string,
+	resource: ResourceForProcessing,
+	paperEnrichment?: PaperMetadata | null,
+): Promise<void> {
 	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
-	const previewImageUrl = resource.og_image_url?.trim() || null;
+	const resourceWithDate = withAcademicPublishedDate(resource, paperEnrichment);
+	const previewImageUrl = resourceWithDate.og_image_url?.trim() || null;
+	const platformMetadata = mergePaperEnrichment(resource.platform_metadata, paperEnrichment);
 	await withCoreDb(env, async (db) => {
 		const updated = await db
 			.update(resources)
 			.set({
 				scrapedDate: new Date(),
+				publishedDate: resourceWithDate.published_date ? new Date(resourceWithDate.published_date) : null,
 				ogImageUrl: previewImageUrl,
-				platformMetadata: resource.platform_metadata,
+				platformMetadata,
 				updatedAt: new Date(),
 			})
 			.where(eq(resources.id, resourceId))
@@ -126,8 +143,9 @@ export async function persistResourceImageSnapshot(env: CoreEnv, resourceId: str
 
 export async function persistProcessedResource(env: CoreEnv, input: PersistProcessedResourceInput): Promise<string> {
 	return withCoreTx(env, async (db) => {
+		const resource = withAcademicPublishedDate(input.resource, input.paperEnrichment);
 		const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquisitionExtraction;
-		const updatePayload = buildResourceUpdate(input.resource, {
+		const updatePayload = buildResourceUpdate(resource, {
 			extraction,
 			paperEnrichment: input.paperEnrichment,
 			previewImageUrl: input.previewImageUrl,
@@ -136,12 +154,12 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 		if (!updatePayload.content?.trim()) {
 			throw new Error(`Refusing to persist enriched resource ${input.resourceId} without content`);
 		}
-		const resourceType = input.resource.type;
+		const resourceType = resource.type;
 		const platformMetadata = updatePayload.platform_metadata;
-		const entityInputs = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, input.resource.source, platformMetadata);
-		const resourceId = await updateResourceAfterProcessing(db, input.resourceId, input.resource, updatePayload);
+		const entityInputs = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, resource.source, platformMetadata);
+		const resourceId = await updateResourceAfterProcessing(db, input.resourceId, resource, updatePayload);
 		if (entityInputs) {
-			await syncResourceEntities(db, resourceId, entityInputs, resourceType, input.resource.source, platformMetadata);
+			await syncResourceEntities(db, resourceId, entityInputs, resourceType, resource.source, platformMetadata);
 		}
 		if (input.youtubeTranscript || input.youtubeHighlights) {
 			await persistYouTubeWorkflowData(db, {
