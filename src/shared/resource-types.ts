@@ -49,10 +49,10 @@ export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
 
 export type ResourceContentSurface = 'app' | 'ai-tools' | 'export';
 
-export function hasResourceContentAccess(input: { surface: ResourceContentSurface; scope: string; inViewerLibrary: boolean }): boolean {
-	// AI and exports stay library-gated so stored or paywalled corpus content is
-	// not redistributed by default.
-	return (input.scope === 'corpus' && input.surface === 'app') || input.inViewerLibrary;
+export function hasResourceContentAccess(input: { surface: ResourceContentSurface; scope: string; viewerHasOwnership: boolean }): boolean {
+	// AI and exports stay ownership-gated so stored or paywalled corpus content
+	// is not redistributed by default.
+	return (input.scope === 'corpus' && input.surface === 'app') || input.viewerHasOwnership;
 }
 
 export const DEFAULT_RESOURCE_LANG = 'en';

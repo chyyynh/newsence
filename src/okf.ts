@@ -2,6 +2,7 @@
 
 import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
+import { usesV2ResourceRelations } from '@db/resource-relations-read-path';
 import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, toIsoString } from '@db/sql';
 import { sql } from 'drizzle-orm';
 
@@ -84,7 +85,14 @@ async function buildCollectionOkfBundle(
 		)[0];
 		if (!collection) throw new Error('Collection not found');
 
-		const resources = await readCollectionResources(db, collection.id, collection.user_id, input.viewerId, input.primaryLocale);
+		const resources = await readCollectionResources(
+			db,
+			collection.id,
+			collection.user_id,
+			input.viewerId,
+			input.primaryLocale,
+			usesV2ResourceRelations(env),
+		);
 		const collectionSlug = slugify(collection.name);
 		if (!collectionSlug) throw new Error(`Collection ${collection.id} has no valid slug`);
 		return {
@@ -106,9 +114,62 @@ async function readCollectionResources(
 	collectionOwnerId: string | null,
 	viewerId: string | null,
 	primaryLocale: string | null,
+	useV2Relations: boolean,
 ): Promise<ResourceRow[]> {
+	if (useV2Relations) {
+		const canReadContent = resourceContentAccessSql('export', {
+			viewerHasOwnership: sql`viewer_save.id IS NOT NULL OR viewer_file.id IS NOT NULL`,
+			scope: sql`r.scope`,
+		});
+		return queryRows<ResourceRow>(
+			db,
+			sql`SELECT
+			     r.id::text,
+			     r.type,
+			     localized.lang,
+			     localized.title,
+			     r.url,
+			     localized.summary,
+			     CASE WHEN ${canReadContent} THEN localized.content ELSE NULL END AS content,
+			     COALESCE(r.published_date, r.scraped_date, r.created_at) AS published_date,
+			     r.tags,
+			     localized.keywords,
+			     r.category
+			   FROM collection_resources edge
+			   JOIN collections collection
+			     ON collection.id = edge.collection_id
+			    AND collection.user_id = ${collectionOwnerId}
+			   JOIN resources r ON r.id = edge.resource_id
+			   LEFT JOIN resource_saves viewer_save
+			     ON viewer_save.resource_id = r.id
+			    AND viewer_save.user_id = ${viewerId}
+			   LEFT JOIN user_files viewer_file
+			     ON viewer_file.resource_id = r.id
+			    AND viewer_file.user_id = ${viewerId}
+			   LEFT JOIN LATERAL (
+			     SELECT rl.lang, rl.title, rl.summary, rl.content, rl.keywords
+			     FROM resources_localized rl
+			     WHERE rl.id = r.id
+			       AND rl.lang IN (r.original_lang, COALESCE(${primaryLocale}::text, r.original_lang))
+			     ORDER BY CASE
+			       WHEN rl.lang = COALESCE(${primaryLocale}::text, r.original_lang) THEN 0
+			       ELSE 1
+			     END
+			     LIMIT 1
+			   ) localized ON TRUE
+			   WHERE edge.collection_id = ${collectionId}::uuid
+			     AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+			     AND (
+			       (r.scope = 'corpus' AND r.enrichment_status = 'enriched')
+			       OR viewer_save.id IS NOT NULL
+			       OR viewer_file.id IS NOT NULL
+			     )
+			   ORDER BY edge.added_at ASC, edge.resource_id ASC`,
+		);
+	}
+
 	const canReadContent = resourceContentAccessSql('export', {
-		inViewerLibrary: sql`viewer_library.id IS NOT NULL`,
+		viewerHasOwnership: sql`viewer_library.id IS NOT NULL`,
 		scope: sql`r.scope`,
 	});
 	return queryRows<ResourceRow>(

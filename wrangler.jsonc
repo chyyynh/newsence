@@ -147,6 +147,7 @@
 		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
-		"AI_GATEWAY_NAME": "default"
+		"AI_GATEWAY_NAME": "default",
+		"RESOURCE_RELATIONS_READ_PATH": "legacy"
 	}
 }
