@@ -35,6 +35,8 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 		let cursor: string | null = null;
 		let available = 0;
 		let attempted = 0;
+		let derivativesExisting = 0;
+		let derivativesStored = 0;
 		let existing = 0;
 		let failed = 0;
 		let resources = 0;
@@ -52,6 +54,8 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 			);
 			available += result.available;
 			attempted += result.attempted;
+			derivativesExisting += result.derivativesExisting;
+			derivativesStored += result.derivativesStored;
 			existing += result.existing;
 			failed += result.failed;
 			resources += result.resources;
@@ -64,6 +68,8 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 				resources: result.resources,
 				attempted: result.attempted,
 				available: result.available,
+				derivativesExisting: result.derivativesExisting,
+				derivativesStored: result.derivativesStored,
 				existing: result.existing,
 				stored: result.stored,
 				failed: result.failed,
@@ -85,6 +91,8 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 					resources,
 					attempted,
 					available,
+					derivativesExisting,
+					derivativesStored,
 					existing,
 					stored,
 					failed,

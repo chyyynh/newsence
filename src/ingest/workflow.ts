@@ -63,6 +63,15 @@ async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resour
 						.join(', ');
 					throw new Error(`Failed to rehost ${result.failed} of ${result.attempted} resource images (${failures})`);
 				}
+				console.info({
+					tag: 'OG_IMAGE',
+					event: 'eager_rehost_completed',
+					resource_id: resourceId,
+					attempted: result.attempted,
+					available: result.available,
+					derivatives_existing: result.derivativesExisting,
+					derivatives_stored: result.derivativesStored,
+				});
 				return result;
 			},
 		)
