@@ -147,14 +147,18 @@ interface PdfMetadata {
 }
 
 export interface PaperReference {
+	paperId?: string;
 	doi?: string;
+	url?: string;
 	title?: string;
 	year?: number;
+	authors?: string[];
+	/** Legacy first-author snapshot retained for tolerant readers. */
 	author?: string;
 }
 
 export interface PaperMetadata {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	source: 'semanticscholar';
 	resolvedAt: string;
 	metricsUpdatedAt: string;

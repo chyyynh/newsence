@@ -7,7 +7,8 @@ import { enqueueOrRestartWorkflow } from '../workflow-control';
 
 const PAGE_SIZE = 10;
 const MAX_PAGES = 2500;
-const WORKFLOW_ID = 'academic-metadata-backfill-v1';
+const ACADEMIC_SCHEMA_VERSION = 2;
+const WORKFLOW_ID = `academic-metadata-backfill-v${ACADEMIC_SCHEMA_VERSION}`;
 
 type AcademicMetadataBackfillPayload = Record<string, never>;
 
@@ -52,11 +53,11 @@ async function loadAcademicMetadataBackfillPage(env: CoreEnv, cursor: string | n
 						lower(url) ~ '^https?://([a-z0-9-]+\\.)*arxiv\\.org/(abs|html|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?(\\.pdf)?/?([?#].*)?$'
 						OR lower(url) ~ '^https?://(dx\\.)?doi\\.org/10\\.[0-9]{4,9}/'
 					)
-					AND COALESCE(platform_metadata #>> '{enrichments,academic,schemaVersion}', '') <> '1'
+					AND COALESCE(platform_metadata #>> '{enrichments,academic,schemaVersion}', '') <> $3
 				ORDER BY id
 				LIMIT $2
 			`,
-			[cursor, limit],
+			[cursor, limit, String(ACADEMIC_SCHEMA_VERSION)],
 		);
 		const rows = result.rows;
 		const items = rows

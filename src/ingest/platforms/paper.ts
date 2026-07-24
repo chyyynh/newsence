@@ -9,8 +9,9 @@ import { z } from 'zod';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
-const RESPONSE_MAX_BYTES = 5 * 1024 * 1024;
-const MAX_REFERENCES = 50;
+// Semantic Scholar's paper-details response is capped at 10 MB. Match the
+// provider boundary so the complete bibliography is retained when it fits.
+const RESPONSE_MAX_BYTES = 10 * 1024 * 1024;
 const ARXIV_PATH_RE = /^\/(?:abs|html|pdf)\/(\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
 
@@ -28,6 +29,7 @@ const PAPER_FIELDS = [
 	'authors.name',
 	'references.title',
 	'references.year',
+	'references.url',
 	'references.externalIds',
 	'references.authors',
 ].join(',');
@@ -48,8 +50,10 @@ export type PaperEnrichmentAttempt = {
 const S2AuthorSchema = z.object({ name: z.string().nullish() });
 const S2ExternalIdsSchema = z.object({ DOI: z.string().nullish() });
 const S2ReferenceSchema = z.object({
+	paperId: z.string().nullish(),
 	title: z.string().nullish(),
 	year: z.number().int().nullish(),
+	url: z.string().nullish(),
 	externalIds: S2ExternalIdsSchema.nullish(),
 	authors: z.array(S2AuthorSchema).nullish(),
 });
@@ -139,12 +143,18 @@ function authorNames(authors: S2Author[] | null | undefined): string[] {
 
 function normalizeReferences(references: S2Ref[] | null | undefined): PaperReference[] {
 	if (!references) return [];
-	return references.slice(0, MAX_REFERENCES).map((ref) => ({
-		doi: ref.externalIds?.DOI?.toLowerCase(),
-		title: ref.title ?? undefined,
-		year: ref.year ?? undefined,
-		author: authorNames(ref.authors)[0],
-	}));
+	return references.map((ref) => {
+		const authors = authorNames(ref.authors);
+		return {
+			paperId: ref.paperId ?? undefined,
+			doi: ref.externalIds?.DOI?.toLowerCase(),
+			url: normalizeHttpsUrl(ref.url),
+			title: ref.title ?? undefined,
+			year: ref.year ?? undefined,
+			authors,
+			author: authors[0],
+		};
+	});
 }
 
 function normalizePublicationDate(value: string | null | undefined): string | undefined {
@@ -174,7 +184,7 @@ function normalizePaper(id: PaperId, paper: S2Paper): PaperMetadata {
 	const references = normalizeReferences(paper.references);
 	const fetchedAt = new Date().toISOString();
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		source: 'semanticscholar',
 		resolvedAt: fetchedAt,
 		metricsUpdatedAt: fetchedAt,
