@@ -10,6 +10,8 @@ const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 const PREVIEW_IMAGE_TARGET_WIDTH = 1200;
+const CLOUDINARY_IMAGE_HOST = 'res.cloudinary.com';
+const CLOUDINARY_RASTER_PATH = '/image/upload/f_png,w_1200/';
 const SANITY_IMAGE_HOST = 'cdn.sanity.io';
 const WORDPRESS_UPLOAD_PATH = /\/wp-content\/uploads\//i;
 
@@ -72,6 +74,14 @@ export function normalizePreviewImageUrl(value: string, baseUrl?: string): strin
 		return null;
 	}
 	if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) return null;
+	if (
+		parsed.hostname.toLowerCase() === CLOUDINARY_IMAGE_HOST &&
+		parsed.pathname.toLowerCase().endsWith('.svg') &&
+		!parsed.pathname.includes(CLOUDINARY_RASTER_PATH)
+	) {
+		parsed.pathname = parsed.pathname.replace('/image/upload/', CLOUDINARY_RASTER_PATH);
+		return parsed.toString();
+	}
 	if (parsed.hostname.toLowerCase() === SANITY_IMAGE_HOST && parsed.pathname.toLowerCase().endsWith('.svg')) {
 		parsed.searchParams.set('fm', 'png');
 		parsed.searchParams.set('w', String(PREVIEW_IMAGE_TARGET_WIDTH));
