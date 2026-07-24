@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { AcademicMetadataBackfillWorkflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
 import { ResourceTranslationWorkflow } from '@ingest/content-localization-workflow';
+import { runMonitorCycle } from '@ingest/official-publications';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { handleYouTubeCron } from '@ingest/platforms/youtube';
@@ -32,9 +33,12 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
 
 		if (event.cron === '*/5 * * * *') {
-			this.ctx.waitUntil(handleRSSCron(this.env));
-		} else if (event.cron === '0 */6 * * *') this.ctx.waitUntil(handleTwitterCron(this.env));
-		else if (event.cron === '*/30 * * * *') this.ctx.waitUntil(handleYouTubeCron(this.env));
+			this.ctx.waitUntil(runMonitorCycle(this.env, handleRSSCron));
+		} else if (event.cron === '0 */6 * * *') {
+			this.ctx.waitUntil(runMonitorCycle(this.env, handleTwitterCron));
+		} else if (event.cron === '*/30 * * * *') {
+			this.ctx.waitUntil(runMonitorCycle(this.env, handleYouTubeCron));
+		}
 	}
 
 	// Service-binding RPC for engine capabilities. Product-domain writes live on
