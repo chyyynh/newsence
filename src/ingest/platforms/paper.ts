@@ -2,7 +2,7 @@
 // dedicated per-key rate, avoiding shared Worker egress IP rate limits, and S2
 // returns reference metadata (DOI + author) in a single call.
 
-import type { WorkflowStep } from 'cloudflare:workers';
+import type { WorkflowDynamicDelayContext, WorkflowSleepDuration, WorkflowStep } from 'cloudflare:workers';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PaperMetadata, PaperReference, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { z } from 'zod';
@@ -12,6 +12,8 @@ const REQUEST_TIMEOUT_MS = 8_000;
 // Semantic Scholar's paper-details response is capped at 10 MB. Match the
 // provider boundary so the complete bibliography is retained when it fits.
 const RESPONSE_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_RATE_LIMIT_DELAY_SECONDS = 15;
+const MAX_RATE_LIMIT_DELAY_SECONDS = 5 * 60;
 const ARXIV_PATH_RE = /^\/(?:abs|html|pdf)\/(\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
 
@@ -131,9 +133,40 @@ async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | nu
 	const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
 	if (res.ok) return S2PaperSchema.parse(JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)));
 	const status = res.status;
+	const retryAfterSeconds = parseRetryAfterSeconds(res.headers.get('retry-after'));
 	await res.body?.cancel();
 	if (status === 404) return null;
+	if (status === 429) {
+		throw new Error(
+			retryAfterSeconds === null
+				? 'Semantic Scholar request failed with HTTP 429'
+				: `Semantic Scholar request failed with HTTP 429; retry_after_seconds=${retryAfterSeconds}`,
+		);
+	}
 	throw new Error(`Semantic Scholar request failed with HTTP ${status}`);
+}
+
+function parseRetryAfterSeconds(value: string | null): number | null {
+	if (!value?.trim()) return null;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(MAX_RATE_LIMIT_DELAY_SECONDS, Math.max(1, Math.ceil(seconds)));
+	}
+	const retryAt = Date.parse(value);
+	if (Number.isNaN(retryAt)) return null;
+	return Math.min(MAX_RATE_LIMIT_DELAY_SECONDS, Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)));
+}
+
+function paperEnrichmentRetryDelay({ ctx, error }: WorkflowDynamicDelayContext): WorkflowSleepDuration {
+	const requestedDelay = error.message.match(/retry_after_seconds=(\d+)/)?.[1];
+	if (requestedDelay) {
+		const seconds = Math.min(MAX_RATE_LIMIT_DELAY_SECONDS, Math.max(1, Number(requestedDelay)));
+		return `${seconds} seconds`;
+	}
+	if (error.message.includes('HTTP 429')) {
+		return `${Math.min(MAX_RATE_LIMIT_DELAY_SECONDS, ctx.attempt * DEFAULT_RATE_LIMIT_DELAY_SECONDS)} seconds`;
+	}
+	return `${Math.min(30, ctx.attempt * 5)} seconds`;
 }
 
 function authorNames(authors: S2Author[] | null | undefined): string[] {
@@ -230,7 +263,7 @@ export async function stagePaperEnrichmentAttempt(
 	try {
 		const metadata = await step.do(
 			stepName,
-			{ retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			{ retries: { limit: 5, delay: paperEnrichmentRetryDelay }, timeout: '30 seconds' },
 			async () => {
 				const startedAt = Date.now();
 				const paper = await enrichS2FromId(paperId, env.S2_API_KEY);

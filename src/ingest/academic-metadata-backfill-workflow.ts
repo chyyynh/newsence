@@ -9,6 +9,7 @@ const PAGE_SIZE = 10;
 const MAX_PAGES = 2500;
 const ACADEMIC_SCHEMA_VERSION = 2;
 const WORKFLOW_ID = `academic-metadata-backfill-v${ACADEMIC_SCHEMA_VERSION}`;
+const PROVIDER_REQUEST_INTERVAL = '3 seconds';
 
 type AcademicMetadataBackfillPayload = Record<string, never>;
 
@@ -44,14 +45,20 @@ async function loadAcademicMetadataBackfillPage(env: CoreEnv, cursor: string | n
 			`
 				SELECT
 					id::text AS id,
-					url,
+					COALESCE(
+						NULLIF(url, ''),
+						'https://doi.org/' || (platform_metadata #>> '{enrichments,academic,doi}')
+					) AS url,
 					COALESCE(jsonb_typeof(platform_metadata #> '{enrichments,academic}') = 'object', false) AS has_existing_academic
 				FROM resources
 				WHERE ($1::uuid IS NULL OR id > $1::uuid)
-					AND url IS NOT NULL
 					AND (
-						lower(url) ~ '^https?://([a-z0-9-]+\\.)*arxiv\\.org/(abs|html|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?(\\.pdf)?/?([?#].*)?$'
-						OR lower(url) ~ '^https?://(dx\\.)?doi\\.org/10\\.[0-9]{4,9}/'
+						lower(COALESCE(url, '')) ~ '^https?://([a-z0-9-]+\\.)*arxiv\\.org/(abs|html|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?(\\.pdf)?/?([?#].*)?$'
+						OR lower(COALESCE(url, '')) ~ '^https?://(dx\\.)?doi\\.org/10\\.[0-9]{4,9}/'
+						OR (
+							type = 'pdf'
+							AND COALESCE(platform_metadata #>> '{enrichments,academic,doi}', '') ~* '^10\\.[0-9]{4,9}/'
+						)
 					)
 					AND COALESCE(platform_metadata #>> '{enrichments,academic,schemaVersion}', '') <> $3
 				ORDER BY id
@@ -145,7 +152,7 @@ export class AcademicMetadataBackfillWorkflow extends WorkflowEntrypoint<CoreEnv
 				}
 
 				if (attempt.outcome !== 'not_applicable') {
-					await step.sleep(`rate-limit-academic-metadata-page-${page}-item-${itemNumber}`, '1 second');
+					await step.sleep(`rate-limit-academic-metadata-page-${page}-item-${itemNumber}`, PROVIDER_REQUEST_INTERVAL);
 				}
 			}
 
