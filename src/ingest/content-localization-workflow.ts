@@ -106,7 +106,7 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourc
 type ResourceTranslationPayload = { resourceId: string; sourceTranslationHash: string };
 
 const TRANSLATION_STEP_CONCURRENCY = 3;
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v9';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v10';
 
 function workflowId(resourceId: string, sourceTranslationHash: string): string {
 	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${sourceTranslationHash.slice(0, 12)}-${resourceId}`;
