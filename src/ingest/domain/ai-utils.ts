@@ -262,12 +262,6 @@ function shouldWriteResourceContentTranslation(resource: ResourceForProcessing):
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
 
-function looksLikeModelExplanation(content: string): boolean {
-	return /^(?:(?:以下是|這是)[：:\s]*(?:完整)?(?:翻譯|譯文|翻譯後的內容)(?:[：:\s]|$)|Here (?:is|are) (?:the )?(?:translation|translated (?:text|content))(?:[：:\s]|$)|(?:I've|I have|I) cleaned (?:up )?(?:the )?(?:text|content|markdown)(?:[：:\s]|$)|(?:清理後|已清理)(?:的)?(?:內容|文字|Markdown)(?:[：:\s]|$))/i.test(
-		content.trim(),
-	);
-}
-
 function splitOversizedBlock(block: string, maxLength: number): string[] {
 	const chunks: string[] = [];
 	let remaining = block;
@@ -314,7 +308,7 @@ function splitContentForTranslation(content: string): string[] {
 
 function validateTranslatedContent(original: string, translated: string | null): string | null {
 	const trimmed = translated?.trim();
-	if (!trimmed || looksLikeModelExplanation(trimmed)) return null;
+	if (!trimmed) return null;
 	if (original.length >= 1000 && cjkRatio(original) < 0.6 && trimmed.length < original.length * MIN_TRANSLATED_CONTENT_RATIO) return null;
 	return trimmed;
 }
