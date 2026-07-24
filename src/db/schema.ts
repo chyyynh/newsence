@@ -120,7 +120,7 @@ export const resourceSaves = pgTable(
 	(table) => [
 		uniqueIndex('resource_saves_user_id_resource_id_key').on(table.userId, table.resourceId),
 		index('resource_saves_resource_id_idx').on(table.resourceId),
-		index('resource_saves_user_id_saved_at_idx').on(table.userId, table.savedAt),
+		index('resource_saves_user_id_saved_at_id_idx').on(table.userId, table.savedAt.desc(), table.id.desc()),
 	],
 );
 
