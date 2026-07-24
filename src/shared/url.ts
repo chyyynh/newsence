@@ -10,6 +10,7 @@ const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'm.youtube.com']);
 const YOUTUBE_SHORT_HOSTS = new Set(['youtu.be']);
 const YOUTUBE_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 const PREVIEW_IMAGE_TARGET_WIDTH = 1200;
+const SANITY_IMAGE_HOST = 'cdn.sanity.io';
 const WORDPRESS_UPLOAD_PATH = /\/wp-content\/uploads\//i;
 
 function hostMatches(hostname: string, hosts: ReadonlySet<string>): boolean {
@@ -71,6 +72,11 @@ export function normalizePreviewImageUrl(value: string, baseUrl?: string): strin
 		return null;
 	}
 	if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) return null;
+	if (parsed.hostname.toLowerCase() === SANITY_IMAGE_HOST && parsed.pathname.toLowerCase().endsWith('.svg')) {
+		parsed.searchParams.set('fm', 'png');
+		parsed.searchParams.set('w', String(PREVIEW_IMAGE_TARGET_WIDTH));
+		return parsed.toString();
+	}
 	if (!WORDPRESS_UPLOAD_PATH.test(parsed.pathname)) return parsed.toString();
 
 	const width = positiveInteger(parsed.searchParams.get('w'));
