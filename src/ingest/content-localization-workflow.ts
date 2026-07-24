@@ -8,7 +8,6 @@ import { sql } from 'drizzle-orm';
 import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
-	assembleZhHantContentTranslation,
 	createZhHantContentTranslationChunks,
 	DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS,
 	generateZhHantMetadataTranslation,
@@ -106,7 +105,7 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourc
 type ResourceTranslationPayload = { resourceId: string; sourceTranslationHash: string };
 
 const TRANSLATION_STEP_CONCURRENCY = 3;
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v12';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v13';
 
 function workflowId(resourceId: string, sourceTranslationHash: string): string {
 	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${sourceTranslationHash.slice(0, 12)}-${resourceId}`;
@@ -143,7 +142,7 @@ async function translateZhHantContentDurably(env: CoreEnv, step: WorkflowStep, s
 		);
 		translatedChunks.push(...translations);
 	}
-	return assembleZhHantContentTranslation(source, translatedChunks);
+	return translatedChunks.join('\n\n');
 }
 
 export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {

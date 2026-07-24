@@ -48,9 +48,7 @@ export function mergeResourceClassification(
 const MAX_CONTENT_LENGTH = 10000;
 const CONTENT_TRANSLATION_CHUNK_LENGTH = 6000;
 export const DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS = 96;
-const MIN_TRANSLATED_CONTENT_RATIO = 0.2;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
-const MIN_CONTENT_TRANSLATION_LENGTH = 20;
 const MIN_TRANSLATABLE_TEXT_LENGTH = 20;
 const ExtractedEntitySchema = z.object({
 	name: z.string().min(1),
@@ -171,16 +169,9 @@ function requiredResourceContent(resource: ResourceForProcessing): string {
 	return content;
 }
 
-function cjkRatio(text: string): number {
-	const letters = text.match(/[A-Za-z\u3400-\u9FFF]/g)?.length ?? 0;
-	if (!letters) return 0;
-	const cjk = text.match(/[\u3400-\u9FFF]/g)?.length ?? 0;
-	return cjk / letters;
-}
-
 export function needsZhHantContentTranslation(resource: ResourceForProcessing): boolean {
 	const content = resource.content?.trim();
-	if (!content || content.length < MIN_CONTENT_TRANSLATION_LENGTH) return false;
+	if (!content) return false;
 	if (!hasTranslatableContent(content)) return false;
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	if (!shouldWriteResourceContentTranslation(resource)) return false;
@@ -214,16 +205,13 @@ export async function generateZhHantMetadataTranslation(
 ${content.slice(0, MAX_CONTENT_LENGTH)}`;
 	if (resource.type === 'twitter') {
 		if (usesInlineTwitterContentTranslation(resource)) {
-			const translation = await generateObject(env.AI, prompt, {
+			return generateObject(env.AI, prompt, {
 				schema: ZhHantTwitterTranslationSchema,
 				task: 'resource-metadata-localization',
 				gatewayId: env.AI_GATEWAY_NAME,
 				maxTokens: 2400,
 				systemPrompt: zhHantMetadataTranslationSystemPrompt(resource, true),
 			});
-			const translatedContent = validateTranslatedContent(content, translation.content);
-			if (!translatedContent) throw new Error('Inline Twitter content translation did not return valid output');
-			return { ...translation, content: translatedContent };
 		}
 		return generateObject(env.AI, prompt, {
 			schema: ZhHantTitleTranslationSchema,
@@ -233,14 +221,13 @@ ${content.slice(0, MAX_CONTENT_LENGTH)}`;
 			systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 		});
 	}
-	const translation = await generateObject(env.AI, prompt, {
+	return generateObject(env.AI, prompt, {
 		schema: ZhHantMetadataTranslationSchema,
 		task: 'resource-metadata-localization',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 700,
 		systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 	});
-	return translation;
 }
 
 export function hasTranslatableContent(content: string): boolean {
@@ -306,13 +293,6 @@ function splitContentForTranslation(content: string): string[] {
 	return chunks;
 }
 
-function validateTranslatedContent(original: string, translated: string | null): string | null {
-	const trimmed = translated?.trim();
-	if (!trimmed) return null;
-	if (original.length >= 1000 && cjkRatio(original) < 0.6 && trimmed.length < original.length * MIN_TRANSLATED_CONTENT_RATIO) return null;
-	return trimmed;
-}
-
 function contentTranslationPrompt(chunk: string, index: number, total: number): string {
 	return `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`;
 }
@@ -332,22 +312,13 @@ export function createZhHantContentTranslationChunks(content: string, maxChunks:
 }
 
 export async function translateZhHantContentChunk(chunk: string, index: number, total: number, env: CoreEnv): Promise<string> {
-	const translated = await generateText(env.AI, contentTranslationPrompt(chunk, index, total), {
+	return generateText(env.AI, contentTranslationPrompt(chunk, index, total), {
 		task: 'resource-content-translation',
 		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 8000,
 		temperature: 0.2,
 		systemPrompt: RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
 	});
-	const validated = validateTranslatedContent(chunk, translated);
-	if (!validated) throw new Error(`Content translation chunk ${index + 1}/${total} did not return valid output`);
-	return validated;
-}
-
-export function assembleZhHantContentTranslation(original: string, translatedChunks: string[]): string {
-	const translated = validateTranslatedContent(original.trim(), translatedChunks.join('\n\n'));
-	if (!translated) throw new Error('Assembled content translation did not pass validation');
-	return translated;
 }
 
 export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
