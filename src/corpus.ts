@@ -7,7 +7,6 @@ import {
 } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
-import { usesV2ResourceRelations } from '@db/resource-relations-read-path';
 import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql } from '@db/sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
@@ -170,7 +169,7 @@ export async function searchCorpusResources(env: CoreEnv, input: ResourceSearchI
 }
 
 export async function readCorpusItems(env: CoreEnv, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
-	return withCoreDb(env, (db) => readItems(db, items, userId, usesV2ResourceRelations(env)));
+	return withCoreDb(env, (db) => readItems(db, items, userId));
 }
 
 function clampInt(value: number | undefined, min: number, max: number, defaultValue: number): number {
@@ -331,32 +330,24 @@ function resourceReadJoins(): SQL {
 	`;
 }
 
-function viewerResourceOwnershipSql(userId: string, useV2Relations: boolean): SQL {
-	return useV2Relations
-		? sql`
-				EXISTS (
-					SELECT 1
-					FROM resource_saves content_save
-					WHERE content_save.resource_id = r.id AND content_save.user_id = ${userId}
-				)
-				OR EXISTS (
-					SELECT 1
-					FROM user_files content_file
-					WHERE content_file.resource_id = r.id AND content_file.user_id = ${userId}
-				)
-			`
-		: sql`
-				EXISTS (
-					SELECT 1
-					FROM library content_library
-					WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
-				)
-			`;
+function viewerResourceOwnershipSql(userId: string): SQL {
+	return sql`
+		EXISTS (
+			SELECT 1
+			FROM resource_saves content_save
+			WHERE content_save.resource_id = r.id AND content_save.user_id = ${userId}
+		)
+		OR EXISTS (
+			SELECT 1
+			FROM user_files content_file
+			WHERE content_file.resource_id = r.id AND content_file.user_id = ${userId}
+		)
+	`;
 }
 
-function resourceReadSelect(userId: string, useV2Relations: boolean): SQL {
+function resourceReadSelect(userId: string): SQL {
 	const canReadContent = resourceContentAccessSql('ai-tools', {
-		viewerHasOwnership: viewerResourceOwnershipSql(userId, useV2Relations),
+		viewerHasOwnership: viewerResourceOwnershipSql(userId),
 		scope: sql`r.scope`,
 	});
 	return sql`
@@ -401,12 +392,12 @@ function resourceSearchSelect(): SQL {
 	`;
 }
 
-function resourceAccessPredicate(userId: string, useV2Relations: boolean): SQL {
+function resourceAccessPredicate(userId: string): SQL {
 	return sql`
 		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 		AND (
 			(r.scope = 'corpus' AND r.enrichment_status = 'enriched')
-			OR (${viewerResourceOwnershipSql(userId, useV2Relations)})
+			OR (${viewerResourceOwnershipSql(userId)})
 		)
 	`;
 }
@@ -433,29 +424,24 @@ function formatResourceReadResult(resource: ResourceContentRow): ReadContextResu
 	};
 }
 
-async function readResources(db: CoreDb, ids: string[], userId: string, useV2Relations: boolean): Promise<Map<string, ReadContextResult>> {
+async function readResources(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 	const rows = await queryRows<ResourceContentRow>(
 		db,
 		sql`
-			SELECT ${resourceReadSelect(userId, useV2Relations)}
+			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceReadJoins()}
 				WHERE r.id = ANY(${uuidArraySql(validIds)})
-				AND ${resourceAccessPredicate(userId, useV2Relations)}
+				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
 	const formatted = rows.map(formatResourceReadResult);
 	return new Map(formatted.map((r) => [r.id, r]));
 }
 
-async function readResourceSummaries(
-	db: CoreDb,
-	ids: string[],
-	userId: string,
-	useV2Relations: boolean,
-): Promise<Map<string, ResourceSummaryRow>> {
+async function readResourceSummaries(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ResourceSummaryRow>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 	const rows = await queryRows<ResourceSummaryRow>(
@@ -465,18 +451,13 @@ async function readResourceSummaries(
 			FROM resources r
 			${resourceReadJoins()}
 				WHERE r.id = ANY(${uuidArraySql(validIds)})
-				AND ${resourceAccessPredicate(userId, useV2Relations)}
+				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
 	return new Map(rows.map((resource) => [resource.id, resource]));
 }
 
-async function readCollections(
-	db: CoreDb,
-	ids: string[],
-	userId: string,
-	useV2Relations: boolean,
-): Promise<Map<string, ReadContextResult>> {
+async function readCollections(db: CoreDb, ids: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const validIds = ids.filter(isValidUuid);
 	if (validIds.length === 0) return new Map();
 
@@ -489,51 +470,28 @@ async function readCollections(
 					WHERE id = ANY(${uuidArraySql(validIds)}) AND user_id = ${userId}
 			`,
 		),
-		useV2Relations
-			? queryRows<{ from_id: string; to_id: string }>(
-					db,
-					sql`
-						SELECT from_id, to_id
-						FROM (
-							SELECT edge.collection_id::text AS from_id,
-							       edge.resource_id::text AS to_id,
-							       edge.added_at,
-							       ROW_NUMBER() OVER (
-							         PARTITION BY edge.collection_id
-							         ORDER BY edge.added_at DESC, edge.resource_id DESC
-							       ) AS row_number
-							FROM collection_resources edge
-							JOIN collections collection
-							  ON collection.id = edge.collection_id
-							 AND collection.user_id = ${userId}
-							WHERE edge.collection_id = ANY(${uuidArraySql(validIds)})
-						) ranked_links
-						WHERE row_number <= ${COLLECTION_LIMIT}
-						ORDER BY added_at DESC, to_id DESC
-					`,
-				)
-			: queryRows<{ from_id: string; to_id: string }>(
-					db,
-					sql`
-						SELECT from_id, to_id
-						FROM (
-							SELECT id AS link_id,
-							       from_id,
-							       to_id,
-							       created_at,
-							       ROW_NUMBER() OVER (
-							         PARTITION BY from_id ORDER BY created_at DESC, id DESC
-							       ) AS row_number
-							FROM resource_links
-							WHERE user_id = ${userId}
-								AND from_type = 'collection'
-								AND from_id = ANY(${textArraySql(validIds)})
-								AND to_type = 'resource'
-						) ranked_links
-						WHERE row_number <= ${COLLECTION_LIMIT}
-						ORDER BY created_at DESC, link_id DESC
-					`,
-				),
+		queryRows<{ from_id: string; to_id: string }>(
+			db,
+			sql`
+				SELECT from_id, to_id
+				FROM (
+					SELECT edge.collection_id::text AS from_id,
+					       edge.resource_id::text AS to_id,
+					       edge.added_at,
+					       ROW_NUMBER() OVER (
+					         PARTITION BY edge.collection_id
+					         ORDER BY edge.added_at DESC, edge.resource_id DESC
+					       ) AS row_number
+					FROM collection_resources edge
+					JOIN collections collection
+					  ON collection.id = edge.collection_id
+					 AND collection.user_id = ${userId}
+					WHERE edge.collection_id = ANY(${uuidArraySql(validIds)})
+				) ranked_links
+				WHERE row_number <= ${COLLECTION_LIMIT}
+				ORDER BY added_at DESC, to_id DESC
+			`,
+		),
 	]);
 
 	const resourceIdsByCollection = new Map<string, string[]>();
@@ -544,7 +502,7 @@ async function readCollections(
 	}
 
 	const allResourceIds = [...new Set([...resourceIdsByCollection.values()].flat().filter(isValidUuid))];
-	const resourceMap = await readResourceSummaries(db, allResourceIds, userId, useV2Relations);
+	const resourceMap = await readResourceSummaries(db, allResourceIds, userId);
 
 	return new Map(
 		collectionRows.map((col) => {
@@ -571,7 +529,7 @@ async function readCollections(
 	);
 }
 
-async function readUrls(db: CoreDb, urls: string[], userId: string, useV2Relations: boolean): Promise<Map<string, ReadContextResult>> {
+async function readUrls(db: CoreDb, urls: string[], userId: string): Promise<Map<string, ReadContextResult>> {
 	const urlPairs = urls.flatMap((url) => {
 		try {
 			return [[url, normalizeUrl(url)] as const];
@@ -586,11 +544,11 @@ async function readUrls(db: CoreDb, urls: string[], userId: string, useV2Relatio
 	const resourceRows = await queryRows<ResourceContentRow>(
 		db,
 		sql`
-			SELECT ${resourceReadSelect(userId, useV2Relations)}
+			SELECT ${resourceReadSelect(userId)}
 			FROM resources r
 			${resourceReadJoins()}
 				WHERE (r.url = ANY(${candidateUrlArray}) OR r.normalized_url = ANY(${candidateUrlArray}))
-				AND ${resourceAccessPredicate(userId, useV2Relations)}
+				AND ${resourceAccessPredicate(userId)}
 		`,
 	);
 	const resourceMap = new Map<string, ResourceContentRow>();
@@ -604,7 +562,7 @@ async function readUrls(db: CoreDb, urls: string[], userId: string, useV2Relatio
 	return new Map(resourceMatches.map((m) => [m.url, formatResourceReadResult(m.resource)] as const));
 }
 
-async function readItems(db: CoreDb, items: ReadContextItem[], userId: string, useV2Relations: boolean): Promise<ReadContextResult[]> {
+async function readItems(db: CoreDb, items: ReadContextItem[], userId: string): Promise<ReadContextResult[]> {
 	const groups = new Map<ReadContextType, string[]>();
 	for (const item of items) {
 		const list = groups.get(item.type) ?? [];
@@ -617,10 +575,10 @@ async function readItems(db: CoreDb, items: ReadContextItem[], userId: string, u
 		entries.map(async ([type, ids]) => {
 			const results =
 				type === 'collection'
-					? await readCollections(db, ids, userId, useV2Relations)
+					? await readCollections(db, ids, userId)
 					: type === 'resource'
-						? await readResources(db, ids, userId, useV2Relations)
-						: await readUrls(db, ids, userId, useV2Relations);
+						? await readResources(db, ids, userId)
+						: await readUrls(db, ids, userId);
 			return [type, results] as const;
 		}),
 	);
