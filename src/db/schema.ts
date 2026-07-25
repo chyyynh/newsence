@@ -9,20 +9,7 @@ import {
 	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
 import type { StoredResourceEntity, TranscriptSegment } from '@core-shared/types';
-import {
-	bigint,
-	boolean,
-	index,
-	integer,
-	jsonb,
-	pgTable,
-	primaryKey,
-	text,
-	timestamp,
-	uniqueIndex,
-	uuid,
-	varchar,
-} from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 
 export const resources = pgTable(
 	'resources',
@@ -154,52 +141,6 @@ export const youtubeTranscripts = pgTable('youtube_transcripts', {
 	aiHighlights: jsonb('ai_highlights').$type<unknown>(),
 	highlightsGeneratedAt: timestamp('highlights_generated_at', { mode: 'date' }),
 });
-
-export const entities = pgTable('entities', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	canonicalName: varchar('canonical_name', { length: 255 }).notNull().unique(),
-	name: varchar('name', { length: 255 }).notNull(),
-	type: varchar('type', { length: 20 }).notNull(),
-	resourceCount: integer('resource_count').default(0).notNull(),
-	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-});
-
-export const entityTranslations = pgTable(
-	'entity_translations',
-	{
-		entityId: uuid('entity_id')
-			.notNull()
-			.references(() => entities.id, { onDelete: 'cascade' }),
-		lang: varchar('lang', { length: 35 }).notNull(),
-		name: varchar('name', { length: 255 }).notNull(),
-		source: varchar('source', { length: 16, enum: RESOURCE_TRANSLATION_SOURCES }).default('original').notNull(),
-		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.entityId, table.lang] }),
-		index('entity_translations_lang_idx').on(table.lang),
-		index('entity_translations_source_idx').on(table.source),
-	],
-);
-
-export const resourceEntities = pgTable(
-	'resource_entities',
-	{
-		id: uuid('id').defaultRandom().primaryKey(),
-		resourceId: uuid('resource_id')
-			.notNull()
-			.references(() => resources.id, { onDelete: 'cascade' }),
-		entityId: uuid('entity_id')
-			.notNull()
-			.references(() => entities.id, { onDelete: 'cascade' }),
-	},
-	(table) => [
-		uniqueIndex('resource_entities_resource_id_entity_id_key').on(table.resourceId, table.entityId),
-		index('resource_entities_entity_id_idx').on(table.entityId),
-	],
-);
 
 export const collections = pgTable('collections', {
 	id: uuid('id').defaultRandom().primaryKey(),
