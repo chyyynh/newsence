@@ -12,7 +12,6 @@ import { SearchIndexRebuildWorkflow, startSearchIndexRebuild } from './ai-search
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
-import { type ExportCollectionOkfInput, exportCollectionOkf } from './okf';
 
 export {
 	AcademicMetadataBackfillWorkflow,
@@ -85,11 +84,6 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Related resource ids for app-side recommendations. */
 	relatedResourceIds(input: RelatedResourceSearchInput) {
 		return relatedCorpusResourceIds(this.env, input);
-	}
-
-	/** Stream a collection as an OKF tar.gz bundle for the app Worker. */
-	exportCollectionOkf(input: ExportCollectionOkfInput): Promise<Response> {
-		return exportCollectionOkf(this.env, input);
 	}
 
 	/** Read workflow status for app-side polling. */

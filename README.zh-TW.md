@@ -152,7 +152,7 @@ src/
 │       ├── hackernews.ts # HN processor
 │       ├── paper.ts      # Semantic Scholar enrichment stage
 │       └── pdf.ts        # PDF text extraction stage
-└── corpus.ts · okf.ts     # engine 讀取、搜尋、匯出輔助
+└── corpus.ts              # engine 讀取、搜尋輔助
 ```
 
 ## 環境變數與 Bindings

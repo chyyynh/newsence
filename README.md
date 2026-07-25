@@ -71,7 +71,7 @@ Translation/summary and classification/entities are separate structured calls so
 
 The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, and caps stored entities per resource.
 
-It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and OKF-style alias groups are presentation or export-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
+It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and alias groups are presentation-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
 
 Change the DB schema only when the product needs a query shape that the current `entities` plus `resource_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
 
@@ -160,7 +160,7 @@ src/
 │       ├── hackernews.ts # HN processor
 │       ├── paper.ts      # Semantic Scholar enrichment stage
 │       └── pdf.ts        # PDF text extraction stage
-└── corpus.ts · okf.ts     # engine read/search/export helpers
+└── corpus.ts              # engine read/search helpers
 ```
 
 ## Environment Variables & Bindings
