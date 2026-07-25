@@ -134,17 +134,11 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 
 The HTTP surface only exposes `GET /health`. App/chat integrations use Cloudflare service-binding RPC with persisted resource IDs, while cron monitors run through scheduled triggers. URL acquisition is an internal stage of the canonical resource workflow.
 
-## CLI & MCP
+## Hosted MCP
 
-Also available as a CLI and [MCP](https://modelcontextprotocol.io) server via the separate [`newsence`](https://www.npmjs.com/package/newsence) npm package:
-
-```bash
-npx newsence search "AI agents"       # search resources
-npx newsence recent --hours 6         # recent resources
-
-claude mcp add newsence -- npx newsence mcp   # Claude Code
-# Remote MCP: https://www.newsence.app/api/mcp
-```
+The newsence app exposes a hosted [MCP](https://modelcontextprotocol.io)
+endpoint at `https://www.newsence.app/api/mcp`. The retired local CLI/MCP
+package is not part of this Worker.
 
 ## Architecture
 

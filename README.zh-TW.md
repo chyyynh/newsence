@@ -126,17 +126,11 @@ pnpm run deploy
 
 HTTP surface 只提供 `GET /health`。App/chat 透過 Cloudflare service-binding RPC 傳入已持久化的 resource ID，cron monitor 使用 scheduled triggers；URL acquisition 只存在於 canonical resource workflow 內部。
 
-## CLI 與 MCP 伺服器
+## Hosted MCP
 
-也可以透過獨立的 [`newsence`](https://www.npmjs.com/package/newsence) npm 套件當 CLI 和 [MCP](https://modelcontextprotocol.io) server 使用：
-
-```bash
-npx newsence search "AI agents"       # 搜尋 resources
-npx newsence recent --hours 6         # 最近幾小時的 resources
-
-claude mcp add newsence -- npx newsence mcp   # 加入 Claude Code
-# 遠端 MCP：https://www.newsence.app/api/mcp
-```
+newsence app 在 `https://www.newsence.app/api/mcp` 提供 hosted
+[MCP](https://modelcontextprotocol.io) endpoint。已退役的本機 CLI／MCP
+套件不屬於這個 Worker。
 
 ## 架構
 
