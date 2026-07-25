@@ -8,7 +8,7 @@ import {
 	SOURCE_PLATFORMS,
 	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
-import type { TranscriptSegment } from '@core-shared/types';
+import type { StoredResourceEntity, TranscriptSegment } from '@core-shared/types';
 import {
 	bigint,
 	boolean,
@@ -43,6 +43,7 @@ export const resources = pgTable(
 		category: text('category', { enum: RESOURCE_CATEGORIES }),
 		ogImageUrl: text('og_image_url'),
 		platformMetadata: jsonb('platform_metadata').$type<unknown>(),
+		entities: jsonb('entities').$type<StoredResourceEntity[]>(),
 		enrichmentStatus: text('enrichment_status', { enum: ['pending', 'enriched', 'failed'] })
 			.default('pending')
 			.notNull(),

@@ -36,6 +36,21 @@ export interface ResourceForProcessing {
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
+/**
+ * One extracted entity as stored on `resources.entities`. Keys are short
+ * because every resource carries roughly ten of these.
+ *
+ * `k` is the canonical key the Collection Wiki groups on to merge mentions
+ * across a collection; `n`/`cn` are the display labels and `t` drives the
+ * graph's type colouring.
+ */
+export type StoredResourceEntity = {
+	k: string;
+	n: string;
+	cn: string | null;
+	t: string;
+};
+
 export interface TranscriptSegment {
 	startTime: number;
 	endTime: number;

@@ -1,7 +1,7 @@
-import type { ContentResourceType, ResourceTranslationSource } from '@core-shared/resource-types';
-import type { PaperMetadata, PlatformMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
+import type { ContentResourceType } from '@core-shared/resource-types';
+import type { PaperMetadata, PlatformMetadata, ResourceForProcessing, StoredResourceEntity, YoutubeTranscript } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
-import { entities, entityTranslations, resourceEntities, resources } from '@db/schema';
+import { resources } from '@db/schema';
 import {
 	canonicalizeEntityName,
 	normalizeResourceEntitiesForStorage,
@@ -9,7 +9,7 @@ import {
 	type ResourceEntityInput,
 } from '@entities/normalize';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
-import { and, eq, inArray, not, notExists, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -199,37 +199,6 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 	});
 }
 
-/**
- * An entity that just lost its last resource link has nothing left to connect,
- * and re-processing an article drops entities constantly — without this the
- * table only ever grows. Scoped to the ids we just unlinked rather than a
- * global sweep, and best-effort: this is derived state, so losing a pass must
- * not fail ingest. entity_translations follows through its cascade.
- */
-async function collectOrphanEntities(db: CoreDb, candidateIds: string[]): Promise<number> {
-	const ids = [...new Set(candidateIds)];
-	if (ids.length === 0) return 0;
-	try {
-		const removed = await db
-			.delete(entities)
-			.where(
-				and(
-					inArray(entities.id, ids),
-					notExists(db.select({ one: sql`1` }).from(resourceEntities).where(eq(resourceEntities.entityId, entities.id))),
-				),
-			)
-			.returning({ id: entities.id });
-		return removed.length;
-	} catch (error) {
-		console.error({
-			tag: 'ENTITIES',
-			msg: 'Orphan cleanup failed; the next sync that unlinks them retries',
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return 0;
-	}
-}
-
 async function syncResourceEntities(
 	db: CoreDb,
 	resourceId: string,
@@ -239,85 +208,34 @@ async function syncResourceEntities(
 	platformMetadata?: unknown,
 ): Promise<void> {
 	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, resourceType, source, platformMetadata);
-	const entityIds: string[] = [];
 
+	// Entities are per-resource facts, not a shared graph: the only consumer is
+	// the Collection Wiki, which groups them by canonical key within one
+	// collection. A column keeps that whole capability without spending ~10
+	// junction and translation rows on every resource.
+	const stored: StoredResourceEntity[] = [];
+	const seen = new Set<string>();
 	for (const entity of normalizedEntities) {
 		const canonical = canonicalizeEntityName(entity.name);
-		if (!canonical) continue;
-
-		const [row] = await db
-			.insert(entities)
-			.values({ canonicalName: canonical, name: entity.name, type: entity.type })
-			.onConflictDoUpdate({
-				target: entities.canonicalName,
-				set: {
-					name: entity.name,
-					type: entity.type,
-					updatedAt: sql`NOW()`,
-				},
-			})
-			.returning({ id: entities.id });
-		const entityId = row?.id;
-		if (!entityId) throw new Error(`Failed to sync entity ${canonical}: no entity id returned`);
-		entityIds.push(entityId);
-		await upsertEntityTranslationRows(db, entityId, entity);
+		if (!canonical || seen.has(canonical)) continue;
+		seen.add(canonical);
+		stored.push({
+			k: canonical,
+			n: entity.name,
+			cn: entity.name_cn.trim() || null,
+			t: entity.type,
+		});
 	}
+	stored.sort((a, b) => a.k.localeCompare(b.k));
 
-	const unlinked = entityIds.length
-		? await db
-				.delete(resourceEntities)
-				.where(and(eq(resourceEntities.resourceId, resourceId), not(inArray(resourceEntities.entityId, entityIds))))
-				.returning({ entityId: resourceEntities.entityId })
-		: await db
-				.delete(resourceEntities)
-				.where(eq(resourceEntities.resourceId, resourceId))
-				.returning({ entityId: resourceEntities.entityId });
-
-	if (entityIds.length) {
-		await db
-			.insert(resourceEntities)
-			.values(entityIds.map((entityId) => ({ resourceId, entityId })))
-			.onConflictDoNothing();
-	}
-
-	const collected = await collectOrphanEntities(
-		db,
-		unlinked.map((row) => row.entityId),
-	);
+	await db.update(resources).set({ entities: stored }).where(eq(resources.id, resourceId));
 
 	console.info({
 		tag: 'ENTITIES',
-		msg: 'Synced resource links',
+		msg: 'Stored resource entities',
 		resourceId,
 		inputCount: inputEntities.length,
-		count: normalizedEntities.length,
-		filteredCount: inputEntities.length - normalizedEntities.length,
-		orphansCollected: collected,
+		count: stored.length,
+		filteredCount: inputEntities.length - stored.length,
 	});
-}
-
-async function upsertEntityTranslationRows(db: CoreDb, entityId: string, entity: ResourceEntityInput): Promise<void> {
-	const labels: Array<{ lang: string; name: string; source: ResourceTranslationSource }> = [
-		{ lang: 'en', name: entity.name, source: 'original' },
-	];
-	if (entity.name_cn.trim()) labels.push({ lang: 'zh-Hant', name: entity.name_cn, source: 'machine' });
-
-	await db
-		.insert(entityTranslations)
-		.values(labels.map((label) => ({ entityId, lang: label.lang, name: label.name, source: label.source })))
-		.onConflictDoUpdate({
-			target: [entityTranslations.entityId, entityTranslations.lang],
-			set: {
-				name: sql`CASE
-						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.name}
-						ELSE excluded.name
-					END`,
-				source: sql`CASE
-						WHEN ${entityTranslations.source} = 'human' AND excluded.source <> 'human' THEN ${entityTranslations.source}
-						WHEN ${entityTranslations.source} = 'original' THEN ${entityTranslations.source}
-						ELSE excluded.source
-					END`,
-				updatedAt: sql`NOW()`,
-			},
-		});
 }
