@@ -135,8 +135,7 @@ export const userFiles = pgTable(
 			.unique(),
 		kind: varchar('kind', { length: 16 }).notNull(),
 		originalFileName: text('original_file_name').notNull(),
-		// All legacy objects are verified with R2 HEAD before this becomes NOT NULL.
-		byteSize: bigint('byte_size', { mode: 'bigint' }),
+		byteSize: bigint('byte_size', { mode: 'bigint' }).notNull(),
 		createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 	},
