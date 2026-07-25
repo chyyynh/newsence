@@ -9,7 +9,7 @@ import {
 	type ResourceEntityInput,
 } from '@entities/normalize';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
-import { and, eq, inArray, not, sql } from 'drizzle-orm';
+import { and, eq, inArray, not, notExists, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -199,6 +199,37 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 	});
 }
 
+/**
+ * An entity that just lost its last resource link has nothing left to connect,
+ * and re-processing an article drops entities constantly — without this the
+ * table only ever grows. Scoped to the ids we just unlinked rather than a
+ * global sweep, and best-effort: this is derived state, so losing a pass must
+ * not fail ingest. entity_translations follows through its cascade.
+ */
+async function collectOrphanEntities(db: CoreDb, candidateIds: string[]): Promise<number> {
+	const ids = [...new Set(candidateIds)];
+	if (ids.length === 0) return 0;
+	try {
+		const removed = await db
+			.delete(entities)
+			.where(
+				and(
+					inArray(entities.id, ids),
+					notExists(db.select({ one: sql`1` }).from(resourceEntities).where(eq(resourceEntities.entityId, entities.id))),
+				),
+			)
+			.returning({ id: entities.id });
+		return removed.length;
+	} catch (error) {
+		console.error({
+			tag: 'ENTITIES',
+			msg: 'Orphan cleanup failed; the next sync that unlinks them retries',
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return 0;
+	}
+}
+
 async function syncResourceEntities(
 	db: CoreDb,
 	resourceId: string,
@@ -232,17 +263,27 @@ async function syncResourceEntities(
 		await upsertEntityTranslationRows(db, entityId, entity);
 	}
 
+	const unlinked = entityIds.length
+		? await db
+				.delete(resourceEntities)
+				.where(and(eq(resourceEntities.resourceId, resourceId), not(inArray(resourceEntities.entityId, entityIds))))
+				.returning({ entityId: resourceEntities.entityId })
+		: await db
+				.delete(resourceEntities)
+				.where(eq(resourceEntities.resourceId, resourceId))
+				.returning({ entityId: resourceEntities.entityId });
+
 	if (entityIds.length) {
-		await db
-			.delete(resourceEntities)
-			.where(and(eq(resourceEntities.resourceId, resourceId), not(inArray(resourceEntities.entityId, entityIds))));
 		await db
 			.insert(resourceEntities)
 			.values(entityIds.map((entityId) => ({ resourceId, entityId })))
 			.onConflictDoNothing();
-	} else {
-		await db.delete(resourceEntities).where(eq(resourceEntities.resourceId, resourceId));
 	}
+
+	const collected = await collectOrphanEntities(
+		db,
+		unlinked.map((row) => row.entityId),
+	);
 
 	console.info({
 		tag: 'ENTITIES',
@@ -251,6 +292,7 @@ async function syncResourceEntities(
 		inputCount: inputEntities.length,
 		count: normalizedEntities.length,
 		filteredCount: inputEntities.length - normalizedEntities.length,
+		orphansCollected: collected,
 	});
 }
 
