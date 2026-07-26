@@ -71,7 +71,7 @@ Translation/summary and classification/entities are separate structured calls so
 
 The core worker keeps entity storage deterministic and conservative. It normalizes obvious duplicates, gates known entity types, filters generic tokens and self-source aliases, and caps stored entities per resource.
 
-It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and OKF-style alias groups are presentation or export-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
+It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and alias groups are presentation-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
 
 Change the DB schema only when the product needs a query shape that the current `entities` plus `resource_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
 
@@ -134,17 +134,11 @@ Or run locally with `pnpm dev` (uses `wrangler dev --test-scheduled`, so you can
 
 The HTTP surface only exposes `GET /health`. App/chat integrations use Cloudflare service-binding RPC with persisted resource IDs, while cron monitors run through scheduled triggers. URL acquisition is an internal stage of the canonical resource workflow.
 
-## CLI & MCP
+## Hosted MCP
 
-Also available as a CLI and [MCP](https://modelcontextprotocol.io) server via the separate [`newsence`](https://www.npmjs.com/package/newsence) npm package:
-
-```bash
-npx newsence search "AI agents"       # search resources
-npx newsence recent --hours 6         # recent resources
-
-claude mcp add newsence -- npx newsence mcp   # Claude Code
-# Remote MCP: https://www.newsence.app/api/mcp
-```
+The newsence app exposes a hosted [MCP](https://modelcontextprotocol.io)
+endpoint at `https://www.newsence.app/api/mcp`. The retired local CLI/MCP
+package is not part of this Worker.
 
 ## Architecture
 
@@ -166,7 +160,7 @@ src/
 │       ├── hackernews.ts # HN processor
 │       ├── paper.ts      # Semantic Scholar enrichment stage
 │       └── pdf.ts        # PDF text extraction stage
-└── corpus.ts · okf.ts     # engine read/search/export helpers
+└── corpus.ts              # engine read/search helpers
 ```
 
 ## Environment Variables & Bindings
@@ -179,6 +173,8 @@ Bindings (in `wrangler.jsonc`):
 | `RESOURCE_PROCESSING_WORKFLOW` | Fetch, parse, classify, and persist a resource |
 | `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
 | `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
+| `RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW` | Warm recent public resource images into app-owned R2 |
+| `ACADEMIC_METADATA_BACKFILL_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
 | `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |
@@ -190,6 +186,39 @@ Secrets (via `wrangler secret put`):
 | `KAITO_API_KEY`                | Yes      | Enables Twitter monitoring               |
 | `YOUTUBE_API_KEY`              | Yes      | Enables YouTube channel monitoring       |
 | `S2_API_KEY`                   | Yes      | Increases Semantic Scholar quota for paper enrichment |
+
+### Recent resource image warmup
+
+New ingest eagerly rehosts every trusted resource image through the app Worker's
+`DomainRpc`. After deploying a change to this pipeline, warm the homepage window
+with a bounded Workflow run:
+
+```sh
+pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill '{"days":7}'
+```
+
+The Workflow accepts only 1–7 days, pages through enriched public corpus rows by
+effective date, and is safe to rerun because R2 keys are content-addressed. Older
+rows are intentionally not scanned; their first image request uses the resource
+row to validate and lazily rehost an R2 miss.
+
+### Academic metadata backfill
+
+After deploying an academic metadata schema change, trigger the versioned
+Workflow through the core service-binding RPC `startAcademicMetadataBackfill()`,
+or directly with Wrangler:
+
+```sh
+pnpm exec wrangler workflows trigger newsence-academic-metadata-backfill '{}'
+```
+
+The Workflow keyset-pages only through explicit `doi.org` and arXiv
+`/abs`, `/html`, or `/pdf` resources that are missing the current
+`schemaVersion`. Each Semantic Scholar request and database write is an
+independent durable step, with a one-second request interval. Successful
+provider responses atomically replace only `enrichments.academic` and fill a
+missing exact publication date. Provider failures preserve legacy metadata;
+reruns automatically skip already-upgraded rows.
 
 ## Adding a Platform
 

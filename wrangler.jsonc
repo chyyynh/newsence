@@ -7,7 +7,7 @@
 	"name": "newsence-core",
 	"main": "src/index.ts",
 	"workers_dev": false,
-	"compatibility_date": "2026-07-07",
+	"compatibility_date": "2026-07-22",
 	/**
 	 * Keep request abort signals available to fetch-heavy ingest endpoints and
 	 * propagate them into subrequests.
@@ -72,6 +72,16 @@
 			"binding": "SEARCH_INDEX_REBUILD_WORKFLOW",
 			"name": "newsence-search-index-rebuild",
 			"class_name": "SearchIndexRebuildWorkflow"
+		},
+		{
+			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW",
+			"name": "newsence-recent-resource-image-backfill",
+			"class_name": "RecentResourceImageBackfillWorkflow"
+		},
+		{
+			"binding": "ACADEMIC_METADATA_BACKFILL_WORKFLOW",
+			"name": "newsence-academic-metadata-backfill",
+			"class_name": "AcademicMetadataBackfillWorkflow"
 		}
 	],
 	/**
@@ -109,6 +119,13 @@
 		{
 			"binding": "R2",
 			"bucket_name": "newsence"
+		}
+	],
+	"services": [
+		{
+			"binding": "DOMAIN",
+			"service": "newsence-web-tanstack",
+			"entrypoint": "DomainRpc"
 		}
 	],
 	/**

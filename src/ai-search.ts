@@ -246,9 +246,7 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	return [...ranks.values()];
 }
 
-type SearchIndexRebuildPayload = {
-	startedAt: string;
-};
+type SearchIndexRebuildPayload = Record<string, never>;
 
 const SEARCH_INDEX_GENERATION = 'canonical-2';
 const REINDEX_PAGE_SIZE = 50;
@@ -373,12 +371,6 @@ type SearchDeltaRow = {
 	updated_at: string;
 };
 
-function isoDate(value: Date | string, field: string): string {
-	const date = value instanceof Date ? value : new Date(value);
-	if (Number.isNaN(date.getTime())) throw new Error(`Invalid ${field}`);
-	return date.toISOString();
-}
-
 async function listCorpusDeltaAfter(env: CoreEnv, startedAt: string, cursor: SearchDeltaCursor | null): Promise<SearchDeltaRow[]> {
 	return withCoreDb(env, (db) =>
 		queryRows<SearchDeltaRow>(
@@ -465,14 +457,15 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep) {
 }
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_GENERATION}`, {
-		startedAt: new Date().toISOString(),
-	});
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_GENERATION}`, {});
 }
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
-	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		const startedAt = isoDate(event.payload.startedAt, 'search rebuild startedAt');
+	async run(_event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		// restart() keeps an instance's immutable event payload. Capture this inside
+		// the execution so every full restart receives a fresh delta boundary while
+		// ordinary step retries keep the same durable value.
+		const startedAt = await step.do('capture-search-rebuild-started-at', async () => new Date().toISOString());
 
 		const instanceConfig = await step.do('ensure-search-instance-config', SHORT_STEP_OPTIONS, () => ensureSearchInstanceConfig(this.env));
 		let cursor: string | null = null;

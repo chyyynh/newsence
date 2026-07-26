@@ -5,22 +5,21 @@ import { withCoreDb } from '@db/client';
 import { textArraySql } from '@db/sql';
 import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
+import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
-	assembleZhHantContentTranslation,
-	createZhHantContentTranslationChunks,
-	DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS,
+	CONTENT_TRANSLATION_MAX_LENGTH,
 	generateZhHantMetadataTranslation,
 	hasTranslatableContent,
 	needsZhHantContentTranslation,
 	needsZhHantMetadataTranslation,
-	translateZhHantContentChunk,
+	translateZhHantContent,
 } from './domain/ai-utils';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 
 export async function getPersistedResourceTranslationHash(env: CoreEnv, resourceId: string): Promise<string | null> {
 	return withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
+		const result = await db.execute<{ source_translation_hash: string }>(sql`
 			SELECT md5(jsonb_build_array(original.title, original.summary, original.content)::text) AS source_translation_hash
 			FROM resources resource
 			JOIN resource_translations original
@@ -33,9 +32,13 @@ export async function getPersistedResourceTranslationHash(env: CoreEnv, resource
 			  AND resource.original_lang <> 'zh-Hant'
 			  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 			  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
+			  -- Gate here rather than inside the workflow: loading a multi-megabyte
+			  -- body blows the 1MiB step-output limit before any length check can
+			  -- run. No hash means the translation is never enqueued at all.
+			  AND length(original.content) <= ${CONTENT_TRANSLATION_MAX_LENGTH}
 			LIMIT 1
 		`);
-		return (result.rows as Array<{ source_translation_hash: string }>)[0]?.source_translation_hash ?? null;
+		return result.rows[0]?.source_translation_hash ?? null;
 	});
 }
 
@@ -76,7 +79,7 @@ function persistMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTra
 
 async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTranslationHash: string): Promise<void> {
 	const sourceIsCurrent = await withCoreDb(env, async (db) => {
-		const result = await db.execute(sql`
+		const result = await db.execute<{ source_is_current: boolean }>(sql`
 			WITH target_resource AS (
 				SELECT resource.id
 				FROM resources resource
@@ -97,15 +100,14 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourc
 			)
 			SELECT EXISTS (SELECT 1 FROM target_resource) AS source_is_current
 		`);
-		return (result.rows as Array<{ source_is_current: boolean }>)[0]?.source_is_current ?? false;
+		return result.rows[0]?.source_is_current ?? false;
 	});
 	if (!sourceIsCurrent) throw new ResourceTranslationSourceChangedError(resourceId);
 }
 
 type ResourceTranslationPayload = { resourceId: string; sourceTranslationHash: string };
 
-const TRANSLATION_STEP_CONCURRENCY = 3;
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v9';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v14';
 
 function workflowId(resourceId: string, sourceTranslationHash: string): string {
 	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${sourceTranslationHash.slice(0, 12)}-${resourceId}`;
@@ -116,33 +118,6 @@ export function enqueueResourceTranslation(env: CoreEnv, resourceId: string, sou
 		resourceId,
 		sourceTranslationHash,
 	});
-}
-
-async function translateZhHantContentDurably(env: CoreEnv, step: WorkflowStep, source: string): Promise<string> {
-	const chunks = createZhHantContentTranslationChunks(source, DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS);
-	const translatedChunks: string[] = [];
-	for (let offset = 0; offset < chunks.length; offset += TRANSLATION_STEP_CONCURRENCY) {
-		const batch = chunks.slice(offset, offset + TRANSLATION_STEP_CONCURRENCY);
-		const translations = await Promise.all(
-			batch.map((chunk, batchIndex) => {
-				const index = offset + batchIndex;
-				return step.do(
-					`translate-zh-hant-content-${index + 1}-of-${chunks.length}`,
-					{
-						retries: {
-							limit: 3,
-							delay: '15 seconds',
-							backoff: 'exponential',
-						},
-						timeout: '180 seconds',
-					},
-					() => translateZhHantContentChunk(chunk, index, chunks.length, env),
-				);
-			}),
-		);
-		translatedChunks.push(...translations);
-	}
-	return assembleZhHantContentTranslation(source, translatedChunks);
 }
 
 export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
@@ -227,7 +202,13 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 
 		if (needsZhHantContentTranslation(resource)) {
 			const source = resource.content!.trim();
-			const translated = await translateZhHantContentDurably(this.env, step, source);
+			const translated = await step.do(
+				'translate-zh-hant-content',
+				// A body at the 36k-character ceiling emits ~11.1k tokens at a
+				// measured ~90 tokens/s, so 180s left almost no margin.
+				{ retries: { limit: 3, delay: '15 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
+				() => translateZhHantContent(source, this.env),
+			);
 			await step.do(
 				'persist-zh-hant-content',
 				{
@@ -241,6 +222,11 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 				() => persistMachineZhHantContent(this.env, resourceId, sourceTranslationHash, translated),
 			);
 		}
+		await step.do(
+			'sync-translated-resource-to-ai-search',
+			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			() => syncCorpusItem(this.env, resourceId),
+		);
 		console.info({
 			tag: 'RESOURCE_TRANSLATION',
 			msg: 'Completed',

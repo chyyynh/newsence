@@ -1,49 +1,57 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
+import { z } from 'zod';
 
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
 
-interface YouTubeThumbnails {
-	default?: { url: string };
-	medium?: { url: string };
-	high?: { url: string };
-	standard?: { url: string };
-	maxres?: { url: string };
-}
+const YouTubeThumbnailSchema = z.object({ url: z.string().min(1) });
+const YouTubeThumbnailsSchema = z.object({
+	default: YouTubeThumbnailSchema.optional(),
+	medium: YouTubeThumbnailSchema.optional(),
+	high: YouTubeThumbnailSchema.optional(),
+	standard: YouTubeThumbnailSchema.optional(),
+	maxres: YouTubeThumbnailSchema.optional(),
+});
+const YouTubeCountSchema = z.string().regex(/^\d+$/);
+const YouTubeApiErrorSchema = z.object({ message: z.string() });
+const YouTubeVideoItemSchema = z.object({
+	id: z.string().min(1),
+	snippet: z.object({
+		title: z.string(),
+		description: z.string(),
+		channelId: z.string().min(1),
+		channelTitle: z.string(),
+		defaultAudioLanguage: z.string().optional(),
+		publishedAt: z.string().min(1),
+		thumbnails: YouTubeThumbnailsSchema,
+		tags: z.array(z.string()).optional(),
+	}),
+	contentDetails: z.object({ duration: z.string().min(1) }),
+	statistics: z.object({
+		viewCount: YouTubeCountSchema.optional(),
+		likeCount: YouTubeCountSchema.optional(),
+		commentCount: YouTubeCountSchema.optional(),
+	}),
+});
+const YouTubeVideosResponseSchema = z.object({
+	items: z.array(YouTubeVideoItemSchema).optional(),
+	error: YouTubeApiErrorSchema.optional(),
+});
+const YouTubeChannelsResponseSchema = z.object({
+	items: z
+		.array(
+			z.object({
+				snippet: z.object({ thumbnails: YouTubeThumbnailsSchema }),
+			}),
+		)
+		.optional(),
+	error: YouTubeApiErrorSchema.optional(),
+});
 
-interface YouTubeVideoItem {
-	id: string;
-	snippet: {
-		title: string;
-		description: string;
-		channelId: string;
-		channelTitle: string;
-		defaultAudioLanguage?: string;
-		publishedAt: string;
-		thumbnails: YouTubeThumbnails;
-		tags?: string[];
-	};
-	contentDetails: {
-		duration: string;
-	};
-	statistics: {
-		viewCount?: string;
-		likeCount?: string;
-		commentCount?: string;
-	};
-}
-
-type YouTubeVideosResponse = {
-	items?: YouTubeVideoItem[];
-	error?: { message: string };
-};
-
-type YouTubeChannelsResponse = {
-	items?: Array<{ snippet: { thumbnails: YouTubeThumbnails } }>;
-	error?: { message: string };
-};
+type YouTubeThumbnails = z.infer<typeof YouTubeThumbnailsSchema>;
+type YouTubeVideosResponse = z.infer<typeof YouTubeVideosResponseSchema>;
 
 function bestThumbnailUrl(thumbnails: YouTubeThumbnails): string | null {
 	return (
@@ -100,7 +108,7 @@ async function fetchYouTubeVideoData(videoId: string, youtubeApiKey: string): Pr
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 		}
 
-		return JSON.parse(await readTextWithLimit(response, YOUTUBE_API_MAX_BYTES)) as YouTubeVideosResponse;
+		return YouTubeVideosResponseSchema.parse(JSON.parse(await readTextWithLimit(response, YOUTUBE_API_MAX_BYTES)));
 	} catch (error) {
 		const message = String(error);
 		throw new Error(
@@ -122,15 +130,19 @@ async function fetchYouTubeChannelAvatar(channelId: string, youtubeApiKey: strin
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 		}
 
-		const channelData = JSON.parse(await readTextWithLimit(response, YOUTUBE_API_MAX_BYTES)) as YouTubeChannelsResponse;
+		const channelData = YouTubeChannelsResponseSchema.parse(JSON.parse(await readTextWithLimit(response, YOUTUBE_API_MAX_BYTES)));
 		if (channelData.error) throw new Error(channelData.error.message);
 		if (!channelData.items?.length) throw new Error('Channel not found');
 		return bestThumbnailUrl(channelData.items[0].snippet.thumbnails);
 	} catch (error) {
 		const message = String(error);
-		throw new Error(
-			`YouTube channel API request failed for ${channelId}: ${youtubeApiKey ? message.replaceAll(youtubeApiKey, '[redacted]') : message}`,
-		);
+		console.warn({
+			tag: 'YOUTUBE',
+			msg: 'Channel avatar unavailable',
+			channelId,
+			error: youtubeApiKey ? message.replaceAll(youtubeApiKey, '[redacted]') : message,
+		});
+		return null;
 	}
 }
 
@@ -183,12 +195,13 @@ export async function scrapeYouTube(
 	const stats = video.statistics;
 
 	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
-	const channelAvatar = await fetchYouTubeChannelAvatar(snippet.channelId, youtubeApiKey);
-
 	const chapters = parseChaptersFromDescription(snippet.description);
 
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching transcript', videoId });
-	const transcript = await fetchTranscript(videoId);
+	const [channelAvatar, transcript] = await Promise.all([
+		fetchYouTubeChannelAvatar(snippet.channelId, youtubeApiKey),
+		fetchTranscript(videoId),
+	]);
 	const transcriptMarkdown = transcript
 		.map((segment) => segment.text.trim())
 		.filter(Boolean)

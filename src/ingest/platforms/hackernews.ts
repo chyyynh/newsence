@@ -2,6 +2,7 @@ import { generateText } from '@core-ai/generation';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import { type HackerNewsMetadata, type NormalizedContent, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { decode } from 'html-entities';
+import { z } from 'zod';
 import { type AcquiredWebContent, acquireWebResource } from '../web-acquisition';
 
 const HN_ALGOLIA_API = 'https://hn.algolia.com/api/v1/items';
@@ -13,18 +14,60 @@ interface HnComment {
 	children?: HnComment[];
 }
 
+// Shape of Algolia's /items/{id} response. It carries the whole comment tree in
+// `children` but has no `descendants` — that is a Firebase field, so discussion
+// size has to be counted from the tree.
 export interface HackerNewsItem {
 	id: number;
 	title?: string;
 	url?: string;
 	author?: string;
 	points?: number;
-	descendants?: number;
 	type?: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
 	created_at_i?: number;
 	text?: string;
 	children?: HnComment[];
 }
+
+const optionalStringSchema = z
+	.string()
+	.nullish()
+	.transform((value) => value ?? undefined);
+const optionalNonnegativeIntegerSchema = z
+	.number()
+	.int()
+	.nonnegative()
+	.nullish()
+	.transform((value) => value ?? undefined);
+
+const HnCommentSchema: z.ZodType<HnComment> = z.lazy(() =>
+	z.object({
+		author: optionalStringSchema,
+		text: optionalStringSchema,
+		children: z
+			.array(HnCommentSchema)
+			.nullish()
+			.transform((value) => value ?? undefined),
+	}),
+);
+
+const HackerNewsItemSchema: z.ZodType<HackerNewsItem> = z.object({
+	id: z.number().int().positive(),
+	title: optionalStringSchema,
+	url: optionalStringSchema,
+	author: optionalStringSchema,
+	points: optionalNonnegativeIntegerSchema,
+	type: z
+		.enum(['story', 'ask', 'show', 'job', 'comment', 'poll'])
+		.nullish()
+		.transform((value) => value ?? undefined),
+	created_at_i: optionalNonnegativeIntegerSchema,
+	text: optionalStringSchema,
+	children: z
+		.array(HnCommentSchema)
+		.nullish()
+		.transform((value) => value ?? undefined),
+});
 
 export function extractHackerNewsId(url: string): string | null {
 	try {
@@ -47,12 +90,21 @@ function hnItemTypeForMetadata(type: HackerNewsItem['type'] | undefined): Hacker
 	return undefined;
 }
 
+/** Every node in the tree, deleted ones included — the closest analogue to the count HN itself shows. */
+function countHnComments(children: HnComment[] | undefined): number {
+	let total = 0;
+	for (const child of children ?? []) {
+		total += 1 + countHnComments(child.children);
+	}
+	return total;
+}
+
 function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author,
 		points: item.points,
-		commentCount: item.descendants,
+		commentCount: countHnComments(item.children),
 		itemType: hnItemTypeForMetadata(item.type),
 		storyUrl: item.url,
 	};
@@ -64,7 +116,7 @@ async function fetchHnItem(itemId: string): Promise<HackerNewsItem> {
 		await response.body?.cancel();
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
-	return JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)) as HackerNewsItem;
+	return HackerNewsItemSchema.parse(JSON.parse(await readTextWithLimit(response, HN_ITEM_MAX_BYTES)));
 }
 
 interface HnCollectedComment {
@@ -81,9 +133,10 @@ function htmlToText(str: string): string {
 function buildHnPostMarkdown(item: HackerNewsItem, title: string): string {
 	const parts: string[] = [`# ${title}\n`];
 	const metaParts: string[] = [];
+	const commentCount = countHnComments(item.children);
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
 	if (item.author) metaParts.push(`by ${item.author}`);
-	if (item.descendants !== undefined) metaParts.push(`${item.descendants} comments`);
+	if (commentCount > 0) metaParts.push(`${commentCount} comments`);
 	if (metaParts.length) parts.push(`*${metaParts.join(' | ')}*\n`);
 	if (item.text) parts.push(`---\n\n${htmlToText(item.text)}\n`);
 	return parts.join('\n');
@@ -238,10 +291,9 @@ export async function buildHackerNewsContent(
 	const comments = item.children?.length ? collectAllComments(item.children) : [];
 	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text ?? null, comments);
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
-	const stats = [
-		item.points !== undefined ? `${item.points} points` : null,
-		item.descendants !== undefined ? `${item.descendants} comments` : null,
-	]
+	// Count nodes, not text-bearing comments, so this matches platform_metadata.commentCount.
+	const commentCount = countHnComments(item.children);
+	const stats = [item.points !== undefined ? `${item.points} points` : null, commentCount > 0 ? `${commentCount} comments` : null]
 		.filter(Boolean)
 		.join(' | ');
 	const links = [item.url ? `[Linked article](${item.url})` : null, `[View the full discussion](${discussionUrl})`]

@@ -37,16 +37,22 @@ export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
 
 export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
 
+// Add-source validation lifecycle for user-added sources (#237); failure
+// details live in scrape_state.
+export const SOURCE_STATUSES = ['pending', 'active', 'failed'] as const;
+
+export type SourceStatus = (typeof SOURCE_STATUSES)[number];
+
 export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 
 export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
 
 export type ResourceContentSurface = 'app' | 'ai-tools' | 'export';
 
-export function hasResourceContentAccess(input: { surface: ResourceContentSurface; scope: string; inViewerLibrary: boolean }): boolean {
-	// AI and exports stay library-gated so stored or paywalled corpus content is
-	// not redistributed by default.
-	return (input.scope === 'corpus' && input.surface === 'app') || input.inViewerLibrary;
+export function hasResourceContentAccess(input: { surface: ResourceContentSurface; scope: string; viewerHasOwnership: boolean }): boolean {
+	// AI and exports stay ownership-gated so stored or paywalled corpus content
+	// is not redistributed by default.
+	return (input.scope === 'corpus' && input.surface === 'app') || input.viewerHasOwnership;
 }
 
 export const DEFAULT_RESOURCE_LANG = 'en';

@@ -1,21 +1,20 @@
 import type { WorkflowStep } from 'cloudflare:workers';
 import { initSync, LiteParse } from '@llamaindex/liteparse-wasm';
 import wasmModule from '@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm';
+import { z } from 'zod';
 
-type PdfTextStatus = 'ok' | 'needs_ocr';
+const PdfTextArtifactSchema = z.object({
+	text: z.string(),
+	status: z.enum(['ok', 'needs_ocr']),
+	pages: z.number().int().positive(),
+	chars: z.number().int().nonnegative(),
+});
 
-export interface PdfTextArtifact {
-	text: string;
-	status: PdfTextStatus;
-	pages: number;
-	chars: number;
-}
+export type PdfTextArtifact = z.infer<typeof PdfTextArtifactSchema>;
 
 const MIN_PDF_CHARS = 40;
 const MIN_PDF_CHARS_PER_PAGE = 20;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
-
-let pdfParserReady = false;
 
 function extractedTextChars(markdown: string): number {
 	const content = markdown.replace(/^```[^\n]*$/gm, '').replace(/^[-_*]{3,}$/gm, '');
@@ -23,10 +22,7 @@ function extractedTextChars(markdown: string): number {
 }
 
 export async function parsePdfBytes(bytes: Uint8Array): Promise<PdfTextArtifact> {
-	if (!pdfParserReady) {
-		initSync({ module: wasmModule });
-		pdfParserReady = true;
-	}
+	initSync({ module: wasmModule });
 	const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'markdown', imageMode: 'off' });
 	const raw = (await parser.parse(bytes)) as { text?: unknown; pages?: unknown };
 	if (typeof raw.text !== 'string') throw new Error('LiteParse response is missing text');
@@ -56,5 +52,5 @@ export async function stagePdfTextExtraction(
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
 		() => extractPdfText(env, input),
 	);
-	return (await new Response(artifact).json()) as PdfTextArtifact;
+	return PdfTextArtifactSchema.parse(await new Response(artifact).json());
 }

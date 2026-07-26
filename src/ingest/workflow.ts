@@ -19,8 +19,14 @@ import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
 import type { RssFeedAcquisitionInput } from './platforms/rss-feed';
+import { applyTweetLinkUnfurl, pendingTweetExternalLink, unfurlTweetExternalLink } from './platforms/twitter-unfurl';
 import { prepareYouTubeHighlights } from './platforms/youtube';
-import { markResourceEnrichmentFailed, persistProcessedResource, persistUnchangedResourceResync } from './resource-persistence';
+import {
+	markResourceEnrichmentFailed,
+	persistProcessedResource,
+	persistResourceImageSnapshot,
+	persistUnchangedResourceResync,
+} from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
@@ -44,6 +50,42 @@ function storedWorkflowId(resourceId: string): string {
 	return ['resource', workflowIdPart(resourceId)].join('-');
 }
 
+async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resourceId: string): Promise<void> {
+	await step
+		.do(
+			'rehost-resource-images',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+			async () => {
+				const result = await env.DOMAIN.rehostResourceImages(resourceId);
+				if (result.failed > 0) {
+					const failures = result.outcomes
+						.filter((outcome) => outcome.state === 'failed')
+						.map((outcome) => `${outcome.sourceHost}:${outcome.failureCode}`)
+						.join(', ');
+					throw new Error(`Failed to rehost ${result.failed} of ${result.attempted} resource images (${failures})`);
+				}
+				console.info({
+					tag: 'OG_IMAGE',
+					event: 'eager_rehost_completed',
+					resource_id: resourceId,
+					attempted: result.attempted,
+					available: result.available,
+					derivatives_existing: result.derivativesExisting,
+					derivatives_stored: result.derivativesStored,
+				});
+				return result;
+			},
+		)
+		.catch((error) =>
+			console.error({
+				tag: 'OG_IMAGE',
+				event: 'eager_rehost_failed',
+				resource_id: resourceId,
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		);
+}
+
 function shouldAcquireContent(
 	resource: ResourceForProcessing & { has_content?: boolean; has_youtube_transcript?: boolean },
 	force = false,
@@ -64,6 +106,41 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 		() => scrapeSavedUrlArtifact(sourceUrl, env),
 	);
 	return readAcquiredContentArtifact(artifact);
+}
+
+/**
+ * Fill `externalOgImage` / `externalTitle` for a share tweet so the link-preview
+ * card can render (#235). Runs before both persist paths — including the
+ * unchanged-resync short-circuit, which is how pre-existing rows get backfilled.
+ */
+async function stageTweetLinkUnfurl(step: WorkflowStep, resource: ResourceForProcessing): Promise<ResourceForProcessing> {
+	const externalUrl = pendingTweetExternalLink(resource);
+	if (!externalUrl) return resource;
+	// Wrapped so a failed fetch (null) stays distinguishable from a page that
+	// simply has no OG image ({ unfurl: null }) — both leave the card hidden.
+	const outcome = await step
+		.do('unfurl-tweet-external-link', { retries: { limit: 1, delay: '5 seconds' }, timeout: '30 seconds' }, async () => ({
+			unfurl: await unfurlTweetExternalLink(externalUrl),
+		}))
+		.catch((error) => {
+			// Legitimate absence: the URL still renders inline in the tweet text (#234).
+			console.error({
+				tag: 'TWITTER',
+				msg: 'Optional external-link unfurl failed; card stays hidden',
+				resource_id: resource.id,
+				external_url: externalUrl,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return null;
+		});
+	if (!outcome) return resource;
+	console.info({
+		tag: 'TWITTER',
+		msg: outcome.unfurl ? 'External link unfurled' : 'External link exposed no OG image',
+		resource_id: resource.id,
+		external_url: externalUrl,
+	});
+	return applyTweetLinkUnfurl(resource, outcome.unfurl);
 }
 
 function rssSourceId(resource: ResourceForProcessing): string | null {
@@ -136,21 +213,31 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
-		const resource = applyAcquiredContent(initialResource, acquiredContent);
+		const resource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
 			await step.do(
 				'record-unchanged-resync',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistUnchangedResourceResync(this.env, resourceId, resource),
+				() => persistUnchangedResourceResync(this.env, resourceId, resource, paperEnrichment),
 			);
+			await stageResourceImageRehost(this.env, step, resourceId);
 			return { success: true, resource_id: resourceId, operation, changed: false };
 		}
 		const resourceType = resource.type;
 		const logContext = { resource_id: resourceId, table: 'resources' };
 
 		console.info({ tag: 'WORKFLOW', msg: 'Starting', resourceType, ...logContext });
+		if (operation === 'ingest') {
+			await step.do(
+				'persist-resource-image-snapshot',
+				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+				() => persistResourceImageSnapshot(this.env, resourceId, resource),
+			);
+			await stageResourceImageRehost(this.env, step, resourceId);
+		}
 
 		const hasContent = 'has_content' in resource && !!resource.has_content;
 		const pdfTextArtifact =
@@ -178,7 +265,6 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			return extractedPdfText ? { ...base, content: extractedPdfText } : base;
 		};
 
-		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const previewImageUrl = acquiredContent?.previewImageUrl?.trim() || null;
 
 		const hackerNewsContent =
@@ -207,9 +293,11 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				const fullResource = await loadFull();
 				const resourceToClassify = hackerNewsContent ? { ...fullResource, content: hackerNewsContent } : fullResource;
 				const classification = await generateResourceClassification(resourceToClassify, this.env);
-				return mergeResourceClassification(resourceToClassify, classification, {
-					extraTags: resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
-				});
+				return mergeResourceClassification(
+					resourceToClassify,
+					classification,
+					resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
+				);
 			},
 		);
 		const processorResult = {
@@ -223,11 +311,21 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
 			resourceType === 'youtube'
-				? await step.do(
-						'prepare-youtube-highlights',
-						{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
-						async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
-					)
+				? await step
+						.do(
+							'prepare-youtube-highlights',
+							{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
+							async () => prepareYouTubeHighlights(this.env, resource, youtubeTranscript),
+						)
+						.catch((error) => {
+							console.error({
+								tag: 'YOUTUBE',
+								msg: 'Optional YouTube highlights failed after retries',
+								resource_id: resourceId,
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return null;
+						})
 				: null;
 		const persistedResourceId = await step.do(
 			'update-db',
@@ -247,6 +345,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
+		if (operation === 'resync') await stageResourceImageRehost(this.env, step, persistedResourceId);
 		const translationSourceHash = await step
 			.do(
 				'load-resource-translation-source-hash',

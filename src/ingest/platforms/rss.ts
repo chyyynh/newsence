@@ -1,7 +1,13 @@
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
 import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadMonitoredSources, type MonitoredSource, markSourceScraped, parseRssAcquisitionMode } from '@ingest/domain/source-store';
+import {
+	loadMonitoredSources,
+	type MonitoredSource,
+	markSourceScraped,
+	parseRssAcquisitionMode,
+	recordSourceFailure,
+} from '@ingest/domain/source-store';
 import { enqueueProcessing } from '@ingest/workflow';
 import { canonicalFeedItemUrl, type FeedItem, feedItemMarkdown, feedPublishedDate, feedSummary, loadFeedEntries } from './rss-feed';
 
@@ -114,6 +120,8 @@ export async function handleRSSCron(env: CoreEnv): Promise<void> {
 					feed: batch[resultIndex]?.name,
 					error: result.reason instanceof Error ? result.reason.message : String(result.reason),
 				});
+				const failedFeed = batch[resultIndex];
+				if (failedFeed) await recordSourceFailure(env, failedFeed.id, result.reason);
 			}
 		}
 	}

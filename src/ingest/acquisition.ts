@@ -8,13 +8,19 @@ import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 import { acquireWebResource, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
 
-export { PDF_MIME, pdfExtractionMetadata };
 export type { PdfExtractionMetadata } from '@core-shared/types';
+export { PDF_MIME, pdfExtractionMetadata };
 
 export type AcquiredContent = NormalizedContent & {
 	extraction?: PdfExtractionMetadata;
 	hackerNewsItem?: HackerNewsItem;
 };
+
+function acquiredPublishedDate(value: string | null): string | null {
+	if (!value?.trim()) return null;
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
 
 export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
@@ -28,6 +34,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		og_image_url: acquired.previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: mergeAcquiredPlatformMetadata(resource.platform_metadata, acquired.platformMetadata, acquired.metadata.siteName),
 		file_type: acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : resource.file_type,
+		published_date: resource.published_date ?? acquiredPublishedDate(acquired.metadata.publishedDate),
 	};
 }
 

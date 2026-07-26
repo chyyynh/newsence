@@ -94,9 +94,7 @@ const RELATED_LIMIT_MAX = RESULT_LIMIT_MAX;
 const SUMMARY_MAX = 500;
 const CONTENT_MAX = 50000;
 const READ_CONTEXT_TOTAL_CONTENT_MAX = 60000;
-const READ_CONTEXT_MIN_ITEM_CONTENT_MAX = 4000;
 const COLLECTION_LIMIT = 100;
-const SOURCE_FILTER_LIMIT = 50;
 
 type NormalizedSearchFilters = {
 	categories?: ResourceCategory[];
@@ -207,7 +205,6 @@ function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFil
 
 function optionalSourceIds(values: string[] | undefined): string[] | undefined {
 	if (values === undefined) return undefined;
-	if (values.length > SOURCE_FILTER_LIMIT) throw new Error(`sourceIds cannot contain more than ${SOURCE_FILTER_LIMIT} values`);
 	const unique = [...new Set(values.map((value) => value.trim()))];
 	if (unique.some((value) => !isValidUuid(value))) throw new Error('Invalid sourceIds');
 	return unique;
@@ -293,21 +290,31 @@ function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
 
 function truncate(content: string | null | undefined, max: number): string {
 	if (!content) return '';
-	return content.length > max ? `${content.slice(0, max)}\n\n[Content truncated]` : content;
+	if (content.length <= max) return content;
+	const marker = '\n\n[Content truncated]';
+	return max > marker.length ? `${content.slice(0, max - marker.length)}${marker}` : content.slice(0, max);
 }
 
 function capReadContextContent(results: ReadContextResult[]): ReadContextResult[] {
-	const contentCount = results.filter((r) => r.content).length;
-	if (contentCount === 0) return results;
+	const readableCount = results.filter((result) => result.content || result.resources?.length).length;
+	if (readableCount === 0) return results;
 
-	const perItemMax = Math.min(
-		CONTENT_MAX,
-		Math.max(READ_CONTEXT_MIN_ITEM_CONTENT_MAX, Math.floor(READ_CONTEXT_TOTAL_CONTENT_MAX / contentCount)),
-	);
+	const perItemMax = Math.min(CONTENT_MAX, Math.floor(READ_CONTEXT_TOTAL_CONTENT_MAX / readableCount));
 	return results.map((result) => {
-		const content = result.content;
-		if (!content || content.length <= perItemMax) return result;
-		return { ...result, content: truncate(content, perItemMax) };
+		const content = truncate(result.content, perItemMax) || undefined;
+		let used = content?.length ?? 0;
+		const resources = result.resources?.filter((resource) => {
+			const size = resource.title.length + (resource.summary?.length ?? 0);
+			if (used + size > perItemMax) return false;
+			used += size;
+			return true;
+		});
+		if (content === result.content && resources?.length === result.resources?.length) return result;
+		return {
+			...result,
+			content,
+			...(resources ? { resources, metadata: { ...result.metadata, resourceCount: resources.length } } : {}),
+		};
 	});
 }
 
@@ -323,13 +330,24 @@ function resourceReadJoins(): SQL {
 	`;
 }
 
+function viewerResourceOwnershipSql(userId: string): SQL {
+	return sql`
+		EXISTS (
+			SELECT 1
+			FROM resource_saves content_save
+			WHERE content_save.resource_id = r.id AND content_save.user_id = ${userId}
+		)
+		OR EXISTS (
+			SELECT 1
+			FROM user_files content_file
+			WHERE content_file.resource_id = r.id AND content_file.user_id = ${userId}
+		)
+	`;
+}
+
 function resourceReadSelect(userId: string): SQL {
 	const canReadContent = resourceContentAccessSql('ai-tools', {
-		inViewerLibrary: sql`EXISTS (
-			SELECT 1
-			FROM library content_library
-			WHERE content_library.resource_id = r.id AND content_library.user_id = ${userId}
-		)`,
+		viewerHasOwnership: viewerResourceOwnershipSql(userId),
 		scope: sql`r.scope`,
 	});
 	return sql`
@@ -379,11 +397,7 @@ function resourceAccessPredicate(userId: string): SQL {
 		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
 		AND (
 			(r.scope = 'corpus' AND r.enrichment_status = 'enriched')
-			OR EXISTS (
-				SELECT 1
-				FROM library l
-				WHERE l.resource_id = r.id AND l.user_id = ${userId}
-			)
+			OR (${viewerResourceOwnershipSql(userId)})
 		)
 	`;
 }
@@ -461,21 +475,21 @@ async function readCollections(db: CoreDb, ids: string[], userId: string): Promi
 			sql`
 				SELECT from_id, to_id
 				FROM (
-					SELECT id AS link_id,
-					       from_id,
-					       to_id,
-					       created_at,
+					SELECT edge.collection_id::text AS from_id,
+					       edge.resource_id::text AS to_id,
+					       edge.added_at,
 					       ROW_NUMBER() OVER (
-					         PARTITION BY from_id ORDER BY created_at DESC, id DESC
+					         PARTITION BY edge.collection_id
+					         ORDER BY edge.added_at DESC, edge.resource_id DESC
 					       ) AS row_number
-					FROM resource_links
-					WHERE user_id = ${userId}
-						AND from_type = 'collection'
-						AND from_id = ANY(${textArraySql(validIds)})
-						AND to_type = 'resource'
+					FROM collection_resources edge
+					JOIN collections collection
+					  ON collection.id = edge.collection_id
+					 AND collection.user_id = ${userId}
+					WHERE edge.collection_id = ANY(${uuidArraySql(validIds)})
 				) ranked_links
 				WHERE row_number <= ${COLLECTION_LIMIT}
-				ORDER BY created_at DESC, link_id DESC
+				ORDER BY added_at DESC, to_id DESC
 			`,
 		),
 	]);

@@ -43,16 +43,20 @@ export async function readTextWithLimit(response: Response, maxBytes = DEFAULT_T
 	let text = '';
 	let totalBytes = 0;
 
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) return text + decoder.decode();
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) return text + decoder.decode();
 
-		totalBytes += value.byteLength;
-		if (totalBytes > maxBytes) {
-			await reader.cancel();
-			throw new Error(`Response body exceeded ${maxBytes} bytes`);
+			totalBytes += value.byteLength;
+			if (totalBytes > maxBytes) {
+				await reader.cancel();
+				throw new Error(`Response body exceeded ${maxBytes} bytes`);
+			}
+			text += decoder.decode(value, { stream: true });
 		}
-		text += decoder.decode(value, { stream: true });
+	} finally {
+		reader.releaseLock();
 	}
 }
 
@@ -68,23 +72,27 @@ export async function readBytesWithLimit(response: Response, maxBytes: number): 
 	const chunks: Uint8Array[] = [];
 	let totalBytes = 0;
 
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) {
-			const bytes = new Uint8Array(totalBytes);
-			let offset = 0;
-			for (const chunk of chunks) {
-				bytes.set(chunk, offset);
-				offset += chunk.byteLength;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				const bytes = new Uint8Array(totalBytes);
+				let offset = 0;
+				for (const chunk of chunks) {
+					bytes.set(chunk, offset);
+					offset += chunk.byteLength;
+				}
+				return bytes;
 			}
-			return bytes;
-		}
 
-		totalBytes += value.byteLength;
-		if (totalBytes > maxBytes) {
-			await reader.cancel();
-			throw new Error(`Response body exceeded ${maxBytes} bytes`);
+			totalBytes += value.byteLength;
+			if (totalBytes > maxBytes) {
+				await reader.cancel();
+				throw new Error(`Response body exceeded ${maxBytes} bytes`);
+			}
+			chunks.push(value);
 		}
-		chunks.push(value);
+	} finally {
+		reader.releaseLock();
 	}
 }

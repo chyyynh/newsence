@@ -36,6 +36,21 @@ export interface ResourceForProcessing {
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
+/**
+ * One extracted entity as stored on `resources.entities`. Keys are short
+ * because every resource carries roughly ten of these.
+ *
+ * `k` is the canonical key the Collection Wiki groups on to merge mentions
+ * across a collection; `n`/`cn` are the display labels and `t` drives the
+ * graph's type colouring.
+ */
+export type StoredResourceEntity = {
+	k: string;
+	n: string;
+	cn: string | null;
+	t: string;
+};
+
 export interface TranscriptSegment {
 	startTime: number;
 	endTime: number;
@@ -147,29 +162,39 @@ interface PdfMetadata {
 }
 
 export interface PaperReference {
+	paperId?: string;
 	doi?: string;
+	url?: string;
 	title?: string;
 	year?: number;
+	authors?: string[];
+	/** Legacy first-author snapshot retained for tolerant readers. */
 	author?: string;
 }
 
 export interface PaperMetadata {
+	schemaVersion: 2;
 	source: 'semanticscholar';
+	resolvedAt: string;
+	metricsUpdatedAt: string;
 	doi?: string;
 	title?: string;
 	authors: string[];
 	abstract?: string;
 	venue?: string;
 	year?: number;
+	publicationDate?: string;
+	publicationTypes?: string[];
 	citedByCount?: number;
 	referenceCount?: number;
+	pdfUrl?: string;
 	references: PaperReference[];
+	referencesTruncated: boolean;
 }
 
 export interface PlatformEnrichments {
 	academic?: PaperMetadata | null;
 	links?: string[];
-	processedAt?: string;
 }
 
 interface ClassificationMetadata {
