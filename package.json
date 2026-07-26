@@ -33,10 +33,5 @@
 		"@types/pg": "^8.20.0",
 		"typescript": "^5.9.3",
 		"wrangler": "^4.113.0"
-	},
-	"pnpm": {
-		"overrides": {
-			"fast-xml-parser": "5.10.1"
-		}
 	}
 }

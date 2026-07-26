@@ -1,7 +1,5 @@
 packages:
   - .
-overrides:
-  fast-xml-parser: 5.10.1
 allowBuilds:
   esbuild: true
   sharp: true
