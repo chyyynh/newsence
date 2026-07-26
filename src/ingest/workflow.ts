@@ -19,6 +19,7 @@ import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
 import type { RssFeedAcquisitionInput } from './platforms/rss-feed';
+import { applyTweetLinkUnfurl, pendingTweetExternalLink, unfurlTweetExternalLink } from './platforms/twitter-unfurl';
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import {
 	markResourceEnrichmentFailed,
@@ -107,6 +108,41 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	return readAcquiredContentArtifact(artifact);
 }
 
+/**
+ * Fill `externalOgImage` / `externalTitle` for a share tweet so the link-preview
+ * card can render (#235). Runs before both persist paths — including the
+ * unchanged-resync short-circuit, which is how pre-existing rows get backfilled.
+ */
+async function stageTweetLinkUnfurl(step: WorkflowStep, resource: ResourceForProcessing): Promise<ResourceForProcessing> {
+	const externalUrl = pendingTweetExternalLink(resource);
+	if (!externalUrl) return resource;
+	// Wrapped so a failed fetch (null) stays distinguishable from a page that
+	// simply has no OG image ({ unfurl: null }) — both leave the card hidden.
+	const outcome = await step
+		.do('unfurl-tweet-external-link', { retries: { limit: 1, delay: '5 seconds' }, timeout: '30 seconds' }, async () => ({
+			unfurl: await unfurlTweetExternalLink(externalUrl),
+		}))
+		.catch((error) => {
+			// Legitimate absence: the URL still renders inline in the tweet text (#234).
+			console.error({
+				tag: 'TWITTER',
+				msg: 'Optional external-link unfurl failed; card stays hidden',
+				resource_id: resource.id,
+				external_url: externalUrl,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return null;
+		});
+	if (!outcome) return resource;
+	console.info({
+		tag: 'TWITTER',
+		msg: outcome.unfurl ? 'External link unfurled' : 'External link exposed no OG image',
+		resource_id: resource.id,
+		external_url: externalUrl,
+	});
+	return applyTweetLinkUnfurl(resource, outcome.unfurl);
+}
+
 function rssSourceId(resource: ResourceForProcessing): string | null {
 	return resource.type === 'rss' ? resource.source_id : null;
 }
@@ -177,7 +213,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
-		const resource = applyAcquiredContent(initialResource, acquiredContent);
+		const resource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
