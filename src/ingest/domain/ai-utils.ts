@@ -41,8 +41,14 @@ export function mergeResourceClassification(
 }
 
 const MAX_CONTENT_LENGTH = 10000;
-const CONTENT_TRANSLATION_CHUNK_LENGTH = 6000;
-export const DURABLE_CONTENT_TRANSLATION_MAX_CHUNKS = 96;
+/**
+ * Ceiling for translating a body in one call. Measured on qwen3-30b: ~0.165
+ * input and ~0.29 output tokens per source character at ~108 output tokens/s,
+ * so 36k characters is ~18k of the 32k context and ~97s against the 180s step
+ * timeout. It covers 98% of the corpus; longer bodies (overwhelmingly Hacker
+ * News comment dumps) keep their original text instead of being split up.
+ */
+export const CONTENT_TRANSLATION_MAX_LENGTH = 36000;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
 const MIN_TRANSLATABLE_TEXT_LENGTH = 20;
 const ExtractedEntitySchema = z.object({
@@ -108,7 +114,6 @@ const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文�
 
 規則：
 - 忠實翻譯原文，不要摘要、不要評論、不要新增資訊
-- 你可能只會收到長文的一個分段；只翻譯當前分段，不要補前後文
 - 保留 Markdown 結構、標題層級、列表、引用、連結和程式碼區塊
 - 專有名詞保留常見英文名稱；必要時可在中文後保留英文
 - 若原文已是繁體中文，直接保留原文；若是簡體中文，轉為自然繁體中文
@@ -170,6 +175,16 @@ export function needsZhHantContentTranslation(resource: ResourceForProcessing): 
 	if (!hasTranslatableContent(content)) return false;
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	if (!shouldWriteResourceContentTranslation(resource)) return false;
+	if (content.length > CONTENT_TRANSLATION_MAX_LENGTH) {
+		console.info({
+			tag: 'RESOURCE_TRANSLATION',
+			msg: 'Body too long to translate in one call; keeping the original',
+			resource_id: resource.id,
+			chars: content.length,
+			limit: CONTENT_TRANSLATION_MAX_LENGTH,
+		});
+		return false;
+	}
 	return true;
 }
 
@@ -244,64 +259,15 @@ function shouldWriteResourceContentTranslation(resource: ResourceForProcessing):
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
 
-function splitOversizedBlock(block: string, maxLength: number): string[] {
-	const chunks: string[] = [];
-	let remaining = block;
-	while (remaining.length > maxLength) {
-		let cut = remaining.lastIndexOf('\n', maxLength);
-		if (cut < Math.floor(maxLength * 0.6)) cut = remaining.lastIndexOf('。', maxLength);
-		if (cut < Math.floor(maxLength * 0.6)) cut = remaining.lastIndexOf('. ', maxLength);
-		if (cut < Math.floor(maxLength * 0.6)) cut = maxLength;
-		chunks.push(remaining.slice(0, cut).trim());
-		remaining = remaining.slice(cut).trim();
-	}
-	if (remaining) chunks.push(remaining);
-	return chunks;
-}
-
-function splitContentForTranslation(content: string): string[] {
-	const chunks: string[] = [];
-	let current = '';
-	const pushCurrent = () => {
-		const trimmed = current.trim();
-		if (trimmed) chunks.push(trimmed);
-		current = '';
-	};
-
-	for (const block of content.split(/\n{2,}/)) {
-		const trimmedBlock = block.trim();
-		if (!trimmedBlock) continue;
-		if (trimmedBlock.length > CONTENT_TRANSLATION_CHUNK_LENGTH) {
-			pushCurrent();
-			chunks.push(...splitOversizedBlock(trimmedBlock, CONTENT_TRANSLATION_CHUNK_LENGTH));
-			continue;
-		}
-		const next = current ? `${current}\n\n${trimmedBlock}` : trimmedBlock;
-		if (next.length > CONTENT_TRANSLATION_CHUNK_LENGTH) {
-			pushCurrent();
-			current = trimmedBlock;
-		} else {
-			current = next;
-		}
-	}
-	pushCurrent();
-	return chunks;
-}
-
-export function createZhHantContentTranslationChunks(content: string, maxChunks: number): string[] {
-	const source = content.trim();
-	const chunks = splitContentForTranslation(source);
-	if (chunks.length > maxChunks) {
-		throw new Error(`Content translation requires ${chunks.length} chunks for ${source.length} characters; limit is ${maxChunks} chunks`);
-	}
-	return chunks;
-}
-
-export async function translateZhHantContentChunk(chunk: string, index: number, total: number, env: CoreEnv): Promise<string> {
-	return generateText(env.AI, `原文 Markdown（第 ${index + 1}/${total} 段）:\n${chunk}`, {
+export async function translateZhHantContent(content: string, env: CoreEnv): Promise<string> {
+	return generateText(env.AI, `原文 Markdown:\n${content.trim()}`, {
 		task: 'resource-content-translation',
 		gatewayId: env.AI_GATEWAY_NAME,
-		maxTokens: 8000,
+		// Measured on real bodies: ~0.31 output tokens per source character, so a
+		// 36k-character body lands near 11.1k. Leave room above that — the
+		// finish_reason guard turns a clipped response into a failed translation,
+		// so this cap must not be reachable by an in-policy body.
+		maxTokens: 16000,
 		temperature: 0.2,
 		systemPrompt: RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT,
 	});
