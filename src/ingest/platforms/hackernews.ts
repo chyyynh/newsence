@@ -14,13 +14,15 @@ interface HnComment {
 	children?: HnComment[];
 }
 
+// Shape of Algolia's /items/{id} response. It carries the whole comment tree in
+// `children` but has no `descendants` — that is a Firebase field, so discussion
+// size has to be counted from the tree.
 export interface HackerNewsItem {
 	id: number;
 	title?: string;
 	url?: string;
 	author?: string;
 	points?: number;
-	descendants?: number;
 	type?: 'story' | 'ask' | 'show' | 'job' | 'comment' | 'poll';
 	created_at_i?: number;
 	text?: string;
@@ -55,7 +57,6 @@ const HackerNewsItemSchema: z.ZodType<HackerNewsItem> = z.object({
 	url: optionalStringSchema,
 	author: optionalStringSchema,
 	points: optionalNonnegativeIntegerSchema,
-	descendants: optionalNonnegativeIntegerSchema,
 	type: z
 		.enum(['story', 'ask', 'show', 'job', 'comment', 'poll'])
 		.nullish()
@@ -89,12 +90,21 @@ function hnItemTypeForMetadata(type: HackerNewsItem['type'] | undefined): Hacker
 	return undefined;
 }
 
+/** Every node in the tree, deleted ones included — the closest analogue to the count HN itself shows. */
+function countHnComments(children: HnComment[] | undefined): number {
+	let total = 0;
+	for (const child of children ?? []) {
+		total += 1 + countHnComments(child.children);
+	}
+	return total;
+}
+
 function buildHnMetadata(item: HackerNewsItem): HackerNewsMetadata {
 	return {
 		itemId: item.id.toString(),
 		author: item.author,
 		points: item.points,
-		commentCount: item.descendants,
+		commentCount: countHnComments(item.children),
 		itemType: hnItemTypeForMetadata(item.type),
 		storyUrl: item.url,
 	};
@@ -123,9 +133,10 @@ function htmlToText(str: string): string {
 function buildHnPostMarkdown(item: HackerNewsItem, title: string): string {
 	const parts: string[] = [`# ${title}\n`];
 	const metaParts: string[] = [];
+	const commentCount = countHnComments(item.children);
 	if (item.points !== undefined) metaParts.push(`${item.points} points`);
 	if (item.author) metaParts.push(`by ${item.author}`);
-	if (item.descendants !== undefined) metaParts.push(`${item.descendants} comments`);
+	if (commentCount > 0) metaParts.push(`${commentCount} comments`);
 	if (metaParts.length) parts.push(`*${metaParts.join(' | ')}*\n`);
 	if (item.text) parts.push(`---\n\n${htmlToText(item.text)}\n`);
 	return parts.join('\n');
@@ -280,10 +291,9 @@ export async function buildHackerNewsContent(
 	const comments = item.children?.length ? collectAllComments(item.children) : [];
 	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text ?? null, comments);
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
-	const stats = [
-		item.points !== undefined ? `${item.points} points` : null,
-		item.descendants !== undefined ? `${item.descendants} comments` : null,
-	]
+	// Count nodes, not text-bearing comments, so this matches platform_metadata.commentCount.
+	const commentCount = countHnComments(item.children);
+	const stats = [item.points !== undefined ? `${item.points} points` : null, commentCount > 0 ? `${commentCount} comments` : null]
 		.filter(Boolean)
 		.join(' | ');
 	const links = [item.url ? `[Linked article](${item.url})` : null, `[View the full discussion](${discussionUrl})`]
