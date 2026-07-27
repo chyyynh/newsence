@@ -139,6 +139,10 @@ export const sources = pgTable(
 		createdBy: text('created_by'),
 		status: text('status', { enum: SOURCE_STATUSES }).default('active').notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
+		// Minimum minutes between polls. Null means every cron firing, which is what
+		// every source did before YouTube's channel feeds joined the RSS monitor and
+		// needed their own, slower cadence.
+		pollIntervalMinutes: integer('poll_interval_minutes'),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),

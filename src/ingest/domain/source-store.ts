@@ -26,6 +26,12 @@ export function parseRssAcquisitionMode(value: unknown, source: string): RssAcqu
 	throw new Error(`RSS source ${source} has invalid acquisition mode: ${String(value)}`);
 }
 
+/**
+ * Enabled sources of one platform that are due to be polled. A null
+ * pollIntervalMinutes means every firing, so sources that never set one behave
+ * exactly as before; setting it lets one monitor carry feeds whose publishers
+ * update at very different rates.
+ */
 export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
 	return withCoreDb(env, async (db: CoreDb) =>
 		db
@@ -38,7 +44,17 @@ export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatfor
 				createdAt: sources.createdAt,
 			})
 			.from(sources)
-			.where(and(eq(sources.monitoringEnabled, true), eq(sources.platform, platform))),
+			.where(
+				and(
+					eq(sources.monitoringEnabled, true),
+					eq(sources.platform, platform),
+					sql`(
+						${sources.pollIntervalMinutes} IS NULL
+						OR ${sources.scrapedAt} IS NULL
+						OR ${sources.scrapedAt} < NOW() - (INTERVAL '1 minute' * ${sources.pollIntervalMinutes})
+					)`,
+				),
+			),
 	);
 }
 

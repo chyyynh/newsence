@@ -1,6 +1,12 @@
+import type { ContentResourceType } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
-import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
+import {
+	attachSourceToResources,
+	type ExistingResourceRecord,
+	getExistingResourcesByUrl,
+	upsertPendingSourceResource,
+} from '@ingest/domain/resource-store';
 import {
 	loadMonitoredSources,
 	type MonitoredSource,
@@ -39,51 +45,58 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 	await enqueueProcessing(env, resourceId);
 }
 
-async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
-	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
-	const items = await loadFeedEntries(feed.handle);
-	if (!items.length) {
-		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
-		await markSourceScraped(env, feed.id);
-		return;
-	}
-
-	const itemUrlsByUrl = new Map<string, { item: FeedItem; url: string }>();
+function dedupedFeedItems(items: FeedItem[], feedName: string): Array<{ item: FeedItem; url: string }> {
+	const byUrl = new Map<string, { item: FeedItem; url: string }>();
 	for (const item of items) {
 		const url = canonicalFeedItemUrl(item);
-		if (url && !itemUrlsByUrl.has(url)) itemUrlsByUrl.set(url, { item, url });
+		if (url && !byUrl.has(url)) byUrl.set(url, { item, url });
 	}
-	const itemUrls = [...itemUrlsByUrl.values()];
-	const skippedInvalid = items.length - itemUrls.length;
-	if (skippedInvalid) console.warn({ tag: 'RSS', msg: 'Skipped invalid or duplicate feed items', feed: feed.name, count: skippedInvalid });
-	const urls = itemUrls.map(({ url }) => url);
-	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, urls));
-	const rssResourceIds = existingRecords.filter((resource) => resource.type === 'rss').map((resource) => resource.id);
-	const hackerNewsResourceIds = existingRecords.filter((resource) => resource.type === 'hackernews').map((resource) => resource.id);
+	const deduped = [...byUrl.values()];
+	const skipped = items.length - deduped.length;
+	if (skipped) console.warn({ tag: 'RSS', msg: 'Skipped invalid or duplicate feed items', feed: feedName, count: skipped });
+	return deduped;
+}
+
+/**
+ * A feed entry can resolve to a type other than 'rss': hnrss items become
+ * 'hackernews', and a channel's Atom feed yields 'youtube'. Provenance is
+ * re-attached per resolved type, so a row saved before its feed was monitored
+ * still gains the source.
+ */
+async function reattachFeedProvenance(env: CoreEnv, feed: RssSource, existing: ExistingResourceRecord[]): Promise<void> {
+	const idsByType = new Map<ContentResourceType, string[]>();
+	for (const resource of existing) {
+		const ids = idsByType.get(resource.type) ?? [];
+		ids.push(resource.id);
+		idsByType.set(resource.type, ids);
+	}
 	await withCoreDb(env, async (db) => {
-		await attachSourceToResources(db, rssResourceIds, feed.id, 'rss');
-		await attachSourceToResources(db, hackerNewsResourceIds, feed.id, 'hackernews');
+		for (const [type, ids] of idsByType) await attachSourceToResources(db, ids, feed.id, type);
 	});
-	const existingSet = new Set(existingRecords.map((e) => normalizeUrl(e.url)));
-	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
+}
+
+/** Re-enqueues rows the monitor still considers retryable, isolating each failure. */
+async function retryExistingResources(env: CoreEnv, feed: RssSource, existing: ExistingResourceRecord[]): Promise<number> {
 	let retried = 0;
-	for (const existing of existingRecords) {
-		if (!existing.shouldRetryEnrichment) continue;
+	for (const resource of existing) {
+		if (!resource.shouldRetryEnrichment) continue;
 		try {
-			await enqueueProcessing(env, existing.id);
+			await enqueueProcessing(env, resource.id);
 			retried++;
 		} catch (error) {
 			console.error({
 				tag: 'RSS',
 				msg: 'Existing resource retry enqueue failed',
 				feed: feed.name,
-				url: existing.url,
+				url: resource.url,
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
+	return retried;
+}
 
-	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, mode, newCount: newItems.length, retried, totalCount: items.length });
+async function enqueueNewFeedItems(env: CoreEnv, feed: RssSource, newItems: Array<{ item: FeedItem; url: string }>): Promise<number> {
 	let queued = 0;
 	for (let index = 0; index < newItems.length; index += ITEM_CONCURRENCY) {
 		const batch = newItems.slice(index, index + ITEM_CONCURRENCY);
@@ -102,6 +115,33 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 			});
 		}
 	}
+	return queued;
+}
+
+async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
+	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
+	const items = await loadFeedEntries(feed.handle);
+	if (!items.length) {
+		console.info({ tag: 'RSS', msg: 'Feed has no items', feed: feed.name });
+		await markSourceScraped(env, feed.id);
+		return;
+	}
+
+	const itemUrls = dedupedFeedItems(items, feed.name);
+	const existing = await withCoreDb(env, (db) =>
+		getExistingResourcesByUrl(
+			db,
+			itemUrls.map(({ url }) => url),
+		),
+	);
+	await reattachFeedProvenance(env, feed, existing);
+
+	const existingSet = new Set(existing.map((resource) => normalizeUrl(resource.url)));
+	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
+	const retried = await retryExistingResources(env, feed, existing);
+	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, mode, newCount: newItems.length, retried, totalCount: items.length });
+
+	const queued = await enqueueNewFeedItems(env, feed, newItems);
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
 	await markSourceScraped(env, feed.id);
 }

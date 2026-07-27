@@ -708,7 +708,7 @@ function parseTranslationSource(value: unknown): ResourceTranslationSource | nul
 	return value as ResourceTranslationSource;
 }
 
-type ExistingResourceRecord = {
+export type ExistingResourceRecord = {
 	id: string;
 	url: string;
 	type: ContentResourceType;

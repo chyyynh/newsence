@@ -246,7 +246,13 @@ export async function scrapeYouTube(
 			author: snippet.channelTitle,
 			language: snippet.defaultAudioLanguage ?? null,
 			publishedDate: snippet.publishedAt,
-			siteName: 'YouTube',
+			// The channel, not the platform. This becomes platform_metadata.sourceName,
+			// which is what per-channel filtering and the card byline read; a literal
+			// 'YouTube' collapses every channel into one bucket. Saved YouTube URLs
+			// have always landed that way — 12 rows say 'YouTube' where the other 566
+			// say a channel name, and the cron only avoided it by pre-filling the row
+			// so acquisition never ran.
+			siteName: snippet.channelTitle.trim() || 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
 		},
 		previewImageUrl: thumbnailUrl,
