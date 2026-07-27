@@ -1,6 +1,13 @@
-import type { PaperMetadata, PlatformMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
-import { withCoreDb, withCoreTx } from '@db/client';
+import type { ContentResourceType } from '@core-shared/resource-types';
+import type { PaperMetadata, PlatformMetadata, ResourceForProcessing, StoredResourceEntity, YoutubeTranscript } from '@core-shared/types';
+import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources } from '@db/schema';
+import {
+	canonicalizeEntityName,
+	normalizeResourceEntitiesForStorage,
+	normalizeResourceEntityUpdatePayload,
+	type ResourceEntityInput,
+} from '@entities/normalize';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
@@ -66,6 +73,7 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 		content: updateData.content !== undefined ? updateData.content : resource.content,
 		tags: [...(updateData.tags ?? resource.tags)],
 		keywords: [...(updateData.keywords ?? resource.keywords)],
+		entities: updateData.entities,
 		og_image_url: previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata,
 	};
@@ -180,7 +188,13 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 		if (!updatePayload.content?.trim()) {
 			throw new Error(`Refusing to persist enriched resource ${input.resourceId} without content`);
 		}
+		const resourceType = resource.type;
+		const platformMetadata = updatePayload.platform_metadata;
+		const entityInputs = normalizeResourceEntityUpdatePayload(updatePayload, resourceType, resource.source, platformMetadata);
 		const resourceId = await updateResourceAfterProcessing(db, input.resourceId, resource, updatePayload);
+		if (entityInputs) {
+			await syncResourceEntities(db, resourceId, entityInputs, resourceType, resource.source, platformMetadata);
+		}
 		if (input.youtubeTranscript || input.youtubeHighlights) {
 			await persistYouTubeWorkflowData(db, {
 				transcript: input.youtubeTranscript,
@@ -188,5 +202,46 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 			});
 		}
 		return resourceId;
+	});
+}
+
+async function syncResourceEntities(
+	db: CoreDb,
+	resourceId: string,
+	inputEntities: ResourceEntityInput[],
+	resourceType: ContentResourceType,
+	source?: string | null,
+	platformMetadata?: unknown,
+): Promise<void> {
+	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, resourceType, source, platformMetadata);
+
+	// Entities are per-resource facts, not a shared graph: the only consumer is
+	// the Collection Wiki, which groups them by canonical key within one
+	// collection. A column keeps that whole capability without spending ~10
+	// junction and translation rows on every resource.
+	const stored: StoredResourceEntity[] = [];
+	const seen = new Set<string>();
+	for (const entity of normalizedEntities) {
+		const canonical = canonicalizeEntityName(entity.name);
+		if (!canonical || seen.has(canonical)) continue;
+		seen.add(canonical);
+		stored.push({
+			k: canonical,
+			n: entity.name,
+			cn: entity.name_cn.trim() || null,
+			t: entity.type,
+		});
+	}
+	stored.sort((a, b) => a.k.localeCompare(b.k));
+
+	await db.update(resources).set({ entities: stored }).where(eq(resources.id, resourceId));
+
+	console.info({
+		tag: 'ENTITIES',
+		msg: 'Stored resource entities',
+		resourceId,
+		inputCount: inputEntities.length,
+		count: stored.length,
+		filteredCount: inputEntities.length - stored.length,
 	});
 }

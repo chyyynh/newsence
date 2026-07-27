@@ -1,6 +1,7 @@
 import { generateObject, generateText } from '@core-ai/generation';
 import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
-import type { ResourceForProcessing } from '@core-shared/types';
+import { ENTITY_TYPES, type ResourceForProcessing } from '@core-shared/types';
+import { entityExtractionExclusionNames } from '@entities/normalize';
 import { z } from 'zod';
 
 export interface ProcessorResult {
@@ -8,6 +9,7 @@ export interface ProcessorResult {
 		tags?: string[];
 		keywords?: string[];
 		content?: string;
+		entities?: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	classificationCategory?: ResourceCategory;
 }
@@ -20,6 +22,7 @@ type ResourceClassification = {
 	tags: string[];
 	keywords: string[];
 	category: ResourceCategory;
+	entities: Array<{ name: string; name_cn: string; type: string }>;
 };
 
 export function mergeResourceClassification(
@@ -32,6 +35,7 @@ export function mergeResourceClassification(
 
 	if (!resource.tags?.length) updateData.tags = allTags;
 	if (!resource.keywords?.length && classification.keywords.length) updateData.keywords = classification.keywords;
+	if (classification.entities.length) updateData.entities = classification.entities;
 
 	return { updateData, classificationCategory: classification.category };
 }
@@ -47,6 +51,11 @@ const MAX_CONTENT_LENGTH = 10000;
 export const CONTENT_TRANSLATION_MAX_LENGTH = 36000;
 const PARTIAL_CONTENT_TRANSLATION_RATIO = 0.2;
 const MIN_TRANSLATABLE_TEXT_LENGTH = 20;
+const ExtractedEntitySchema = z.object({
+	name: z.string().min(1),
+	name_cn: z.string().min(1),
+	type: z.enum(ENTITY_TYPES),
+});
 
 const ZhHantMetadataTranslationSchema = z.object({
 	title: z.string().min(1),
@@ -65,6 +74,7 @@ const ZhHantTwitterTranslationSchema = z.object({
 const ResourceClassificationSchema = z.object({
 	tags: z.array(z.string().min(1)).min(1),
 	keywords: z.array(z.string().min(1)).min(1),
+	entities: z.array(ExtractedEntitySchema),
 	category: z.enum(RESOURCE_CATEGORIES),
 });
 
@@ -109,10 +119,11 @@ const RESOURCE_CONTENT_TRANSLATION_SYSTEM_PROMPT = `你是專業的新聞全文�
 - 若原文已是繁體中文，直接保留原文；若是簡體中文，轉為自然繁體中文
 - 直接輸出翻譯後的 Markdown，不要包 code block。`;
 
-const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類編輯。請只輸出符合 schema 的分類資料。
+const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實體分析師。請只輸出符合 schema 的分類資料。
 
 任務：
 - 產生 tags、keywords、category
+- 擷取重要 named entities
 
 標籤規則：
 - AI相關: AI, MachineLearning, DeepLearning, NLP, ComputerVision, LLM, GenerativeAI
@@ -121,16 +132,27 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類編輯
 - 事件類型: Funding, IPO, Acquisition, ProductLaunch, Research, Partnership
 - 新聞性質: Review, Opinion, Analysis, Feature, Interview, Tutorial, Announcement
 
+實體擷取規則：
+- 提取 3-8 個最重要的具名實體；如果文章太短，可以少於 3 個
+- type 只能是 person, organization, product, technology, event, location
+- name 用英文或原文慣用名稱；name_cn 用繁體中文，若無慣用中文名則與 name 相同
+- 不要把文章來源、平台、作者名稱當作實體，除非文章主題就是該來源、平台或作者本身
+- 不要提取泛詞、短縮碎片、股票代號或單字母縮寫，例如 AI、X、Go、US、C、RL、PI、$GOOGL
+- 模型、產品、活動請使用完整慣用名稱，例如 Claude Opus 4.7、DeepSeek V4、TechCrunch Disrupt 2026
+- 如果只能判斷出泛詞、版本碎片或來源名稱，寧可少提取
+
 分類只能是：AI, Tech, Finance, Research, Business, Other。`;
 
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
 	const content = requiredResourceContent(resource);
 	const source = requiredResourceSource(resource);
+	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
+	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 	const summaryLine = resource.summary?.trim() ? `\n摘要: ${resource.summary.trim()}` : '';
 	return `文章資訊:
 標題: ${resource.title}
 來源: ${source}
-資源類型: ${resource.type}${summaryLine}
+資源類型: ${resource.type}${excludedLine}${summaryLine}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
@@ -266,5 +288,6 @@ export async function generateResourceClassification(resource: ResourceForProces
 		tags: classification.tags.slice(0, 5),
 		keywords: classification.keywords.slice(0, 8),
 		category: classification.category,
+		entities: classification.entities.slice(0, 10),
 	};
 }
