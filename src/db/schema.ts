@@ -9,7 +9,20 @@ import {
 	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
 import type { StoredResourceEntity, TranscriptSegment } from '@core-shared/types';
-import { bigint, boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+	bigint,
+	boolean,
+	index,
+	integer,
+	jsonb,
+	pgTable,
+	primaryKey,
+	text,
+	timestamp,
+	uniqueIndex,
+	uuid,
+	varchar,
+} from 'drizzle-orm/pg-core';
 
 export const resources = pgTable(
 	'resources',
@@ -34,6 +47,9 @@ export const resources = pgTable(
 		enrichmentStatus: text('enrichment_status', { enum: ['pending', 'enriched', 'failed'] })
 			.default('pending')
 			.notNull(),
+		// Consecutive failed enrichment runs; drives retry backoff and the give-up
+		// point in getExistingResourcesByUrl. Reset to 0 whenever enrichment lands.
+		enrichmentAttempts: integer('enrichment_attempts').default(0).notNull(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 	},

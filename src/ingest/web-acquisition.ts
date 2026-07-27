@@ -11,6 +11,34 @@ const GENERIC_HTML_MAX_BYTES = 5 * 1024 * 1024;
 const GENERIC_PDF_MAX_BYTES = 25 * 1024 * 1024;
 const MIN_ARTICLE_CONTENT_CHARS = 180;
 
+// Statuses where the server has answered about this URL rather than about its own
+// health. 429 and every 5xx are deliberately absent: those can differ next time.
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 403, 404, 405, 406, 410, 451]);
+
+export class AcquisitionHttpError extends Error {
+	constructor(
+		readonly status: number,
+		statusText: string,
+	) {
+		super(`HTTP ${status}: ${statusText}`);
+		this.name = 'AcquisitionHttpError';
+	}
+}
+
+/** The page was fetched; re-parsing the same bytes cannot produce a different verdict. */
+export class UnreadableContentError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'UnreadableContentError';
+	}
+}
+
+/** True when a retry would repeat the identical request and receive the identical answer. */
+export function isPermanentAcquisitionFailure(error: unknown): boolean {
+	if (error instanceof UnreadableContentError) return true;
+	return error instanceof AcquisitionHttpError && PERMANENT_HTTP_STATUSES.has(error.status);
+}
+
 type TransformElement = {
 	parentElement: TransformElement | null;
 	removeAttribute(name: string): void;
@@ -149,11 +177,11 @@ async function acquirePdfResponse(response: Response, finalUrl: string): Promise
 
 async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Promise<AcquiredWebContent> {
 	const article = await extractHtmlArticle(html, url);
-	if (!article) throw new Error(`No readable article content found: ${url}`);
+	if (!article) throw new UnreadableContentError(`No readable article content found: ${url}`);
 
 	const content = await markdownFromHtml(env, article.html, url);
 	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
-		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
+		throw new UnreadableContentError(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
 	return {
 		type: 'web',
@@ -185,7 +213,7 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 	);
 	if (!response.ok) {
 		await response.body?.cancel();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		throw new AcquisitionHttpError(response.status, response.statusText);
 	}
 	const finalUrl = response.url.trim();
 	if (!finalUrl) {

@@ -19,6 +19,9 @@ import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema'
 import { textArraySql, uuidArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 
+/** Failed enrichments to retry before a URL is treated as permanently dead. */
+const MAX_ENRICHMENT_ATTEMPTS = 5;
+
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
 	has_youtube_transcript?: boolean;
@@ -556,6 +559,12 @@ function resourceConflictSetSql(): SQL {
 			WHEN ${preserveEnriched} THEN resources.enrichment_status
 			ELSE excluded.enrichment_status
 		END,
+		-- Landing enrichment clears the failure streak; anything else leaves it, so a
+		-- row that keeps failing keeps climbing toward the give-up point.
+		enrichment_attempts = CASE
+			WHEN excluded.enrichment_status = 'enriched' THEN 0
+			ELSE resources.enrichment_attempts
+		END,
 		updated_at = CASE WHEN ${preserveEnriched} THEN resources.updated_at ELSE now() END
 	`;
 }
@@ -715,7 +724,13 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			r.type AS type,
 			(
 				r.enrichment_status = 'pending'
-				OR (r.enrichment_status = 'failed' AND r.updated_at < NOW() - INTERVAL '30 minutes')
+				OR (
+					r.enrichment_status = 'failed'
+					AND r.enrichment_attempts < ${MAX_ENRICHMENT_ATTEMPTS}
+					-- 30m, 1h, 2h, 4h, then give up: a feed re-lists the same item for
+					-- days, and a flat 30-minute window re-ran a dead URL every cycle.
+					AND r.updated_at < NOW() - (INTERVAL '30 minutes' * POWER(2, GREATEST(r.enrichment_attempts, 1) - 1))
+				)
 			) AS "shouldRetryEnrichment"
 		FROM resources r
 			WHERE r.normalized_url = ANY(${textArraySql(urls)})

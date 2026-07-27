@@ -83,7 +83,13 @@ export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: str
 	await withCoreDb(env, async (db) => {
 		const updated = await db
 			.update(resources)
-			.set({ enrichmentStatus: 'failed', updatedAt: sql`NOW()` })
+			.set({
+				enrichmentStatus: 'failed',
+				// Counts consecutive failures so the RSS/Twitter/YouTube monitors can
+				// back off and eventually stop re-enqueuing a URL that never resolves.
+				enrichmentAttempts: sql`${resources.enrichmentAttempts} + 1`,
+				updatedAt: sql`NOW()`,
+			})
 			.where(eq(resources.id, resourceId))
 			.returning({ id: resources.id });
 		if (!updated.length) throw new Error(`Failed to mark resource ${resourceId} as failed: not found`);

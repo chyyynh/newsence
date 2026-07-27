@@ -27,6 +27,7 @@ import {
 	persistResourceImageSnapshot,
 	persistUnchangedResourceResync,
 } from './resource-persistence';
+import { isPermanentAcquisitionFailure } from './web-acquisition';
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
@@ -97,15 +98,47 @@ function shouldAcquireContent(
 	return (!hasContent || needsYouTubeAcquisition || needsAcquisitionIdentity) && !resource.storage_key && !!resource.url;
 }
 
-async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
+/**
+ * A permanent failure leaves the step through its return value rather than as a
+ * throw, so Workflows records one attempt instead of three — a 403 does not
+ * become a different 403 ten seconds later. The throw happens outside the step,
+ * where it reaches the run() catch that marks the resource failed.
+ *
+ * Returned on its own rather than wrapped around the artifact: `step.do` accepts
+ * a bare ReadableStream for large output, and nesting one inside an object is
+ * not a documented shape.
+ */
+type PermanentAcquisitionFailure = { permanentFailure: string };
+
+function permanentAcquisitionFailure(value: unknown): value is PermanentAcquisitionFailure {
+	return !!value && typeof value === 'object' && 'permanentFailure' in value;
+}
+
+async function acquireOrFailPermanently(
+	step: WorkflowStep,
+	name: string,
+	acquire: () => Promise<ReadableStream<Uint8Array>>,
+): Promise<AcquiredContent> {
+	const outcome = await step.do(
+		name,
+		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+		async (): Promise<ReadableStream<Uint8Array> | PermanentAcquisitionFailure> => {
+			try {
+				return await acquire();
+			} catch (error) {
+				if (!isPermanentAcquisitionFailure(error)) throw error;
+				return { permanentFailure: error instanceof Error ? error.message : String(error) };
+			}
+		},
+	);
+	if (permanentAcquisitionFailure(outcome)) throw new Error(outcome.permanentFailure);
+	return readAcquiredContentArtifact(outcome);
+}
+
+function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
 	const sourceUrl = resource.url;
 	if (!sourceUrl) throw new Error(`Resource ${resource.id} has no source URL`);
-	const artifact = await step.do(
-		'acquire-content',
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		() => scrapeSavedUrlArtifact(sourceUrl, env),
-	);
-	return readAcquiredContentArtifact(artifact);
+	return acquireOrFailPermanently(step, 'acquire-content', () => scrapeSavedUrlArtifact(sourceUrl, env));
 }
 
 /**
@@ -147,13 +180,8 @@ function rssSourceId(resource: ResourceForProcessing): string | null {
 	return resource.type === 'rss' ? resource.source_id : null;
 }
 
-async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
-	const artifact = await step.do(
-		'acquire-rss-feed-content',
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		() => scrapeRssFeedItemArtifact(input, env),
-	);
-	return readAcquiredContentArtifact(artifact);
+function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
+	return acquireOrFailPermanently(step, 'acquire-rss-feed-content', () => scrapeRssFeedItemArtifact(input, env));
 }
 
 async function acquireResourceForOperation(
