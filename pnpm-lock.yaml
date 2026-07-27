@@ -11,9 +11,6 @@ importers:
       '@extractus/article-extractor':
         specifier: ^8.1.0
         version: 8.1.0
-      '@extractus/feed-extractor':
-        specifier: ^7.2.1
-        version: 7.2.1
       '@llamaindex/liteparse-wasm':
         specifier: ^2.1.1
         version: 2.1.1
@@ -319,10 +316,6 @@ packages:
 
   '@extractus/article-extractor@8.1.0':
     resolution: {integrity: sha512-FLA07C3YFFyisrob3UW3kyd88M2BW3OKLQpWFMDiH0abzAR9L5CL2B+HuB+rzo3s/gu7sdRW++82qZBmdOowMg==}
-    engines: {node: '>= 20'}
-
-  '@extractus/feed-extractor@7.2.1':
-    resolution: {integrity: sha512-vc84NZST31wLDTesAkmHL8GBxSB2zw2/h9ZKiQMB71az13sC65EeAcDeLJ2z3atsIhtxESnCMaKmQdOrFiFLcg==}
     engines: {node: '>= 20'}
 
   '@img/colour@1.0.0':
@@ -1097,12 +1090,6 @@ snapshots:
       sanitize-html: 2.17.6
     transitivePeerDependencies:
       - canvas
-
-  '@extractus/feed-extractor@7.2.1':
-    dependencies:
-      '@pwshub/bellajs': 13.0.2
-      fast-xml-parser: 5.10.1
-      html-entities: 2.6.0
 
   '@img/colour@1.0.0': {}
 

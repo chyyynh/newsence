@@ -18,7 +18,6 @@
 	},
 	"dependencies": {
 		"@extractus/article-extractor": "^8.1.0",
-		"@extractus/feed-extractor": "^7.2.1",
 		"@llamaindex/liteparse-wasm": "^2.1.1",
 		"drizzle-orm": "^0.45.2",
 		"feedsmith": "2.9.6",

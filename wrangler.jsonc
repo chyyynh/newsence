@@ -48,9 +48,8 @@
 	 */
 	"triggers": {
 		"crons": [
-			"*/5 * * * *", // RSS monitor (every 5 minutes)
-			"0 */6 * * *", // Twitter monitor (every 6 hours)
-			"*/30 * * * *" // YouTube channel monitor (every 30 minutes)
+			"*/5 * * * *", // RSS monitor, incl. YouTube channel feeds (every 5 minutes)
+			"0 */6 * * *" // Twitter monitor (every 6 hours)
 		]
 	},
 	/**

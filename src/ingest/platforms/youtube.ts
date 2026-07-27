@@ -1,18 +1,14 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/generation';
-import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import { platformMetadataFor, type ResourceForProcessing, type TranscriptSegment, type YoutubeTranscript } from '@core-shared/types';
-import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { youtubeTranscripts } from '@db/schema';
-import { extractFromXml, type FeedEntry } from '@extractus/feed-extractor';
-import { attachSourceToResources, getExistingResourcesByUrl, upsertPendingSourceResource } from '@ingest/domain/resource-store';
-import { loadMonitoredSources, type MonitoredSource, markSourceScraped, recordSourceFailure } from '@ingest/domain/source-store';
-import { enqueueProcessing } from '@ingest/workflow';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { scrapeYouTube } from './youtube-acquisition';
 
-const MAX_FEED_BYTES = 1024 * 1024;
+// Enrichment only. Channel discovery is the RSS monitor's job: a channel handle
+// is its Atom feed URL, so the feeds sit in `sources` as platform='rss' and
+// scrapeSavedUrl routes the resulting watch?v= links back to YouTube — the same
+// shape Hacker News has always used.
 
 const YouTubeHighlightSchema = z.object({
 	title: z.string().min(1),
@@ -148,171 +144,4 @@ async function prepareYouTubeHighlightsFromTranscript(
 			generatedAt,
 		},
 	};
-}
-
-function parseFeedVideos(xml: string) {
-	const feed = extractFromXml(xml, {
-		descriptionMaxLen: 0,
-		getExtraEntryFields: (entry) => ({ videoId: entry['yt:videoId'] }),
-	});
-	if (!Array.isArray(feed.entries)) throw new Error('YouTube feed parser returned no entries');
-	const entries = feed.entries as Array<FeedEntry & { videoId?: unknown }>;
-	const videos: Array<{ videoId: string; url: string }> = [];
-	for (const entry of entries) {
-		try {
-			if (typeof entry.videoId !== 'string' || !entry.videoId.trim()) throw new Error('Feed entry is missing videoId');
-			if (!entry.link?.trim()) throw new Error(`Feed entry ${entry.videoId} is missing link`);
-			const url = normalizeUrl(entry.link);
-			if (!new URL(url).pathname.startsWith('/shorts/')) videos.push({ videoId: entry.videoId, url });
-		} catch (error) {
-			console.error({
-				tag: 'YOUTUBE-CRON',
-				msg: 'Skipped invalid feed entry',
-				videoId: typeof entry.videoId === 'string' ? entry.videoId : undefined,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-	return videos;
-}
-
-async function queueYouTubeVideo(
-	env: CoreEnv,
-	channel: { id: string; name: string },
-	video: { videoId: string; url: string },
-): Promise<void> {
-	const scraped = await scrapeYouTube(video.videoId, env.YOUTUBE_API_KEY);
-	const youtubeMetadata = scraped.platformMetadata.data;
-	const title = scraped.title?.trim();
-	if (!title) throw new Error(`YouTube video ${video.videoId} has no title`);
-	const publishedDate = scraped.metadata.publishedDate;
-	if (!publishedDate) throw new Error(`YouTube video ${video.videoId} has no published date`);
-
-	const resourceId = await withCoreDb(env, async (db) => {
-		const resourceId = await upsertPendingSourceResource(db, {
-			sourceId: channel.id,
-			url: video.url,
-			title,
-			source: youtubeMetadata.channelName,
-			publishedDate,
-			summary: scraped.metadata.description,
-			type: 'youtube',
-			originalLang: scraped.metadata.language ?? undefined,
-			content: scraped.markdown,
-			platformMetadata: scraped.platformMetadata,
-			previewImageUrl: scraped.previewImageUrl,
-		});
-		await persistYouTubeWorkflowData(db, { transcript: scraped.youtubeTranscript });
-		return resourceId;
-	});
-	await enqueueProcessing(env, resourceId);
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'Started video workflow', channel: channel.name, title: title.slice(0, 60) });
-}
-
-async function retryExistingYouTubeVideos(
-	env: CoreEnv,
-	channelName: string,
-	records: Array<{ id: string; shouldRetryEnrichment: boolean }>,
-): Promise<number> {
-	let queued = 0;
-	for (const record of records) {
-		if (!record.shouldRetryEnrichment) continue;
-		try {
-			await enqueueProcessing(env, record.id);
-			queued++;
-		} catch (error) {
-			console.error({
-				tag: 'YOUTUBE-CRON',
-				msg: 'Failed to retry video workflow',
-				channel: channelName,
-				resourceId: record.id,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-	return queued;
-}
-
-async function queueNewYouTubeVideos(
-	env: CoreEnv,
-	channel: { id: string; name: string },
-	videos: Array<{ videoId: string; url: string }>,
-): Promise<number> {
-	let queued = 0;
-	for (const video of videos) {
-		try {
-			await queueYouTubeVideo(env, channel, video);
-			queued++;
-		} catch (error) {
-			console.error({
-				tag: 'YOUTUBE-CRON',
-				msg: 'Failed to queue video',
-				channel: channel.name,
-				videoId: video.videoId,
-				url: video.url,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-	return queued;
-}
-
-async function processYouTubeChannel(env: CoreEnv, channel: MonitoredSource): Promise<number> {
-	const res = await fetchWithTimeout(channel.handle, { headers: { 'User-Agent': WEB_FETCH_USER_AGENT } });
-	if (!res.ok) {
-		await res.body?.cancel();
-		throw new Error(`YouTube feed ${channel.name} failed with HTTP ${res.status}`);
-	}
-
-	const videos = parseFeedVideos(await readTextWithLimit(res, MAX_FEED_BYTES));
-	if (videos.length === 0) {
-		console.info({ tag: 'YOUTUBE-CRON', msg: 'Feed has no videos', channel: channel.name });
-		await markSourceScraped(env, channel.id);
-		return 0;
-	}
-
-	const videoUrls = videos.map(({ url }) => url);
-	const existingRecords = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, videoUrls));
-	await withCoreDb(env, (db) =>
-		attachSourceToResources(
-			db,
-			existingRecords.map((record) => record.id),
-			channel.id,
-			'youtube',
-		),
-	);
-	const existingSet = new Set(existingRecords.map((record) => normalizeUrl(record.url)));
-	const newVideos = videos.filter(({ url }) => !existingSet.has(url));
-	let queued = await retryExistingYouTubeVideos(env, channel.name, existingRecords);
-
-	if (!newVideos.length) console.info({ tag: 'YOUTUBE-CRON', msg: 'No new videos', channel: channel.name });
-	queued += await queueNewYouTubeVideos(env, channel, newVideos);
-
-	await markSourceScraped(env, channel.id);
-	return queued;
-}
-
-export async function handleYouTubeCron(env: CoreEnv): Promise<void> {
-	if (!env.YOUTUBE_API_KEY) throw new Error('YOUTUBE_API_KEY is not configured');
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'start' });
-	const channels = await loadMonitoredSources(env, 'youtube');
-
-	let totalQueued = 0;
-	const failures: unknown[] = [];
-	for (const channel of channels) {
-		try {
-			totalQueued += await processYouTubeChannel(env, channel);
-		} catch (error) {
-			failures.push(error);
-			console.error({
-				tag: 'YOUTUBE-CRON',
-				msg: 'Channel processing failed',
-				channel: channel.name,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			await recordSourceFailure(env, channel.id, error);
-		}
-	}
-	console.info({ tag: 'YOUTUBE-CRON', msg: 'end', queued: totalQueued, channels: channels.length });
-	if (failures.length) throw new AggregateError(failures, `${failures.length} YouTube channels failed`);
 }

@@ -4,7 +4,6 @@ import { ResourceTranslationWorkflow } from '@ingest/content-localization-workfl
 import { runMonitorCycle } from '@ingest/official-publications';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
-import { handleYouTubeCron } from '@ingest/platforms/youtube';
 import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
@@ -31,12 +30,12 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override scheduled(event: ScheduledController): void {
 		console.info({ tag: 'CORE', msg: 'Scheduled', cron: event.cron });
 
+		// YouTube channels ride the RSS monitor: their handles are Atom feed URLs,
+		// so they are ordinary rss sources with a 30-minute poll interval.
 		if (event.cron === '*/5 * * * *') {
 			this.ctx.waitUntil(runMonitorCycle(this.env, handleRSSCron));
 		} else if (event.cron === '0 */6 * * *') {
 			this.ctx.waitUntil(runMonitorCycle(this.env, handleTwitterCron));
-		} else if (event.cron === '*/30 * * * *') {
-			this.ctx.waitUntil(runMonitorCycle(this.env, handleYouTubeCron));
 		}
 	}
 
