@@ -20,7 +20,6 @@
 			"@core-ai/*": ["./src/ai/*"],
 			"@db/*": ["./src/db/*"],
 			"@core-shared/*": ["./src/shared/*"],
-			"@entities/*": ["./src/entities/*"],
 			"@ingest/*": ["./src/ingest/*"]
 		},
 		/* Enable importing .json files */
