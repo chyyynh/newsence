@@ -20,9 +20,8 @@ import type {
 	ResourceTranslationMap,
 	StoredResourceEntity,
 } from '@core-shared/types';
-import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
+import { type CoreDb, textArraySql, uuidArraySql, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
-import { textArraySql, uuidArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 
 /** Failed enrichments to retry before a URL is treated as permanently dead. */

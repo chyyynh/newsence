@@ -1,7 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
-import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, textArraySql, uuidArraySql } from '@db/sql';
+import { type CoreDb, isValidUuid, queryRows, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 

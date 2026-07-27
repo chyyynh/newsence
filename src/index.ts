@@ -1,7 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { AcademicMetadataBackfillWorkflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
 import { ResourceTranslationWorkflow } from '@ingest/content-localization-workflow';
-import { runMonitorCycle } from '@ingest/official-publications';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
@@ -19,6 +18,35 @@ export {
 	ResourceTranslationWorkflow,
 	SearchIndexRebuildWorkflow,
 };
+
+type MonitorHandler = (env: CoreEnv) => Promise<void>;
+
+async function reconcileOfficialPublications(env: CoreEnv): Promise<void> {
+	try {
+		const result = await env.DOMAIN.reconcileOfficialPublications();
+		console.info({
+			tag: 'OFFICIAL_PUBLICATIONS',
+			msg: 'Reconciled curated corpus publications',
+			inserted: result.inserted,
+		});
+	} catch (error) {
+		// Publication is derived product state. Never turn a repair failure into
+		// an ingest failure; the next monitor cycle retries the same statement.
+		console.error({
+			tag: 'OFFICIAL_PUBLICATIONS',
+			msg: 'Reconciliation failed; retrying next monitor cycle',
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+async function runMonitorCycle(env: CoreEnv, handler: MonitorHandler): Promise<void> {
+	try {
+		await handler(env);
+	} finally {
+		await reconcileOfficialPublications(env);
+	}
+}
 
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {

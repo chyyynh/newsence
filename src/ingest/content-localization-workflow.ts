@@ -1,8 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { RESOURCE_ORIGINAL_CONTENT_TYPES, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
-import { withCoreDb } from '@db/client';
-import { textArraySql } from '@db/sql';
+import { textArraySql, withCoreDb } from '@db/client';
 import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
 import { syncCorpusItem } from '../ai-search';

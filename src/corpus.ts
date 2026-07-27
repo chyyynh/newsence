@@ -6,8 +6,7 @@ import {
 	type ResourceCategory,
 } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
-import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql } from '@db/sql';
+import { type CoreDb, isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 
