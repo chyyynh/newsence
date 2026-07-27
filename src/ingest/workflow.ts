@@ -143,7 +143,10 @@ async function acquireOrFailPermanently(
 function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
 	const sourceUrl = resource.url;
 	if (!sourceUrl) throw new Error(`Resource ${resource.id} has no source URL`);
-	return acquireOrFailPermanently(step, 'acquire-content', () => scrapeSavedUrlArtifact(sourceUrl, env));
+	// A monitored source's feed decided to list this; anything else is a person's
+	// explicit save, which feed policies must not veto.
+	const origin = { monitored: !!resource.source_id };
+	return acquireOrFailPermanently(step, 'acquire-content', () => scrapeSavedUrlArtifact(sourceUrl, env, origin));
 }
 
 /**

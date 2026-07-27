@@ -1,14 +1,17 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { z } from 'zod';
+import type { AcquisitionOrigin } from '../acquisition';
 import { IngestPolicySkip, UnreadableContentError } from '../acquisition-failures';
 
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
-// Shorts and clips this brief carry no transcript worth reading. The channel Atom
-// feed exposes no duration and links Shorts as /watch?v= like everything else, so
-// this is the first point in the pipeline that can tell them apart at all.
+// Shorts and clips this brief carry no transcript worth reading, so a monitored
+// channel does not contribute them. The channel Atom feed exposes no duration and
+// links Shorts as /watch?v= like everything else, so this is the first point in
+// the pipeline that can tell them apart at all — hence a policy check this deep,
+// gated on whether the URL came from a feed or from a person.
 const MIN_VIDEO_DURATION_SECONDS = 180;
 
 const YouTubeThumbnailSchema = z.object({ url: z.string().min(1) });
@@ -200,6 +203,7 @@ async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
 export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
+	origin: AcquisitionOrigin,
 ): Promise<NormalizedContent<'youtube'> & { platformMetadata: PlatformMetadata<'youtube'> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
@@ -215,7 +219,7 @@ export async function scrapeYouTube(
 	// Checked before the transcript and avatar calls, so a video we do not want
 	// costs one request instead of three.
 	const durationSeconds = isoDurationSeconds(video.contentDetails.duration);
-	if (durationSeconds === null || durationSeconds <= MIN_VIDEO_DURATION_SECONDS) {
+	if (origin.monitored && (durationSeconds === null || durationSeconds <= MIN_VIDEO_DURATION_SECONDS)) {
 		const reason = durationSeconds === null ? 'is a live stream or unstarted premiere' : `runs ${durationSeconds}s`;
 		throw new IngestPolicySkip(`YouTube video ${videoId} ${reason}; wanted over ${MIN_VIDEO_DURATION_SECONDS}s`);
 	}

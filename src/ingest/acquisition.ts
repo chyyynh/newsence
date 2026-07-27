@@ -84,11 +84,18 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
 	};
 }
 
-export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<AcquiredContent> {
+/**
+ * What a monitored feed contributes is a curation decision; what someone types in
+ * is not. Only the monitored path applies the feed policies, so a deliberately
+ * saved URL is never rejected for being the kind of thing we don't crawl.
+ */
+export type AcquisitionOrigin = { monitored: boolean };
+
+export async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 
 	const videoId = extractYouTubeId(validatedUrl);
-	if (videoId) return sanitizeAcquiredContent(await scrapeYouTube(videoId, env.YOUTUBE_API_KEY));
+	if (videoId) return sanitizeAcquiredContent(await scrapeYouTube(videoId, env.YOUTUBE_API_KEY, origin));
 
 	const tweetId = extractTweetId(validatedUrl);
 	if (tweetId) return sanitizeAcquiredContent(await scrapeTweet(tweetId, env.KAITO_API_KEY));
@@ -99,8 +106,8 @@ export async function scrapeSavedUrl(url: string, env: CoreEnv): Promise<Acquire
 	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env));
 }
 
-export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(url, env);
+export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(url, env, origin);
 	return acquiredContentArtifact(acquired);
 }
 
