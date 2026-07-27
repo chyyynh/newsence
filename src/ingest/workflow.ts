@@ -13,7 +13,7 @@ import {
 	scrapeRssFeedItemArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { isPermanentAcquisitionFailure, PermanentAcquisitionError } from './acquisition-failures';
+import { isPermanentAcquisitionFailure } from './acquisition-failures';
 import { enqueueResourceTranslation, isResourceTranslationEligible } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { buildHackerNewsContent } from './platforms/hackernews';
@@ -98,49 +98,44 @@ function shouldAcquireContent(
 	return (!hasContent || needsYouTubeAcquisition || needsAcquisitionIdentity) && !resource.storage_key && !!resource.url;
 }
 
+const PERMANENT_ACQUISITION_ERROR = 'PermanentAcquisitionError';
+
 /**
- * A permanent failure leaves the step through its return value rather than as a
- * throw, so Workflows records one attempt instead of three — a 403 does not
- * become a different 403 ten seconds later.
- *
- * NonRetryableError would say that in fewer lines, and the docs' warning that it
- * "invokes no further steps" turns out not to cover a catch block: probed on a
- * resource with no extractable content, validate-resource-content threw one from
- * inside a step and both cleanup steps still ran. What it cannot do is carry the
- * verdict out. The throw here happens outside the step, so run()'s catch can
- * match it with instanceof and mark the row permanently failed; thrown inside,
- * the error crosses a durable boundary that folds the class name into the
- * message, leaving only a string to match on.
- *
- * The sentinel is returned on its own rather than wrapped around the artifact:
- * `step.do` documents a bare ReadableStream for large output, not one nested in
- * an object.
+ * Permanent failures use the platform's own mechanism: NonRetryableError stops
+ * the step retrying, and — probed on a resource with no extractable content —
+ * the docs' "invokes no further steps" does not extend to run()'s catch, so the
+ * cleanup steps still mark the row.
  */
-type PermanentAcquisitionFailure = { permanentFailure: string };
-
-function permanentAcquisitionFailure(value: unknown): value is PermanentAcquisitionFailure {
-	return !!value && typeof value === 'object' && 'permanentFailure' in value;
-}
-
 async function acquireOrFailPermanently(
 	step: WorkflowStep,
 	name: string,
 	acquire: () => Promise<ReadableStream<Uint8Array>>,
 ): Promise<AcquiredContent> {
-	const outcome = await step.do(
+	const artifact = await step.do(
 		name,
 		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		async (): Promise<ReadableStream<Uint8Array> | PermanentAcquisitionFailure> => {
+		async () => {
 			try {
 				return await acquire();
 			} catch (error) {
 				if (!isPermanentAcquisitionFailure(error)) throw error;
-				return { permanentFailure: error instanceof Error ? error.message : String(error) };
+				throw new NonRetryableError(error instanceof Error ? error.message : String(error), PERMANENT_ACQUISITION_ERROR);
 			}
 		},
 	);
-	if (permanentAcquisitionFailure(outcome)) throw new PermanentAcquisitionError(outcome.permanentFailure);
-	return readAcquiredContentArtifact(outcome);
+	return readAcquiredContentArtifact(artifact);
+}
+
+/**
+ * Measured, not assumed: the name passed to NonRetryableError does not survive
+ * the durable step boundary — run()'s catch sees `name === 'Error'` with the
+ * class folded into the message as `PermanentAcquisitionError: …`. That prefix
+ * is the only signal left, and matching it fails safe: if Workflows ever changes
+ * the format, the row falls back to the ordinary retry budget instead of the
+ * failure going unrecorded.
+ */
+function isPermanentAcquisitionVerdict(error: unknown): boolean {
+	return error instanceof Error && error.message.startsWith(`${PERMANENT_ACQUISITION_ERROR}:`);
 }
 
 function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
@@ -239,7 +234,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					resource_id: resourceId,
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
-			const permanent = error instanceof PermanentAcquisitionError;
+			const permanent = isPermanentAcquisitionVerdict(error);
 			await step
 				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
 					markResourceEnrichmentFailed(this.env, resourceId, { permanent }),
