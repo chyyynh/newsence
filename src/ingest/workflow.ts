@@ -13,7 +13,6 @@ import {
 	scrapeRssFeedItemArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { isPermanentAcquisitionFailure } from './acquisition-failures';
 import { enqueueResourceTranslation, isResourceTranslationEligible } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { buildHackerNewsContent } from './platforms/hackernews';
@@ -98,53 +97,32 @@ function shouldAcquireContent(
 	return (!hasContent || needsYouTubeAcquisition || needsAcquisitionIdentity) && !resource.storage_key && !!resource.url;
 }
 
-const PERMANENT_ACQUISITION_ERROR = 'PermanentAcquisitionError';
-
 /**
- * Permanent failures use the platform's own mechanism: NonRetryableError stops
- * the step retrying, and — probed on a resource with no extractable content —
- * the docs' "invokes no further steps" does not extend to run()'s catch, so the
- * cleanup steps still mark the row.
+ * Acquisition gets one attempt, not three.
+ *
+ * Measured, because the docs suggest otherwise: NonRetryableError thrown inside
+ * a step does *not* skip its retries — three runs against a page with no
+ * article recorded three attempts whether it was thrown from the step callback
+ * or from the scraper, with the class serialised away to plain `Error` each
+ * time. The only lever the platform actually honours is retries.limit.
+ *
+ * Setting it to 0 also removes a duplicated layer: a failed acquisition is
+ * already retried by the monitors, on a 30m/1h/2h/4h backoff that gives up after
+ * MAX_ENRICHMENT_ATTEMPTS. Ten-second retries only ever helped a blip shorter
+ * than the outer schedule, and cost every doomed URL three fetches instead of
+ * one.
  */
-async function acquireOrFailPermanently(
-	step: WorkflowStep,
-	name: string,
-	acquire: () => Promise<ReadableStream<Uint8Array>>,
-): Promise<AcquiredContent> {
-	const artifact = await step.do(
-		name,
-		{ retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-		async () => {
-			try {
-				return await acquire();
-			} catch (error) {
-				if (!isPermanentAcquisitionFailure(error)) throw error;
-				throw new NonRetryableError(error instanceof Error ? error.message : String(error), PERMANENT_ACQUISITION_ERROR);
-			}
-		},
-	);
-	return readAcquiredContentArtifact(artifact);
-}
+const ACQUISITION_STEP = { retries: { limit: 0, delay: '10 seconds' }, timeout: '120 seconds' } as const;
 
-/**
- * Measured, not assumed: the name passed to NonRetryableError does not survive
- * the durable step boundary — run()'s catch sees `name === 'Error'` with the
- * class folded into the message as `PermanentAcquisitionError: …`. That prefix
- * is the only signal left, and matching it fails safe: if Workflows ever changes
- * the format, the row falls back to the ordinary retry budget instead of the
- * failure going unrecorded.
- */
-function isPermanentAcquisitionVerdict(error: unknown): boolean {
-	return error instanceof Error && error.message.startsWith(`${PERMANENT_ACQUISITION_ERROR}:`);
-}
-
-function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
+async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resource: ResourceForProcessing): Promise<AcquiredContent> {
 	const sourceUrl = resource.url;
 	if (!sourceUrl) throw new Error(`Resource ${resource.id} has no source URL`);
 	// A monitored source's feed decided to list this; anything else is a person's
 	// explicit save, which feed policies must not veto.
 	const origin = { monitored: !!resource.source_id };
-	return acquireOrFailPermanently(step, 'acquire-content', () => scrapeSavedUrlArtifact(sourceUrl, env, origin));
+	return readAcquiredContentArtifact(
+		await step.do('acquire-content', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin)),
+	);
 }
 
 /**
@@ -186,8 +164,10 @@ function rssSourceId(resource: ResourceForProcessing): string | null {
 	return resource.type === 'rss' ? resource.source_id : null;
 }
 
-function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
-	return acquireOrFailPermanently(step, 'acquire-rss-feed-content', () => scrapeRssFeedItemArtifact(input, env));
+async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
+	return readAcquiredContentArtifact(
+		await step.do('acquire-rss-feed-content', ACQUISITION_STEP, () => scrapeRssFeedItemArtifact(input, env)),
+	);
 }
 
 async function acquireResourceForOperation(
@@ -234,10 +214,9 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					resource_id: resourceId,
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
-			const permanent = isPermanentAcquisitionVerdict(error);
 			await step
 				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-					markResourceEnrichmentFailed(this.env, resourceId, { permanent }),
+					markResourceEnrichmentFailed(this.env, resourceId),
 				)
 				.catch(logCleanupFailure('Failed to mark resource as failed'));
 			await step

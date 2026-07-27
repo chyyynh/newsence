@@ -2,7 +2,6 @@ import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { normalizePreviewImageUrl } from '@core-shared/url';
 import { addTransformations, extractFromHtml } from '@extractus/article-extractor';
-import { AcquisitionHttpError, UnreadableContentError } from './acquisition-failures';
 import { type PdfTextArtifact, parsePdfBytes } from './platforms/pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -150,11 +149,11 @@ async function acquirePdfResponse(response: Response, finalUrl: string): Promise
 
 async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Promise<AcquiredWebContent> {
 	const article = await extractHtmlArticle(html, url);
-	if (!article) throw new UnreadableContentError(`No readable article content found: ${url}`);
+	if (!article) throw new Error(`No readable article content found: ${url}`);
 
 	const content = await markdownFromHtml(env, article.html, url);
 	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
-		throw new UnreadableContentError(`Extracted HTML content is too short (${content.length} chars): ${url}`);
+		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
 	return {
 		type: 'web',
@@ -186,7 +185,7 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 	);
 	if (!response.ok) {
 		await response.body?.cancel();
-		throw new AcquisitionHttpError(response.status, response.statusText);
+		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 	}
 	const finalUrl = response.url.trim();
 	if (!finalUrl) {

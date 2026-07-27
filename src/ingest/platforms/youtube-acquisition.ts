@@ -2,7 +2,6 @@ import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { z } from 'zod';
 import type { AcquisitionOrigin } from '../acquisition';
-import { IngestPolicySkip, UnreadableContentError } from '../acquisition-failures';
 
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
@@ -210,7 +209,7 @@ export async function scrapeYouTube(
 	const videoData = await fetchYouTubeVideoData(videoId, youtubeApiKey);
 
 	if (videoData.error) throw new Error(`YouTube API: ${videoData.error.message}`);
-	if (!videoData.items?.length) throw new UnreadableContentError(`YouTube video ${videoId} was not found`);
+	if (!videoData.items?.length) throw new Error(`YouTube video ${videoId} was not found`);
 
 	const video = videoData.items[0];
 	const snippet = video.snippet;
@@ -221,7 +220,7 @@ export async function scrapeYouTube(
 	const durationSeconds = isoDurationSeconds(video.contentDetails.duration);
 	if (origin.monitored && (durationSeconds === null || durationSeconds <= MIN_VIDEO_DURATION_SECONDS)) {
 		const reason = durationSeconds === null ? 'is a live stream or unstarted premiere' : `runs ${durationSeconds}s`;
-		throw new IngestPolicySkip(`YouTube video ${videoId} ${reason}; wanted over ${MIN_VIDEO_DURATION_SECONDS}s`);
+		throw new Error(`YouTube video ${videoId} ${reason}; wanted over ${MIN_VIDEO_DURATION_SECONDS}s`);
 	}
 
 	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
