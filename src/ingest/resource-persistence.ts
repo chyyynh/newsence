@@ -215,10 +215,9 @@ async function syncResourceEntities(
 ): Promise<void> {
 	const normalizedEntities = normalizeResourceEntitiesForStorage(inputEntities, resourceType, source, platformMetadata);
 
-	// Entities are per-resource facts, not a shared graph: the only consumer is
-	// the Collection Wiki, which groups them by canonical key within one
-	// collection. A column keeps that whole capability without spending ~10
-	// junction and translation rows on every resource.
+	// Entities remain resource-local derived facts. The compact representation
+	// preserves future grouping options without maintaining a global reverse
+	// index or roughly ten junction rows for every resource.
 	const stored: StoredResourceEntity[] = [];
 	const seen = new Set<string>();
 	for (const entity of normalizedEntities) {

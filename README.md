@@ -20,7 +20,7 @@
 
 ## What is newsence?
 
-Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, stores them as searchable resources and an entity graph. Each enriched corpus resource is synchronized to Cloudflare AI Search for retrieval.
+Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, and stores searchable resources with resource-local entity annotations. Each enriched corpus resource is synchronized to Cloudflare AI Search for retrieval.
 
 ## Supported Platforms
 
@@ -50,7 +50,7 @@ Content arrives (source monitor / saved URL / uploaded blob / resync)
   ├─ 1. Load Resource ──────── Canonical resources row; acquire URL content or extract uploaded PDF text
   ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
   ├─ 3. Save to DB ─────────── Update resources + resource_translations
-  ├─    Sync Entities ──────── Upsert entities, link through resource_entities
+  ├─    Store Entities ─────── Replace the resource-local resources.entities JSON
   ├─ 4. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
   └─ 5. Sync AI Search ─────── Upload the enriched corpus document to Cloudflare AI Search
 ```
@@ -73,7 +73,9 @@ The core worker keeps entity storage deterministic and conservative. It normaliz
 
 It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and alias groups are presentation-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
 
-Change the DB schema only when the product needs a query shape that the current `entities` plus `resource_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
+Entity extraction remains enabled even though the Collection Wiki product surface is retired. The derived annotations live only in `resources.entities` and are retained for future retrieval or presentation work; there is no normalized global entity graph or reverse index.
+
+Add normalized entity tables only when a real product consumer needs cross-resource queries that the resource-local JSON cannot answer cleanly. Potential future additions such as reviewed aliases or extraction-run history should follow that consumer rather than precede it.
 
 ## Stack
 
@@ -146,7 +148,7 @@ package is not part of this Worker.
 src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
 ├── ai/                   # Workers AI / AI Gateway helpers
-├── entities/             # entity normalization + graph sync
+├── entities/             # resource-local entity normalization
 ├── shared/               # small cross-subsystem primitives
 │   ├── types.ts          # ResourceForProcessing, NormalizedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits

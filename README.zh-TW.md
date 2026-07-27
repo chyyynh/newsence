@@ -20,7 +20,7 @@
 
 ## newsence 是什麼？
 
-[**newsence.app**](https://www.newsence.app) 的引擎。支援 RSS、Twitter/X、YouTube、Hacker News、一般網頁與上傳檔案，自動中英雙語 AI 分析與知識圖譜，並將完成 enrichment 的 corpus resource 同步到 Cloudflare AI Search。
+[**newsence.app**](https://www.newsence.app) 的引擎。支援 RSS、Twitter/X、YouTube、Hacker News、一般網頁與上傳檔案，自動進行中英雙語 AI 分析並保留每筆 resource 的實體註記，再將完成 enrichment 的 corpus resource 同步到 Cloudflare AI Search。
 
 ## 支援平台
 
@@ -50,7 +50,7 @@
   ├─ 1. 讀取 Resource ───── canonical resources row；抓取 URL 內容或抽取上傳 PDF 文字
   ├─ 2. AI 分析 ──────────── AI Gateway text/JSON calls → 中英標題、摘要、標籤、關鍵字、實體
   ├─ 3. 存入資料庫 ────────── 更新 resources + resource_translations
-  ├─    同步實體 ─────────── 將實體寫入正規化表格，透過 resource_entities 建立關聯
+  ├─    儲存實體 ─────────── 取代該 resource 的 resources.entities JSON
   ├─ 4. YouTube 精華 ─────── （僅 YouTube）從字幕生成 AI 精華段落
   └─ 5. 同步 AI Search ───── 將完成 enrichment 的 corpus 文件上傳到 Cloudflare AI Search
 ```
@@ -66,6 +66,12 @@
 | **搜尋索引** | Cloudflare AI Search  | 對完成 enrichment 的 corpus 文件提供 hybrid retrieval       |
 
 翻譯/摘要與分類/實體是分開的 structured calls，避免其中一個 schema 失敗就讓整個 resource 落入 fallback。
+
+### 實體資料策略
+
+Core 會正規化明顯重複項目、限制實體類型、排除泛詞與來源別名，並限制每筆 resource 儲存的實體數量。
+
+Collection Wiki 產品介面雖已退役，entity extraction 仍刻意保持啟用。衍生註記只存在 `resources.entities`，供未來搜尋或呈現功能使用；目前沒有全域正規化 entity graph 或 reverse index。只有在真實產品需求需要跨 resource 查詢時，才應重新加入正規化 entity tables。
 
 ## 技術棧
 
@@ -138,7 +144,7 @@ newsence app 在 `https://www.newsence.app/api/mcp` 提供 hosted
 src/
 ├── index.ts              # 只保留 Cloudflare WorkerEntrypoint class
 ├── ai/                   # Workers AI / AI Gateway helpers
-├── entities/             # entity normalization + graph sync
+├── entities/             # resource-local entity normalization
 ├── shared/               # 小型跨子系統 primitives
 │   ├── types.ts          # ResourceForProcessing、NormalizedContent、YoutubeTranscript
 │   └── web.ts            # fetch、URL normalization、stream limits

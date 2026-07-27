@@ -37,12 +37,11 @@ export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 /**
- * One extracted entity as stored on `resources.entities`. Keys are short
- * because every resource carries roughly ten of these.
+ * One resource-local entity annotation stored on `resources.entities`. Keys
+ * are short because every enriched resource can carry several of these.
  *
- * `k` is the canonical key the Collection Wiki groups on to merge mentions
- * across a collection; `n`/`cn` are the display labels and `t` drives the
- * graph's type colouring.
+ * `k` is stable enough for a future consumer to group exact canonical matches;
+ * `n`/`cn` are display labels and `t` is the entity class.
  */
 export type StoredResourceEntity = {
 	k: string;
