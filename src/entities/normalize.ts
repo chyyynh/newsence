@@ -5,7 +5,7 @@
 // pipeline (persistence + prompt exclusion lists).
 
 import type { ContentResourceType } from '@core-shared/resource-types';
-import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
+import { ENTITY_TYPES, type EntityType, type StoredResourceEntity } from '@core-shared/types';
 
 export type ResourceEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedResourceEntity = { name: string; name_cn: string; type: EntityType };
@@ -162,44 +162,26 @@ export function entityExtractionExclusionNames(
 	return names;
 }
 
-export function normalizeResourceEntitiesForStorage(
+export function toStoredResourceEntities(
 	entities: ResourceEntityInput[],
 	resourceType: ContentResourceType,
 	source?: string | null,
 	platformMetadata?: unknown,
-): NormalizedResourceEntity[] {
-	const byCanonical = new Map<string, NormalizedResourceEntity>();
+): StoredResourceEntity[] {
+	const byCanonical = new Map<string, StoredResourceEntity>();
 	const excludedCanonicals = excludedEntityCanonicalNames(resourceType, source, platformMetadata);
 	for (const entity of entities) {
 		const normalized = normalizeResourceEntity(entity);
 		if (!normalized) continue;
 		const canonical = canonicalizeEntityName(normalized.name);
 		if (!canonical || byCanonical.has(canonical) || !shouldStoreResourceEntity(normalized, excludedCanonicals)) continue;
-		byCanonical.set(canonical, normalized);
+		byCanonical.set(canonical, {
+			k: canonical,
+			n: normalized.name,
+			cn: normalized.name_cn || null,
+			t: normalized.type,
+		});
 		if (byCanonical.size >= MAX_ENTITIES_PER_RESOURCE) break;
 	}
-	return [...byCanonical.values()];
-}
-
-export function normalizeResourceEntityUpdatePayload(
-	updatePayload: { entities?: unknown },
-	resourceType: ContentResourceType,
-	source?: string | null,
-	platformMetadata?: unknown,
-): NormalizedResourceEntity[] | null {
-	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeResourceEntitiesForStorage(
-		updatePayload.entities.filter(isResourceEntityInput),
-		resourceType,
-		source,
-		platformMetadata,
-	);
-	updatePayload.entities = entities;
-	return entities;
-}
-
-function isResourceEntityInput(value: unknown): value is ResourceEntityInput {
-	if (!value || typeof value !== 'object') return false;
-	const record = value as Record<string, unknown>;
-	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';
+	return [...byCanonical.values()].sort((a, b) => a.k.localeCompare(b.k));
 }

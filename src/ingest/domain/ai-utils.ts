@@ -9,7 +9,7 @@ export interface ProcessorResult {
 		tags?: string[];
 		keywords?: string[];
 		content?: string;
-		entities?: Array<{ name: string; name_cn: string; type: string }>;
+		entities: Array<{ name: string; name_cn: string; type: string }>;
 	};
 	classificationCategory?: ResourceCategory;
 }
@@ -30,12 +30,11 @@ export function mergeResourceClassification(
 	classification: ResourceClassification,
 	extraTags: string[] = [],
 ): { updateData: ProcessorResult['updateData']; classificationCategory?: ResourceCategory } {
-	const updateData: ProcessorResult['updateData'] = {};
+	const updateData: ProcessorResult['updateData'] = { entities: classification.entities };
 	const allTags = [...new Set([...classification.tags, classification.category, ...extraTags])];
 
 	if (!resource.tags?.length) updateData.tags = allTags;
 	if (!resource.keywords?.length && classification.keywords.length) updateData.keywords = classification.keywords;
-	if (classification.entities.length) updateData.entities = classification.entities;
 
 	return { updateData, classificationCategory: classification.category };
 }

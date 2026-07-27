@@ -47,7 +47,7 @@ export type StoredResourceEntity = {
 	k: string;
 	n: string;
 	cn: string | null;
-	t: string;
+	t: EntityType;
 };
 
 export interface TranscriptSegment {

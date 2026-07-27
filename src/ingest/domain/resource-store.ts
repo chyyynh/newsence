@@ -13,7 +13,13 @@ import {
 	type ResourceScope,
 	type ResourceTranslationSource,
 } from '@core-shared/resource-types';
-import type { PlatformMetadata, ResourceForProcessing, ResourceLocaleText, ResourceTranslationMap } from '@core-shared/types';
+import type {
+	PlatformMetadata,
+	ResourceForProcessing,
+	ResourceLocaleText,
+	ResourceTranslationMap,
+	StoredResourceEntity,
+} from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { textArraySql, uuidArraySql } from '@db/sql';
@@ -30,6 +36,10 @@ type StoredResourceForProcessing = ResourceForProcessing & {
 type ResourceUpdate = Pick<ResourceForProcessing, 'summary' | 'content' | 'tags' | 'keywords'> & {
 	og_image_url: string | null;
 	platform_metadata: PlatformMetadata | null;
+};
+
+type ProcessedResourceUpdate = ResourceUpdate & {
+	entities: StoredResourceEntity[];
 };
 
 type ResourceStoreRow = {
@@ -303,11 +313,12 @@ export async function updateResourceAfterProcessing(
 	db: CoreDb,
 	resourceId: string,
 	resource: ResourceForProcessing,
-	updatePayload: ResourceUpdate,
+	updatePayload: ProcessedResourceUpdate,
 ): Promise<string> {
 	const record = resourceMirrorRecord(resourceId, resource, updatePayload);
 	await invalidateChangedMachineTranslationFields(db, resourceId, record);
 	const tags = textArraySql(record.tags);
+	const entitiesJson = JSON.stringify(updatePayload.entities);
 	const result = await db.execute<{ id: string }>(sql`
 		UPDATE resources
 		   SET source_id = COALESCE(source_id, ${record.sourceId}::uuid),
@@ -323,6 +334,7 @@ export async function updateResourceAfterProcessing(
 		       category = ${record.category},
 		       og_image_url = ${record.ogImageUrl},
 		       platform_metadata = ${record.platformMetadataJson}::jsonb,
+		       entities = ${entitiesJson}::jsonb,
 		       enrichment_status = 'enriched',
 		       -- Landing enrichment clears the failure streak, so a row that failed
 		       -- twice and then succeeded does not carry those attempts forever.
