@@ -13,7 +13,7 @@ import {
 	scrapeRssFeedItemArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { enqueueResourceTranslation, getPersistedResourceTranslationHash } from './content-localization-workflow';
+import { enqueueResourceTranslation, isResourceTranslationEligible } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
@@ -346,11 +346,11 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			},
 		);
 		if (operation === 'resync') await stageResourceImageRehost(this.env, step, persistedResourceId);
-		const translationSourceHash = await step
+		const translationEligible = await step
 			.do(
-				'load-resource-translation-source-hash',
+				'check-resource-translation-eligibility',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => getPersistedResourceTranslationHash(this.env, persistedResourceId),
+				() => isResourceTranslationEligible(this.env, persistedResourceId),
 			)
 			.catch((error) => {
 				console.error({
@@ -359,14 +359,14 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					resource_id: persistedResourceId,
 					error: error instanceof Error ? error.message : String(error),
 				});
-				return null;
+				return false;
 			});
-		if (translationSourceHash) {
+		if (translationEligible) {
 			await step
 				.do(
 					'enqueue-resource-translation',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueResourceTranslation(this.env, persistedResourceId, translationSourceHash),
+					() => enqueueResourceTranslation(this.env, persistedResourceId),
 				)
 				.catch((error) =>
 					console.error({
