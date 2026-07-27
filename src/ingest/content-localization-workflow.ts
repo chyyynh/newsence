@@ -19,8 +19,8 @@ import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 
 export async function isResourceTranslationEligible(env: CoreEnv, resourceId: string): Promise<boolean> {
 	return withCoreDb(env, async (db) => {
-		const result = await db.execute<{ eligible: boolean }>(sql`
-			SELECT TRUE AS eligible
+		const result = await db.execute(sql`
+			SELECT 1
 			FROM resources resource
 			JOIN resource_translations original
 			  ON original.resource_id = resource.id
@@ -38,7 +38,7 @@ export async function isResourceTranslationEligible(env: CoreEnv, resourceId: st
 			  AND length(original.content) <= ${CONTENT_TRANSLATION_MAX_LENGTH}
 			LIMIT 1
 		`);
-		return result.rows[0]?.eligible ?? false;
+		return result.rows.length > 0;
 	});
 }
 

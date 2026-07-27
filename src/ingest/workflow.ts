@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
-import { loadRssSourcePolicy } from '@ingest/domain/source-store';
+import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
 import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
@@ -13,6 +13,7 @@ import {
 	scrapeRssFeedItemArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
+import { isPermanentAcquisitionFailure, PermanentAcquisitionError } from './acquisition-failures';
 import { enqueueResourceTranslation, isResourceTranslationEligible } from './content-localization-workflow';
 import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
 import { buildHackerNewsContent } from './platforms/hackernews';
@@ -27,7 +28,6 @@ import {
 	persistResourceImageSnapshot,
 	persistUnchangedResourceResync,
 } from './resource-persistence';
-import { isPermanentAcquisitionFailure, PermanentAcquisitionError } from './web-acquisition';
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
@@ -101,12 +101,17 @@ function shouldAcquireContent(
 /**
  * A permanent failure leaves the step through its return value rather than as a
  * throw, so Workflows records one attempt instead of three — a 403 does not
- * become a different 403 ten seconds later. The throw happens outside the step,
- * where it reaches the run() catch that marks the resource failed.
+ * become a different 403 ten seconds later.
  *
- * Returned on its own rather than wrapped around the artifact: `step.do` accepts
- * a bare ReadableStream for large output, and nesting one inside an object is
- * not a documented shape.
+ * NonRetryableError is the declared way to say that, and it would be less code.
+ * It is not used here because the docs say a step that throws it invokes no
+ * further steps, and the steps that mark the resource failed run after this one;
+ * a row left 'pending' is re-enqueued by the monitors immediately, which is worse
+ * than the waste being removed. Verify that behaviour before switching.
+ *
+ * The sentinel is returned on its own rather than wrapped around the artifact:
+ * `step.do` documents a bare ReadableStream for large output, not one nested in
+ * an object.
  */
 type PermanentAcquisitionFailure = { permanentFailure: string };
 
@@ -196,7 +201,7 @@ async function acquireResourceForOperation(
 		const source = await step.do(
 			'load-rss-source-policy',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-			() => loadRssSourcePolicy(env, sourceId),
+			() => loadFeedSourcePolicy(env, sourceId),
 		);
 		if (source.acquisitionMode === 'feed') {
 			if (!resource.url) throw new Error(`RSS resource ${resource.id} has no article URL`);

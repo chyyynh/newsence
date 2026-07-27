@@ -79,11 +79,7 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 	};
 }
 
-export async function markResourceEnrichmentFailed(
-	env: CoreEnv,
-	resourceId: string,
-	{ permanent = false }: { permanent?: boolean } = {},
-): Promise<void> {
+export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string, { permanent }: { permanent: boolean }): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		const updated = await db
 			.update(resources)

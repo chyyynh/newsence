@@ -324,6 +324,9 @@ export async function updateResourceAfterProcessing(
 		       og_image_url = ${record.ogImageUrl},
 		       platform_metadata = ${record.platformMetadataJson}::jsonb,
 		       enrichment_status = 'enriched',
+		       -- Landing enrichment clears the failure streak, so a row that failed
+		       -- twice and then succeeded does not carry those attempts forever.
+		       enrichment_attempts = 0,
 		       updated_at = now()
 		 WHERE id = ${resourceId}::uuid
 		 RETURNING id::text AS id
@@ -559,12 +562,6 @@ function resourceConflictSetSql(): SQL {
 			WHEN ${preserveEnriched} THEN resources.enrichment_status
 			ELSE excluded.enrichment_status
 		END,
-		-- Landing enrichment clears the failure streak; anything else leaves it, so a
-		-- row that keeps failing keeps climbing toward the give-up point.
-		enrichment_attempts = CASE
-			WHEN excluded.enrichment_status = 'enriched' THEN 0
-			ELSE resources.enrichment_attempts
-		END,
 		updated_at = CASE WHEN ${preserveEnriched} THEN resources.updated_at ELSE now() END
 	`;
 }
@@ -713,6 +710,7 @@ export type ExistingResourceRecord = {
 	url: string;
 	type: ContentResourceType;
 	shouldRetryEnrichment: boolean;
+	needsSourceAttach: boolean;
 };
 
 export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Promise<ExistingResourceRecord[]> {
@@ -731,7 +729,8 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 					-- days, and a flat 30-minute window re-ran a dead URL every cycle.
 					AND r.updated_at < NOW() - (INTERVAL '30 minutes' * POWER(2, GREATEST(r.enrichment_attempts, 1) - 1))
 				)
-			) AS "shouldRetryEnrichment"
+			) AS "shouldRetryEnrichment",
+			(r.source_id IS NULL) AS "needsSourceAttach"
 		FROM resources r
 			WHERE r.normalized_url = ANY(${textArraySql(urls)})
 			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
@@ -739,18 +738,14 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 	return result.rows;
 }
 
-export async function attachSourceToResources(
-	db: CoreDb,
-	resourceIds: string[],
-	sourceId: string,
-	resourceType: ContentResourceType,
-): Promise<void> {
+/** Claims unowned rows for a source. Callers pass ids they just read, so the
+ *  only guard that can still exclude anything is the unowned check itself. */
+export async function attachSourceToResources(db: CoreDb, resourceIds: string[], sourceId: string): Promise<void> {
 	if (!resourceIds.length) return;
 	await db.execute(sql`
 		UPDATE resources
 		SET source_id = ${sourceId}::uuid
 		WHERE id = ANY(${uuidArraySql(resourceIds)})
-		  AND type = ${resourceType}
 		  AND source_id IS NULL
 	`);
 }

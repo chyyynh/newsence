@@ -64,7 +64,7 @@ function requiredTweetDate(value: string | null, tweetId: string): Date {
 async function reuseExistingTweet(env: CoreEnv, url: string, sourceId: string): Promise<boolean> {
 	const [existing] = await withCoreDb(env, (db) => getExistingResourcesByUrl(db, [url]));
 	if (!existing) return false;
-	await withCoreDb(env, (db) => attachSourceToResources(db, [existing.id], sourceId, 'twitter'));
+	await withCoreDb(env, (db) => attachSourceToResources(db, [existing.id], sourceId));
 	if (existing.shouldRetryEnrichment) await enqueueProcessing(env, existing.id);
 	console.info({ tag: 'TWITTER', msg: 'Resource already exists (dedup)', url });
 	return true;
@@ -118,7 +118,7 @@ async function saveThread(tweets: Tweet[], env: CoreEnv, monitoredSource: Monito
 
 	if (existing) {
 		const existingId = existing.id;
-		await withCoreDb(env, (db) => attachSourceToResources(db, [existingId], monitoredSource.id, 'twitter'));
+		await withCoreDb(env, (db) => attachSourceToResources(db, [existingId], monitoredSource.id));
 		const changed = await reopenResourceForReprocessing(env, existingId, {
 			content: combinedText,
 			platformMetadata,
@@ -505,7 +505,7 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	if (!env.KAITO_API_KEY) throw new Error('KAITO_API_KEY is not configured');
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const runStartedAt = new Date();
-	const users = await loadMonitoredSources(env, 'twitter');
+	const users = await loadMonitoredSources(env, 'platform');
 	if (!users.length) {
 		console.info({ tag: 'TWITTER', msg: 'No twitter sources configured' });
 		return;

@@ -5,10 +5,10 @@ import { youtubeTranscripts } from '@db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
-// Enrichment only. Channel discovery is the RSS monitor's job: a channel handle
-// is its Atom feed URL, so the feeds sit in `sources` as platform='rss' and
-// scrapeSavedUrl routes the resulting watch?v= links back to YouTube — the same
-// shape Hacker News has always used.
+// Enrichment only. Channel discovery is the feed monitor's job: a channel handle
+// is its Atom feed URL, so channels stay platform='youtube' with content_mode
+// 'web' and are polled by handleRSSCron, and scrapeSavedUrl routes the resulting
+// watch?v= links back to YouTube.
 
 const YouTubeHighlightSchema = z.object({
 	title: z.string().min(1),

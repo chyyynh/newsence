@@ -1,7 +1,7 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { z } from 'zod';
-import { IngestPolicySkip } from '../web-acquisition';
+import { IngestPolicySkip, UnreadableContentError } from '../acquisition-failures';
 
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
@@ -96,8 +96,8 @@ const transcriptFetch: typeof fetch = (input, init) => {
 
 /**
  * ISO-8601 duration as the videos endpoint returns it: PT1H2M3S, PT58S, PT3M.
- * Null when there is no real length to compare — a live stream or an unstarted
- * premiere reports `P0D`, and neither is a short video.
+ * Null when there is no real length yet — a live stream or an unstarted premiere
+ * reports `P0D`.
  */
 function isoDurationSeconds(duration: string): number | null {
 	const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(duration.trim());
@@ -206,20 +206,18 @@ export async function scrapeYouTube(
 	const videoData = await fetchYouTubeVideoData(videoId, youtubeApiKey);
 
 	if (videoData.error) throw new Error(`YouTube API: ${videoData.error.message}`);
-	if (!videoData.items?.length) throw new Error('Video not found');
+	if (!videoData.items?.length) throw new UnreadableContentError(`YouTube video ${videoId} was not found`);
 
 	const video = videoData.items[0];
 	const snippet = video.snippet;
 	const stats = video.statistics;
 
-	// Both checks run before the transcript and avatar calls, so a video we do not
-	// want costs one request instead of three.
+	// Checked before the transcript and avatar calls, so a video we do not want
+	// costs one request instead of three.
 	const durationSeconds = isoDurationSeconds(video.contentDetails.duration);
-	if (durationSeconds === null) {
-		throw new IngestPolicySkip(`YouTube video ${videoId} is a live stream or unstarted premiere (${video.contentDetails.duration})`);
-	}
-	if (durationSeconds <= MIN_VIDEO_DURATION_SECONDS) {
-		throw new IngestPolicySkip(`YouTube video ${videoId} runs ${durationSeconds}s, at or under the ${MIN_VIDEO_DURATION_SECONDS}s floor`);
+	if (durationSeconds === null || durationSeconds <= MIN_VIDEO_DURATION_SECONDS) {
+		const reason = durationSeconds === null ? 'is a live stream or unstarted premiere' : `runs ${durationSeconds}s`;
+		throw new IngestPolicySkip(`YouTube video ${videoId} ${reason}; wanted over ${MIN_VIDEO_DURATION_SECONDS}s`);
 	}
 
 	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
@@ -247,11 +245,10 @@ export async function scrapeYouTube(
 			language: snippet.defaultAudioLanguage ?? null,
 			publishedDate: snippet.publishedAt,
 			// The channel, not the platform. This becomes platform_metadata.sourceName,
-			// which is what per-channel filtering and the card byline read; a literal
-			// 'YouTube' collapses every channel into one bucket. Saved YouTube URLs
-			// have always landed that way — 12 rows say 'YouTube' where the other 566
-			// say a channel name, and the cron only avoided it by pre-filling the row
-			// so acquisition never ran.
+			// the display fallback when a row has no source relation — a literal
+			// 'YouTube' collapses every channel into one byline. Saved YouTube URLs
+			// have always landed that way; the cron only avoided it by pre-filling the
+			// row so acquisition never ran.
 			siteName: snippet.channelTitle.trim() || 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
 		},

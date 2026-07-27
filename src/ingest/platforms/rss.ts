@@ -1,4 +1,3 @@
-import type { ContentResourceType } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb } from '@db/client';
 import {
@@ -58,64 +57,37 @@ function dedupedFeedItems(items: FeedItem[], feedName: string): Array<{ item: Fe
 }
 
 /**
- * A feed entry can resolve to a type other than 'rss': hnrss items become
- * 'hackernews', and a channel's Atom feed yields 'youtube'. Provenance is
- * re-attached per resolved type, so a row saved before its feed was monitored
- * still gains the source.
+ * Claims rows that already existed before this feed was monitored — a saved URL,
+ * or an entry that resolved to another type ('hackernews' from hnrss, 'youtube'
+ * from a channel feed). Only unowned rows are sent, so after the first cycle
+ * this issues no statement at all.
  */
 async function reattachFeedProvenance(env: CoreEnv, feed: RssSource, existing: ExistingResourceRecord[]): Promise<void> {
-	const idsByType = new Map<ContentResourceType, string[]>();
-	for (const resource of existing) {
-		const ids = idsByType.get(resource.type) ?? [];
-		ids.push(resource.id);
-		idsByType.set(resource.type, ids);
-	}
-	await withCoreDb(env, async (db) => {
-		for (const [type, ids] of idsByType) await attachSourceToResources(db, ids, feed.id, type);
-	});
+	const unowned = existing.filter((resource) => resource.needsSourceAttach).map((resource) => resource.id);
+	if (!unowned.length) return;
+	await withCoreDb(env, (db) => attachSourceToResources(db, unowned, feed.id));
 }
 
-/** Re-enqueues rows the monitor still considers retryable, isolating each failure. */
-async function retryExistingResources(env: CoreEnv, feed: RssSource, existing: ExistingResourceRecord[]): Promise<number> {
-	let retried = 0;
-	for (const resource of existing) {
-		if (!resource.shouldRetryEnrichment) continue;
-		try {
-			await enqueueProcessing(env, resource.id);
-			retried++;
-		} catch (error) {
-			console.error({
-				tag: 'RSS',
-				msg: 'Existing resource retry enqueue failed',
-				feed: feed.name,
-				url: resource.url,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-	return retried;
-}
-
-async function enqueueNewFeedItems(env: CoreEnv, feed: RssSource, newItems: Array<{ item: FeedItem; url: string }>): Promise<number> {
-	let queued = 0;
-	for (let index = 0; index < newItems.length; index += ITEM_CONCURRENCY) {
-		const batch = newItems.slice(index, index + ITEM_CONCURRENCY);
-		const results = await Promise.allSettled(batch.map(({ item, url }) => enqueueFeedItem(env, feed, item, url)));
+/** Runs `work` over `items` in bounded batches, isolating and logging each failure. */
+async function enqueueInBatches<T>(items: T[], describe: (item: T) => string, msg: string, work: (item: T) => Promise<unknown>) {
+	let done = 0;
+	for (let index = 0; index < items.length; index += ITEM_CONCURRENCY) {
+		const batch = items.slice(index, index + ITEM_CONCURRENCY);
+		const results = await Promise.allSettled(batch.map(work));
 		for (const [resultIndex, result] of results.entries()) {
 			if (result.status === 'fulfilled') {
-				queued++;
+				done++;
 				continue;
 			}
 			console.error({
 				tag: 'RSS',
-				msg: 'Item enqueue failed',
-				feed: feed.name,
-				url: batch[resultIndex]?.url,
+				msg,
+				url: describe(batch[resultIndex] as T),
 				error: result.reason instanceof Error ? result.reason.message : String(result.reason),
 			});
 		}
 	}
-	return queued;
+	return done;
 }
 
 async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
@@ -138,21 +110,31 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 	const existingSet = new Set(existing.map((resource) => normalizeUrl(resource.url)));
 	const newItems = itemUrls.filter(({ url }) => !existingSet.has(url));
-	const retried = await retryExistingResources(env, feed, existing);
+	const retryable = existing.filter((resource) => resource.shouldRetryEnrichment);
+	const retried = await enqueueInBatches(
+		retryable,
+		(r) => r.url,
+		'Existing resource retry enqueue failed',
+		(r) => enqueueProcessing(env, r.id),
+	);
 	console.info({ tag: 'RSS', msg: 'Feed processed', feed: feed.name, mode, newCount: newItems.length, retried, totalCount: items.length });
 
-	const queued = await enqueueNewFeedItems(env, feed, newItems);
+	const queued = await enqueueInBatches(
+		newItems,
+		({ url }) => url,
+		'Item enqueue failed',
+		({ item, url }) => enqueueFeedItem(env, feed, item, url),
+	);
 	console.info({ tag: 'RSS', msg: 'Feed enqueue done', feed: feed.name, queued, total: newItems.length });
 	await markSourceScraped(env, feed.id);
 }
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	// YouTube channels are polled here: a channel handle is an Atom feed URL, so
-	// there is nothing for a separate monitor to do. They keep platform='youtube'
-	// for the plan quota and the source list, and their entries resolve back to
-	// type='youtube' at acquisition.
-	const feeds = await loadMonitoredSources(env, ['rss', 'youtube']);
+	// Every feed-discovered source, whatever its platform says: a YouTube channel
+	// handle is an Atom feed URL, so there is nothing for a separate monitor to do.
+	// Its entries still resolve back to type='youtube' at acquisition.
+	const feeds = await loadMonitoredSources(env, 'feed');
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);
 		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));
