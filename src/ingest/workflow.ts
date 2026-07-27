@@ -189,16 +189,29 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			return await this.runResource(resourceId, step, operation);
 		} catch (error) {
 			if (operation === 'resync') throw error;
-			await step.do(
-				'mark-resource-failed',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => markResourceEnrichmentFailed(this.env, resourceId),
-			);
-			await step.do(
-				'remove-failed-resource-from-search-index',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => deleteCorpusItem(this.env, resourceId),
-			);
+			// Neither cleanup step may throw: whatever they raise would replace
+			// `error` as the instance's top-level failure, and the cause of the
+			// failure is the only reason anyone opens this record. A broken
+			// deleteCorpusItem masked every acquisition error this way.
+			const logCleanupFailure = (msg: string) => (cleanupError: unknown) =>
+				console.error({
+					tag: 'WORKFLOW',
+					msg,
+					resource_id: resourceId,
+					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+				});
+			await step
+				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
+					markResourceEnrichmentFailed(this.env, resourceId),
+				)
+				.catch(logCleanupFailure('Failed to mark resource as failed'));
+			await step
+				.do(
+					'remove-failed-resource-from-search-index',
+					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+					() => deleteCorpusItem(this.env, resourceId),
+				)
+				.catch(logCleanupFailure('Failed to remove failed resource from the search index'));
 			throw error;
 		}
 	}

@@ -184,7 +184,12 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
-	const listed = await env.AI_SEARCH.items.list({ search: key, source: 'builtin', per_page: 1 });
+	// Search by the bare id, not the full key: a value containing `/` is parsed as
+	// a folder metadata filter and rejected with 7001 "metadata filter pattern
+	// exceeds maximum length", so passing `resources/<id>.md` failed every call.
+	// The REST API grew an exact-`key` parameter, but the Workers binding type has
+	// no such field yet — the exact-match filter below covers the difference.
+	const listed = await env.AI_SEARCH.items.list({ search: resourceId, source: 'builtin', per_page: 1 });
 	const matches = listed.result.filter((item) => item.key === key && item.source_id === 'builtin');
 	await Promise.all(matches.map((item) => env.AI_SEARCH.items.delete(item.id)));
 	if (matches.length) {
