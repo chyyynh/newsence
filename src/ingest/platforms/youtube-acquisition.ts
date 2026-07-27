@@ -1,10 +1,15 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { z } from 'zod';
+import { IngestPolicySkip } from '../web-acquisition';
 
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
+// Shorts and clips this brief carry no transcript worth reading. The channel Atom
+// feed exposes no duration and links Shorts as /watch?v= like everything else, so
+// this is the first point in the pipeline that can tell them apart at all.
+const MIN_VIDEO_DURATION_SECONDS = 180;
 
 const YouTubeThumbnailSchema = z.object({ url: z.string().min(1) });
 const YouTubeThumbnailsSchema = z.object({
@@ -88,6 +93,19 @@ const transcriptFetch: typeof fetch = (input, init) => {
 	const url = typeof input === 'string' || input instanceof URL ? input.toString() : input.url;
 	return fetchWithTimeout(url, init, TRANSCRIPT_FETCH_TIMEOUT_MS);
 };
+
+/**
+ * ISO-8601 duration as the videos endpoint returns it: PT1H2M3S, PT58S, PT3M.
+ * Null when there is no real length to compare — a live stream or an unstarted
+ * premiere reports `P0D`, and neither is a short video.
+ */
+function isoDurationSeconds(duration: string): number | null {
+	const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(duration.trim());
+	if (!match) throw new Error(`Unparseable YouTube duration: ${duration}`);
+	const [, days, hours, minutes, seconds] = match;
+	const total = Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes ?? 0) * 60 + Number(seconds ?? 0);
+	return total > 0 ? total : null;
+}
 
 function toSeconds(value: string | number | undefined, field: string, videoId: string): number {
 	const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number.parseFloat(value) : Number.NaN;
@@ -193,6 +211,16 @@ export async function scrapeYouTube(
 	const video = videoData.items[0];
 	const snippet = video.snippet;
 	const stats = video.statistics;
+
+	// Both checks run before the transcript and avatar calls, so a video we do not
+	// want costs one request instead of three.
+	const durationSeconds = isoDurationSeconds(video.contentDetails.duration);
+	if (durationSeconds === null) {
+		throw new IngestPolicySkip(`YouTube video ${videoId} is a live stream or unstarted premiere (${video.contentDetails.duration})`);
+	}
+	if (durationSeconds <= MIN_VIDEO_DURATION_SECONDS) {
+		throw new IngestPolicySkip(`YouTube video ${videoId} runs ${durationSeconds}s, at or under the ${MIN_VIDEO_DURATION_SECONDS}s floor`);
+	}
 
 	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
 	const chapters = parseChaptersFromDescription(snippet.description);

@@ -8,7 +8,7 @@ import {
 	normalizeResourceEntityUpdatePayload,
 	type ResourceEntityInput,
 } from '@entities/normalize';
-import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
+import { MAX_ENRICHMENT_ATTEMPTS, updateResourceAfterProcessing } from '@ingest/domain/resource-store';
 import { eq, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
@@ -79,15 +79,21 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 	};
 }
 
-export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<void> {
+export async function markResourceEnrichmentFailed(
+	env: CoreEnv,
+	resourceId: string,
+	{ permanent = false }: { permanent?: boolean } = {},
+): Promise<void> {
 	await withCoreDb(env, async (db) => {
 		const updated = await db
 			.update(resources)
 			.set({
 				enrichmentStatus: 'failed',
-				// Counts consecutive failures so the RSS/Twitter/YouTube monitors can
-				// back off and eventually stop re-enqueuing a URL that never resolves.
-				enrichmentAttempts: sql`${resources.enrichmentAttempts} + 1`,
+				// Counts consecutive failures so the monitors can back off and eventually
+				// stop re-enqueuing a URL that never resolves. A permanent verdict — a 404,
+				// or a video we have decided not to ingest — starts at the give-up point,
+				// because the next four attempts would reach the same conclusion.
+				enrichmentAttempts: permanent ? MAX_ENRICHMENT_ATTEMPTS : sql`${resources.enrichmentAttempts} + 1`,
 				updatedAt: sql`NOW()`,
 			})
 			.where(eq(resources.id, resourceId))

@@ -33,9 +33,29 @@ export class UnreadableContentError extends Error {
 	}
 }
 
+/** We fetched it, understood it, and do not want it. Not a fault — a policy decision. */
+export class IngestPolicySkip extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'IngestPolicySkip';
+	}
+}
+
+/**
+ * Raised outside the acquisition step once the step has reported a permanent
+ * verdict, so the workflow's failure handler can tell "this URL will never work"
+ * from "this run went wrong" and skip the monitor retries too.
+ */
+export class PermanentAcquisitionError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'PermanentAcquisitionError';
+	}
+}
+
 /** True when a retry would repeat the identical request and receive the identical answer. */
 export function isPermanentAcquisitionFailure(error: unknown): boolean {
-	if (error instanceof UnreadableContentError) return true;
+	if (error instanceof UnreadableContentError || error instanceof IngestPolicySkip) return true;
 	return error instanceof AcquisitionHttpError && PERMANENT_HTTP_STATUSES.has(error.status);
 }
 

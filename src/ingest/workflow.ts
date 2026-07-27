@@ -27,7 +27,7 @@ import {
 	persistResourceImageSnapshot,
 	persistUnchangedResourceResync,
 } from './resource-persistence';
-import { isPermanentAcquisitionFailure } from './web-acquisition';
+import { isPermanentAcquisitionFailure, PermanentAcquisitionError } from './web-acquisition';
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
@@ -131,7 +131,7 @@ async function acquireOrFailPermanently(
 			}
 		},
 	);
-	if (permanentAcquisitionFailure(outcome)) throw new Error(outcome.permanentFailure);
+	if (permanentAcquisitionFailure(outcome)) throw new PermanentAcquisitionError(outcome.permanentFailure);
 	return readAcquiredContentArtifact(outcome);
 }
 
@@ -228,9 +228,10 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					resource_id: resourceId,
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
+			const permanent = error instanceof PermanentAcquisitionError;
 			await step
 				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-					markResourceEnrichmentFailed(this.env, resourceId),
+					markResourceEnrichmentFailed(this.env, resourceId, { permanent }),
 				)
 				.catch(logCleanupFailure('Failed to mark resource as failed'));
 			await step

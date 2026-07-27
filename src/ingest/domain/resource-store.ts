@@ -20,7 +20,7 @@ import { textArraySql, uuidArraySql } from '@db/sql';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 
 /** Failed enrichments to retry before a URL is treated as permanently dead. */
-const MAX_ENRICHMENT_ATTEMPTS = 5;
+export const MAX_ENRICHMENT_ATTEMPTS = 5;
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
