@@ -27,12 +27,19 @@ export function parseRssAcquisitionMode(value: unknown, source: string): RssAcqu
 }
 
 /**
- * Enabled sources of one platform that are due to be polled. A null
- * pollIntervalMinutes means every firing, so sources that never set one behave
- * exactly as before; setting it lets one monitor carry feeds whose publishers
- * update at very different rates.
+ * Enabled sources of the given platforms that are due to be polled.
+ *
+ * Takes a list because which monitor runs a source is a code-level decision,
+ * not a property of the source: a YouTube channel stays platform='youtube' —
+ * that is what the plan quota and the source list read — while the RSS monitor
+ * polls it, because its handle is an Atom feed like any other.
+ *
+ * A null pollIntervalMinutes means every firing, so sources that never set one
+ * behave exactly as before; setting it lets one monitor carry feeds whose
+ * publishers update at very different rates.
  */
-export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
+export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatform | SourcePlatform[]): Promise<MonitoredSource[]> {
+	const platforms = Array.isArray(platform) ? platform : [platform];
 	return withCoreDb(env, async (db: CoreDb) =>
 		db
 			.select({
@@ -47,7 +54,7 @@ export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatfor
 			.where(
 				and(
 					eq(sources.monitoringEnabled, true),
-					eq(sources.platform, platform),
+					inArray(sources.platform, platforms),
 					sql`(
 						${sources.pollIntervalMinutes} IS NULL
 						OR ${sources.scrapedAt} IS NULL
@@ -62,16 +69,21 @@ export async function markSourceScraped(env: CoreEnv, sourceId: string, scrapedA
 	await markSourcesScraped(env, [sourceId], scrapedAt);
 }
 
+/**
+ * Policy for a source the RSS monitor owns. Not filtered by platform: a YouTube
+ * channel is polled here too, and the thing that actually decides how its
+ * entries are acquired is the mode, which parseRssAcquisitionMode validates.
+ */
 export async function loadRssSourcePolicy(env: CoreEnv, sourceId: string): Promise<RssSourcePolicy> {
 	return withCoreDb(env, async (db) => {
 		const source = (
 			await db
 				.select({ id: sources.id, name: sources.name, handle: sources.handle, acquisitionMode: sources.acquisitionMode })
 				.from(sources)
-				.where(and(eq(sources.id, sourceId), eq(sources.platform, 'rss')))
+				.where(eq(sources.id, sourceId))
 				.limit(1)
 		)[0];
-		if (!source) throw new Error(`RSS source ${sourceId} was not found`);
+		if (!source) throw new Error(`Source ${sourceId} was not found`);
 		return { ...source, acquisitionMode: parseRssAcquisitionMode(source.acquisitionMode, source.name) };
 	});
 }

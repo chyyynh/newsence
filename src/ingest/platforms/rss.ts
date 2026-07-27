@@ -148,7 +148,11 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
-	const feeds = await loadMonitoredSources(env, 'rss');
+	// YouTube channels are polled here: a channel handle is an Atom feed URL, so
+	// there is nothing for a separate monitor to do. They keep platform='youtube'
+	// for the plan quota and the source list, and their entries resolve back to
+	// type='youtube' at acquisition.
+	const feeds = await loadMonitoredSources(env, ['rss', 'youtube']);
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);
 		const results = await Promise.allSettled(batch.map((feed) => processFeed(env, feed)));
