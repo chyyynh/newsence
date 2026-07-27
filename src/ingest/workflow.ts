@@ -103,11 +103,14 @@ function shouldAcquireContent(
  * throw, so Workflows records one attempt instead of three — a 403 does not
  * become a different 403 ten seconds later.
  *
- * NonRetryableError is the declared way to say that, and it would be less code.
- * It is not used here because the docs say a step that throws it invokes no
- * further steps, and the steps that mark the resource failed run after this one;
- * a row left 'pending' is re-enqueued by the monitors immediately, which is worse
- * than the waste being removed. Verify that behaviour before switching.
+ * NonRetryableError would say that in fewer lines, and the docs' warning that it
+ * "invokes no further steps" turns out not to cover a catch block: probed on a
+ * resource with no extractable content, validate-resource-content threw one from
+ * inside a step and both cleanup steps still ran. What it cannot do is carry the
+ * verdict out. The throw here happens outside the step, so run()'s catch can
+ * match it with instanceof and mark the row permanently failed; thrown inside,
+ * the error crosses a durable boundary that folds the class name into the
+ * message, leaving only a string to match on.
  *
  * The sentinel is returned on its own rather than wrapped around the artifact:
  * `step.do` documents a bare ReadableStream for large output, not one nested in
