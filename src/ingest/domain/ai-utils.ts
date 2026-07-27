@@ -1,42 +1,19 @@
 import { generateObject, generateText } from '@core-ai/generation';
 import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { ENTITY_TYPES, type ResourceForProcessing } from '@core-shared/types';
-import { entityExtractionExclusionNames } from '@entities/normalize';
+import { entityExtractionExclusionNames, type ResourceEntityInput } from '@entities/normalize';
 import { z } from 'zod';
 
 export interface ProcessorResult {
-	updateData: {
-		tags?: string[];
-		keywords?: string[];
-		content?: string;
-		entities: Array<{ name: string; name_cn: string; type: string }>;
-	};
-	classificationCategory?: ResourceCategory;
+	tags?: string[];
+	keywords?: string[];
+	content?: string;
+	entities: ResourceEntityInput[];
+	category: ResourceCategory;
 }
 
 function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
-}
-
-type ResourceClassification = {
-	tags: string[];
-	keywords: string[];
-	category: ResourceCategory;
-	entities: Array<{ name: string; name_cn: string; type: string }>;
-};
-
-export function mergeResourceClassification(
-	resource: ResourceForProcessing,
-	classification: ResourceClassification,
-	extraTags: string[] = [],
-): { updateData: ProcessorResult['updateData']; classificationCategory?: ResourceCategory } {
-	const updateData: ProcessorResult['updateData'] = { entities: classification.entities };
-	const allTags = [...new Set([...classification.tags, classification.category, ...extraTags])];
-
-	if (!resource.tags?.length) updateData.tags = allTags;
-	if (!resource.keywords?.length && classification.keywords.length) updateData.keywords = classification.keywords;
-
-	return { updateData, classificationCategory: classification.category };
 }
 
 const MAX_CONTENT_LENGTH = 10000;
@@ -272,7 +249,7 @@ export async function translateZhHantContent(content: string, env: CoreEnv): Pro
 	});
 }
 
-export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
+export async function classifyResource(resource: ResourceForProcessing, env: CoreEnv, extraTags: string[] = []): Promise<ProcessorResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
 	const resourcePrompt = buildResourceContextPrompt(resource);
@@ -283,10 +260,12 @@ export async function generateResourceClassification(resource: ResourceForProces
 		maxTokens: 500,
 		systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
 	});
+	const tags = classification.tags.slice(0, 5);
+	const keywords = classification.keywords.slice(0, 8);
 	return {
-		tags: classification.tags.slice(0, 5),
-		keywords: classification.keywords.slice(0, 8),
 		category: classification.category,
 		entities: classification.entities.slice(0, 10),
+		...(!resource.tags.length ? { tags: [...new Set([...tags, classification.category, ...extraTags])] } : {}),
+		...(!resource.keywords.length && keywords.length ? { keywords } : {}),
 	};
 }

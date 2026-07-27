@@ -46,28 +46,25 @@ function withAcademicPublishedDate(resource: ResourceForProcessing, paperEnrichm
 function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput) {
 	const { processorResult, extraction, paperEnrichment, previewImageUrl } = input;
 	if (!resource.platform_metadata) throw new Error(`Cannot build update for resource ${resource.id} without platform metadata`);
-	const updateData = processorResult.updateData;
 	let platformMetadata = mergePaperEnrichment(resource.platform_metadata, paperEnrichment);
-	if (processorResult.classificationCategory) {
-		platformMetadata = {
-			...platformMetadata,
-			classification: {
-				...(platformMetadata.classification ?? {}),
-				category: processorResult.classificationCategory,
-				classifiedAt: new Date().toISOString(),
-			},
-		};
-	}
+	platformMetadata = {
+		...platformMetadata,
+		classification: {
+			...(platformMetadata.classification ?? {}),
+			category: processorResult.category,
+			classifiedAt: new Date().toISOString(),
+		},
+	};
 	const sourceName = resource.source?.trim();
 	if (!sourceName) throw new Error('Cannot build platform metadata without a source name');
 	platformMetadata = { ...platformMetadata, ...(extraction ? { extraction } : {}), sourceName };
 
 	return {
 		summary: resource.summary,
-		content: updateData.content !== undefined ? updateData.content : resource.content,
-		tags: [...(updateData.tags ?? resource.tags)],
-		keywords: [...(updateData.keywords ?? resource.keywords)],
-		entities: toStoredResourceEntities(updateData.entities, resource.type, resource.source, platformMetadata),
+		content: processorResult.content !== undefined ? processorResult.content : resource.content,
+		tags: [...(processorResult.tags ?? resource.tags)],
+		keywords: [...(processorResult.keywords ?? resource.keywords)],
+		entities: toStoredResourceEntities(processorResult.entities, resource.type, resource.source, platformMetadata),
 		og_image_url: previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata,
 	};
@@ -187,9 +184,9 @@ export async function persistProcessedResource(env: CoreEnv, input: PersistProce
 			tag: 'ENTITIES',
 			msg: 'Stored resource entities',
 			resourceId,
-			inputCount: input.processorResult.updateData.entities.length,
+			inputCount: input.processorResult.entities.length,
 			count: updatePayload.entities.length,
-			filteredCount: input.processorResult.updateData.entities.length - updatePayload.entities.length,
+			filteredCount: input.processorResult.entities.length - updatePayload.entities.length,
 		});
 		if (input.youtubeTranscript || input.youtubeHighlights) {
 			await persistYouTubeWorkflowData(db, {

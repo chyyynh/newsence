@@ -14,7 +14,7 @@ import {
 	scrapeSavedUrlArtifact,
 } from './acquisition';
 import { enqueueResourceTranslation, isResourceTranslationEligible } from './content-localization-workflow';
-import { generateResourceClassification, mergeResourceClassification } from './domain/ai-utils';
+import { classifyResource } from './domain/ai-utils';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
 import { stagePdfTextExtraction } from './platforms/pdf';
@@ -319,20 +319,16 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			async () => {
 				const fullResource = await loadFull();
 				const resourceToClassify = hackerNewsContent ? { ...fullResource, content: hackerNewsContent } : fullResource;
-				const classification = await generateResourceClassification(resourceToClassify, this.env);
-				return mergeResourceClassification(
+				return classifyResource(
 					resourceToClassify,
-					classification,
+					this.env,
 					resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
 				);
 			},
 		);
 		const processorResult = {
 			...classificationResult,
-			updateData: {
-				...classificationResult.updateData,
-				...(hackerNewsContent ? { content: hackerNewsContent } : {}),
-			},
+			...(hackerNewsContent ? { content: hackerNewsContent } : {}),
 		};
 
 		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;

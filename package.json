@@ -10,7 +10,6 @@
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
 		"start": "wrangler dev --test-scheduled",
-		"test": "tsx --test src/**/*.test.ts",
 		"cf-typegen": "wrangler types --env-interface BaseCoreEnv",
 		"typecheck": "pnpm cf-typegen && pnpm check:db-schema && tsc --noEmit",
 		"typecheck:types": "wrangler types --check --env-interface BaseCoreEnv",
@@ -31,7 +30,6 @@
 		"@biomejs/biome": "^2.5.5",
 		"@types/node": "^22.19.7",
 		"@types/pg": "^8.20.0",
-		"tsx": "^4.23.1",
 		"typescript": "^5.9.3",
 		"wrangler": "^4.113.0"
 	}
