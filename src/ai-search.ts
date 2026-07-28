@@ -349,6 +349,8 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 type SearchIndexResumeCheckpoint = {
 	completedPage: number;
 	erroredInstanceId: string;
+	generation: number;
+	generationKey: string;
 	key: string;
 	resumeAfterCursor: string;
 	startedAt: string;
@@ -362,6 +364,8 @@ const SEARCH_INDEX_RESUME_CHECKPOINTS = {
 	'canonical-3-kind-page-365': {
 		completedPage: 364,
 		erroredInstanceId: 'search-index-rebuild-canonical-3-kind',
+		generation: 3,
+		generationKey: 'canonical-3-kind',
 		resumeAfterCursor: '8c65c3d0-f5de-44ce-a435-0bc95e2ea335',
 		startedAt: '2026-07-28T05:31:32.516Z',
 		uploadedBeforeResume: 18_250,
@@ -416,7 +420,13 @@ function parseSearchIndexResumeCheckpoint(payload: SearchIndexRebuildPayload): S
 	if (typeof checkpointKey !== 'string' || !(checkpointKey in SEARCH_INDEX_RESUME_CHECKPOINTS)) {
 		throw new Error(`Unsupported AI Search resume checkpoint: ${String(checkpointKey)}`);
 	}
-	const checkpoint = SEARCH_INDEX_RESUME_CHECKPOINTS[checkpointKey as SearchIndexResumeCheckpointKey];
+	const checkpoint: Omit<SearchIndexResumeCheckpoint, 'key'> =
+		SEARCH_INDEX_RESUME_CHECKPOINTS[checkpointKey as SearchIndexResumeCheckpointKey];
+	if (checkpoint.generation !== SEARCH_INDEX_GENERATION.ordinal || checkpoint.generationKey !== SEARCH_INDEX_GENERATION.key) {
+		throw new Error(
+			`AI Search resume checkpoint generation ${checkpoint.generation}/${checkpoint.generationKey} does not match ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}`,
+		);
+	}
 	if (!Number.isSafeInteger(checkpoint.completedPage) || checkpoint.completedPage < 0) {
 		throw new Error('AI Search resume checkpoint completedPage must be a non-negative safe integer');
 	}
