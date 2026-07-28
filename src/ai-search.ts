@@ -351,8 +351,10 @@ type SearchIndexRebuildPayload = Record<string, never>;
 const SEARCH_INDEX_GENERATION = 'canonical-3-kind';
 const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION}`;
 const REINDEX_PAGE_SIZE = 50;
-const REINDEX_UPLOAD_CONCURRENCY = 10;
-const REINDEX_DELETE_CONCURRENCY = 10;
+// Workers allow at most six simultaneous outgoing connections per invocation.
+// Stay below that ceiling instead of relying on the runtime to queue the
+// seventh AI Search binding call inside one durable step.
+const REINDEX_AI_SEARCH_CONCURRENCY = 5;
 const REINDEX_MAX_PRUNE_PASSES = 3;
 // Batch prune pages and combine corpus reads/uploads below so the current full
 // rebuild stays under the 1,024-step Workflow limit on Workers Free.
@@ -515,8 +517,8 @@ async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<number> 
 		return resourceId === null || !eligibleIds.has(resourceId);
 	});
 
-	for (let offset = 0; offset < staleItems.length; offset += REINDEX_DELETE_CONCURRENCY) {
-		const batch = staleItems.slice(offset, offset + REINDEX_DELETE_CONCURRENCY);
+	for (let offset = 0; offset < staleItems.length; offset += REINDEX_AI_SEARCH_CONCURRENCY) {
+		const batch = staleItems.slice(offset, offset + REINDEX_AI_SEARCH_CONCURRENCY);
 		await Promise.all(batch.map((item) => env.AI_SEARCH.items.delete(item.id)));
 	}
 	if (staleItems.length) {
@@ -535,8 +537,8 @@ async function pruneSearchItemPages(env: CoreEnv, firstPage: number, lastPage: n
 
 async function uploadCorpusIds(env: CoreEnv, ids: readonly string[]): Promise<number> {
 	let uploaded = 0;
-	for (let offset = 0; offset < ids.length; offset += REINDEX_UPLOAD_CONCURRENCY) {
-		const documents = await withCoreDb(env, (db) => loadCorpusDocuments(db, ids.slice(offset, offset + REINDEX_UPLOAD_CONCURRENCY)));
+	for (let offset = 0; offset < ids.length; offset += REINDEX_AI_SEARCH_CONCURRENCY) {
+		const documents = await withCoreDb(env, (db) => loadCorpusDocuments(db, ids.slice(offset, offset + REINDEX_AI_SEARCH_CONCURRENCY)));
 		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
 		uploaded += documents.length;
 	}
