@@ -3,6 +3,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { withCoreDb } from '@db/client';
 import { isExplicitPaperUrl, stagePaperEnrichmentAttempt } from '@ingest/platforms/paper';
 import { persistAcademicMetadataBackfill } from '@ingest/resource-persistence';
+import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 
 const PAGE_SIZE = 10;
@@ -138,12 +139,24 @@ export class AcademicMetadataBackfillWorkflow extends WorkflowEntrypoint<CoreEnv
 				if (attempt.outcome === 'resolved' && attempt.metadata) {
 					const metadata = attempt.metadata;
 					summary.resolved++;
-					await step.do(
-						`persist-academic-metadata-page-${page}-item-${itemNumber}`,
+					const persistence = await step.do(
+						`persist-academic-metadata-index-relevance-page-${page}-item-${itemNumber}-v2`,
 						{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 						() => persistAcademicMetadataBackfill(this.env, candidate.id, metadata),
 					);
-					summary.upgraded++;
+					if (persistence.indexRelevantChanged) {
+						// The transaction's locked before/after comparison is a
+						// durable step result, so this conditional remains stable on
+						// replay. A failed sync must fail the backfill item rather than
+						// leave an acknowledged index drift.
+						await step.do(
+							`sync-ai-search-academic-metadata-page-${page}-item-${itemNumber}-v1`,
+							{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+							() => syncCorpusItem(this.env, candidate.id),
+						);
+					}
+					if (persistence.changed) summary.upgraded++;
+					else summary.preserved++;
 				} else if (attempt.outcome === 'preserved') {
 					summary.preserved++;
 				} else if (attempt.outcome === 'not_found') {

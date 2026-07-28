@@ -294,14 +294,33 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
-			const persisted = await step.do(
-				'record-unchanged-resync-kind-platform-v1',
+			const persistence = await step.do(
+				'record-unchanged-resync-index-relevance-v2',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() => persistUnchangedResourceResync(this.env, resourceId, resource, paperEnrichment),
 			);
-			if (!persisted) return { success: true, resource_id: resourceId, operation, changed: false, superseded: true };
+			if (!persistence.persisted) {
+				return { success: true, resource_id: resourceId, operation, changed: false, superseded: true };
+			}
 			await stageResourceImageRehost(this.env, step, resourceId);
-			return { success: true, resource_id: resourceId, operation, changed: false };
+			if (persistence.indexRelevantChanged) {
+				// Branch only on the persisted step result so replay sees the same
+				// decision. Let exhausted sync retries fail the resync instead of
+				// reporting success with a known index drift.
+				await step.do(
+					'sync-ai-search-unchanged-resync-index-relevance-v1',
+					{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+					() => syncCorpusItem(this.env, resourceId),
+				);
+			}
+			return {
+				success: true,
+				resource_id: resourceId,
+				operation,
+				changed: false,
+				metadata_changed: persistence.changed,
+				index_relevant_changed: persistence.indexRelevantChanged,
+			};
 		}
 		const logContext = { resource_id: resourceId, table: 'resources' };
 

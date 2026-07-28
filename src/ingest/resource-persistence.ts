@@ -43,10 +43,28 @@ type BuildResourceUpdateInput = {
 };
 
 type LockedResourceState = {
+	created_at: Date | string;
+	file_type: string | null;
 	kind: string | null;
+	legacy_type: string;
+	monitored_source_name: string | null;
+	og_image_url: string | null;
 	platform_metadata: unknown;
 	published_date: Date | string | null;
 	resource_platform: string | null;
+	scraped_date: Date | string | null;
+};
+
+export type ResourcePersistenceOutcome = {
+	/**
+	 * False only when compare-and-set protection rejected a superseded workflow
+	 * snapshot. A current no-op still counts as persisted.
+	 */
+	persisted: boolean;
+	/** Durable payload fields changed, excluding refresh-only timestamps. */
+	changed: boolean;
+	/** The stored AI Search document or its filter metadata may have changed. */
+	indexRelevantChanged: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -67,9 +85,17 @@ function academicTimestamp(metadata: PaperMetadata): number {
 	return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+function academicSchemaVersion(metadata: unknown): unknown {
+	return isRecord(metadata) ? metadata.schemaVersion : null;
+}
+
 function newestAcademicEnrichment(first: PaperMetadata | null, second: PaperMetadata | null): PaperMetadata | null {
 	if (!first) return second;
 	if (!second) return first;
+	// A schema backfill must not preserve an older payload solely because its
+	// provider timestamp is newer (for example, a concurrent legacy writer).
+	if (academicSchemaVersion(first) === 2 && academicSchemaVersion(second) !== 2) return first;
+	if (academicSchemaVersion(first) !== 2 && academicSchemaVersion(second) === 2) return second;
 	return academicTimestamp(second) > academicTimestamp(first) ? second : first;
 }
 
@@ -93,14 +119,61 @@ function mergeLockedPlatformMetadata(resource: ResourceForProcessing, lockedPlat
 
 async function lockResourceState(db: CoreDb, resourceId: string): Promise<LockedResourceState> {
 	const result = await db.execute<LockedResourceState>(sql`
-		SELECT kind, resource_platform, published_date, platform_metadata
-		FROM resources
-		WHERE id = ${resourceId}::uuid
-		FOR UPDATE
+		SELECT
+			r.created_at,
+			r.file_type,
+			r.kind,
+			r.type AS legacy_type,
+			monitored_source.name AS monitored_source_name,
+			r.og_image_url,
+			r.platform_metadata,
+			r.published_date,
+			r.resource_platform,
+			r.scraped_date
+		FROM resources r
+		LEFT JOIN sources monitored_source ON monitored_source.id = r.source_id
+		WHERE r.id = ${resourceId}::uuid
+		FOR UPDATE OF r
 	`);
 	const lockedResource = result.rows[0];
 	if (!lockedResource) throw new Error(`Failed to lock resource ${resourceId}: not found`);
 	return lockedResource;
+}
+
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+	if (Object.is(left, right)) return true;
+	if (Array.isArray(left) || Array.isArray(right)) {
+		if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+		return left.every((value, index) => jsonValuesEqual(value, right[index]));
+	}
+	if (!isRecord(left) || !isRecord(right)) return false;
+	const leftKeys = Object.keys(left).filter((key) => left[key] !== undefined);
+	const rightKeys = Object.keys(right).filter((key) => right[key] !== undefined);
+	if (leftKeys.length !== rightKeys.length) return false;
+	return leftKeys.every((key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key], right[key]));
+}
+
+function dateTimestamp(value: Date | string | null): number | null {
+	if (value === null) return null;
+	const timestamp = new Date(value).getTime();
+	return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function datesEqual(left: Date | string | null, right: Date | string | null): boolean {
+	return dateTimestamp(left) === dateTimestamp(right);
+}
+
+function effectiveTimestamp(input: {
+	createdAt: Date | string;
+	publishedDate: Date | string | null;
+	scrapedDate: Date | string | null;
+}): number | null {
+	return dateTimestamp(input.publishedDate) ?? dateTimestamp(input.scrapedDate) ?? dateTimestamp(input.createdAt);
+}
+
+function metadataSourceName(value: unknown): string | null {
+	if (!isRecord(value) || typeof value.sourceName !== 'string') return null;
+	return value.sourceName.trim() || null;
 }
 
 function mergeLockedResourceState(
@@ -218,16 +291,50 @@ export async function persistUnchangedResourceResync(
 	resourceId: string,
 	resource: ResourceForProcessing,
 	paperEnrichment?: PaperMetadata | null,
-): Promise<boolean> {
+): Promise<ResourcePersistenceOutcome> {
 	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
 	return withCoreTx(env, async (db) => {
 		const lockedResource = await lockResourceState(db, resourceId);
-		if (resourceWriteIsSuperseded(resource, lockedResource, 'unchanged_resync')) return false;
+		if (resourceWriteIsSuperseded(resource, lockedResource, 'unchanged_resync')) {
+			return { persisted: false, changed: false, indexRelevantChanged: false };
+		}
 		const merged = mergeLockedResourceState(resource, lockedResource, paperEnrichment ?? null);
 		const resourceWithDate = merged.resource;
 		const previewImageUrl = resourceWithDate.og_image_url?.trim() || null;
 		if (!resourceWithDate.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
 		const platformMetadata = mergePaperEnrichment(resourceWithDate.platform_metadata, merged.paperEnrichment);
+		const refreshedAt = new Date();
+		const publishedDate = resourceWithDate.published_date ? new Date(resourceWithDate.published_date) : null;
+		const academicChanged = !jsonValuesEqual(
+			academicEnrichmentFrom(lockedResource.platform_metadata),
+			academicEnrichmentFrom(platformMetadata),
+		);
+		const identityChanged =
+			lockedResource.legacy_type !== resourceWithDate.type ||
+			lockedResource.kind !== resourceWithDate.kind ||
+			lockedResource.resource_platform !== resourceWithDate.resource_platform;
+		const effectiveAtChanged =
+			effectiveTimestamp({
+				createdAt: lockedResource.created_at,
+				publishedDate: lockedResource.published_date,
+				scrapedDate: lockedResource.scraped_date,
+			}) !==
+			effectiveTimestamp({
+				createdAt: lockedResource.created_at,
+				publishedDate,
+				scrapedDate: refreshedAt,
+			});
+		const platformMetadataChanged = !jsonValuesEqual(lockedResource.platform_metadata, platformMetadata);
+		const metadataSourceChanged =
+			!lockedResource.monitored_source_name?.trim() &&
+			metadataSourceName(lockedResource.platform_metadata) !== metadataSourceName(platformMetadata);
+		const changed =
+			identityChanged ||
+			lockedResource.file_type !== (resourceWithDate.file_type ?? null) ||
+			!datesEqual(lockedResource.published_date, publishedDate) ||
+			lockedResource.og_image_url !== previewImageUrl ||
+			platformMetadataChanged;
+		const indexRelevantChanged = identityChanged || effectiveAtChanged || academicChanged || metadataSourceChanged;
 		const updated = await db
 			.update(resources)
 			.set({
@@ -235,28 +342,43 @@ export async function persistUnchangedResourceResync(
 				kind: resourceWithDate.kind,
 				resourcePlatform: resourceWithDate.resource_platform,
 				fileType: resourceWithDate.file_type ?? null,
-				scrapedDate: new Date(),
-				publishedDate: resourceWithDate.published_date ? new Date(resourceWithDate.published_date) : null,
+				scrapedDate: refreshedAt,
+				publishedDate,
 				ogImageUrl: previewImageUrl,
 				platformMetadata,
-				updatedAt: new Date(),
+				updatedAt: refreshedAt,
 			})
 			.where(eq(resources.id, resourceId))
 			.returning({ id: resources.id });
 		if (!updated.length) throw new Error(`Failed to record resource ${resourceId} resync: not found`);
-		return true;
+		return { persisted: true, changed, indexRelevantChanged };
 	});
 }
 
-export async function persistAcademicMetadataBackfill(env: CoreEnv, resourceId: string, metadata: PaperMetadata): Promise<void> {
-	await withCoreTx(env, async (_db, client) => {
+export async function persistAcademicMetadataBackfill(
+	env: CoreEnv,
+	resourceId: string,
+	metadata: PaperMetadata,
+): Promise<ResourcePersistenceOutcome> {
+	return withCoreTx(env, async (_db, client) => {
 		const locked = await client.query<{
+			created_at: Date | string;
 			legacy_type: string;
 			kind: string | null;
+			platform_metadata: unknown;
+			published_date: Date | string | null;
 			resource_platform: string | null;
+			scraped_date: Date | string | null;
 		}>(
 			`
-				SELECT type AS legacy_type, kind, resource_platform
+				SELECT
+					created_at,
+					type AS legacy_type,
+					kind,
+					platform_metadata,
+					published_date,
+					resource_platform,
+					scraped_date
 				FROM resources
 				WHERE id = $1::uuid
 				FOR UPDATE
@@ -276,17 +398,46 @@ export async function persistAcademicMetadataBackfill(env: CoreEnv, resourceId: 
 				`Cannot persist academic metadata for resource ${resourceId} with invalid identity ${String(row.kind)} / ${String(row.resource_platform)}`,
 			);
 		}
+		const storedAcademic = academicEnrichmentFrom(row.platform_metadata);
+		const academic = newestAcademicEnrichment(metadata, storedAcademic);
+		if (!academic) throw new Error(`Failed to select academic metadata for resource ${resourceId}`);
 		const identity = resourceIdentityWithAcademic(currentIdentity, true);
-		const publishedDate = metadata.publicationDate ? `${metadata.publicationDate}T00:00:00.000Z` : null;
+		const academicPublishedDate = academic.publicationDate ? `${academic.publicationDate}T00:00:00.000Z` : null;
+		const publishedDate = row.published_date ?? academicPublishedDate;
+		const academicChanged = !jsonValuesEqual(storedAcademic, academic);
+		const identityChanged = row.kind !== identity.kind || row.resource_platform !== identity.resourcePlatform;
+		const publishedDateChanged = !datesEqual(row.published_date, publishedDate);
+		const changed = academicChanged || identityChanged || publishedDateChanged;
+		const indexRelevantChanged =
+			academicChanged ||
+			identityChanged ||
+			effectiveTimestamp({
+				createdAt: row.created_at,
+				publishedDate: row.published_date,
+				scrapedDate: row.scraped_date,
+			}) !==
+				effectiveTimestamp({
+					createdAt: row.created_at,
+					publishedDate,
+					scrapedDate: row.scraped_date,
+				});
+		if (!changed) {
+			console.info({
+				tag: 'S2',
+				event: 'academic_metadata_backfill_unchanged',
+				resource_id: resourceId,
+			});
+			return { persisted: true, changed: false, indexRelevantChanged: false };
+		}
 		const result = await client.query<{ id: string }>(
 			`
-				UPDATE resources
-				SET
-					platform_metadata =
-						CASE
-							WHEN jsonb_typeof(platform_metadata) = 'object' THEN platform_metadata
-							ELSE '{}'::jsonb
-						END
+					UPDATE resources
+					SET
+						platform_metadata =
+							CASE
+								WHEN jsonb_typeof(platform_metadata) = 'object' THEN platform_metadata
+								ELSE '{}'::jsonb
+							END
 						|| jsonb_build_object(
 							'enrichments',
 							CASE
@@ -295,23 +446,25 @@ export async function persistAcademicMetadataBackfill(env: CoreEnv, resourceId: 
 							END
 							|| jsonb_build_object('academic', $2::jsonb)
 						),
-					published_date = COALESCE(published_date, $3::timestamp),
+					published_date = $3::timestamp,
 					kind = $4,
 					resource_platform = $5,
 					updated_at = NOW()
 				WHERE id = $1::uuid
 				RETURNING id::text AS id
 			`,
-			[resourceId, JSON.stringify(metadata), publishedDate, identity.kind, identity.resourcePlatform],
+			[resourceId, JSON.stringify(academic), publishedDate, identity.kind, identity.resourcePlatform],
 		);
 		if (result.rowCount !== 1) throw new Error(`Failed to persist academic metadata for resource ${resourceId}: not found`);
 		console.info({
 			tag: 'S2',
 			event: 'academic_metadata_backfill_persisted',
 			resource_id: resourceId,
-			references_loaded: metadata.references.length,
+			references_loaded: academic.references.length,
 			publication_date_available: !!publishedDate,
+			index_relevant_changed: indexRelevantChanged,
 		});
+		return { persisted: true, changed: true, indexRelevantChanged };
 	});
 }
 

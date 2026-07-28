@@ -21,6 +21,7 @@ const PAGE_SIZE = 500;
 const MAX_PAGES = 1200;
 const MAX_BLOCKING_AUDIT_GROUPS = 128;
 const MAX_NONBLOCKING_AUDIT_GROUPS = 384;
+const MAX_RESULT_AUDIT_GROUPS = 50;
 const WORKFLOW_VERSION = 1;
 const RESOURCE_IDENTITY_BACKFILL_MODES = ['dry-run', 'write', 'audit', 'convergence'] as const;
 
@@ -136,6 +137,19 @@ export type ResourceIdentityBackfillSummary = {
 	before: ResourceIdentityAudit;
 	write: WriteSummary;
 	after: ResourceIdentityAudit;
+	invariants: ResourceIdentityInvariantCounters;
+};
+
+type ResourceIdentityAuditResult = Omit<ResourceIdentityAudit, 'groups'> & {
+	sampleGroups: ResourceIdentityAuditGroup[];
+};
+
+export type ResourceIdentityBackfillResult = {
+	mode: ResourceIdentityBackfillMode;
+	snapshotAt: string;
+	before: ResourceIdentityAuditResult;
+	write: WriteSummary;
+	after: ResourceIdentityAuditResult;
 	invariants: ResourceIdentityInvariantCounters;
 };
 
@@ -693,7 +707,26 @@ function assertFinalState(mode: ResourceIdentityBackfillMode, summary: ResourceI
 	}
 }
 
-async function recordSummary(step: WorkflowStep, summary: ResourceIdentityBackfillSummary) {
+function compactAuditResult(audit: ResourceIdentityAudit): ResourceIdentityAuditResult {
+	const { groups, ...counters } = audit;
+	const blockingGroups = groups.filter((group) => group.blocking).slice(0, MAX_RESULT_AUDIT_GROUPS);
+	const remaining = MAX_RESULT_AUDIT_GROUPS - blockingGroups.length;
+	const nonBlockingGroups = groups.filter((group) => !group.blocking).slice(0, remaining);
+	return { ...counters, sampleGroups: [...blockingGroups, ...nonBlockingGroups] };
+}
+
+function compactBackfillResult(summary: ResourceIdentityBackfillSummary): ResourceIdentityBackfillResult {
+	return {
+		mode: summary.mode,
+		snapshotAt: summary.snapshotAt,
+		before: compactAuditResult(summary.before),
+		write: summary.write,
+		after: compactAuditResult(summary.after),
+		invariants: summary.invariants,
+	};
+}
+
+async function recordSummary(step: WorkflowStep, result: ResourceIdentityBackfillResult) {
 	return step.do(
 		'record-resource-identity-backfill-summary',
 		{ retries: { limit: 0, delay: '1 second' }, timeout: '5 seconds' },
@@ -701,16 +734,9 @@ async function recordSummary(step: WorkflowStep, summary: ResourceIdentityBackfi
 			console.info({
 				tag: 'RESOURCE_IDENTITY',
 				event: 'resource_identity_backfill_completed',
-				mode: summary.mode,
-				snapshotAt: summary.snapshotAt,
-				before: { ...summary.before, groups: undefined },
-				beforeBlockingGroups: summary.before.groups.filter((group) => group.blocking).slice(0, 50),
-				write: summary.write,
-				after: { ...summary.after, groups: undefined },
-				afterBlockingGroups: summary.after.groups.filter((group) => group.blocking).slice(0, 50),
-				invariants: summary.invariants,
+				...result,
 			});
-			return summary;
+			return result;
 		},
 	);
 }
@@ -739,16 +765,15 @@ export class ResourceIdentityBackfillWorkflow extends WorkflowEntrypoint<CoreEnv
 			'record-resource-identity-backfill-preflight',
 			{ retries: { limit: 0, delay: '1 second' }, timeout: '5 seconds' },
 			async () => {
+				const result = compactAuditResult(before);
 				console.info({
 					tag: 'RESOURCE_IDENTITY',
 					event: 'resource_identity_backfill_preflight',
 					mode,
 					snapshotAt,
-					...before,
-					groups: undefined,
-					blockingGroups: before.groups.filter((group) => group.blocking).slice(0, 50),
+					...result,
 				});
-				return before;
+				return result;
 			},
 		);
 		assertPreflightAllowsWrite(mode, before);
@@ -759,8 +784,7 @@ export class ResourceIdentityBackfillWorkflow extends WorkflowEntrypoint<CoreEnv
 			loadInvariantCounters(this.env, snapshotAt),
 		);
 		const summary = { mode, snapshotAt, before, write, after, invariants } satisfies ResourceIdentityBackfillSummary;
-		const recorded = await recordSummary(step, summary);
 		assertFinalState(mode, summary);
-		return recorded;
+		return recordSummary(step, compactBackfillResult(summary));
 	}
 }
