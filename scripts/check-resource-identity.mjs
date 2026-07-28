@@ -43,7 +43,7 @@ assert.equal(legacyResourceTypeAfterAcquisition('pdf', 'web'), 'web');
 
 const translationCases = [
 	['generic document', { kind: 'document', resourcePlatform: null, fileType: null }, true],
-	['Hacker News PDF', { kind: 'document', resourcePlatform: 'hackernews', fileType: 'application/pdf' }, true],
+	['Hacker News document with PDF representation', { kind: 'document', resourcePlatform: 'hackernews', fileType: 'application/pdf' }, true],
 	['direct PDF', { kind: 'document', resourcePlatform: null, fileType: 'application/pdf' }, false],
 	['post', { kind: 'post', resourcePlatform: 'twitter', fileType: null }, true],
 	['video', { kind: 'video', resourcePlatform: 'youtube', fileType: null }, false],
