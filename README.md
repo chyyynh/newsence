@@ -263,20 +263,33 @@ provider responses atomically replace only `enrichments.academic` and fill a
 missing exact publication date. Provider failures preserve legacy metadata;
 reruns automatically skip already-upgraded rows.
 
-## Adding a Platform
+## Adding an Ingest Adapter
 
-Platforms are source adapters. Each platform lives in one `ingest/platforms/*.ts` file with the discovery/scrape/process pieces it actually needs. App-owned saved URLs and uploads are persisted as `resources`/`library` rows by the app; the workflow receives a `resourceId`. SQL writes stay in `ingest/domain/resource-store.ts`.
+Ingest adapters live in `ingest/platforms/*.ts` with the
+discovery/scrape/process pieces they actually need. App-owned saved URLs create
+`resources` plus `resource_saves`; uploads create `resources` plus `user_files`.
+The workflow receives a `resourceId`. SQL writes stay in
+`ingest/domain/resource-store.ts`.
 
-Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernews`) is not content shape (`pdf`, academic paper) and not origin (`upload`, `saved_url`, `generated`). PDF extraction and Semantic Scholar paper enrichment are workflow stages keyed from row content/metadata, not platform adapters.
+Keep the axes separate: acquisition (`rss`, `web`, or a specialized adapter) is
+not canonical `ResourcePlatform` (`youtube`, `twitter`, `hackernews`, or null),
+`ResourceKind` (`document`, `post`, `video`, `paper`, `image`, `file`), blob
+representation (MIME/filename/size/pages), or lifecycle origin (`source`,
+`saved_url`, `upload`, `generated`). PDF extraction and Semantic Scholar paper
+enrichment are workflow stages keyed from row content/metadata, not additional
+identity values.
 
-Minimum to add a new source:
+Minimum to add a new ingest source:
 
-1. **Platform file** (`ingest/platforms/foo.ts`) — discovery/scrape helpers and optional custom processor.
+1. **Adapter file** (`ingest/platforms/foo.ts`) — discovery/scrape helpers and optional custom processor.
 2. **Metadata shape** — add only the platform-specific JSON payload needed by `platform_metadata`.
 3. **Monitor** (optional) — if the source is pollable, wire its cron handler from `src/index.ts`.
 4. **Workflow hook** (optional) — only if the source needs behavior beyond the default AI merge.
 
-The new resource goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
+The new resource goes through the same Workflow pipeline as every other ingest
+source. Add a new canonical platform value only when the product needs durable
+platform-specific behavior or presentation; an RSS feed or ordinary web page
+does not qualify.
 
 ## License
 

@@ -183,20 +183,31 @@ Secrets（透過 `wrangler secret put` 設定）：
 | `YOUTUBE_API_KEY`              | 是   | 啟用 YouTube 頻道監控         |
 | `S2_API_KEY`                   | 是   | 提高 Semantic Scholar paper enrichment quota |
 
-## 新增平台
+## 新增擷取 adapter
 
-平台是來源 adapter。每個平台集中在一個 `ingest/platforms/*.ts` 檔案裡，只放它真正需要的 discovery / scrape / process 邏輯。App-owned saved URL 和 upload 由 app 先寫成 `resources`/`library` rows；workflow 收到的是 `resourceId`。SQL 寫入留在 `ingest/domain/resource-store.ts`。
+擷取 adapter 集中在 `ingest/platforms/*.ts`，只放它真正需要的
+discovery / scrape / process 邏輯。App-owned saved URL 先寫入 `resources`
+與 `resource_saves`；upload 則寫入 `resources` 與 `user_files`。Workflow
+收到的是 `resourceId`，SQL 寫入留在 `ingest/domain/resource-store.ts`。
 
-三個軸要分開：platform（`rss`、`web`、`youtube`、`twitter`、`hackernews`）不是 content shape（`pdf`、academic paper），也不是 origin（`upload`、`saved_url`、`generated`）。PDF 解析和 Semantic Scholar paper enrichment 是 workflow stage，根據 row 內容或 metadata 觸發，不是 platform adapter。
+各軸要分開：acquisition（`rss`、`web` 或專用 adapter）不是 canonical
+`ResourcePlatform`（`youtube`、`twitter`、`hackernews` 或 null），也不是
+`ResourceKind`（`document`、`post`、`video`、`paper`、`image`、`file`）、
+blob representation（MIME／檔名／大小／頁數）或 lifecycle origin
+（`source`、`saved_url`、`upload`、`generated`）。PDF 解析和 Semantic
+Scholar paper enrichment 是 workflow stage，依 row 內容或 metadata
+觸發，不是新的 identity 值。
 
 新增一個來源最少要做：
 
-1. **Platform file**（`ingest/platforms/foo.ts`）— discovery / scrape helpers 和可選自訂 processor。
+1. **Adapter file**（`ingest/platforms/foo.ts`）— discovery / scrape helpers 和可選自訂 processor。
 2. **Metadata shape** — 只加入 `platform_metadata` 真的需要的平台 JSON payload。
 3. **Monitor**（可選）— 如果來源可以輪詢，從 `src/index.ts` 接上 cron handler。
 4. **Workflow hook**（可選）— 只有在來源需要不同於預設 AI merge 的行為時才加。
 
-新 resource 一樣走 Workflow pipeline，AI 步驟你不用動。
+新 resource 一樣走 Workflow pipeline。只有當產品真的需要持久化的
+platform-specific 行為或呈現時才新增 canonical platform；RSS feed 或
+一般網頁不算。
 
 ## 授權
 
