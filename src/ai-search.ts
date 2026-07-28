@@ -346,6 +346,30 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	return [...ranks.values()];
 }
 
+type SearchIndexResumeCheckpoint = {
+	completedPage: number;
+	erroredInstanceId: string;
+	key: string;
+	resumeAfterCursor: string;
+	startedAt: string;
+	uploadedBeforeResume: number;
+};
+
+// One-time, source-controlled recovery boundary for the pre-concurrency-fix
+// generation-3 bridge. Keeping the cursor out of the trigger payload prevents
+// an operator typo from silently skipping an arbitrary corpus range.
+const SEARCH_INDEX_RESUME_CHECKPOINTS = {
+	'canonical-3-kind-page-365': {
+		completedPage: 364,
+		erroredInstanceId: 'search-index-rebuild-canonical-3-kind',
+		resumeAfterCursor: '8c65c3d0-f5de-44ce-a435-0bc95e2ea335',
+		startedAt: '2026-07-28T05:31:32.516Z',
+		uploadedBeforeResume: 18_250,
+	},
+} as const satisfies Record<string, Omit<SearchIndexResumeCheckpoint, 'key'>>;
+
+type SearchIndexResumeCheckpointKey = keyof typeof SEARCH_INDEX_RESUME_CHECKPOINTS;
+
 type SearchIndexRebuildPayload =
 	| { mode?: 'rebuild' }
 	| {
@@ -353,6 +377,10 @@ type SearchIndexRebuildPayload =
 			// Workflow version. The source instance must itself be terminal.
 			completedInstanceId: string;
 			mode: 'adopt';
+	  }
+	| {
+			checkpoint: SearchIndexResumeCheckpointKey;
+			mode: 'resume';
 	  };
 
 const SEARCH_INDEX_NAME = 'public-corpus';
@@ -381,6 +409,32 @@ const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } a
 const SHORT_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '60 seconds' } as const;
 const BATCH_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '300 seconds' } as const;
 const UTC_TIMESTAMP_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"';
+
+function parseSearchIndexResumeCheckpoint(payload: SearchIndexRebuildPayload): SearchIndexResumeCheckpoint | null {
+	if (payload.mode !== 'resume') return null;
+	const checkpointKey: unknown = payload.checkpoint;
+	if (typeof checkpointKey !== 'string' || !(checkpointKey in SEARCH_INDEX_RESUME_CHECKPOINTS)) {
+		throw new Error(`Unsupported AI Search resume checkpoint: ${String(checkpointKey)}`);
+	}
+	const checkpoint = SEARCH_INDEX_RESUME_CHECKPOINTS[checkpointKey as SearchIndexResumeCheckpointKey];
+	if (!Number.isSafeInteger(checkpoint.completedPage) || checkpoint.completedPage < 0) {
+		throw new Error('AI Search resume checkpoint completedPage must be a non-negative safe integer');
+	}
+	if (checkpoint.uploadedBeforeResume !== (checkpoint.completedPage + 1) * REINDEX_PAGE_SIZE) {
+		throw new Error('AI Search resume checkpoint uploaded count does not match its completed page boundary');
+	}
+	if (!checkpoint.erroredInstanceId.trim()) throw new Error('AI Search resume checkpoint source instance is empty');
+	if (!isValidUuid(checkpoint.resumeAfterCursor)) throw new Error('AI Search resume checkpoint cursor must be a UUID');
+	const startedAtDate = new Date(checkpoint.startedAt);
+	if (Number.isNaN(startedAtDate.getTime()) || startedAtDate.toISOString() !== checkpoint.startedAt) {
+		throw new Error('AI Search resume checkpoint startedAt must be a canonical UTC timestamp');
+	}
+	return {
+		...checkpoint,
+		key: checkpointKey,
+		startedAt: checkpoint.startedAt,
+	};
+}
 
 async function searchIndexKindMetadataReady(env: CoreEnv): Promise<boolean> {
 	try {
@@ -978,7 +1032,7 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
 		const requestedMode: unknown = event.payload.mode;
-		if (requestedMode !== undefined && requestedMode !== 'rebuild' && requestedMode !== 'adopt') {
+		if (requestedMode !== undefined && requestedMode !== 'rebuild' && requestedMode !== 'adopt' && requestedMode !== 'resume') {
 			throw new Error(`Unsupported AI Search rebuild mode: ${String(requestedMode)}`);
 		}
 		const adoptionSourceValue: unknown = event.payload.mode === 'adopt' ? event.payload.completedInstanceId : undefined;
@@ -986,12 +1040,26 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		if (requestedMode === 'adopt' && !adoptionSourceInstanceId) {
 			throw new Error('AI Search generation adoption requires a completed source Workflow instance id');
 		}
+		const resumeCheckpoint = parseSearchIndexResumeCheckpoint(event.payload);
+		const resumeSourceStatus = resumeCheckpoint
+			? await step.do('verify-errored-search-rebuild-source', SHORT_STEP_OPTIONS, async () => {
+					const instance = await this.env.SEARCH_INDEX_REBUILD_WORKFLOW.get(resumeCheckpoint.erroredInstanceId);
+					const status = await instance.status();
+					if (status.status !== 'errored') {
+						throw new Error(`AI Search resume source ${resumeCheckpoint.erroredInstanceId} is ${status.status}, not errored`);
+					}
+					return { status: status.status };
+				})
+			: null;
 
 		// Keep the legacy step name as the rebuild's delta boundary. A pre-gate
 		// instance can replay this newer graph after deployment while retaining
 		// its original durable output; using the DB generation timestamp instead
 		// would silently move that in-flight rebuild's delta window forward.
-		const startedAt = await step.do('capture-search-rebuild-started-at', async () => new Date().toISOString());
+		const startedAt = await step.do(
+			'capture-search-rebuild-started-at',
+			async () => resumeCheckpoint?.startedAt ?? new Date().toISOString(),
+		);
 
 		// First generation-state side effect for every execution, including a
 		// direct operator restart: clear readiness and advance the fencing epoch.
@@ -1034,9 +1102,9 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		const instanceConfig = await step.do('ensure-search-instance-config', SHORT_STEP_OPTIONS, () =>
 			withSearchIndexRebuildLease(this.env, lease, () => ensureSearchInstanceConfig(this.env)),
 		);
-		let cursor: string | null = null;
-		let uploaded = 0;
-		let page = 0;
+		let cursor: string | null = resumeCheckpoint?.resumeAfterCursor ?? null;
+		let uploaded = resumeCheckpoint?.uploadedBeforeResume ?? 0;
+		let page = resumeCheckpoint ? resumeCheckpoint.completedPage + 1 : 0;
 
 		while (true) {
 			const result = await step.do(`sync-corpus-page-${page}`, BATCH_STEP_OPTIONS, () =>
@@ -1081,10 +1149,18 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		);
 
 		return {
-			mode: 'rebuild' as const,
+			mode: resumeCheckpoint ? ('resume' as const) : ('rebuild' as const),
 			startedAt,
 			generation: SEARCH_INDEX_GENERATION,
 			rebuildEpoch: lease.rebuildEpoch,
+			...(resumeCheckpoint
+				? {
+						resume: {
+							...resumeCheckpoint,
+							sourceStatus: resumeSourceStatus,
+						},
+					}
+				: {}),
 			identityPreflight,
 			instanceConfig,
 			uploaded,
