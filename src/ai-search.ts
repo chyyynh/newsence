@@ -212,7 +212,7 @@ function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	};
 }
 
-async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<void> {
+async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo> {
 	const startedAt = Date.now();
 	const result = await env.AI_SEARCH.items.upload(itemKey(document.id), serializeDocument(document), {
 		metadata: corpusItemMetadata(document),
@@ -224,6 +224,7 @@ async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Pro
 		item_id: result.id,
 		latency_ms: Date.now() - startedAt,
 	});
+	return result;
 }
 
 export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<'uploaded' | 'deleted' | 'skipped'> {
@@ -925,7 +926,7 @@ async function loadEligibleCorpusLatestUpdates(env: CoreEnv, resourceIds: readon
 			db,
 			sql`
 				SELECT r.id::text,
-				       (
+				       CEIL(
 				         EXTRACT(
 				           EPOCH FROM (
 				             GREATEST(
@@ -1151,9 +1152,13 @@ type SearchIndexRepairSyncResult = {
 	requested: number;
 	requestedDigest: string;
 	results: Array<{
-		action: 'already-advanced' | 'synced';
+		action: 'already-advanced' | 'synced' | 'uploaded';
 		error: string | null;
 		itemId: string;
+		latestUpdateMs: number;
+		pinnedItemId: string;
+		previousLastSeenAt: string | null;
+		previousStatus: AiSearchItemInfo['status'];
 		resourceId: string;
 		status: AiSearchItemInfo['status'];
 	}>;
@@ -1174,6 +1179,12 @@ function compareAscii(left: string, right: string): number {
 	if (left < right) return -1;
 	if (left > right) return 1;
 	return 0;
+}
+
+function parseAiSearchTimestamp(value: string | undefined): number {
+	if (!value) return Number.NaN;
+	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value) ? `${value.replace(' ', 'T')}Z` : value;
+	return Date.parse(normalized);
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -1228,7 +1239,7 @@ function parseSearchIndexRepairTarget(item: AiSearchItemInfo, status: SearchInde
 		throw new Error(`AI Search repair candidate ${item.id} is missing its terminal error`);
 	}
 	const lastSeenAt = item.last_seen_at;
-	const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
+	const lastSeenMs = parseAiSearchTimestamp(lastSeenAt);
 	if (!lastSeenAt || Number.isNaN(lastSeenMs)) {
 		throw new Error(`AI Search repair candidate ${item.id} has an invalid last-seen timestamp`);
 	}
@@ -1257,12 +1268,6 @@ async function loadSearchIndexRepairTargets(env: CoreEnv): Promise<SearchIndexRe
 	const latestUpdates = await loadEligibleCorpusLatestUpdates(env, [...resourceIds]);
 	if (latestUpdates.size !== targets.length) {
 		throw new Error(`AI Search repair candidate eligibility mismatch: ${latestUpdates.size}/${targets.length}`);
-	}
-	for (const target of targets) {
-		const latestUpdateMs = latestUpdates.get(target.resourceId);
-		if (latestUpdateMs === undefined || latestUpdateMs > Date.parse(target.lastSeenAt)) {
-			throw new Error(`AI Search repair candidate ${target.resourceId} has DB content newer than its stored item`);
-		}
 	}
 	return searchIndexRepairTargetSnapshot(targets);
 }
@@ -1295,59 +1300,128 @@ function assertInitialSearchIndexRepairTargets(
 }
 
 function assertSearchIndexRepairTargetSubset(snapshot: SearchIndexRepairTargetSnapshot, initial: SearchIndexRepairTargetSnapshot): void {
-	const initialItemToResource = new Map(initial.targets.map((target) => [target.itemId, target.resourceId]));
+	const initialResourceIds = new Set(initial.targets.map((target) => target.resourceId));
 	for (const target of snapshot.targets) {
-		if (initialItemToResource.get(target.itemId) !== target.resourceId) {
+		if (!initialResourceIds.has(target.resourceId)) {
 			throw new Error(`AI Search repair retry introduced an unpinned target: ${target.itemId}/${target.resourceId}`);
 		}
 	}
+}
+
+type SearchIndexRepairCurrentTarget = {
+	current: AiSearchItemInfo;
+	target: SearchIndexRepairTarget;
+};
+
+async function resolveSearchIndexRepairCurrentTarget(
+	env: CoreEnv,
+	target: SearchIndexRepairTarget,
+): Promise<SearchIndexRepairCurrentTarget> {
+	const listed = await env.AI_SEARCH.items.list({
+		per_page: REINDEX_PAGE_SIZE,
+		search: target.resourceId,
+		source: 'builtin',
+	});
+	const total = listedItemCount(listed, `current repair item ${target.resourceId}`);
+	if (total > REINDEX_PAGE_SIZE) {
+		throw new Error(`AI Search repair key lookup exceeded its single-page fence: ${total}/${REINDEX_PAGE_SIZE}`);
+	}
+	const matches = listed.result.filter((item) => item.key === itemKey(target.resourceId) && item.source_id === 'builtin');
+	if (matches.length !== 1) {
+		throw new Error(`AI Search repair could not resolve one current item for ${target.itemId}/${target.resourceId}: ${matches.length}`);
+	}
+	const [current] = matches;
+	if (current.key !== itemKey(target.resourceId) || current.source_id !== 'builtin') {
+		throw new Error(`AI Search repair inspection returned the wrong item for ${target.itemId}/${target.resourceId}`);
+	}
+	if (current.status === 'skipped') {
+		throw new Error(`AI Search repair target ${target.itemId}/${target.resourceId} became skipped`);
+	}
+	return { current, target };
+}
+
+function searchIndexRepairTargetNeedsUpload(current: AiSearchItemInfo, latestUpdateMs: number): boolean {
+	if (current.status === 'queued' || current.status === 'running') return false;
+	const lastSeenMs = parseAiSearchTimestamp(current.last_seen_at);
+	return Number.isNaN(lastSeenMs) || latestUpdateMs > lastSeenMs;
+}
+
+function searchIndexRepairResult(
+	action: SearchIndexRepairSyncResult['results'][number]['action'],
+	entry: SearchIndexRepairCurrentTarget,
+	item: AiSearchItemInfo,
+	latestUpdateMs: number,
+): SearchIndexRepairSyncResult['results'][number] {
+	const { current, target } = entry;
+	if (item.status === 'skipped') throw new Error(`AI Search repair action skipped ${item.id}/${target.resourceId}`);
+	if (item.key !== itemKey(target.resourceId) || item.source_id !== 'builtin') {
+		throw new Error(`AI Search repair action returned the wrong item for ${target.itemId}/${target.resourceId}`);
+	}
+	return {
+		action,
+		error: item.error?.trim() || null,
+		itemId: item.id,
+		latestUpdateMs,
+		pinnedItemId: target.itemId,
+		previousLastSeenAt: current.last_seen_at ?? null,
+		previousStatus: current.status,
+		resourceId: target.resourceId,
+		status: item.status,
+	};
+}
+
+async function applySearchIndexRepairTarget(
+	env: CoreEnv,
+	entry: SearchIndexRepairCurrentTarget,
+	latestUpdateMs: number,
+	uploadDocument: CorpusDocument | undefined,
+): Promise<SearchIndexRepairSyncResult['results'][number]> {
+	const { current } = entry;
+	if (current.status === 'queued' || current.status === 'running') {
+		return searchIndexRepairResult('already-advanced', entry, current, latestUpdateMs);
+	}
+	if (uploadDocument) {
+		const uploaded = await uploadCorpusDocument(env, uploadDocument);
+		return searchIndexRepairResult('uploaded', entry, uploaded, latestUpdateMs);
+	}
+	if (current.status === 'completed') {
+		return searchIndexRepairResult('already-advanced', entry, current, latestUpdateMs);
+	}
+	const synced = await env.AI_SEARCH.items.get(current.id).sync();
+	return searchIndexRepairResult('synced', entry, synced, latestUpdateMs);
 }
 
 async function syncSearchIndexRepairTargets(env: CoreEnv, snapshot: SearchIndexRepairTargetSnapshot): Promise<SearchIndexRepairSyncResult> {
 	if (snapshot.targets.length > REINDEX_AI_SEARCH_CONCURRENCY) {
 		throw new Error(`AI Search repair sync batch exceeded ${REINDEX_AI_SEARCH_CONCURRENCY} targets`);
 	}
-	const results: SearchIndexRepairSyncResult['results'] = [];
-	const batchResults = await Promise.all(
-		snapshot.targets.map(async (target): Promise<SearchIndexRepairSyncResult['results'][number]> => {
-			const itemBinding = env.AI_SEARCH.items.get(target.itemId);
-			const current = await itemBinding.info();
-			if (current.id !== target.itemId || current.key !== itemKey(target.resourceId) || current.source_id !== 'builtin') {
-				throw new Error(`AI Search repair inspection returned the wrong item for ${target.itemId}/${target.resourceId}`);
-			}
-			if (current.status === 'skipped') {
-				throw new Error(`AI Search repair target ${target.itemId}/${target.resourceId} became skipped`);
-			}
-			if (current.status === 'completed' || current.status === 'queued' || current.status === 'running') {
-				return {
-					action: 'already-advanced',
-					error: current.error?.trim() || null,
-					itemId: current.id,
-					resourceId: target.resourceId,
-					status: current.status,
-				};
-			}
-			const synced = await itemBinding.sync();
-			if (synced.id !== target.itemId || synced.key !== itemKey(target.resourceId)) {
-				throw new Error(`AI Search repair sync returned the wrong item for ${target.itemId}/${target.resourceId}`);
-			}
-			if (synced.status === 'skipped') {
-				throw new Error(`AI Search repair sync skipped ${target.itemId}/${target.resourceId}`);
-			}
-			return {
-				action: 'synced',
-				error: synced.error?.trim() || null,
-				itemId: synced.id,
-				resourceId: target.resourceId,
-				status: synced.status,
-			};
+	const currentTargets = await Promise.all(snapshot.targets.map((target) => resolveSearchIndexRepairCurrentTarget(env, target)));
+	const latestUpdates = await loadEligibleCorpusLatestUpdates(
+		env,
+		currentTargets.map(({ target }) => target.resourceId),
+	);
+	if (latestUpdates.size !== currentTargets.length) {
+		throw new Error(`AI Search repair batch eligibility mismatch: ${latestUpdates.size}/${currentTargets.length}`);
+	}
+	const uploadIds = currentTargets.flatMap(({ current, target }) => {
+		const latestUpdateMs = latestUpdates.get(target.resourceId);
+		if (latestUpdateMs === undefined) throw new Error(`AI Search repair target ${target.resourceId} lost eligibility`);
+		return searchIndexRepairTargetNeedsUpload(current, latestUpdateMs) ? [target.resourceId] : [];
+	});
+	const uploadDocuments = await withCoreDb(env, (db) => loadCorpusDocuments(db, uploadIds));
+	if (uploadDocuments.length !== uploadIds.length) {
+		throw new Error(`AI Search repair upload document mismatch: ${uploadDocuments.length}/${uploadIds.length}`);
+	}
+	const documentsById = new Map(uploadDocuments.map((document) => [document.id, document]));
+	const results = await Promise.all(
+		currentTargets.map((entry) => {
+			const latestUpdateMs = latestUpdates.get(entry.target.resourceId);
+			if (latestUpdateMs === undefined) throw new Error(`AI Search repair target ${entry.target.resourceId} lost eligibility`);
+			return applySearchIndexRepairTarget(env, entry, latestUpdateMs, documentsById.get(entry.target.resourceId));
 		}),
 	);
-	for (const result of batchResults) {
-		if (results.some((existing) => existing.itemId === result.itemId)) {
-			throw new Error(`AI Search repair sync returned duplicate item ${result.itemId}`);
-		}
-		results.push(result);
+	if (new Set(results.map((result) => result.itemId)).size !== results.length) {
+		throw new Error('AI Search repair batch returned duplicate item identities');
 	}
 	return {
 		requested: snapshot.targets.length,

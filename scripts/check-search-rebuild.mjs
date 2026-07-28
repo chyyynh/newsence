@@ -7,7 +7,7 @@ import pg from 'pg';
 const WORKFLOW_NAME = 'newsence-search-index-rebuild';
 const DEFAULT_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind';
 const RESUME_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-resume-v1';
-const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v1';
+const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v2';
 const RESUME_VERSION_ID = '94064547-549b-4d1e-adb0-893c5f232792';
 const READINESS_VERSION_ID = 'e0445ff4-222f-4e54-b6a5-1bdd95d2476f';
 const RESUME_STARTED_AT = '2026-07-28T05:31:32.516Z';
@@ -153,6 +153,12 @@ function assertUtcTimestamp(value, label) {
 	assert.equal(typeof value, 'string', `${label} type`);
 	assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,6})?Z$/, `${label} format`);
 	assert.equal(Number.isNaN(Date.parse(value)), false, `${label} value`);
+}
+
+function parseAiSearchTimestamp(value) {
+	if (typeof value !== 'string') return Number.NaN;
+	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value) ? `${value.replace(' ', 'T')}Z` : value;
+	return Date.parse(normalized);
 }
 
 function assertResumeCompletion(steps, versionId, lastSuccessfulStep) {
@@ -406,7 +412,7 @@ function assertRepairTargetSnapshot(snapshot, label) {
 		assert.ok(target.status === 'error' || target.status === 'outdated', `${label} target ${index} repair status`);
 		assert.equal(typeof target.error, 'string', `${label} target ${index} error type`);
 		if (target.status === 'error') assert.notEqual(target.error.trim(), '', `${label} target ${index} error`);
-		assertUtcTimestamp(target.lastSeenAt, `${label} target ${index} last-seen`);
+		assert.equal(Number.isNaN(parseAiSearchTimestamp(target.lastSeenAt)), false, `${label} target ${index} last-seen`);
 	}
 	return snapshot;
 }
@@ -424,17 +430,38 @@ function assertRepairSyncResult(result, snapshot, label) {
 	assert.equal(result.results.length, snapshot.targets.length, `${label} result count`);
 	for (const [index, synced] of result.results.entries()) {
 		const target = snapshot.targets[index];
-		assert.ok(synced.action === 'synced' || synced.action === 'already-advanced', `${label} result ${index} action`);
-		assert.equal(synced.itemId, target.itemId, `${label} result ${index} item id`);
+		assert.ok(['synced', 'uploaded', 'already-advanced'].includes(synced.action), `${label} result ${index} action`);
+		assert.match(synced.itemId, /^[0-9a-f]{32}$/, `${label} result ${index} item id`);
+		assert.equal(synced.pinnedItemId, target.itemId, `${label} result ${index} pinned item id`);
 		assert.equal(synced.resourceId, target.resourceId, `${label} result ${index} resource id`);
+		assert.equal(Number.isSafeInteger(synced.latestUpdateMs), true, `${label} result ${index} latest update`);
+		assert.ok(
+			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(synced.previousStatus),
+			`${label} result ${index} previous status`,
+		);
+		assert.ok(
+			synced.previousLastSeenAt === null || typeof synced.previousLastSeenAt === 'string',
+			`${label} result ${index} previous last-seen`,
+		);
+		const previousLastSeenMs = parseAiSearchTimestamp(synced.previousLastSeenAt);
+		const storedItemWasStale = Number.isNaN(previousLastSeenMs) || synced.latestUpdateMs > previousLastSeenMs;
 		assert.ok(
 			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(synced.status),
 			`${label} result ${index} status`,
 		);
 		if (synced.action === 'already-advanced') {
-			assert.ok(['completed', 'queued', 'running'].includes(synced.status), `${label} result ${index} advanced status`);
+			assert.ok(['completed', 'queued', 'running'].includes(synced.previousStatus), `${label} result ${index} advanced prior status`);
+			assert.equal(synced.status, synced.previousStatus, `${label} result ${index} advanced status`);
+			if (synced.previousStatus === 'completed') {
+				assert.equal(storedItemWasStale, false, `${label} result ${index} completed item freshness`);
+			}
+		} else if (synced.action === 'uploaded') {
+			assert.equal(storedItemWasStale, true, `${label} result ${index} upload reason`);
+			assert.notEqual(synced.status, 'skipped', `${label} result ${index} upload status`);
 		} else {
-			assert.notEqual(synced.status, 'skipped', `${label} result ${index} synced status`);
+			assert.ok(['error', 'outdated'].includes(synced.previousStatus), `${label} result ${index} sync prior status`);
+			assert.equal(storedItemWasStale, false, `${label} result ${index} sync freshness`);
+			assert.notEqual(synced.status, 'skipped', `${label} result ${index} sync status`);
 		}
 		assert.ok(synced.error === null || typeof synced.error === 'string', `${label} result ${index} error`);
 	}
@@ -508,9 +535,9 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		),
 		'readiness continuation repair postclaim',
 	);
-	const initialItemToResource = new Map(repairTargetsBeforeClaim.targets.map((target) => [target.itemId, target.resourceId]));
+	const initialResourceIds = new Set(repairTargetsBeforeClaim.targets.map((target) => target.resourceId));
 	for (const target of repairTargetsAfterClaim.targets) {
-		assert.equal(initialItemToResource.get(target.itemId), target.resourceId, 'readiness continuation repair postclaim pinned target');
+		assert.equal(initialResourceIds.has(target.resourceId), true, 'readiness continuation repair postclaim pinned target');
 	}
 	const repairSnapshots = new Map([[0, repairTargetsBeforeClaim]]);
 	const retryTargetSteps = numberedSteps(steps, /^inspect-search-index-repair-targets-(\d+)-\d+$/, 'readiness continuation repair retries');
@@ -524,11 +551,7 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 			`readiness continuation repair retry ${index}`,
 		);
 		for (const target of snapshot.targets) {
-			assert.equal(
-				initialItemToResource.get(target.itemId),
-				target.resourceId,
-				`readiness continuation repair retry ${index} pinned target`,
-			);
+			assert.equal(initialResourceIds.has(target.resourceId), true, `readiness continuation repair retry ${index} pinned target`);
 		}
 		repairSnapshots.set(index, snapshot);
 	}
