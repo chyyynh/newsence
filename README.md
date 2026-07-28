@@ -189,6 +189,30 @@ Secrets (via `wrangler secret put`):
 | `YOUTUBE_API_KEY`              | Yes      | Enables YouTube channel monitoring       |
 | `S2_API_KEY`                   | Yes      | Increases Semantic Scholar quota for paper enrichment |
 
+### Search index rebuild and reader cutover
+
+The resource-identity dual-read index uses exactly five custom metadata fields:
+`effective_at`, `source_id`, `type`, `category`, and `kind`. Cloudflare AI
+Search currently limits an instance to five custom fields, so
+`resource_platform` remains represented by the verified legacy-type proxy until
+the #251 contract rebuild replaces `type`.
+
+Roll out an index schema change in this order:
+
+1. Apply and validate the database identity backfill.
+2. Deploy Core so new uploads carry the new metadata, while existing app
+   readers continue sending legacy `types`.
+3. Call `startSearchIndexRebuild()` and poll
+   `getSearchIndexRebuildStatus(instanceId)`.
+4. Deploy app/MCP readers that send `kinds` or `resourcePlatforms` only after
+   the Workflow succeeds.
+
+The rebuild preflights missing identities and legacy platform-proxy drift. It
+does not report success merely because uploads were queued: it waits until all
+`resources/` items have no queued, running, outdated, error, or skipped status,
+then compares total and per-kind index counts with Postgres. This terminal
+success is the reader-cutover gate.
+
 ### Recent resource image warmup
 
 New ingest eagerly rehosts every trusted resource image through the app Worker's

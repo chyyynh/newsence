@@ -94,6 +94,12 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return startSearchIndexRebuild(this.env);
 	}
 
+	/** Read search-index rebuild status for operator polling. */
+	async getSearchIndexRebuildStatus(instanceId: string) {
+		const instance = await this.env.SEARCH_INDEX_REBUILD_WORKFLOW.get(instanceId);
+		return instance.status();
+	}
+
 	/** Start or resume the versioned academic metadata backfill. */
 	startAcademicMetadataBackfill() {
 		return startAcademicMetadataBackfill(this.env);
