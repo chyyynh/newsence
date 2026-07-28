@@ -8,6 +8,7 @@
 		"deploy:dry-run": "pnpm run typecheck && wrangler deploy --dry-run",
 		"check:db-schema": "node scripts/check-drizzle-prisma-drift.mjs",
 		"check:resource-identity": "node --experimental-strip-types scripts/check-resource-identity.mjs",
+		"check:search-rebuild": "node scripts/check-search-rebuild.mjs",
 		"check:search-rollout": "node scripts/check-search-rollout.mjs",
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
