@@ -7,8 +7,8 @@ const WORKFLOW_NAME = 'newsence-search-index-rebuild';
 const DEFAULT_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind';
 const RESUME_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-resume-v1';
 const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v1';
-const LEGACY_BRIDGE_VERSION_ID = '7832da37-1ad4-4ea3-a7f6-1c6e9ead590f';
 const RESUME_VERSION_ID = '94064547-549b-4d1e-adb0-893c5f232792';
+const READINESS_VERSION_ID = 'e0445ff4-222f-4e54-b6a5-1bdd95d2476f';
 const RESUME_STARTED_AT = '2026-07-28T05:31:32.516Z';
 const READINESS_CHECKPOINT_KEY = 'canonical-3-kind-resume-v1-readiness-timeout';
 const READINESS_TIMEOUT_ERROR_PREFIX = 'AI Search index did not become ready:';
@@ -136,7 +136,7 @@ function assertUtcTimestamp(value, label) {
 }
 
 function assertResumeCompletion(steps, versionId, lastSuccessfulStep) {
-	assert.notEqual(versionId, LEGACY_BRIDGE_VERSION_ID, 'resume Workflow version must not reuse the legacy bridge');
+	assert.equal(versionId, RESUME_VERSION_ID, 'resume Workflow version');
 	assert.match(lastSuccessfulStep, /^mark-search-index-generation-ready-\d+$/, 'resume final ready step');
 	assert.equal(
 		steps.some((step) => /^sync-corpus-page-0-\d+$/.test(step.name)),
@@ -164,7 +164,7 @@ function assertResumeCompletion(steps, versionId, lastSuccessfulStep) {
 		steps.find((step) => /^begin-search-index-generation-\d+$/.test(step.name)),
 		'resume generation lease',
 	);
-	assert.ok(Number.isSafeInteger(Number(lease.rebuildEpoch)), 'resume generation epoch');
+	assert.equal(Number(lease.rebuildEpoch), RESUME_REBUILD_EPOCH, 'resume generation epoch');
 
 	const readiness = parsedStepOutput(
 		steps.findLast((step) => /^load-search-index-readiness-\d+-\d+$/.test(step.name)),
@@ -323,8 +323,7 @@ function assertResumeReadinessTimeout(steps, versionId, status, lastSuccessfulSt
 }
 
 function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulStep) {
-	assert.notEqual(versionId, LEGACY_BRIDGE_VERSION_ID, 'readiness continuation must not reuse the legacy bridge');
-	assert.notEqual(versionId, RESUME_VERSION_ID, 'readiness continuation requires the newly deployed Workflow version');
+	assert.equal(versionId, READINESS_VERSION_ID, 'readiness continuation Workflow version');
 	assert.match(lastSuccessfulStep, /^mark-search-index-generation-ready-\d+$/, 'readiness continuation final ready step');
 
 	const allowedStepPatterns = [
