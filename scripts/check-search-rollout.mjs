@@ -68,25 +68,81 @@ const client = new pg.Client({ connectionString: databaseUrl() });
 await client.connect();
 let state;
 let expected;
+let identityInvariants;
 try {
-	const [stateResult, expectedResult] = await Promise.all([
-		client.query(
-			`SELECT index_name, generation, generation_key, status, rebuild_epoch, rebuilding_at, ready_at, updated_at
+	const stateResult = await client.query(
+		`SELECT index_name, generation, generation_key, status, rebuild_epoch, rebuilding_at, ready_at, updated_at
 		   FROM search_index_states
 		  WHERE index_name = $1`,
-			[STATE_INDEX_NAME],
-		),
-		client.query(
-			`SELECT kind, COUNT(*)::int AS count
+		[STATE_INDEX_NAME],
+	);
+	const expectedResult = await client.query(
+		`SELECT kind, COUNT(*)::int AS count
 			   FROM resources
 			  WHERE scope = 'corpus'
 			    AND enrichment_status = 'enriched'
 			    AND kind = ANY($1::text[])
 			  GROUP BY kind
 			  ORDER BY kind`,
-			[CONTENT_KINDS],
-		),
-	]);
+		[CONTENT_KINDS],
+	);
+	const invariantResult = await client.query(
+		`WITH expected AS (
+			   SELECT
+			     kind,
+			     resource_platform,
+			     CASE
+			       WHEN type = 'twitter' THEN 'post'
+			       WHEN type = 'youtube' THEN 'video'
+			       WHEN type = 'image' THEN 'image'
+			       WHEN type = 'file' THEN 'file'
+			       WHEN type IN ('web', 'rss', 'pdf', 'hackernews')
+			         AND COALESCE(platform_metadata #>> '{enrichments,academic,source}', '') = 'semanticscholar'
+			         THEN 'paper'
+			       ELSE 'document'
+			     END AS expected_kind,
+			     CASE
+			       WHEN type = 'twitter' THEN 'twitter'
+			       WHEN type = 'youtube' THEN 'youtube'
+			       WHEN type = 'hackernews' THEN 'hackernews'
+			       ELSE NULL
+			     END AS expected_platform
+			   FROM resources
+			   WHERE enrichment_status = 'enriched'
+			 )
+			 SELECT
+			   (SELECT COUNT(*)::int FROM resources WHERE kind IS NULL) AS null_kind,
+			   (SELECT COUNT(*)::int
+			      FROM resources
+			     WHERE kind NOT IN ('document', 'post', 'video', 'paper', 'image', 'file')) AS invalid_kind,
+			   (SELECT COUNT(*)::int
+			      FROM resources
+			     WHERE resource_platform IS NOT NULL
+			       AND resource_platform NOT IN ('hackernews', 'twitter', 'youtube')) AS invalid_platform,
+			   (SELECT COUNT(*)::int
+			      FROM resources
+			     WHERE NOT ((
+			       (kind IS NULL AND resource_platform IS NULL)
+			       OR (kind = 'document' AND resource_platform IS NULL)
+			       OR (kind = 'document' AND resource_platform = 'hackernews')
+			       OR (kind = 'post' AND resource_platform = 'twitter')
+			       OR (kind = 'video' AND resource_platform = 'youtube')
+			       OR (kind = 'paper' AND resource_platform IS NULL)
+			       OR (kind = 'paper' AND resource_platform = 'hackernews')
+			       OR (kind = 'image' AND resource_platform IS NULL)
+			       OR (kind = 'file' AND resource_platform IS NULL)
+			     ) IS TRUE)) AS invalid_matrix,
+			   (SELECT COUNT(*)::int
+			      FROM expected
+			     WHERE kind IS DISTINCT FROM expected_kind
+			        OR resource_platform IS DISTINCT FROM expected_platform) AS enriched_legacy_drift`,
+	);
+	const constraintResult = await client.query(
+		`SELECT convalidated
+			   FROM pg_constraint
+			  WHERE conrelid = 'resources'::regclass
+			    AND conname = 'resources_kind_platform_check'`,
+	);
 	assert.equal(stateResult.rowCount, 1, 'durable search generation row');
 	[state] = stateResult.rows;
 	const byKind = Object.fromEntries(CONTENT_KINDS.map((kind) => [kind, 0]));
@@ -99,6 +155,13 @@ try {
 		total: Object.values(byKind).reduce((total, count) => total + count, 0),
 		byKind,
 	};
+	assert.equal(invariantResult.rowCount, 1, 'resource identity invariant row');
+	[identityInvariants] = invariantResult.rows;
+	for (const [name, count] of Object.entries(identityInvariants)) {
+		assert.equal(count, 0, `resource identity invariant ${name}`);
+	}
+	assert.equal(constraintResult.rowCount, 1, 'resource identity matrix constraint');
+	assert.equal(constraintResult.rows[0].convalidated, true, 'resource identity matrix constraint validated');
 } finally {
 	await client.end();
 }
@@ -127,4 +190,6 @@ console.info({
 	readyAt: state.ready_at,
 	updatedAt: state.updated_at,
 	customMetadata: instance.custom_metadata.map((field) => field.field_name),
+	identityInvariants,
+	identityConstraintValidated: true,
 });
