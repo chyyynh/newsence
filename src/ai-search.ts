@@ -258,18 +258,33 @@ export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promis
 	return matches.length > 0;
 }
 
-function legacyTypeFilter(options: CorpusSearchOptions): ContentResourceType[] | null | undefined {
-	const explicitTypes = options.types ? new Set(options.types) : null;
-	const platformTypes = options.resourcePlatforms
-		? CONTENT_RESOURCE_TYPES.filter((type) => options.resourcePlatforms?.includes(LEGACY_RESOURCE_IDENTITIES[type].resourcePlatform))
-		: null;
-	if (!explicitTypes && !platformTypes) return undefined;
-	const compatible = platformTypes ?? [...(explicitTypes ?? [])];
-	const filtered = explicitTypes ? compatible.filter((type) => explicitTypes.has(type)) : compatible;
-	return filtered.length ? filtered : null;
+function legacyTypesForContentKind(kind: ContentResourceKind): ContentResourceType[] {
+	return CONTENT_RESOURCE_TYPES.filter((type) => {
+		const legacyKind = LEGACY_RESOURCE_IDENTITIES[type].kind;
+		return legacyKind === kind || (kind === 'paper' && legacyKind === 'document');
+	});
 }
 
-function searchFilters(options: CorpusSearchOptions): VectorizeVectorMetadataFilter | null | undefined {
+function legacyTypeFilter(options: CorpusSearchOptions, kindMetadataReady: boolean): ContentResourceType[] | null | undefined {
+	const constraints: Array<Set<ContentResourceType>> = [];
+	if (options.types) constraints.push(new Set(options.types));
+	if (options.resourcePlatforms) {
+		const resourcePlatforms = new Set(options.resourcePlatforms);
+		const compatibleTypes = CONTENT_RESOURCE_TYPES.filter((type) =>
+			resourcePlatforms.has(LEGACY_RESOURCE_IDENTITIES[type].resourcePlatform),
+		);
+		constraints.push(new Set(compatibleTypes));
+	}
+	if (options.kinds && !kindMetadataReady) {
+		const compatibleTypes = options.kinds.flatMap(legacyTypesForContentKind);
+		constraints.push(new Set(compatibleTypes));
+	}
+	if (constraints.length === 0) return undefined;
+	const compatible = CONTENT_RESOURCE_TYPES.filter((type) => constraints.every((constraint) => constraint.has(type)));
+	return compatible.length ? compatible : null;
+}
+
+function searchFilters(options: CorpusSearchOptions, kindMetadataReady: boolean): VectorizeVectorMetadataFilter | null | undefined {
 	if (
 		options.sourceIds?.length === 0 ||
 		options.categories?.length === 0 ||
@@ -283,11 +298,11 @@ function searchFilters(options: CorpusSearchOptions): VectorizeVectorMetadataFil
 	if (options.sourceIds?.length) {
 		filters.source_id = { $in: [...options.sourceIds] };
 	}
-	const types = legacyTypeFilter(options);
+	const types = legacyTypeFilter(options, kindMetadataReady);
 	if (types === null) return null;
 	if (types) filters.type = { $in: types };
 	if (options.categories?.length) filters.category = { $in: [...options.categories] };
-	if (options.kinds?.length) filters.kind = { $in: [...options.kinds] };
+	if (kindMetadataReady && options.kinds?.length) filters.kind = { $in: [...options.kinds] };
 	if (options.effectiveAfter || options.effectiveBefore) {
 		filters.effective_at = {
 			...(options.effectiveAfter ? { $gte: options.effectiveAfter.toISOString() } : {}),
@@ -300,7 +315,8 @@ function searchFilters(options: CorpusSearchOptions): VectorizeVectorMetadataFil
 export async function searchCorpusRanks(env: CoreEnv, query: string, options: CorpusSearchOptions = {}): Promise<AiSearchRank[]> {
 	const profile = options.profile ?? 'discovery';
 	const retrievalType = profile === 'related' ? 'vector' : 'hybrid';
-	const filters = searchFilters(options);
+	const kindMetadataReady = options.kinds?.length ? await searchIndexKindMetadataReady(env) : false;
+	const filters = searchFilters(options, kindMetadataReady);
 	if (filters === null) return [];
 	const response = await env.AI_SEARCH.search({
 		query,
@@ -333,6 +349,7 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 type SearchIndexRebuildPayload = Record<string, never>;
 
 const SEARCH_INDEX_GENERATION = 'canonical-3-kind';
+const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION}`;
 const REINDEX_PAGE_SIZE = 50;
 const REINDEX_UPLOAD_CONCURRENCY = 10;
 const REINDEX_DELETE_CONCURRENCY = 10;
@@ -345,6 +362,16 @@ const REINDEX_READY_POLL_INTERVAL = '10 minutes';
 const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } as const;
 const SHORT_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '60 seconds' } as const;
 const BATCH_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '300 seconds' } as const;
+
+async function searchIndexKindMetadataReady(env: CoreEnv): Promise<boolean> {
+	try {
+		const instance = await env.SEARCH_INDEX_REBUILD_WORKFLOW.get(SEARCH_INDEX_REBUILD_INSTANCE_ID);
+		const status = await instance.status();
+		return status.status === 'complete';
+	} catch {
+		return false;
+	}
+}
 
 type SearchIdentityCountRow = {
 	count: string;
@@ -763,7 +790,7 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep) {
 }
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, `search-index-rebuild-${SEARCH_INDEX_GENERATION}`, {});
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, {});
 }
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
