@@ -6,13 +6,27 @@ import pg from 'pg';
 const WORKFLOW_NAME = 'newsence-search-index-rebuild';
 const DEFAULT_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind';
 const RESUME_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-resume-v1';
+const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v1';
 const LEGACY_BRIDGE_VERSION_ID = '7832da37-1ad4-4ea3-a7f6-1c6e9ead590f';
+const RESUME_VERSION_ID = '94064547-549b-4d1e-adb0-893c5f232792';
 const RESUME_STARTED_AT = '2026-07-28T05:31:32.516Z';
+const READINESS_CHECKPOINT_KEY = 'canonical-3-kind-resume-v1-readiness-timeout';
+const READINESS_TIMEOUT_ERROR_PREFIX = 'AI Search index did not become ready:';
+const RESUME_REBUILD_EPOCH = 2;
+const READINESS_REBUILD_EPOCH = 3;
+const RESUME_FINAL_READINESS_ATTEMPT = 35;
 const INSTANCE_ID = process.env.SEARCH_REBUILD_INSTANCE_ID?.trim() || DEFAULT_INSTANCE_ID;
 const ALLOW_IN_PROGRESS = process.argv.includes('--allow-in-progress');
+const EXPECT_READINESS_TIMEOUT = process.argv.includes('--expect-readiness-timeout');
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const NON_FAILURE_STATUSES = new Set(['queued', 'running', 'waiting', 'complete']);
+
+assert.equal(
+	ALLOW_IN_PROGRESS && EXPECT_READINESS_TIMEOUT,
+	false,
+	'--allow-in-progress and --expect-readiness-timeout are mutually exclusive',
+);
 
 function describeWorkflowInstance() {
 	const result = spawnSync(
@@ -41,6 +55,10 @@ function header(output, label) {
 	return match[1].trim();
 }
 
+function optionalHeader(output, label) {
+	return output.match(new RegExp(`^${label}:\\s*(.+)$`, 'm'))?.[1]?.trim() ?? null;
+}
+
 function normalizedStatus(value) {
 	const match = value.match(/\b(queued|running|waiting|paused|errored|terminated|completed?|unknown)\b/i);
 	assert.ok(match, `Workflow status: ${value}`);
@@ -52,8 +70,10 @@ function workflowSteps(output) {
 	const steps = [];
 	for (const block of output.split(/\n(?=\s+Name:\s+)/)) {
 		const name = block.match(/^\s+Name:\s+(.+)$/m)?.[1]?.trim();
+		const type = block.match(/^\s+Type:\s+(.+)$/m)?.[1]?.trim();
 		const success = block.match(/^\s+Success:\s+(.+)$/m)?.[1]?.trim();
-		if (!name || !success) continue;
+		const sleeping = /\bSleeping\b/i.test(type ?? '');
+		if (!name || (!success && !sleeping)) continue;
 		const attempts = [];
 		for (const line of block.split('\n')) {
 			if (!line.trimStart().startsWith('│')) continue;
@@ -69,7 +89,7 @@ function workflowSteps(output) {
 		}
 		steps.push({
 			name,
-			success,
+			success: success ?? 'Sleeping',
 			output: block.match(/^\s+Output:\s+(.+)$/m)?.[1]?.trim() ?? null,
 			retriesAt: block.match(/^\s+Retries At:\s+(.+)$/m)?.[1]?.trim() ?? null,
 			attempts,
@@ -98,6 +118,21 @@ function parsedStepOutput(step, label) {
 	let parsed = JSON.parse(step.output);
 	if (typeof parsed === 'string' && /^[{[]/.test(parsed.trim())) parsed = JSON.parse(parsed);
 	return parsed;
+}
+
+function assertSearchIndexReadiness(readiness, label) {
+	assert.equal(readiness.configReady, true, `${label} AI Search metadata config`);
+	assert.deepEqual(readiness.indexed, readiness.expected, `${label} indexed counts by kind`);
+	assert.equal(readiness.ownedStatuses.completed, readiness.expected.total, `${label} completed owned items`);
+	for (const state of ['queued', 'running', 'error', 'outdated', 'skipped']) {
+		assert.equal(readiness.ownedStatuses[state], 0, `${label} owned ${state} items`);
+	}
+}
+
+function assertUtcTimestamp(value, label) {
+	assert.equal(typeof value, 'string', `${label} type`);
+	assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,6})?Z$/, `${label} format`);
+	assert.equal(Number.isNaN(Date.parse(value)), false, `${label} value`);
 }
 
 function assertResumeCompletion(steps, versionId, lastSuccessfulStep) {
@@ -135,12 +170,7 @@ function assertResumeCompletion(steps, versionId, lastSuccessfulStep) {
 		steps.findLast((step) => /^load-search-index-readiness-\d+-\d+$/.test(step.name)),
 		'resume terminal readiness',
 	);
-	assert.equal(readiness.configReady, true, 'resume AI Search metadata config');
-	assert.deepEqual(readiness.indexed, readiness.expected, 'resume indexed counts by kind');
-	assert.equal(readiness.ownedStatuses.completed, readiness.expected.total, 'resume completed owned items');
-	for (const state of ['queued', 'running', 'error', 'outdated', 'skipped']) {
-		assert.equal(readiness.ownedStatuses[state], 0, `resume owned ${state} items`);
-	}
+	assertSearchIndexReadiness(readiness, 'resume');
 
 	const generationReadiness = parsedStepOutput(
 		steps.find((step) => /^mark-search-index-generation-ready-\d+$/.test(step.name)),
@@ -156,15 +186,228 @@ function assertResumeCompletion(steps, versionId, lastSuccessfulStep) {
 	};
 }
 
+function numberedSteps(steps, pattern, label) {
+	const matches = steps.flatMap((step) => {
+		const match = step.name.match(pattern);
+		return match ? [{ index: Number(match[1]), step }] : [];
+	});
+	assert.equal(
+		matches.every((entry) => Number.isSafeInteger(entry.index) && entry.index >= 0),
+		true,
+		`${label} indices`,
+	);
+	matches.sort((left, right) => left.index - right.index);
+	return matches;
+}
+
+function assertExactStepRange(matches, first, last, label) {
+	assert.equal(matches.length, last - first + 1, `${label} step count`);
+	assert.deepEqual(
+		matches.map((entry) => entry.index),
+		Array.from({ length: last - first + 1 }, (_, offset) => first + offset),
+		`${label} step range`,
+	);
+}
+
+function exactStep(steps, pattern, label) {
+	const matches = steps.filter((step) => pattern.test(step.name));
+	assert.equal(matches.length, 1, `${label} step count`);
+	return matches[0];
+}
+
+function assertResumeCorpusAndDelta(steps) {
+	const corpus = numberedSteps(steps, /^sync-corpus-page-(\d+)-\d+$/, 'resume corpus');
+	assertExactStepRange(corpus, 365, 643, 'resume corpus');
+	const corpusTerminal = parsedStepOutput(corpus.at(-1)?.step, 'resume corpus terminal page');
+	assert.equal(corpusTerminal.done, true, 'resume corpus terminal done');
+	assert.equal(Number(corpusTerminal.uploaded), 0, 'resume corpus terminal uploaded');
+
+	const delta = numberedSteps(steps, /^sync-corpus-delta-page-(\d+)-\d+$/, 'resume delta');
+	assertExactStepRange(delta, 0, 2, 'resume delta');
+	const deltaOutputs = delta.map(({ step }, index) => parsedStepOutput(step, `resume delta page ${index}`));
+	assert.equal(
+		deltaOutputs.reduce((total, result) => total + Number(result.uploaded), 0),
+		59,
+		'resume delta uploads',
+	);
+	assert.equal(deltaOutputs.at(-1)?.done, true, 'resume delta terminal done');
+	assert.equal(Number(deltaOutputs.at(-1)?.uploaded), 0, 'resume delta terminal uploaded');
+}
+
+function assertResumePrunePass(steps, pass, expectedDeleted) {
+	const pageCount = Number(
+		parsedStepOutput(
+			steps.find((step) => step.name === `load-search-item-page-count-${pass}-1`),
+			`resume prune pass ${pass} page count`,
+		),
+	);
+	assert.equal(pageCount, 644, `resume prune pass ${pass} page count`);
+	const batches = steps
+		.flatMap((step) => {
+			const match = step.name.match(new RegExp(`^prune-search-item-pages-${pass}-(\\d+)-(\\d+)-\\d+$`));
+			return match ? [{ first: Number(match[1]), last: Number(match[2]), step }] : [];
+		})
+		.sort((left, right) => left.first - right.first);
+	assert.equal(batches.length, 65, `resume prune pass ${pass} batch count`);
+	assert.equal(batches[0]?.first, 1, `resume prune pass ${pass} first page`);
+	assert.equal(batches.at(-1)?.last, pageCount, `resume prune pass ${pass} last page`);
+	for (const [index, batch] of batches.entries()) {
+		assert.equal(batch.last - batch.first < 10, true, `resume prune pass ${pass} batch ${index} width`);
+		if (index > 0) {
+			assert.equal(batch.first, batches[index - 1].last + 1, `resume prune pass ${pass} batch ${index} continuity`);
+		}
+	}
+	const deleted = batches.reduce(
+		(total, batch, index) => total + Number(parsedStepOutput(batch.step, `resume prune pass ${pass} batch ${index}`)),
+		0,
+	);
+	assert.equal(deleted, expectedDeleted, `resume prune pass ${pass} deleted items`);
+}
+
+function assertResumeReadinessTimeout(steps, versionId, status, lastSuccessfulStep, workflowError) {
+	assert.equal(versionId, RESUME_VERSION_ID, 'readiness-timeout source Workflow version');
+	assert.equal(status, 'errored', 'readiness-timeout source terminal status');
+	assert.equal(
+		lastSuccessfulStep,
+		`load-search-index-readiness-${RESUME_FINAL_READINESS_ATTEMPT}-1`,
+		'readiness-timeout source final successful step',
+	);
+	assert.match(
+		workflowError ?? '',
+		new RegExp(`^Error: ${READINESS_TIMEOUT_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+		'readiness-timeout source terminal error',
+	);
+	assert.equal(
+		steps.some((step) => /^mark-search-index-generation-ready-\d+$/.test(step.name)),
+		false,
+		'readiness-timeout source must not publish readiness',
+	);
+
+	const source = parsedStepOutput(
+		steps.find((step) => /^verify-errored-search-rebuild-source-\d+$/.test(step.name)),
+		'readiness-timeout original source verification',
+	);
+	assert.equal(source.status, 'errored', 'readiness-timeout original source status');
+	const startedAt = parsedStepOutput(
+		steps.find((step) => /^capture-search-rebuild-started-at-\d+$/.test(step.name)),
+		'readiness-timeout delta boundary',
+	);
+	assert.equal(startedAt, RESUME_STARTED_AT, 'readiness-timeout original delta boundary');
+	const lease = parsedStepOutput(
+		steps.find((step) => /^begin-search-index-generation-\d+$/.test(step.name)),
+		'readiness-timeout generation lease',
+	);
+	assert.equal(Number(lease.rebuildEpoch), RESUME_REBUILD_EPOCH, 'readiness-timeout generation epoch');
+
+	assertResumeCorpusAndDelta(steps);
+	assertResumePrunePass(steps, 0, 16);
+	assertResumePrunePass(steps, 1, 0);
+	const readinessSteps = numberedSteps(steps, /^load-search-index-readiness-(\d+)-\d+$/, 'readiness-timeout observations');
+	assertExactStepRange(readinessSteps, 0, RESUME_FINAL_READINESS_ATTEMPT, 'readiness-timeout observations');
+	const terminalReadiness = parsedStepOutput(readinessSteps.at(-1)?.step, 'readiness-timeout terminal observation');
+	assert.equal(terminalReadiness.configReady, true, 'readiness-timeout AI Search metadata config');
+	assert.equal(terminalReadiness.ownedStatuses.error, 0, 'readiness-timeout owned errored items');
+	assert.equal(terminalReadiness.ownedStatuses.skipped, 0, 'readiness-timeout owned skipped items');
+	assert.equal(terminalReadiness.indexed, null, 'readiness-timeout index remains unsettled');
+	assert.ok(
+		terminalReadiness.ownedStatuses.queued + terminalReadiness.ownedStatuses.running + terminalReadiness.ownedStatuses.outdated > 0,
+		'readiness-timeout must have only transient work remaining',
+	);
+	return {
+		source,
+		startedAt,
+		rebuildEpoch: Number(lease.rebuildEpoch),
+		terminalReadiness,
+		workflowError,
+	};
+}
+
+function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulStep) {
+	assert.notEqual(versionId, LEGACY_BRIDGE_VERSION_ID, 'readiness continuation must not reuse the legacy bridge');
+	assert.notEqual(versionId, RESUME_VERSION_ID, 'readiness continuation requires the newly deployed Workflow version');
+	assert.match(lastSuccessfulStep, /^mark-search-index-generation-ready-\d+$/, 'readiness continuation final ready step');
+
+	const allowedStepPatterns = [
+		/^verify-readiness-timeout-source-\d+$/,
+		/^claim-search-index-readiness-continuation-\d+$/,
+		/^reverify-readiness-timeout-source-\d+$/,
+		/^load-search-index-readiness-\d+-\d+$/,
+		/^wait-search-index-readiness-\d+-\d+$/,
+		/^mark-search-index-generation-ready-\d+$/,
+	];
+	for (const step of steps) {
+		assert.equal(
+			allowedStepPatterns.some((pattern) => pattern.test(step.name)),
+			true,
+			`readiness continuation unexpected step ${step.name}`,
+		);
+	}
+
+	const sourceBeforeClaim = parsedStepOutput(
+		exactStep(steps, /^verify-readiness-timeout-source-\d+$/, 'readiness continuation source preclaim'),
+		'readiness continuation source preclaim',
+	);
+	const sourceAfterClaim = parsedStepOutput(
+		exactStep(steps, /^reverify-readiness-timeout-source-\d+$/, 'readiness continuation source postclaim'),
+		'readiness continuation source postclaim',
+	);
+	assert.deepEqual(sourceAfterClaim, sourceBeforeClaim, 'readiness continuation source error remained stable across claim');
+	assert.equal(sourceBeforeClaim.instanceId, RESUME_INSTANCE_ID, 'readiness continuation source instance');
+	assert.equal(sourceBeforeClaim.status, 'errored', 'readiness continuation source status');
+	assert.equal(sourceBeforeClaim.error?.name, 'Error', 'readiness continuation source error name');
+	assert.match(
+		sourceBeforeClaim.error?.message ?? '',
+		new RegExp(`^${READINESS_TIMEOUT_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+		'readiness continuation source error',
+	);
+
+	const claim = parsedStepOutput(
+		exactStep(steps, /^claim-search-index-readiness-continuation-\d+$/, 'readiness continuation claim'),
+		'readiness continuation claim',
+	);
+	assert.equal(claim.generation, 3, 'readiness continuation generation');
+	assert.equal(claim.generationKey, 'canonical-3-kind', 'readiness continuation generation key');
+	assert.equal(Number(claim.sourceRebuildEpoch), RESUME_REBUILD_EPOCH, 'readiness continuation source epoch');
+	assert.equal(Number(claim.rebuildEpoch), READINESS_REBUILD_EPOCH, 'readiness continuation claimed epoch');
+	assertUtcTimestamp(claim.startedAt, 'readiness continuation claim timestamp');
+
+	const readinessSteps = numberedSteps(steps, /^load-search-index-readiness-(\d+)-\d+$/, 'readiness continuation observations');
+	assert.ok(readinessSteps.length > 0, 'readiness continuation observation');
+	assertExactStepRange(readinessSteps, 0, readinessSteps.length - 1, 'readiness continuation observations');
+	assert.ok(readinessSteps.length <= 144, 'readiness continuation observation limit');
+	const readinessSleeps = numberedSteps(steps, /^wait-search-index-readiness-(\d+)-\d+$/, 'readiness continuation waits');
+	assert.equal(readinessSleeps.length, readinessSteps.length - 1, 'readiness continuation wait count');
+	if (readinessSleeps.length > 0) {
+		assertExactStepRange(readinessSleeps, 0, readinessSleeps.length - 1, 'readiness continuation waits');
+	}
+	const readiness = parsedStepOutput(readinessSteps.at(-1)?.step, 'readiness continuation terminal observation');
+	assertSearchIndexReadiness(readiness, 'readiness continuation');
+	const generationReadiness = parsedStepOutput(
+		exactStep(steps, /^mark-search-index-generation-ready-\d+$/, 'readiness continuation generation readiness'),
+		'readiness continuation generation readiness',
+	);
+	assertUtcTimestamp(generationReadiness.readyAt, 'readiness continuation ready timestamp');
+	return {
+		checkpoint: READINESS_CHECKPOINT_KEY,
+		source: {
+			beforeClaim: sourceBeforeClaim,
+			afterClaim: sourceAfterClaim,
+		},
+		claim,
+		readiness,
+		generationReadiness,
+	};
+}
+
 function databaseUrl() {
 	const value = process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL;
-	if (!value) throw new Error('Set a direct database URL before strict resume validation');
+	if (!value) throw new Error('Set a direct database URL before strict search-rebuild validation');
 	const url = new URL(value);
 	if (url.searchParams.get('sslrootcert') === 'system') url.searchParams.delete('sslrootcert');
 	return url.toString();
 }
 
-async function assertResumeDurableState(resumeEvidence) {
+async function assertSearchIndexDurableState({ label, ready, rebuildEpoch, status }) {
 	const client = new pg.Client({ connectionString: databaseUrl() });
 	await client.connect();
 	try {
@@ -173,13 +416,14 @@ async function assertResumeDurableState(resumeEvidence) {
 			   FROM search_index_states
 			  WHERE index_name = 'public-corpus'`,
 		);
-		assert.equal(result.rowCount, 1, 'resume durable generation row');
+		assert.equal(result.rowCount, 1, `${label} durable generation row`);
 		const [state] = result.rows;
-		assert.equal(state.generation, 3, 'resume durable generation');
-		assert.equal(state.generation_key, 'canonical-3-kind', 'resume durable generation key');
-		assert.equal(state.status, 'ready', 'resume durable generation status');
-		assert.ok(state.ready_at, 'resume durable ready timestamp');
-		assert.equal(Number(state.rebuild_epoch), resumeEvidence.rebuildEpoch, 'resume Workflow/database epoch');
+		assert.equal(state.generation, 3, `${label} durable generation`);
+		assert.equal(state.generation_key, 'canonical-3-kind', `${label} durable generation key`);
+		assert.equal(state.status, status, `${label} durable generation status`);
+		assert.equal(Number(state.rebuild_epoch), rebuildEpoch, `${label} durable generation epoch`);
+		if (ready) assert.ok(state.ready_at, `${label} durable ready timestamp`);
+		else assert.equal(state.ready_at, null, `${label} durable ready timestamp`);
 		return {
 			generation: state.generation,
 			generationKey: state.generation_key,
@@ -198,6 +442,7 @@ const instanceId = header(output, 'Instance Id');
 const versionId = header(output, 'Version Id');
 const status = normalizedStatus(header(output, 'Status'));
 const lastSuccessfulStep = header(output, 'Last Successful Step');
+const workflowError = optionalHeader(output, 'Error');
 const steps = workflowSteps(output);
 const failedSteps = steps.filter((step) => /\bNo\b/i.test(step.success)).map((step) => step.name);
 const runningStepRecord = steps.findLast((step) => /\bRunning\b/i.test(step.success)) ?? null;
@@ -209,32 +454,71 @@ const completedPage = completedPageMatch ? Number(completedPageMatch[1]) : null;
 
 assert.equal(workflowName, WORKFLOW_NAME, 'Workflow name');
 assert.equal(instanceId, INSTANCE_ID, 'Workflow instance id');
-assert.ok(
-	NON_FAILURE_STATUSES.has(status),
-	`Workflow entered ${status}: ${JSON.stringify({
-		lastSuccessfulStep,
-		completedPage,
-		failedSteps,
-		retry,
-	})}`,
-);
 assert.deepEqual(failedSteps, [], 'Workflow failed steps');
-if (!ALLOW_IN_PROGRESS) assert.equal(status, 'complete', 'Workflow terminal completion');
-const resumeEvidence =
-	!ALLOW_IN_PROGRESS && instanceId === RESUME_INSTANCE_ID ? assertResumeCompletion(steps, versionId, lastSuccessfulStep) : null;
-const durableState = resumeEvidence ? await assertResumeDurableState(resumeEvidence) : null;
+let readinessTimeoutEvidence = null;
+let resumeEvidence = null;
+let readinessContinuationEvidence = null;
+let durableState = null;
+if (EXPECT_READINESS_TIMEOUT) {
+	assert.equal(instanceId, RESUME_INSTANCE_ID, 'readiness-timeout source instance id');
+	readinessTimeoutEvidence = assertResumeReadinessTimeout(steps, versionId, status, lastSuccessfulStep, workflowError);
+	durableState = await assertSearchIndexDurableState({
+		label: 'readiness-timeout source',
+		ready: false,
+		rebuildEpoch: RESUME_REBUILD_EPOCH,
+		status: 'rebuilding',
+	});
+} else {
+	assert.ok(
+		NON_FAILURE_STATUSES.has(status),
+		`Workflow entered ${status}: ${JSON.stringify({
+			lastSuccessfulStep,
+			completedPage,
+			failedSteps,
+			retry,
+		})}`,
+	);
+	if (!ALLOW_IN_PROGRESS) {
+		assert.equal(status, 'complete', 'Workflow terminal completion');
+		assert.equal(workflowError, null, 'completed Workflow error');
+		if (instanceId === RESUME_INSTANCE_ID) {
+			resumeEvidence = assertResumeCompletion(steps, versionId, lastSuccessfulStep);
+			durableState = await assertSearchIndexDurableState({
+				label: 'resume',
+				ready: true,
+				rebuildEpoch: resumeEvidence.rebuildEpoch,
+				status: 'ready',
+			});
+		} else if (instanceId === READINESS_INSTANCE_ID) {
+			readinessContinuationEvidence = assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulStep);
+			durableState = await assertSearchIndexDurableState({
+				label: 'readiness continuation',
+				ready: true,
+				rebuildEpoch: READINESS_REBUILD_EPOCH,
+				status: 'ready',
+			});
+		}
+	}
+}
 
 console.info({
-	event: ALLOW_IN_PROGRESS ? 'search_rebuild_progress_validated' : 'search_rebuild_completion_validated',
+	event: EXPECT_READINESS_TIMEOUT
+		? 'search_rebuild_readiness_timeout_validated'
+		: ALLOW_IN_PROGRESS
+			? 'search_rebuild_progress_validated'
+			: 'search_rebuild_completion_validated',
 	workflowName,
 	instanceId,
 	versionId,
 	status,
+	workflowError,
 	lastSuccessfulStep,
 	completedPage,
 	runningStep,
 	failedSteps,
 	retry,
+	readinessTimeoutEvidence,
 	resumeEvidence,
+	readinessContinuationEvidence,
 	durableState,
 });

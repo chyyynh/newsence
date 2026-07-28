@@ -385,6 +385,36 @@ const SEARCH_INDEX_RESUME_CHECKPOINTS = {
 
 type SearchIndexResumeCheckpointKey = keyof typeof SEARCH_INDEX_RESUME_CHECKPOINTS;
 
+type SearchIndexReadinessContinuationCheckpoint = {
+	generation: number;
+	generationKey: string;
+	key: string;
+	readinessErrorName: string;
+	readinessErrorPrefix: string;
+	sourceInstanceId: string;
+	sourceRebuildEpoch: number;
+	sourceResumeCheckpoint: SearchIndexResumeCheckpointKey;
+};
+
+// One-time, source-controlled handoff for the generation-3 recovery instance.
+// The trigger selects only this key; source identity, failure reason, and the
+// exact lease being retired cannot be supplied by an operator.
+const SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS = {
+	'canonical-3-kind-resume-v1-readiness-timeout': {
+		generation: 3,
+		generationKey: 'canonical-3-kind',
+		readinessErrorName: 'Error',
+		readinessErrorPrefix: 'AI Search index did not become ready:',
+		sourceInstanceId: 'search-index-rebuild-canonical-3-kind-resume-v1',
+		sourceRebuildEpoch: 2,
+		sourceResumeCheckpoint: 'canonical-3-kind-page-365',
+	},
+} as const satisfies Record<string, Omit<SearchIndexReadinessContinuationCheckpoint, 'key'>>;
+
+type SearchIndexReadinessContinuationCheckpointKey = keyof typeof SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS;
+
+type SearchIndexRebuildMode = 'rebuild' | 'adopt' | 'resume' | 'readiness';
+
 type SearchIndexRebuildPayload =
 	| { mode?: 'rebuild' }
 	| {
@@ -396,7 +426,20 @@ type SearchIndexRebuildPayload =
 	| {
 			checkpoint: SearchIndexResumeCheckpointKey;
 			mode: 'resume';
+	  }
+	| {
+			checkpoint: SearchIndexReadinessContinuationCheckpointKey;
+			mode: 'readiness';
 	  };
+
+function parseSearchIndexRebuildMode(payload: SearchIndexRebuildPayload): SearchIndexRebuildMode {
+	const requestedMode: unknown = payload.mode;
+	if (requestedMode === undefined) return 'rebuild';
+	if (requestedMode === 'rebuild' || requestedMode === 'adopt' || requestedMode === 'resume' || requestedMode === 'readiness') {
+		return requestedMode;
+	}
+	throw new Error(`Unsupported AI Search rebuild mode: ${String(requestedMode)}`);
+}
 
 const SEARCH_INDEX_NAME = 'public-corpus';
 // Bump both values whenever the physical AI Search contract changes. The
@@ -419,6 +462,7 @@ const REINDEX_MAX_PRUNE_PASSES = 3;
 // rebuild stays under the 1,024-step Workflow limit on Workers Free.
 const REINDEX_PRUNE_PAGES_PER_STEP = 10;
 const REINDEX_READY_POLL_ATTEMPTS = 36;
+const REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS = 144;
 const REINDEX_READY_POLL_INTERVAL = '10 minutes';
 const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } as const;
 const SHORT_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '60 seconds' } as const;
@@ -455,6 +499,40 @@ function parseSearchIndexResumeCheckpoint(payload: SearchIndexRebuildPayload): S
 		key: checkpointKey,
 		startedAt: checkpoint.startedAt,
 	};
+}
+
+function parseSearchIndexReadinessContinuationCheckpoint(
+	payload: SearchIndexRebuildPayload,
+): SearchIndexReadinessContinuationCheckpoint | null {
+	if (payload.mode !== 'readiness') return null;
+	const checkpointKey: unknown = payload.checkpoint;
+	if (typeof checkpointKey !== 'string' || !(checkpointKey in SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS)) {
+		throw new Error(`Unsupported AI Search readiness continuation checkpoint: ${String(checkpointKey)}`);
+	}
+	const checkpoint: Omit<SearchIndexReadinessContinuationCheckpoint, 'key'> =
+		SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS[checkpointKey as SearchIndexReadinessContinuationCheckpointKey];
+	if (checkpoint.generation !== SEARCH_INDEX_GENERATION.ordinal || checkpoint.generationKey !== SEARCH_INDEX_GENERATION.key) {
+		throw new Error(
+			`AI Search readiness continuation checkpoint generation ${checkpoint.generation}/${checkpoint.generationKey} does not match ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}`,
+		);
+	}
+	if (!checkpoint.sourceInstanceId.trim()) {
+		throw new Error('AI Search readiness continuation checkpoint source instance is empty');
+	}
+	if (!Number.isSafeInteger(checkpoint.sourceRebuildEpoch) || checkpoint.sourceRebuildEpoch < 0) {
+		throw new Error('AI Search readiness continuation checkpoint source epoch must be a non-negative safe integer');
+	}
+	if (!checkpoint.readinessErrorPrefix) {
+		throw new Error('AI Search readiness continuation checkpoint error prefix is empty');
+	}
+	if (!checkpoint.readinessErrorName) {
+		throw new Error('AI Search readiness continuation checkpoint error name is empty');
+	}
+	const sourceResumeCheckpoint = SEARCH_INDEX_RESUME_CHECKPOINTS[checkpoint.sourceResumeCheckpoint];
+	if (sourceResumeCheckpoint.generation !== checkpoint.generation || sourceResumeCheckpoint.generationKey !== checkpoint.generationKey) {
+		throw new Error('AI Search readiness continuation source resume checkpoint generation does not match');
+	}
+	return { ...checkpoint, key: checkpointKey };
 }
 
 async function searchIndexKindMetadataReady(env: CoreEnv): Promise<boolean> {
@@ -546,6 +624,97 @@ async function writeSearchIndexRebuildingState(env: CoreEnv, advanceEpoch: boole
 
 async function beginSearchIndexRebuild(env: CoreEnv): Promise<SearchIndexRebuildLease> {
 	return writeSearchIndexRebuildingState(env, true);
+}
+
+type SearchIndexReadinessContinuationClaim = SearchIndexRebuildLease & {
+	generation: number;
+	generationKey: string;
+	sourceRebuildEpoch: string;
+};
+
+async function claimSearchIndexReadinessContinuation(
+	env: CoreEnv,
+	checkpoint: SearchIndexReadinessContinuationCheckpoint,
+	claimStartedAt: string,
+): Promise<SearchIndexReadinessContinuationClaim> {
+	const sourceRebuildEpoch = String(checkpoint.sourceRebuildEpoch);
+	const expectedRebuildEpoch = String(checkpoint.sourceRebuildEpoch + 1);
+	const [row] = await withCoreDb(env, (db) =>
+		queryRows<SearchIndexRebuildingRow>(
+			db,
+			sql`
+				WITH claimed AS (
+				  UPDATE search_index_states
+				  SET status = 'rebuilding',
+				      rebuild_epoch = rebuild_epoch + 1,
+				      rebuilding_at = ${claimStartedAt}::timestamptz,
+				      ready_at = NULL,
+				      updated_at = ${claimStartedAt}::timestamptz
+				  WHERE index_name = ${SEARCH_INDEX_NAME}
+				    AND generation = ${checkpoint.generation}
+				    AND generation_key = ${checkpoint.generationKey}
+				    AND status = 'rebuilding'
+				    AND rebuild_epoch = ${sourceRebuildEpoch}::bigint
+				    AND ready_at IS NULL
+				  RETURNING rebuild_epoch, rebuilding_at
+				)
+				SELECT
+				  rebuild_epoch::text,
+				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
+				FROM claimed
+				UNION ALL
+				-- A step retry after a committed response loss may observe its own
+				-- completed claim. The immutable Workflow timestamp is the claim
+				-- token, so it can recover epoch 3 without advancing it again.
+				SELECT
+				  rebuild_epoch::text,
+				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
+				FROM search_index_states
+				WHERE index_name = ${SEARCH_INDEX_NAME}
+				  AND generation = ${checkpoint.generation}
+				  AND generation_key = ${checkpoint.generationKey}
+				  AND status = 'rebuilding'
+				  AND rebuild_epoch = ${expectedRebuildEpoch}::bigint
+				  AND rebuilding_at = ${claimStartedAt}::timestamptz
+				  AND ready_at IS NULL
+				  AND NOT EXISTS (SELECT 1 FROM claimed)
+				LIMIT 1
+			`,
+		),
+	);
+	if (!row || row.rebuild_epoch !== expectedRebuildEpoch) {
+		throw new Error(
+			`AI Search readiness continuation could not claim ${checkpoint.generation}/${checkpoint.generationKey}/${sourceRebuildEpoch}`,
+		);
+	}
+	return {
+		generation: checkpoint.generation,
+		generationKey: checkpoint.generationKey,
+		sourceRebuildEpoch,
+		rebuildEpoch: row.rebuild_epoch,
+		startedAt: row.started_at,
+	};
+}
+
+async function verifySearchIndexReadinessTimeoutSource(env: CoreEnv, checkpoint: SearchIndexReadinessContinuationCheckpoint) {
+	const instance = await env.SEARCH_INDEX_REBUILD_WORKFLOW.get(checkpoint.sourceInstanceId);
+	const status = await instance.status();
+	if (status.status !== 'errored') {
+		throw new Error(`AI Search readiness continuation source ${checkpoint.sourceInstanceId} is ${status.status}, not errored`);
+	}
+	if (status.error?.name !== checkpoint.readinessErrorName || !status.error.message.startsWith(checkpoint.readinessErrorPrefix)) {
+		throw new Error(
+			`AI Search readiness continuation source ${checkpoint.sourceInstanceId} did not fail from the pinned readiness timeout`,
+		);
+	}
+	return {
+		instanceId: checkpoint.sourceInstanceId,
+		status: status.status,
+		error: {
+			name: status.error.name,
+			message: status.error.message,
+		},
+	};
 }
 
 async function assertSearchIndexRebuildLease(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<void> {
@@ -970,6 +1139,18 @@ function searchIdentityCountsEqual(left: SearchIdentityCounts, right: SearchIden
 	return left.total === right.total && CONTENT_RESOURCE_KINDS.every((kind) => left.byKind[kind] === right.byKind[kind]);
 }
 
+function readinessTimeoutSourcesEqual(
+	left: Awaited<ReturnType<typeof verifySearchIndexReadinessTimeoutSource>>,
+	right: Awaited<ReturnType<typeof verifySearchIndexReadinessTimeoutSource>>,
+): boolean {
+	return (
+		left.instanceId === right.instanceId &&
+		left.status === right.status &&
+		left.error.name === right.error.name &&
+		left.error.message === right.error.message
+	);
+}
+
 function searchIndexReady(observation: SearchIndexReadinessObservation): boolean {
 	return (
 		observation.configReady &&
@@ -1003,9 +1184,13 @@ async function waitForSearchIndexReady(
 	env: CoreEnv,
 	step: WorkflowStep,
 	lease: SearchIndexRebuildLease,
+	pollAttempts = REINDEX_READY_POLL_ATTEMPTS,
 ): Promise<SearchIndexReadinessObservation> {
+	if (!Number.isSafeInteger(pollAttempts) || pollAttempts <= 0) {
+		throw new Error(`AI Search readiness poll attempts must be a positive safe integer: ${pollAttempts}`);
+	}
 	let last: SearchIndexReadinessObservation | null = null;
-	for (let attempt = 0; attempt < REINDEX_READY_POLL_ATTEMPTS; attempt++) {
+	for (let attempt = 0; attempt < pollAttempts; attempt++) {
 		last = await step.do(`load-search-index-readiness-${attempt}`, SHORT_STEP_OPTIONS, () =>
 			withSearchIndexRebuildLease(env, lease, () => loadSearchIndexReadiness(env)),
 		);
@@ -1013,7 +1198,7 @@ async function waitForSearchIndexReady(
 		if (searchIndexSettled(last.ownedStatuses) && (last.ownedStatuses.error > 0 || last.ownedStatuses.skipped > 0)) {
 			throw new Error(`AI Search indexing failed: ${JSON.stringify(last.ownedStatuses)}`);
 		}
-		if (attempt < REINDEX_READY_POLL_ATTEMPTS - 1) {
+		if (attempt < pollAttempts - 1) {
 			await step.sleep(`wait-search-index-readiness-${attempt}`, REINDEX_READY_POLL_INTERVAL);
 		}
 	}
@@ -1050,11 +1235,50 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, { mode: 'rebuild' });
 }
 
+async function continueSearchIndexReadiness(
+	env: CoreEnv,
+	step: WorkflowStep,
+	checkpoint: SearchIndexReadinessContinuationCheckpoint,
+	claimStartedAt: string,
+) {
+	const sourceBeforeClaim = await step.do('verify-readiness-timeout-source', SHORT_STEP_OPTIONS, () =>
+		verifySearchIndexReadinessTimeoutSource(env, checkpoint),
+	);
+	const claim = await step.do('claim-search-index-readiness-continuation', SHORT_STEP_OPTIONS, () =>
+		claimSearchIndexReadinessContinuation(env, checkpoint, claimStartedAt),
+	);
+	const sourceAfterClaim = await step.do('reverify-readiness-timeout-source', SHORT_STEP_OPTIONS, () =>
+		verifySearchIndexReadinessTimeoutSource(env, checkpoint),
+	);
+	if (!readinessTimeoutSourcesEqual(sourceBeforeClaim, sourceAfterClaim)) {
+		throw new Error('AI Search readiness continuation source changed while claiming the fenced lease');
+	}
+	const readiness = await waitForSearchIndexReady(env, step, claim, REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS);
+	const generationReadiness = await step.do('mark-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
+		markSearchIndexGenerationReady(env, claim),
+	);
+	return {
+		mode: 'readiness' as const,
+		checkpoint,
+		source: {
+			beforeClaim: sourceBeforeClaim,
+			afterClaim: sourceAfterClaim,
+		},
+		claim,
+		generation: SEARCH_INDEX_GENERATION,
+		rebuildEpoch: claim.rebuildEpoch,
+		pollAttempts: REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS,
+		readiness,
+		generationReadiness,
+	};
+}
+
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		const requestedMode: unknown = event.payload.mode;
-		if (requestedMode !== undefined && requestedMode !== 'rebuild' && requestedMode !== 'adopt' && requestedMode !== 'resume') {
-			throw new Error(`Unsupported AI Search rebuild mode: ${String(requestedMode)}`);
+		const requestedMode = parseSearchIndexRebuildMode(event.payload);
+		const readinessCheckpoint = parseSearchIndexReadinessContinuationCheckpoint(event.payload);
+		if (readinessCheckpoint) {
+			return continueSearchIndexReadiness(this.env, step, readinessCheckpoint, event.timestamp.toISOString());
 		}
 		const adoptionSourceValue: unknown = event.payload.mode === 'adopt' ? event.payload.completedInstanceId : undefined;
 		const adoptionSourceInstanceId = typeof adoptionSourceValue === 'string' ? adoptionSourceValue.trim() : undefined;
