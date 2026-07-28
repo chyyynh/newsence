@@ -1,5 +1,7 @@
 import {
 	RESOURCE_CATEGORIES,
+	RESOURCE_KINDS,
+	RESOURCE_PLATFORMS,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
 	RESOURCE_TYPES,
@@ -30,6 +32,8 @@ export const resources = pgTable(
 		id: uuid('id').defaultRandom().primaryKey(),
 		sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
 		type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
+		kind: text('kind', { enum: RESOURCE_KINDS }),
+		resourcePlatform: text('resource_platform', { enum: RESOURCE_PLATFORMS }),
 		scope: text('scope', { enum: RESOURCE_SCOPES }).default('private').notNull(),
 		url: text('url'),
 		normalizedUrl: text('normalized_url'),

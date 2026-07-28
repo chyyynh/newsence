@@ -16,6 +16,83 @@ export function isResourceType(value: unknown): value is ResourceType {
 	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
 
+export const RESOURCE_KINDS = ['document', 'post', 'video', 'paper', 'image', 'file'] as const;
+
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
+
+export const RESOURCE_PLATFORMS = ['hackernews', 'twitter', 'youtube'] as const;
+
+export type ResourcePlatform = (typeof RESOURCE_PLATFORMS)[number] | null;
+
+export const VALID_KIND_PLATFORMS = {
+	document: [null, 'hackernews'],
+	post: ['twitter'],
+	video: ['youtube'],
+	paper: [null, 'hackernews'],
+	image: [null],
+	file: [null],
+} as const satisfies Readonly<Record<ResourceKind, readonly ResourcePlatform[]>>;
+
+export type ResourceIdentity = Readonly<{
+	kind: ResourceKind;
+	resourcePlatform: ResourcePlatform;
+}>;
+
+export const LEGACY_RESOURCE_IDENTITIES = {
+	web: { kind: 'document', resourcePlatform: null },
+	rss: { kind: 'document', resourcePlatform: null },
+	twitter: { kind: 'post', resourcePlatform: 'twitter' },
+	youtube: { kind: 'video', resourcePlatform: 'youtube' },
+	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
+	pdf: { kind: 'document', resourcePlatform: null },
+	image: { kind: 'image', resourcePlatform: null },
+	file: { kind: 'file', resourcePlatform: null },
+} as const satisfies Readonly<Record<ResourceType, ResourceIdentity>>;
+
+export function isResourceKind(value: unknown): value is ResourceKind {
+	return typeof value === 'string' && (RESOURCE_KINDS as readonly string[]).includes(value);
+}
+
+export function isResourcePlatform(value: unknown): value is ResourcePlatform {
+	return value === null || (typeof value === 'string' && (RESOURCE_PLATFORMS as readonly string[]).includes(value));
+}
+
+export function isValidKindPlatform(kind: unknown, resourcePlatform: unknown): kind is ResourceKind {
+	if (!isResourceKind(kind) || !isResourcePlatform(resourcePlatform)) return false;
+	return (VALID_KIND_PLATFORMS[kind] as readonly ResourcePlatform[]).includes(resourcePlatform);
+}
+
+export function assertValidKindPlatform(kind: unknown, resourcePlatform: unknown): asserts kind is ResourceKind {
+	if (!isValidKindPlatform(kind, resourcePlatform)) {
+		throw new Error(`Invalid resource kind/platform pair: ${String(kind)} / ${String(resourcePlatform)}`);
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown): boolean {
+	if (!isRecord(platformMetadata) || !isRecord(platformMetadata.enrichments)) return false;
+	const academic = platformMetadata.enrichments.academic;
+	return isRecord(academic) && academic.source === 'semanticscholar';
+}
+
+export function legacyResourceIdentity(type: ResourceType, hasAcademicEnrichment = false): ResourceIdentity {
+	const identity = LEGACY_RESOURCE_IDENTITIES[type];
+	if (hasAcademicEnrichment && identity.kind === 'document') {
+		return { kind: 'paper', resourcePlatform: identity.resourcePlatform };
+	}
+	return identity;
+}
+
+export function resourceIdentityForDetectedPlatform(
+	resourcePlatform: Exclude<ResourcePlatform, null>,
+	hasAcademicEnrichment = false,
+): ResourceIdentity {
+	return legacyResourceIdentity(resourcePlatform, hasAcademicEnrichment);
+}
+
 // Translation/enrichment completeness policy for legacy resource rows. Keep
 // this policy domain independent from the umbrella ContentResourceType alias
 // so the overloaded resource-type contract can be retired in stages (#245).

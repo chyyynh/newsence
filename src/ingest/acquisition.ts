@@ -1,10 +1,10 @@
 import { isContentResourceType } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
-import { extractYouTubeId, normalizeUrl } from '@core-shared/url';
+import { detectResourceUrl, normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
-import { extractHackerNewsId, type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
+import { type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
 import { acquireRssFeedItem, type RssFeedAcquisitionInput } from './platforms/rss-feed';
-import { extractTweetId, scrapeTweet } from './platforms/twitter-acquisition';
+import { scrapeTweet } from './platforms/twitter-acquisition';
 import { scrapeYouTube } from './platforms/youtube-acquisition';
 import { acquireWebResource, PDF_MIME, pdfExtractionMetadata } from './web-acquisition';
 
@@ -93,15 +93,19 @@ export type AcquisitionOrigin = { monitored: boolean };
 
 export async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
-
-	const videoId = extractYouTubeId(validatedUrl);
-	if (videoId) return sanitizeAcquiredContent(await scrapeYouTube(videoId, env.YOUTUBE_API_KEY, origin));
-
-	const tweetId = extractTweetId(validatedUrl);
-	if (tweetId) return sanitizeAcquiredContent(await scrapeTweet(tweetId, env.KAITO_API_KEY));
-
-	const hackerNewsId = extractHackerNewsId(validatedUrl);
-	if (hackerNewsId) return sanitizeAcquiredContent(await scrapeHackerNews(hackerNewsId, env));
+	const detected = detectResourceUrl(validatedUrl);
+	if (detected) {
+		switch (detected.resourcePlatform) {
+			case 'youtube':
+				return sanitizeAcquiredContent(await scrapeYouTube(detected.platformId, env.YOUTUBE_API_KEY, origin));
+			case 'twitter':
+				return sanitizeAcquiredContent(await scrapeTweet(detected.platformId, env.KAITO_API_KEY));
+			case 'hackernews':
+				return sanitizeAcquiredContent(await scrapeHackerNews(detected.platformId, env));
+			default:
+				detected.resourcePlatform satisfies never;
+		}
+	}
 
 	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env));
 }

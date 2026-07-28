@@ -81,6 +81,11 @@
 			"binding": "ACADEMIC_METADATA_BACKFILL_WORKFLOW",
 			"name": "newsence-academic-metadata-backfill",
 			"class_name": "AcademicMetadataBackfillWorkflow"
+		},
+		{
+			"binding": "RESOURCE_IDENTITY_BACKFILL_WORKFLOW",
+			"name": "newsence-resource-identity-backfill",
+			"class_name": "ResourceIdentityBackfillWorkflow"
 		}
 	],
 	/**

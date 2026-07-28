@@ -8,12 +8,18 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const drizzlePath = resolve(root, 'src/db/schema.ts');
 const prismaPath = resolve(root, '../../web-tanstack/prisma/schema.prisma');
 const manualIndexesPath = resolve(root, '../../web-tanstack/prisma/manual-indexes.sql');
+const resourceIdentityExpandPath = resolve(root, '../../web-tanstack/prisma/245-expand.sql');
+const resourceIdentityInvariantsPath = resolve(root, '../../web-tanstack/prisma/245-resource-identity-invariants.sql');
+const resourceSourceProvenancePath = resolve(root, '../../web-tanstack/prisma/resource-source-provenance.sql');
 const resourceTypesPath = resolve(root, 'src/shared/resource-types.ts');
 const systemIdentitiesPath = resolve(root, 'src/shared/system-identities.ts');
 
 const drizzleSource = readFileSync(drizzlePath, 'utf8');
 const prismaSource = readFileSync(prismaPath, 'utf8');
 const manualIndexesSource = readFileSync(manualIndexesPath, 'utf8');
+const resourceIdentityExpandSource = readFileSync(resourceIdentityExpandPath, 'utf8');
+const resourceIdentityInvariantsSource = readFileSync(resourceIdentityInvariantsPath, 'utf8');
+const resourceSourceProvenanceSource = readFileSync(resourceSourceProvenancePath, 'utf8');
 const resourceTypesSource = readFileSync(resourceTypesPath, 'utf8');
 const systemIdentitiesSource = readFileSync(systemIdentitiesPath, 'utf8');
 
@@ -105,9 +111,57 @@ function parseStringArray(source, name) {
 	return [...declaration[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
 }
 
+function parseStringOrNullArrayRecord(source, name) {
+	const body = source.match(new RegExp(`export const ${name} = \\{([\\s\\S]*?)\\} as const`))?.[1];
+	if (!body) return null;
+	const entries = new Map();
+	for (const match of body.matchAll(/(\w+):\s*\[([^\]]*)\]/g)) {
+		const values = [...match[2].matchAll(/'([^']+)'|\b(null)\b/g)].map((value) => value[1] ?? null);
+		entries.set(match[1], values);
+	}
+	return entries.size > 0 ? entries : null;
+}
+
 function parseObjectStringProperty(source, objectName, propertyName) {
 	const objectBody = source.match(new RegExp(`export const ${objectName} = \\{([\\s\\S]*?)\\} as const`))?.[1];
 	return objectBody?.match(new RegExp(`${propertyName}:\\s*'([^']+)'`))?.[1] ?? null;
+}
+
+function sqlStringValues(source) {
+	return [...source.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+}
+
+function parseNullableDomainConstraint(source, constraintName, columnName) {
+	const match = source.match(
+		new RegExp(`ADD CONSTRAINT ${constraintName}\\s+CHECK \\(${columnName} IS NULL OR ${columnName} IN \\(([^)]+)\\)\\);`),
+	);
+	return match ? sqlStringValues(match[1]) : null;
+}
+
+function parseKindPlatformMatrixBody(body) {
+	if (!body) return null;
+	const pairs = [];
+	for (const match of body.matchAll(/\(kind = '([^']+)' AND resource_platform (IS NULL|= '([^']+)')\)/g)) {
+		pairs.push(`${match[1]}:${match[2] === 'IS NULL' ? 'null' : match[3]}`);
+	}
+	return {
+		allowsLegacyNullPair: /\(kind IS NULL AND resource_platform IS NULL\)/.test(body),
+		pairs,
+	};
+}
+
+function parseConstraintKindPlatformMatrix(source) {
+	const body = source.match(/ADD CONSTRAINT resources_kind_platform_check\s+CHECK\s*\(\s*\(([\s\S]*?)\)\s+IS TRUE\s*\);/)?.[1];
+	return parseKindPlatformMatrixBody(body);
+}
+
+function parseInvariantKindPlatformMatrix(source) {
+	const body = source.match(/INTO invalid_matrix_count[\s\S]*?FROM resources\s+WHERE NOT\s*\(\s*\(([\s\S]*?)\)\s+IS TRUE\s*\);/)?.[1];
+	return parseKindPlatformMatrixBody(body);
+}
+
+function expectedKindPlatformPairs(matrix) {
+	return [...matrix.entries()].flatMap(([kind, platforms]) => platforms.map((platform) => `${kind}:${platform ?? 'null'}`));
 }
 
 function sameValues(actual, expected) {
@@ -192,6 +246,87 @@ if (!contentResourceTypes || !mediaResourceTypes) {
 	}
 }
 
+const resourceKinds = parseStringArray(resourceTypesSource, 'RESOURCE_KINDS');
+const resourcePlatforms = parseStringArray(resourceTypesSource, 'RESOURCE_PLATFORMS');
+const validKindPlatforms = parseStringOrNullArrayRecord(resourceTypesSource, 'VALID_KIND_PLATFORMS');
+if (!resourceKinds || !resourcePlatforms || !validKindPlatforms) {
+	errors.push(`Unable to parse canonical resource identity domains from ${resourceTypesPath}`);
+} else {
+	const matrixKinds = [...validKindPlatforms.keys()];
+	if (!sameMembers(matrixKinds, resourceKinds)) {
+		errors.push('VALID_KIND_PLATFORMS keys differ from canonical RESOURCE_KINDS');
+	}
+	const unknownMatrixPlatforms = [...validKindPlatforms.values()]
+		.flat()
+		.filter((platform) => platform !== null && !resourcePlatforms.includes(platform));
+	if (unknownMatrixPlatforms.length > 0) {
+		errors.push(`VALID_KIND_PLATFORMS contains unknown platforms: ${[...new Set(unknownMatrixPlatforms)].join(', ')}`);
+	}
+
+	if (!/kind:\s*text\('kind',\s*\{\s*enum:\s*RESOURCE_KINDS\s*\}\),/.test(drizzleSource)) {
+		errors.push('Drizzle resources.kind must be nullable and use the canonical RESOURCE_KINDS domain');
+	}
+	if (!/resourcePlatform:\s*text\('resource_platform',\s*\{\s*enum:\s*RESOURCE_PLATFORMS\s*\}\),/.test(drizzleSource)) {
+		errors.push('Drizzle resources.resourcePlatform must be nullable and use the canonical RESOURCE_PLATFORMS domain');
+	}
+
+	const resourceModelBody = prismaSource.match(/model Resource \{([\s\S]*?)\n\}/)?.[1] ?? '';
+	if (!/^\s*kind\s+String\?\s*$/m.test(resourceModelBody)) {
+		errors.push('Prisma Resource.kind must be nullable and have no default during the expand phase');
+	}
+	if (!/^\s*resourcePlatform\s+String\?\s+@map\("resource_platform"\)\s*$/m.test(resourceModelBody)) {
+		errors.push('Prisma Resource.resourcePlatform must be nullable, mapped to resource_platform, and have no default');
+	}
+
+	const expectedPairs = expectedKindPlatformPairs(validKindPlatforms);
+	for (const [label, source] of [
+		['manual-indexes.sql', manualIndexesSource],
+		['245-expand.sql', resourceIdentityExpandSource],
+	]) {
+		const constrainedKinds = parseNullableDomainConstraint(source, 'resources_kind_check', 'kind');
+		if (!constrainedKinds || !sameValues(constrainedKinds, resourceKinds)) {
+			errors.push(`${label} resources_kind_check differs from canonical RESOURCE_KINDS`);
+		}
+		const constrainedPlatforms = parseNullableDomainConstraint(source, 'resources_resource_platform_check', 'resource_platform');
+		if (!constrainedPlatforms || !sameValues(constrainedPlatforms, resourcePlatforms)) {
+			errors.push(`${label} resources_resource_platform_check differs from canonical RESOURCE_PLATFORMS`);
+		}
+		const matrix = parseConstraintKindPlatformMatrix(source);
+		if (!matrix?.allowsLegacyNullPair || !sameMembers(matrix.pairs, expectedPairs)) {
+			errors.push(`${label} resources_kind_platform_check differs from canonical VALID_KIND_PLATFORMS`);
+		}
+	}
+
+	const invariantKinds = resourceIdentityInvariantsSource.match(/WHERE kind NOT IN \(([^)]+)\)/)?.[1];
+	if (!invariantKinds || !sameValues(sqlStringValues(invariantKinds), resourceKinds)) {
+		errors.push('245-resource-identity-invariants.sql kind audit differs from canonical RESOURCE_KINDS');
+	}
+	const invariantPlatforms = resourceIdentityInvariantsSource.match(/resource_platform NOT IN \(([^)]+)\)/)?.[1];
+	if (!invariantPlatforms || !sameValues(sqlStringValues(invariantPlatforms), resourcePlatforms)) {
+		errors.push('245-resource-identity-invariants.sql platform audit differs from canonical RESOURCE_PLATFORMS');
+	}
+	const invariantMatrix = parseInvariantKindPlatformMatrix(resourceIdentityInvariantsSource);
+	if (!invariantMatrix?.allowsLegacyNullPair || !sameMembers(invariantMatrix.pairs, expectedPairs)) {
+		errors.push('245-resource-identity-invariants.sql matrix audit differs from canonical VALID_KIND_PLATFORMS');
+	}
+
+	if (!/ADD COLUMN IF NOT EXISTS kind text;/.test(resourceIdentityExpandSource)) {
+		errors.push('245-expand.sql must add nullable resources.kind without a default');
+	}
+	if (!/ADD COLUMN IF NOT EXISTS resource_platform text;/.test(resourceIdentityExpandSource)) {
+		errors.push('245-expand.sql must add nullable resources.resource_platform without a default');
+	}
+	for (const [label, source] of [
+		['manual-indexes.sql', manualIndexesSource],
+		['245-expand.sql', resourceIdentityExpandSource],
+		['resource-source-provenance.sql', resourceSourceProvenanceSource],
+	]) {
+		if (!/(\w+)\.source_id,\s*\1\.kind,\s*\1\.resource_platform\s+FROM resources/.test(source)) {
+			errors.push(`${label} resources_localized must append kind and resource_platform after source_id`);
+		}
+	}
+}
+
 const sourcePlatforms = parseStringArray(resourceTypesSource, 'SOURCE_PLATFORMS');
 const sourceAcquisitionModes = parseStringArray(resourceTypesSource, 'SOURCE_ACQUISITION_MODES');
 if (!sourcePlatforms || !sourceAcquisitionModes) {
@@ -233,5 +368,5 @@ if (errors.length > 0) {
 }
 
 process.stdout.write(
-	`Drizzle/Prisma drift check passed for ${drizzleTables.length} complete table definitions and canonical resource/source domains.\n`,
+	`Drizzle/Prisma drift check passed for ${drizzleTables.length} complete table definitions and canonical resource/source domains and identity matrix.\n`,
 );

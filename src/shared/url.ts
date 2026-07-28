@@ -1,3 +1,5 @@
+import type { ResourcePlatform } from './resource-types';
+
 const TRACKING_PARAMS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'gclid', 'mc_eid', 'mc_cid'];
 
 const DOMAIN_ALIASES: Record<string, string> = {
@@ -30,6 +32,11 @@ function canonicalHost(hostname: string): string {
 
 function isYouTubeHost(hostname: string): boolean {
 	return hostMatches(hostname, YOUTUBE_WATCH_HOSTS) || hostMatches(hostname, YOUTUBE_SHORT_HOSTS);
+}
+
+function isTwitterHost(hostname: string): boolean {
+	const lower = hostname.toLowerCase();
+	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
 }
 
 function parseUrl(rawUrl: string): URL | null {
@@ -110,4 +117,38 @@ export function extractYouTubeId(url: string): string | null {
 	const [kind, maybeId] = parsed.pathname.split('/').filter(Boolean);
 	const pathId = hostMatches(hostname, YOUTUBE_SHORT_HOSTS) ? kind : ['embed', 'shorts', 'live', 'v'].includes(kind ?? '') ? maybeId : null;
 	return pathId?.match(YOUTUBE_VIDEO_ID_RE)?.[0] ?? null;
+}
+
+export function extractTweetId(url: string): string | null {
+	const parsed = parseUrl(url);
+	if (!parsed || !isTwitterHost(parsed.hostname)) return null;
+	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? parsed.pathname.match(/^\/i\/article\/(\d+)/)?.[1] ?? null;
+}
+
+export function extractHackerNewsId(url: string): string | null {
+	const parsed = parseUrl(url);
+	if (!parsed) return null;
+	const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+	if (host !== 'news.ycombinator.com' && host !== 'ycombinator.com' && !host.endsWith('.ycombinator.com')) return null;
+	return parsed.searchParams.get('id')?.match(/^\d+$/)?.[0] ?? null;
+}
+
+export type DetectedResourceUrl = Readonly<{
+	resourcePlatform: Exclude<ResourcePlatform, null>;
+	platformId: string;
+}>;
+
+export function detectResourceUrl(url: string | null | undefined): DetectedResourceUrl | null {
+	if (!url) return null;
+	const youtubeId = extractYouTubeId(url);
+	if (youtubeId) return { resourcePlatform: 'youtube', platformId: youtubeId };
+	const tweetId = extractTweetId(url);
+	if (tweetId) return { resourcePlatform: 'twitter', platformId: tweetId };
+	const hackerNewsId = extractHackerNewsId(url);
+	if (hackerNewsId) return { resourcePlatform: 'hackernews', platformId: hackerNewsId };
+	return null;
+}
+
+export function detectResourcePlatform(url: string | null | undefined): ResourcePlatform {
+	return detectResourceUrl(url)?.resourcePlatform ?? null;
 }

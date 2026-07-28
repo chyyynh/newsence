@@ -3,6 +3,12 @@ import { AcademicMetadataBackfillWorkflow, startAcademicMetadataBackfill } from 
 import { ResourceTranslationWorkflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
+import {
+	type ResourceIdentityBackfillMode,
+	ResourceIdentityBackfillWorkflow,
+	resourceIdentityBackfillInstanceId,
+	startResourceIdentityBackfill,
+} from '@ingest/resource-identity-backfill-workflow';
 import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
@@ -14,6 +20,7 @@ import { assertResourceProcessable, isResourceEnrichmentComplete } from './inges
 export {
 	AcademicMetadataBackfillWorkflow,
 	RecentResourceImageBackfillWorkflow,
+	ResourceIdentityBackfillWorkflow,
 	ResourceProcessingWorkflow,
 	ResourceTranslationWorkflow,
 	SearchIndexRebuildWorkflow,
@@ -95,6 +102,17 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Read academic metadata backfill status for operator polling. */
 	async getAcademicMetadataBackfillStatus(instanceId: string) {
 		const instance = await this.env.ACADEMIC_METADATA_BACKFILL_WORKFLOW.get(instanceId);
+		return instance.status();
+	}
+
+	/** Start or resume a versioned resource kind/platform migration mode. */
+	startResourceIdentityBackfill(mode: ResourceIdentityBackfillMode = 'dry-run') {
+		return startResourceIdentityBackfill(this.env, mode);
+	}
+
+	/** Read the stable resource kind/platform migration instance for a mode. */
+	async getResourceIdentityBackfillStatus(mode: ResourceIdentityBackfillMode = 'dry-run') {
+		const instance = await this.env.RESOURCE_IDENTITY_BACKFILL_WORKFLOW.get(resourceIdentityBackfillInstanceId(mode));
 		return instance.status();
 	}
 
