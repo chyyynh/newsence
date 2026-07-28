@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
@@ -12,9 +13,28 @@ const READINESS_VERSION_ID = 'e0445ff4-222f-4e54-b6a5-1bdd95d2476f';
 const RESUME_STARTED_AT = '2026-07-28T05:31:32.516Z';
 const READINESS_CHECKPOINT_KEY = 'canonical-3-kind-resume-v1-readiness-timeout';
 const READINESS_TIMEOUT_ERROR_PREFIX = 'AI Search index did not become ready:';
+const READINESS_INITIAL_REPAIR_DIGEST = '710d51c0b740233a3634ab8e1b22e1d74f9dfc0c5954d303b8fcf2e717ce9c21';
+const READINESS_MAX_REPAIR_ROUNDS = 3;
 const RESUME_REBUILD_EPOCH = 2;
 const READINESS_REBUILD_EPOCH = 3;
 const RESUME_FINAL_READINESS_ATTEMPT = 35;
+const RESUME_TERMINAL_EXPECTED = {
+	total: 32_223,
+	byKind: {
+		document: 23_079,
+		post: 8_673,
+		video: 457,
+		paper: 14,
+	},
+};
+const RESUME_TERMINAL_OWNED_STATUSES = {
+	completed: 30_775,
+	error: 1,
+	outdated: 27,
+	queued: 1_325,
+	running: 95,
+	skipped: 0,
+};
 const INSTANCE_ID = process.env.SEARCH_REBUILD_INSTANCE_ID?.trim() || DEFAULT_INSTANCE_ID;
 const ALLOW_IN_PROGRESS = process.argv.includes('--allow-in-progress');
 const EXPECT_READINESS_TIMEOUT = process.argv.includes('--expect-readiness-timeout');
@@ -31,7 +51,7 @@ assert.equal(
 function describeWorkflowInstance() {
 	const result = spawnSync(
 		'pnpm',
-		['exec', 'wrangler', 'workflows', 'instances', 'describe', WORKFLOW_NAME, INSTANCE_ID, '--truncate-output-limit', '2000'],
+		['exec', 'wrangler', 'workflows', 'instances', 'describe', WORKFLOW_NAME, INSTANCE_ID, '--truncate-output-limit', '20000'],
 		{
 			cwd: PACKAGE_ROOT,
 			encoding: 'utf8',
@@ -215,6 +235,20 @@ function exactStep(steps, pattern, label) {
 	return matches[0];
 }
 
+function assertStepOrder(steps, orderedSteps, label) {
+	const positions = orderedSteps.map(({ pattern, stepLabel }) => {
+		const step = exactStep(steps, pattern, `${label} ${stepLabel}`);
+		const position = steps.indexOf(step);
+		assert.notEqual(position, -1, `${label} ${stepLabel} position`);
+		return position;
+	});
+	assert.deepEqual(
+		positions,
+		[...positions].sort((left, right) => left - right),
+		`${label} execution order`,
+	);
+}
+
 function assertResumeCorpusAndDelta(steps) {
 	const corpus = numberedSteps(steps, /^sync-corpus-page-(\d+)-\d+$/, 'resume corpus');
 	assertExactStepRange(corpus, 365, 643, 'resume corpus');
@@ -306,12 +340,17 @@ function assertResumeReadinessTimeout(steps, versionId, status, lastSuccessfulSt
 	assertExactStepRange(readinessSteps, 0, RESUME_FINAL_READINESS_ATTEMPT, 'readiness-timeout observations');
 	const terminalReadiness = parsedStepOutput(readinessSteps.at(-1)?.step, 'readiness-timeout terminal observation');
 	assert.equal(terminalReadiness.configReady, true, 'readiness-timeout AI Search metadata config');
-	assert.equal(terminalReadiness.ownedStatuses.error, 0, 'readiness-timeout owned errored items');
-	assert.equal(terminalReadiness.ownedStatuses.skipped, 0, 'readiness-timeout owned skipped items');
+	assert.deepEqual(terminalReadiness.expected, RESUME_TERMINAL_EXPECTED, 'readiness-timeout expected identity counts');
+	assert.deepEqual(terminalReadiness.ownedStatuses, RESUME_TERMINAL_OWNED_STATUSES, 'readiness-timeout exact owned status snapshot');
 	assert.equal(terminalReadiness.indexed, null, 'readiness-timeout index remains unsettled');
+	assert.equal(
+		Object.values(terminalReadiness.ownedStatuses).reduce((total, count) => total + Number(count), 0),
+		terminalReadiness.expected.total,
+		'readiness-timeout owned status total',
+	);
 	assert.ok(
 		terminalReadiness.ownedStatuses.queued + terminalReadiness.ownedStatuses.running + terminalReadiness.ownedStatuses.outdated > 0,
-		'readiness-timeout must have only transient work remaining',
+		'readiness-timeout must still have transient work remaining',
 	);
 	return {
 		source,
@@ -322,14 +361,99 @@ function assertResumeReadinessTimeout(steps, versionId, status, lastSuccessfulSt
 	};
 }
 
+function repairTargetDigest(targets) {
+	const canonical = [...targets]
+		.sort((left, right) => (left.resourceId < right.resourceId ? -1 : left.resourceId > right.resourceId ? 1 : 0))
+		.map((target) => [target.itemId, target.resourceId, target.status, target.error].join('|'))
+		.join('\n');
+	return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+function repairTargetSnapshot(targets) {
+	const sortedTargets = [...targets].sort((left, right) =>
+		left.resourceId < right.resourceId ? -1 : left.resourceId > right.resourceId ? 1 : 0,
+	);
+	return {
+		counts: {
+			error: sortedTargets.filter((target) => target.status === 'error').length,
+			outdated: sortedTargets.filter((target) => target.status === 'outdated').length,
+			total: sortedTargets.length,
+		},
+		digest: repairTargetDigest(sortedTargets),
+		targets: sortedTargets,
+	};
+}
+
+function assertRepairTargetSnapshot(snapshot, label) {
+	assert.equal(typeof snapshot, 'object', `${label} snapshot`);
+	assert.equal(snapshot.counts.error + snapshot.counts.outdated, snapshot.counts.total, `${label} count total`);
+	assert.equal(snapshot.targets.length, snapshot.counts.total, `${label} target count`);
+	assert.equal(repairTargetDigest(snapshot.targets), snapshot.digest, `${label} target digest`);
+	assert.deepEqual(
+		snapshot.targets.map((target) => target.resourceId),
+		[...snapshot.targets].map((target) => target.resourceId).sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+		`${label} target ordering`,
+	);
+	assert.equal(new Set(snapshot.targets.map((target) => target.itemId)).size, snapshot.targets.length, `${label} unique item ids`);
+	assert.equal(new Set(snapshot.targets.map((target) => target.resourceId)).size, snapshot.targets.length, `${label} unique resource ids`);
+	for (const [index, target] of snapshot.targets.entries()) {
+		assert.match(target.itemId, /^[0-9a-f]{32}$/, `${label} target ${index} item id`);
+		assert.match(
+			target.resourceId,
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			`${label} target ${index} resource id`,
+		);
+		assert.ok(target.status === 'error' || target.status === 'outdated', `${label} target ${index} repair status`);
+		assert.equal(typeof target.error, 'string', `${label} target ${index} error type`);
+		if (target.status === 'error') assert.notEqual(target.error.trim(), '', `${label} target ${index} error`);
+		assertUtcTimestamp(target.lastSeenAt, `${label} target ${index} last-seen`);
+	}
+	return snapshot;
+}
+
+function assertInitialRepairTargetSnapshot(snapshot, label) {
+	assertRepairTargetSnapshot(snapshot, label);
+	assert.deepEqual(snapshot.counts, { error: 1, outdated: 29, total: 30 }, `${label} exact counts`);
+	assert.equal(snapshot.digest, READINESS_INITIAL_REPAIR_DIGEST, `${label} pinned digest`);
+	return snapshot;
+}
+
+function assertRepairSyncResult(result, snapshot, label) {
+	assert.equal(result.requested, snapshot.targets.length, `${label} requested count`);
+	assert.equal(result.requestedDigest, snapshot.digest, `${label} requested digest`);
+	assert.equal(result.results.length, snapshot.targets.length, `${label} result count`);
+	for (const [index, synced] of result.results.entries()) {
+		const target = snapshot.targets[index];
+		assert.ok(synced.action === 'synced' || synced.action === 'already-advanced', `${label} result ${index} action`);
+		assert.equal(synced.itemId, target.itemId, `${label} result ${index} item id`);
+		assert.equal(synced.resourceId, target.resourceId, `${label} result ${index} resource id`);
+		assert.ok(
+			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(synced.status),
+			`${label} result ${index} status`,
+		);
+		if (synced.action === 'already-advanced') {
+			assert.ok(['completed', 'queued', 'running'].includes(synced.status), `${label} result ${index} advanced status`);
+		} else {
+			assert.notEqual(synced.status, 'skipped', `${label} result ${index} synced status`);
+		}
+		assert.ok(synced.error === null || typeof synced.error === 'string', `${label} result ${index} error`);
+	}
+	return result;
+}
+
 function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulStep) {
 	assert.equal(versionId, READINESS_VERSION_ID, 'readiness continuation Workflow version');
 	assert.match(lastSuccessfulStep, /^mark-search-index-generation-ready-\d+$/, 'readiness continuation final ready step');
 
 	const allowedStepPatterns = [
 		/^verify-readiness-timeout-source-\d+$/,
+		/^inspect-search-index-repair-targets-preclaim-\d+$/,
 		/^claim-search-index-readiness-continuation-\d+$/,
 		/^reverify-readiness-timeout-source-\d+$/,
+		/^inspect-search-index-repair-targets-postclaim-\d+$/,
+		/^inspect-search-index-repair-targets-\d+-\d+$/,
+		/^sync-search-index-repair-targets-\d+-\d+-\d+$/,
+		/^wait-search-index-repair-0-\d+$/,
 		/^load-search-index-readiness-\d+-\d+$/,
 		/^wait-search-index-readiness-\d+-\d+$/,
 		/^mark-search-index-generation-ready-\d+$/,
@@ -360,6 +484,13 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		'readiness continuation source error',
 	);
 
+	const repairTargetsBeforeClaim = assertInitialRepairTargetSnapshot(
+		parsedStepOutput(
+			exactStep(steps, /^inspect-search-index-repair-targets-preclaim-\d+$/, 'readiness continuation repair preclaim'),
+			'readiness continuation repair preclaim',
+		),
+		'readiness continuation repair preclaim',
+	);
 	const claim = parsedStepOutput(
 		exactStep(steps, /^claim-search-index-readiness-continuation-\d+$/, 'readiness continuation claim'),
 		'readiness continuation claim',
@@ -369,6 +500,67 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 	assert.equal(Number(claim.sourceRebuildEpoch), RESUME_REBUILD_EPOCH, 'readiness continuation source epoch');
 	assert.equal(Number(claim.rebuildEpoch), READINESS_REBUILD_EPOCH, 'readiness continuation claimed epoch');
 	assertUtcTimestamp(claim.startedAt, 'readiness continuation claim timestamp');
+
+	const repairTargetsAfterClaim = assertRepairTargetSnapshot(
+		parsedStepOutput(
+			exactStep(steps, /^inspect-search-index-repair-targets-postclaim-\d+$/, 'readiness continuation repair postclaim'),
+			'readiness continuation repair postclaim',
+		),
+		'readiness continuation repair postclaim',
+	);
+	const initialItemToResource = new Map(repairTargetsBeforeClaim.targets.map((target) => [target.itemId, target.resourceId]));
+	for (const target of repairTargetsAfterClaim.targets) {
+		assert.equal(initialItemToResource.get(target.itemId), target.resourceId, 'readiness continuation repair postclaim pinned target');
+	}
+	const repairSnapshots = new Map([[0, repairTargetsBeforeClaim]]);
+	const retryTargetSteps = numberedSteps(steps, /^inspect-search-index-repair-targets-(\d+)-\d+$/, 'readiness continuation repair retries');
+	if (retryTargetSteps.length > 0) {
+		assertExactStepRange(retryTargetSteps, 1, retryTargetSteps.length, 'readiness continuation repair retries');
+	}
+	assert.ok(retryTargetSteps.length < READINESS_MAX_REPAIR_ROUNDS, 'readiness continuation bounded repair retries');
+	for (const { index, step } of retryTargetSteps) {
+		const snapshot = assertRepairTargetSnapshot(
+			parsedStepOutput(step, `readiness continuation repair retry ${index}`),
+			`readiness continuation repair retry ${index}`,
+		);
+		for (const target of snapshot.targets) {
+			assert.equal(
+				initialItemToResource.get(target.itemId),
+				target.resourceId,
+				`readiness continuation repair retry ${index} pinned target`,
+			);
+		}
+		repairSnapshots.set(index, snapshot);
+	}
+	const repairSyncSteps = steps
+		.flatMap((step) => {
+			const match = step.name.match(/^sync-search-index-repair-targets-(\d+)-(\d+)-\d+$/);
+			return match ? [{ repairRound: Number(match[1]), batch: Number(match[2]), step }] : [];
+		})
+		.sort((left, right) => left.repairRound - right.repairRound || left.batch - right.batch);
+	for (const [repairRound, snapshot] of repairSnapshots) {
+		const expectedBatchCount = Math.ceil(snapshot.targets.length / 5);
+		const roundBatches = repairSyncSteps.filter((entry) => entry.repairRound === repairRound);
+		assert.deepEqual(
+			roundBatches.map((entry) => entry.batch),
+			Array.from({ length: expectedBatchCount }, (_, batch) => batch),
+			`readiness continuation repair round ${repairRound} batch range`,
+		);
+		for (const { batch, step } of roundBatches) {
+			const batchSnapshot = repairTargetSnapshot(snapshot.targets.slice(batch * 5, batch * 5 + 5));
+			assertRepairSyncResult(
+				parsedStepOutput(step, `readiness continuation repair round ${repairRound} batch ${batch}`),
+				batchSnapshot,
+				`readiness continuation repair round ${repairRound} batch ${batch}`,
+			);
+		}
+	}
+	assert.equal(
+		repairSyncSteps.every((entry) => repairSnapshots.has(entry.repairRound)),
+		true,
+		'readiness continuation repair sync rounds',
+	);
+	exactStep(steps, /^wait-search-index-repair-0-\d+$/, 'readiness continuation initial repair wait');
 
 	const readinessSteps = numberedSteps(steps, /^load-search-index-readiness-(\d+)-\d+$/, 'readiness continuation observations');
 	assert.ok(readinessSteps.length > 0, 'readiness continuation observation');
@@ -386,6 +578,19 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		'readiness continuation generation readiness',
 	);
 	assertUtcTimestamp(generationReadiness.readyAt, 'readiness continuation ready timestamp');
+	assertStepOrder(
+		steps,
+		[
+			{ pattern: /^verify-readiness-timeout-source-\d+$/, stepLabel: 'source preclaim' },
+			{ pattern: /^inspect-search-index-repair-targets-preclaim-\d+$/, stepLabel: 'repair preclaim' },
+			{ pattern: /^claim-search-index-readiness-continuation-\d+$/, stepLabel: 'lease claim' },
+			{ pattern: /^reverify-readiness-timeout-source-\d+$/, stepLabel: 'source postclaim' },
+			{ pattern: /^inspect-search-index-repair-targets-postclaim-\d+$/, stepLabel: 'repair postclaim' },
+			{ pattern: /^sync-search-index-repair-targets-0-0-\d+$/, stepLabel: 'initial repair sync' },
+			{ pattern: /^mark-search-index-generation-ready-\d+$/, stepLabel: 'generation ready' },
+		],
+		'readiness continuation fence',
+	);
 	return {
 		checkpoint: READINESS_CHECKPOINT_KEY,
 		source: {
@@ -393,6 +598,12 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 			afterClaim: sourceAfterClaim,
 		},
 		claim,
+		repair: {
+			beforeClaim: repairTargetsBeforeClaim,
+			afterClaim: repairTargetsAfterClaim,
+			rounds: repairSnapshots.size,
+			batches: repairSyncSteps.length,
+		},
 		readiness,
 		generationReadiness,
 	};
