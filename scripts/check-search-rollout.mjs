@@ -9,6 +9,7 @@ const GENERATION = 3;
 const GENERATION_KEY = 'canonical-3-kind';
 const ALLOW_IN_PROGRESS = process.argv.includes('--allow-in-progress');
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const CONTENT_KINDS = ['document', 'post', 'video', 'paper'];
 const EXPECTED_CUSTOM_METADATA = [
 	{ field_name: 'effective_at', data_type: 'datetime' },
 	{ field_name: 'source_id', data_type: 'text' },
@@ -57,6 +58,7 @@ assert.equal(instance.paused, false, 'AI Search paused');
 assert.deepEqual(instance.custom_metadata, EXPECTED_CUSTOM_METADATA, 'AI Search custom metadata contract');
 
 const stats = runWranglerJson(['ai-search', 'stats', INDEX_NAME]);
+assert.equal(typeof stats.completed, 'number', 'AI Search completed count');
 for (const state of TERMINAL_ITEM_STATES) {
 	assert.equal(typeof stats[state], 'number', `AI Search ${state} count`);
 	if (!ALLOW_IN_PROGRESS) assert.equal(stats[state], 0, `AI Search ${state} items`);
@@ -65,15 +67,38 @@ for (const state of TERMINAL_ITEM_STATES) {
 const client = new pg.Client({ connectionString: databaseUrl() });
 await client.connect();
 let state;
+let expected;
 try {
-	const result = await client.query(
-		`SELECT index_name, generation, generation_key, status, rebuild_epoch, rebuilding_at, ready_at, updated_at
+	const [stateResult, expectedResult] = await Promise.all([
+		client.query(
+			`SELECT index_name, generation, generation_key, status, rebuild_epoch, rebuilding_at, ready_at, updated_at
 		   FROM search_index_states
 		  WHERE index_name = $1`,
-		[STATE_INDEX_NAME],
-	);
-	assert.equal(result.rowCount, 1, 'durable search generation row');
-	[state] = result.rows;
+			[STATE_INDEX_NAME],
+		),
+		client.query(
+			`SELECT kind, COUNT(*)::int AS count
+			   FROM resources
+			  WHERE scope = 'corpus'
+			    AND enrichment_status = 'enriched'
+			    AND kind = ANY($1::text[])
+			  GROUP BY kind
+			  ORDER BY kind`,
+			[CONTENT_KINDS],
+		),
+	]);
+	assert.equal(stateResult.rowCount, 1, 'durable search generation row');
+	[state] = stateResult.rows;
+	const byKind = Object.fromEntries(CONTENT_KINDS.map((kind) => [kind, 0]));
+	for (const row of expectedResult.rows) {
+		assert.ok(CONTENT_KINDS.includes(row.kind), `expected content kind ${row.kind}`);
+		assert.equal(typeof row.count, 'number', `expected ${row.kind} count`);
+		byKind[row.kind] = row.count;
+	}
+	expected = {
+		total: Object.values(byKind).reduce((total, count) => total + count, 0),
+		byKind,
+	};
 } finally {
 	await client.end();
 }
@@ -86,6 +111,7 @@ if (ALLOW_IN_PROGRESS) {
 } else {
 	assert.equal(state.status, 'ready', 'durable search rollout readiness');
 	assert.ok(state.ready_at, 'durable search ready timestamp');
+	assert.equal(stats.completed, expected.total, 'AI Search completed items match the enriched corpus');
 }
 
 console.info({
@@ -95,6 +121,10 @@ console.info({
 	generationKey: state.generation_key,
 	status: state.status,
 	rebuildEpoch: Number(state.rebuild_epoch),
-	itemStates: Object.fromEntries(TERMINAL_ITEM_STATES.map((itemState) => [itemState, stats[itemState]])),
+	itemStates: Object.fromEntries(['completed', ...TERMINAL_ITEM_STATES].map((itemState) => [itemState, stats[itemState]])),
+	expected,
+	rebuildingAt: state.rebuilding_at,
+	readyAt: state.ready_at,
+	updatedAt: state.updated_at,
 	customMetadata: instance.custom_metadata.map((field) => field.field_name),
 });
