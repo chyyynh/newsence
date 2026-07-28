@@ -14,6 +14,7 @@ import {
 	type AcquiredContent,
 	applyAcquiredContent,
 	PDF_MIME,
+	pdfExtractionMetadata,
 	readAcquiredContentArtifact,
 	scrapeRssFeedItemArtifact,
 	scrapeSavedUrlArtifact,
@@ -28,6 +29,7 @@ import { applyTweetLinkUnfurl, pendingTweetExternalLink, unfurlTweetExternalLink
 import { prepareYouTubeHighlights } from './platforms/youtube';
 import {
 	markResourceEnrichmentFailed,
+	persistPdfExtractionSnapshot,
 	persistProcessedResource,
 	persistResourceImageSnapshot,
 	persistUnchangedResourceResync,
@@ -186,6 +188,32 @@ async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: 
 	);
 }
 
+async function persistPdfExtractionBeforeValidation(
+	env: CoreEnv,
+	step: WorkflowStep,
+	input: {
+		acquiredExtraction: AcquiredContent['extraction'];
+		operation: WorkflowOperation;
+		pdfTextArtifact: Awaited<ReturnType<typeof stagePdfTextExtraction>> | null;
+		resource: ResourceForProcessing;
+		resourceId: string;
+	},
+): Promise<boolean> {
+	const extraction = input.pdfTextArtifact ? pdfExtractionMetadata(input.pdfTextArtifact) : input.acquiredExtraction;
+	if (extraction && (input.pdfTextArtifact !== null || input.operation === 'resync')) {
+		const persisted = await step.do(
+			'persist-resource-pdf-extraction-snapshot-v1',
+			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+			() => persistPdfExtractionSnapshot(env, input.resourceId, input.resource, extraction),
+		);
+		if (!persisted) return false;
+	}
+	if (extraction?.status === 'needs_ocr') {
+		throw new NonRetryableError(`PDF resource ${input.resourceId} requires OCR`, 'PdfOcrRequiredError');
+	}
+	return true;
+}
+
 async function acquireResourceForOperation(
 	env: CoreEnv,
 	step: WorkflowStep,
@@ -301,9 +329,15 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 						sourceStorageKey: resource.storage_key,
 					})
 				: null;
-		const pdfExtraction = pdfTextArtifact ?? acquiredContent?.extraction;
-		if (pdfExtraction?.status === 'needs_ocr') {
-			throw new NonRetryableError(`PDF resource ${resourceId} requires OCR`, 'PdfOcrRequiredError');
+		const extractionSnapshotCurrent = await persistPdfExtractionBeforeValidation(this.env, step, {
+			acquiredExtraction: acquiredContent?.extraction,
+			operation,
+			pdfTextArtifact,
+			resource,
+			resourceId,
+		});
+		if (!extractionSnapshotCurrent) {
+			return { success: true, resource_id: resourceId, operation, superseded: true };
 		}
 		await step.do('validate-resource-content', { retries: { limit: 0, delay: '1 second' }, timeout: '5 seconds' }, async () => {
 			const hasProcessableContent = hasContent || !!pdfTextArtifact?.text?.trim() || !!acquiredContent?.markdown?.trim();

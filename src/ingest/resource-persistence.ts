@@ -6,7 +6,13 @@ import {
 	parseResourceIdentity,
 	resourceIdentityWithAcademic,
 } from '@core-shared/resource-types';
-import type { PaperMetadata, PlatformMetadata, ResourceForProcessing, YoutubeTranscript } from '@core-shared/types';
+import {
+	type PaperMetadata,
+	type PlatformMetadata,
+	type ResourceForProcessing,
+	withPdfExtractionMetadata,
+	type YoutubeTranscript,
+} from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources } from '@db/schema';
 import { toStoredResourceEntities } from '@entities/normalize';
@@ -336,6 +342,33 @@ export async function persistResourceImageSnapshot(
 			.where(eq(resources.id, resourceId))
 			.returning({ id: resources.id });
 		if (!updated.length) throw new Error(`Failed to persist resource ${resourceId} image snapshot: not found`);
+		return true;
+	});
+}
+
+export async function persistPdfExtractionSnapshot(
+	env: CoreEnv,
+	resourceId: string,
+	resource: ResourceForProcessing,
+	extraction: PdfExtractionMetadata,
+): Promise<boolean> {
+	return withCoreTx(env, async (db) => {
+		const lockedResource = await lockResourceState(db, resourceId);
+		if (resourceWriteIsSuperseded(resource, lockedResource, 'pdf_extraction_snapshot')) return false;
+		const platformMetadata = isPlatformMetadata(lockedResource.platform_metadata)
+			? lockedResource.platform_metadata
+			: resource.platform_metadata;
+		if (!platformMetadata) {
+			throw new Error(`Cannot snapshot PDF extraction for resource ${resourceId} without platform metadata`);
+		}
+		const updated = await db
+			.update(resources)
+			.set({
+				platformMetadata: withPdfExtractionMetadata(platformMetadata, extraction),
+			})
+			.where(eq(resources.id, resourceId))
+			.returning({ id: resources.id });
+		if (!updated.length) throw new Error(`Failed to persist PDF extraction snapshot for resource ${resourceId}: not found`);
 		return true;
 	});
 }

@@ -8,6 +8,7 @@ import {
 	resourceIdentityDisplayLabel,
 	resourceIdentityWithAcademic,
 } from '../src/shared/resource-types.ts';
+import { withPdfExtractionMetadata } from '../src/shared/types.ts';
 import { detectResourcePlatform } from '../src/shared/url.ts';
 
 const legacyMatrix = {
@@ -89,12 +90,25 @@ assert.equal(
 	true,
 );
 
+const pdfPlatformMetadata = {
+	fetchedAt: '2026-07-28T00:00:00.000Z',
+	data: null,
+	representation: { fileName: 'paper.pdf', fileSize: 1024 },
+};
+const pdfExtraction = { status: 'needs_ocr', parser: 'liteparse', chars: 3, pages: 2 };
+assert.deepEqual(withPdfExtractionMetadata(pdfPlatformMetadata, pdfExtraction), {
+	...pdfPlatformMetadata,
+	extraction: pdfExtraction,
+});
+assert.equal(withPdfExtractionMetadata(pdfPlatformMetadata, undefined), pdfPlatformMetadata);
+
 console.info({
 	event: 'resource_identity_smoke_passed',
 	legacyCases: Object.keys(legacyMatrix).length,
 	displayLabelCases: 4,
 	legacyTypeCases: 3,
 	platformAcquisitionCases: platformAcquisitionCases.length,
+	pdfExtractionCases: 2,
 	snapshotCasCases: 5,
 	translationCases: translationCases.length,
 	urlCases: 4,

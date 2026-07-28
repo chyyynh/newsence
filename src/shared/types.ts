@@ -249,6 +249,13 @@ export type PlatformMetadata<T extends ContentResourceType | ResourcePlatform = 
 	extraction?: PdfExtractionMetadata;
 } & ClassificationEnvelope;
 
+export function withPdfExtractionMetadata<T extends ContentResourceType | ResourcePlatform>(
+	platformMetadata: PlatformMetadata<T>,
+	extraction: PdfExtractionMetadata | undefined,
+): PlatformMetadata<T> {
+	return extraction ? { ...platformMetadata, extraction } : platformMetadata;
+}
+
 export function platformMetadataFor<T extends Exclude<ResourcePlatform, null>>(
 	resource: Pick<ResourceForProcessing, 'resource_platform' | 'platform_metadata'>,
 	resourcePlatform: T,

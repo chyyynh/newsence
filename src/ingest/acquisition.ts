@@ -13,6 +13,7 @@ import type {
 	ResourceForProcessing,
 	ResourceRepresentationMetadata,
 } from '@core-shared/types';
+import { withPdfExtractionMetadata } from '@core-shared/types';
 import { detectResourcePlatform, detectResourceUrl, normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 import { type HackerNewsItem, scrapeHackerNews } from './platforms/hackernews';
@@ -37,11 +38,9 @@ function acquiredPublishedDate(value: string | null): string | null {
 
 export function applyAcquiredContent(resource: ResourceForProcessing, acquired?: AcquiredContent): ResourceForProcessing {
 	if (!acquired) return resource;
-	const platformMetadata = mergeAcquiredPlatformMetadata(
-		resource.platform_metadata,
-		acquired.platformMetadata,
-		acquired.metadata.siteName,
-		acquired.fileType,
+	const platformMetadata = withPdfExtractionMetadata(
+		mergeAcquiredPlatformMetadata(resource.platform_metadata, acquired.platformMetadata, acquired.metadata.siteName, acquired.fileType),
+		acquired.extraction,
 	);
 	const detectedPlatform = detectResourcePlatform(resource.url);
 	if (acquired.resourcePlatform && detectedPlatform && acquired.resourcePlatform !== detectedPlatform) {
