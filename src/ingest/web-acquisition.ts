@@ -125,6 +125,8 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 	const title = titleFromFileName(fileName);
 	return {
 		type: 'pdf',
+		resourcePlatform: null,
+		fileType: PDF_MIME,
 		title,
 		markdown: parsed.text,
 		metadata: {
@@ -136,7 +138,8 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 		},
 		platformMetadata: {
 			fetchedAt: new Date().toISOString(),
-			data: { fileName, fileSize: bytes.byteLength },
+			data: null,
+			representation: { fileName, fileSize: bytes.byteLength },
 		},
 		extraction: pdfExtractionMetadata(parsed),
 	};
@@ -157,6 +160,8 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Prom
 	}
 	return {
 		type: 'web',
+		resourcePlatform: null,
+		fileType: null,
 		title: article.title,
 		markdown: content,
 		metadata: {

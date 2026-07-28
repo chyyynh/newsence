@@ -1,7 +1,7 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PlatformMetadata } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/url';
-import { withCoreDb } from '@db/client';
+import { withCoreDb, withCoreTx } from '@db/client';
 import {
 	attachSourceToResources,
 	getExistingResourcesByUrl,
@@ -27,7 +27,7 @@ async function enqueueTwitterResource(
 		hashTags?: string[];
 	},
 ): Promise<void> {
-	const resourceId = await withCoreDb(env, (db) =>
+	const resourceId = await withCoreTx(env, (db) =>
 		upsertPendingSourceResource(db, {
 			sourceId: data.sourceId,
 			url: data.url,

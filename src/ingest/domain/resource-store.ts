@@ -1,17 +1,24 @@
 import {
-	CONTENT_RESOURCE_TYPES,
 	type ContentResourceType,
 	canonicalizeOptionalResourceLang,
 	canonicalizeResourceLang,
 	DEFAULT_RESOURCE_LANG,
+	hasSemanticScholarAcademicEnrichment,
+	isContentResourceKind,
 	isContentResourceType,
+	isResourceType,
+	legacyResourceIdentity,
+	parseResourceIdentity,
 	RESOURCE_CATEGORIES,
-	RESOURCE_ORIGINAL_CONTENT_TYPES,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
 	type ResourceCategory,
+	type ResourceKind,
+	type ResourcePlatform,
 	type ResourceScope,
 	type ResourceTranslationSource,
+	resourceIdentityForDetectedPlatform,
+	type SourceAcquisitionMode,
 } from '@core-shared/resource-types';
 import type {
 	PlatformMetadata,
@@ -20,7 +27,9 @@ import type {
 	ResourceTranslationMap,
 	StoredResourceEntity,
 } from '@core-shared/types';
+import { detectResourcePlatform } from '@core-shared/url';
 import { type CoreDb, textArraySql, uuidArraySql, withCoreDb, withCoreTx } from '@db/client';
+import { contentResourceIdentitySql, resourceDisplaySourceSql, translatableResourceIdentitySql } from '@db/resource-identity-sql';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 
@@ -44,6 +53,9 @@ type ProcessedResourceUpdate = ResourceUpdate & {
 type ResourceStoreRow = {
 	id: string;
 	source_id: string | null;
+	source_acquisition_mode: string | null;
+	kind: string | null;
+	resource_platform: string | null;
 	title: string | null;
 	summary: string | null;
 	content: string | null;
@@ -54,6 +66,7 @@ type ResourceStoreRow = {
 	source: string | null;
 	type: string | null;
 	scope: string | null;
+	enrichment_status: string;
 	published_date: Date | string | null;
 	tags: string[];
 	keywords: string[];
@@ -73,6 +86,59 @@ type ResourceStoreTranslationRow = {
 	keywords?: unknown;
 	source?: unknown;
 };
+
+type StoredResourceIdentityRow = {
+	kind: string | null;
+	resource_platform: string | null;
+	type: string | null;
+	url: string | null;
+	enrichment_status: string;
+	platform_metadata: unknown;
+};
+
+function storedResourceIdentity(row: StoredResourceIdentityRow) {
+	const stored = parseResourceIdentity(row.kind, row.resource_platform);
+	if (stored) return stored;
+	if (row.kind !== null || row.resource_platform !== null) {
+		throw new Error(`Invalid stored resource identity: ${String(row.kind)} / ${String(row.resource_platform)}`);
+	}
+	if (!isResourceType(row.type)) throw new Error(`Invalid legacy resource type: ${String(row.type)}`);
+
+	const hasAcademicEnrichment = hasSemanticScholarAcademicEnrichment(row.platform_metadata);
+	const detectedPlatform = detectResourcePlatform(row.url);
+	if (row.enrichment_status !== 'enriched') {
+		if (detectedPlatform) return resourceIdentityForDetectedPlatform(detectedPlatform, hasAcademicEnrichment);
+		if (row.type === 'twitter' || row.type === 'youtube' || row.type === 'hackernews') {
+			throw new Error(`Cannot verify pending ${row.type} resource platform from URL: ${String(row.url)}`);
+		}
+	}
+	return legacyResourceIdentity(row.type, hasAcademicEnrichment);
+}
+
+function parseSourceAcquisitionMode(value: unknown): SourceAcquisitionMode | null {
+	if (value === null || value === undefined) return null;
+	if (value === 'platform' || value === 'web' || value === 'feed') return value;
+	throw new Error(`Invalid source acquisition mode: ${String(value)}`);
+}
+
+export function resourceTranslationIdentityPredicate(): SQL {
+	return translatableResourceIdentitySql({
+		fileType: sql`${resources.fileType}`,
+		kind: sql`${resources.kind}`,
+		resourcePlatform: sql`${resources.resourcePlatform}`,
+		type: sql`${resources.type}`,
+	});
+}
+
+function effectiveResourcePlatformPredicate(platform: Exclude<ResourcePlatform, null>): SQL {
+	return sql`((
+		CASE
+			WHEN ${resources.kind} IS NOT NULL THEN ${resources.resourcePlatform}
+			WHEN ${resources.type} = ${platform} THEN ${platform}
+			ELSE NULL
+		END
+	) = ${platform}) IS TRUE`;
+}
 
 export async function loadResourceForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
 	return loadResource(env, resourceId, false);
@@ -95,10 +161,15 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 		const row = (
 			await db
 				.select({
+					kind: resources.kind,
+					resourcePlatform: resources.resourcePlatform,
 					type: resources.type,
+					url: resources.url,
+					enrichmentStatus: resources.enrichmentStatus,
+					platformMetadata: resources.platformMetadata,
 					complete: sql<boolean>`${resources.enrichmentStatus} = 'enriched'
 								AND (
-									${resources.type} <> 'youtube'
+									NOT (${effectiveResourcePlatformPredicate('youtube')})
 									OR EXISTS (
 										SELECT 1
 										FROM ${youtubeTranscripts}
@@ -113,7 +184,7 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 									  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 									  AND (
 										${resources.scope} <> 'corpus'
-										OR ${resources.type} <> ALL(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
+										OR NOT (${resourceTranslationIdentityPredicate()})
 										OR ${resources.url} IS NULL
 										OR (
 											NULLIF(BTRIM(original.content), '') IS NOT NULL
@@ -126,16 +197,49 @@ export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: str
 				.limit(1)
 		)[0];
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
-		parseResourceType(row.type);
+		const identity = storedResourceIdentity({
+			kind: row.kind,
+			resource_platform: row.resourcePlatform,
+			type: row.type,
+			url: row.url,
+			enrichment_status: row.enrichmentStatus,
+			platform_metadata: row.platformMetadata,
+		});
+		if (!isContentResourceKind(identity.kind)) {
+			throw new Error(`Resource kind is not processable by core: ${identity.kind}`);
+		}
 		return row.complete;
 	});
 }
 
 export async function assertResourceProcessable(env: CoreEnv, resourceId: string): Promise<void> {
 	await withCoreDb(env, async (db) => {
-		const row = (await db.select({ type: resources.type }).from(resources).where(eq(resources.id, resourceId)).limit(1))[0];
+		const row = (
+			await db
+				.select({
+					kind: resources.kind,
+					resourcePlatform: resources.resourcePlatform,
+					type: resources.type,
+					url: resources.url,
+					enrichmentStatus: resources.enrichmentStatus,
+					platformMetadata: resources.platformMetadata,
+				})
+				.from(resources)
+				.where(eq(resources.id, resourceId))
+				.limit(1)
+		)[0];
 		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
-		parseResourceType(row.type);
+		const identity = storedResourceIdentity({
+			kind: row.kind,
+			resource_platform: row.resourcePlatform,
+			type: row.type,
+			url: row.url,
+			enrichment_status: row.enrichmentStatus,
+			platform_metadata: row.platformMetadata,
+		});
+		if (!isContentResourceKind(identity.kind)) {
+			throw new Error(`Resource kind is not processable by core: ${identity.kind}`);
+		}
 	});
 }
 
@@ -144,6 +248,9 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 		SELECT
 			rl.id::text AS id,
 			rl.source_id::text AS source_id,
+			monitored_source.content_mode AS source_acquisition_mode,
+			rl.kind AS kind,
+			rl.resource_platform AS resource_platform,
 			rl.title AS title,
 			rl.summary AS summary,
 			${shell ? sql`NULL::text` : sql`rl.content`} AS content,
@@ -151,7 +258,13 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			${
 				shell
 					? sql`CASE
-						WHEN rl.type = 'youtube' THEN EXISTS (
+						WHEN (
+							CASE
+								WHEN rl.kind IS NOT NULL THEN rl.resource_platform
+								WHEN rl.type = 'youtube' THEN 'youtube'
+								ELSE NULL
+							END
+						) = 'youtube' THEN EXISTS (
 							SELECT 1
 							FROM ${youtubeTranscripts}
 							WHERE ${youtubeTranscripts.videoId} = rl.platform_metadata->'data'->>'videoId'
@@ -178,9 +291,16 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			) AS translations,
 			rl.url AS url,
 			rl.og_image_url AS og_image_url,
-			COALESCE(NULLIF(monitored_source.name, ''), NULLIF(rl.platform_metadata->>'sourceName', '')) AS source,
+			${resourceDisplaySourceSql({
+				kind: sql`rl.kind`,
+				monitoredSourceName: sql`monitored_source.name`,
+				platformMetadata: sql`rl.platform_metadata`,
+				resourcePlatform: sql`rl.resource_platform`,
+				type: sql`rl.type`,
+			})} AS source,
 			rl.type AS type,
 			rl.scope AS scope,
+			rl.enrichment_status AS enrichment_status,
 			rl.published_date AS published_date,
 			rl.tags AS tags,
 			rl.keywords AS keywords,
@@ -199,9 +319,13 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 }
 
 function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
+	const identity = storedResourceIdentity(row);
 	const resource: StoredResourceForProcessing = {
 		id: row.id,
 		source_id: row.source_id,
+		source_acquisition_mode: parseSourceAcquisitionMode(row.source_acquisition_mode),
+		kind: identity.kind,
+		resource_platform: identity.resourcePlatform,
 		original_lang: canonicalizeResourceLang(row.original_lang),
 		title: requiredString(row.title, 'title'),
 		summary: row.summary,
@@ -268,6 +392,8 @@ type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 interface ResourceMirrorRecord {
 	id: string;
 	sourceId: string | null;
+	kind: ResourceKind;
+	resourcePlatform: ResourcePlatform;
 	type: ContentResourceType;
 	scope: ResourceScope;
 	url: string | null;
@@ -322,6 +448,8 @@ export async function updateResourceAfterProcessing(
 		UPDATE resources
 		   SET source_id = COALESCE(source_id, ${record.sourceId}::uuid),
 		       type = ${record.type},
+		       kind = ${record.kind},
+		       resource_platform = ${record.resourcePlatform},
 		       url = ${record.url},
 		       normalized_url = ${record.normalizedUrl},
 		       storage_key = ${record.storageKey},
@@ -390,9 +518,16 @@ async function invalidateChangedMachineTranslationFields(db: CoreDb, resourceId:
 }
 
 function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcessing {
+	const detectedPlatform = detectResourcePlatform(base.url);
+	const hasAcademicEnrichment = hasSemanticScholarAcademicEnrichment(base.platformMetadata);
+	const identity = detectedPlatform
+		? resourceIdentityForDetectedPlatform(detectedPlatform, hasAcademicEnrichment)
+		: legacyResourceIdentity(base.type, hasAcademicEnrichment);
 	return {
 		id: base.url,
 		source_id: base.sourceId,
+		kind: identity.kind,
+		resource_platform: identity.resourcePlatform,
 		original_lang: canonicalizeOptionalResourceLang(base.originalLang) ?? DEFAULT_RESOURCE_LANG,
 		title: base.title,
 		scope: 'corpus',
@@ -441,6 +576,10 @@ function resourceMirrorRecord(
 	enrichmentStatus: ResourceEnrichmentStatus = 'enriched',
 ): ResourceMirrorRecord {
 	const storedPlatformMetadata = updatePayload.platform_metadata;
+	const identity = parseResourceIdentity(resource.kind, resource.resource_platform);
+	if (!identity) {
+		throw new Error(`Invalid resource identity: ${String(resource.kind)} / ${String(resource.resource_platform)}`);
+	}
 	const url = cleanString(resource.url);
 	const tags = stringArrayValue(updatePayload.tags, 'tags');
 	const keywords = stringArrayValue(updatePayload.keywords, 'keywords');
@@ -449,6 +588,8 @@ function resourceMirrorRecord(
 	return {
 		id: resourceId,
 		sourceId: cleanString(resource.source_id),
+		kind: identity.kind,
+		resourcePlatform: identity.resourcePlatform,
 		type: parseResourceType(resource.type),
 		scope: resource.scope,
 		url,
@@ -508,7 +649,7 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 	const tags = textArraySql(record.tags);
 	return sql`
 		INSERT INTO resources (
-			id, source_id, type, scope, url, normalized_url, storage_key, file_type,
+			id, source_id, type, kind, resource_platform, scope, url, normalized_url, storage_key, file_type,
 			original_lang, published_date, scraped_date, tags, category,
 			og_image_url, platform_metadata, enrichment_status,
 			created_at, updated_at
@@ -517,6 +658,8 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			${record.id}::uuid,
 			${record.sourceId}::uuid,
 			${record.type},
+			${record.kind},
+			${record.resourcePlatform},
 			${record.scope},
 			${record.url},
 			${record.normalizedUrl},
@@ -543,6 +686,11 @@ function resourceConflictSetSql(): SQL {
 	return sql`
 		source_id = COALESCE(resources.source_id, excluded.source_id),
 		type = CASE WHEN ${preserveEnriched} THEN resources.type ELSE excluded.type END,
+		kind = CASE WHEN ${preserveEnriched} THEN resources.kind ELSE excluded.kind END,
+		resource_platform = CASE
+			WHEN ${preserveEnriched} THEN resources.resource_platform
+			ELSE excluded.resource_platform
+		END,
 		scope = CASE
 			WHEN resources.scope = 'corpus' OR excluded.scope = 'private' THEN resources.scope
 			ELSE excluded.scope
@@ -744,7 +892,11 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
 			(r.source_id IS NULL) AS "needsSourceAttach"
 		FROM resources r
 			WHERE r.normalized_url = ANY(${textArraySql(urls)})
-			  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+			  AND ${contentResourceIdentitySql({
+					kind: sql`r.kind`,
+					resourcePlatform: sql`r.resource_platform`,
+					type: sql`r.type`,
+				})}
 	`);
 	return result.rows;
 }

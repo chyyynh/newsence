@@ -1,5 +1,5 @@
 import { normalizeUrl } from '@core-shared/url';
-import { withCoreDb } from '@db/client';
+import { withCoreDb, withCoreTx } from '@db/client';
 import {
 	attachSourceToResources,
 	type ExistingResourceRecord,
@@ -26,7 +26,7 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
 	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
 	const content = mode === 'feed' ? await feedItemMarkdown(env, item, url) : null;
-	const resourceId = await withCoreDb(env, (db) =>
+	const resourceId = await withCoreTx(env, (db) =>
 		upsertPendingSourceResource(db, {
 			sourceId: feed.id,
 			url,
@@ -133,7 +133,7 @@ export async function handleRSSCron(env: CoreEnv): Promise<void> {
 	console.info({ tag: 'RSS', msg: 'start' });
 	// Every feed-discovered source, whatever its platform says: a YouTube channel
 	// handle is an Atom feed URL, so there is nothing for a separate monitor to do.
-	// Its entries still resolve back to type='youtube' at acquisition.
+	// Its entries still resolve to resource_platform='youtube' at acquisition.
 	const feeds = await loadMonitoredSources(env, 'feed');
 	for (let index = 0; index < feeds.length; index += FEED_CONCURRENCY) {
 		const batch = feeds.slice(index, index + FEED_CONCURRENCY);

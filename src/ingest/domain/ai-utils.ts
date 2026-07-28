@@ -58,11 +58,11 @@ const INLINE_TWITTER_CONTENT_TRANSLATION_MAX_LENGTH = 1000;
 
 function usesInlineTwitterContentTranslation(resource: ResourceForProcessing): boolean {
 	const content = resource.content?.trim();
-	return resource.type === 'twitter' && !!content && content.length <= INLINE_TWITTER_CONTENT_TRANSLATION_MAX_LENGTH;
+	return resource.resource_platform === 'twitter' && !!content && content.length <= INLINE_TWITTER_CONTENT_TRANSLATION_MAX_LENGTH;
 }
 
 function zhHantMetadataTranslationSystemPrompt(resource: ResourceForProcessing, includeContent = false): string {
-	if (resource.type === 'twitter') {
+	if (resource.resource_platform === 'twitter') {
 		return `你是專業的新聞翻譯編輯。請只輸出符合 schema 的繁體中文結果。
 
 任務：
@@ -122,13 +122,14 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
 	const content = requiredResourceContent(resource);
 	const source = requiredResourceSource(resource);
-	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
+	const excludedEntities = entityExtractionExclusionNames(resource.resource_platform, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 	const summaryLine = resource.summary?.trim() ? `\n摘要: ${resource.summary.trim()}` : '';
 	return `文章資訊:
 標題: ${resource.title}
 來源: ${source}
-資源類型: ${resource.type}${excludedLine}${summaryLine}
+資源種類: ${resource.kind}
+資源平台: ${resource.resource_platform ?? 'none'}${excludedLine}${summaryLine}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
@@ -168,7 +169,7 @@ export function needsZhHantMetadataTranslation(resource: ResourceForProcessing):
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	const translation = resource.translations[ZH_HANT_RESOURCE_LANG];
 	if (translation?.source === 'human') return false;
-	if (resource.type === 'twitter') {
+	if (resource.resource_platform === 'twitter') {
 		return isEmpty(translation?.title) || (usesInlineTwitterContentTranslation(resource) && isEmpty(translation?.content));
 	}
 	return isEmpty(translation?.title) || isEmpty(translation?.summary);
@@ -185,11 +186,12 @@ export async function generateZhHantMetadataTranslation(
 	const content = requiredResourceContent(resource);
 	const summaryLine = resource.summary?.trim() ? `\n摘要：${resource.summary.trim()}` : '';
 	const prompt = `原文資訊：
-	資源類型：${resource.type}
+	資源種類：${resource.kind}
+	資源平台：${resource.resource_platform ?? 'none'}
 	標題：${resource.title}${summaryLine}
 內容：
 ${content.slice(0, MAX_CONTENT_LENGTH)}`;
-	if (resource.type === 'twitter') {
+	if (resource.resource_platform === 'twitter') {
 		if (usesInlineTwitterContentTranslation(resource)) {
 			return generateObject(env.AI, prompt, {
 				schema: ZhHantTwitterTranslationSchema,

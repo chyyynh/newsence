@@ -1,12 +1,7 @@
-import {
-	CONTENT_RESOURCE_TYPES,
-	type ContentResourceType,
-	isContentResourceType,
-	RESOURCE_CATEGORIES,
-	type ResourceCategory,
-} from '@core-shared/resource-types';
+import { type ContentResourceType, isContentResourceType, RESOURCE_CATEGORIES, type ResourceCategory } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
+import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 
@@ -276,7 +271,11 @@ function recencySql(): SQL {
 function corpusEnrichedSql(): SQL {
 	return sql`r.scope = 'corpus'
 		AND r.enrichment_status = 'enriched'
-		AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})`;
+		AND ${contentResourceIdentitySql({
+			kind: sql`r.kind`,
+			resourcePlatform: sql`r.resource_platform`,
+			type: sql`r.type`,
+		})}`;
 }
 
 function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
@@ -358,7 +357,7 @@ function resourceReadSelect(userId: string): SQL {
 		r.file_type,
 		r.original_lang,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		${resourceDisplaySource()} AS source,
 		r.tags,
 		rt.title AS title,
 		rt.summary AS summary,
@@ -385,7 +384,7 @@ function resourceSearchSelect(): SQL {
 		rt.title AS title,
 		r.url,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		${resourceDisplaySource()} AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
@@ -393,12 +392,26 @@ function resourceSearchSelect(): SQL {
 
 function resourceAccessPredicate(userId: string): SQL {
 	return sql`
-		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+		${contentResourceIdentitySql({
+			kind: sql`r.kind`,
+			resourcePlatform: sql`r.resource_platform`,
+			type: sql`r.type`,
+		})}
 		AND (
 			(r.scope = 'corpus' AND r.enrichment_status = 'enriched')
 			OR (${viewerResourceOwnershipSql(userId)})
 		)
 	`;
+}
+
+function resourceDisplaySource(): SQL {
+	return resourceDisplaySourceSql({
+		kind: sql`r.kind`,
+		monitoredSourceName: sql`monitored_source.name`,
+		platformMetadata: sql`r.platform_metadata`,
+		resourcePlatform: sql`r.resource_platform`,
+		type: sql`r.type`,
+	});
 }
 
 function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {

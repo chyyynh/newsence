@@ -1,8 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { RESOURCE_ORIGINAL_CONTENT_TYPES, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
-import { textArraySql, withCoreDb } from '@db/client';
-import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
+import { ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
+import { withCoreDb } from '@db/client';
+import { resources, resourceTranslations } from '@db/schema';
+import { loadResourceForProcessing, resourceTranslationIdentityPredicate, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
 import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
@@ -20,15 +21,15 @@ export async function isResourceTranslationEligible(env: CoreEnv, resourceId: st
 	return withCoreDb(env, async (db) => {
 		const result = await db.execute(sql`
 			SELECT 1
-			FROM resources resource
-			JOIN resource_translations original
-			  ON original.resource_id = resource.id
-			 AND original.lang = resource.original_lang
-			WHERE resource.id = ${resourceId}::uuid
-			  AND resource.scope = 'corpus'
-			  AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
-			  AND resource.url IS NOT NULL
-			  AND resource.original_lang <> 'zh-Hant'
+			FROM ${resources}
+			JOIN ${resourceTranslations} original
+			  ON original.resource_id = ${resources.id}
+			 AND original.lang = ${resources.originalLang}
+			WHERE ${resources.id} = ${resourceId}::uuid
+			  AND ${resources.scope} = 'corpus'
+			  AND ${resourceTranslationIdentityPredicate()}
+			  AND ${resources.url} IS NOT NULL
+			  AND ${resources.originalLang} <> 'zh-Hant'
 			  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 			  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
 			  -- Length gate lives here as well as in needsZhHantContentTranslation:
@@ -79,7 +80,7 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Prom
 
 type ResourceTranslationPayload = { resourceId: string };
 
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v15';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v16';
 
 function workflowId(resourceId: string): string {
 	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${resourceId}`;
@@ -98,7 +99,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 
 	private async translateResource(resourceId: string, step: WorkflowStep) {
 		const [initial, eligible] = await step.do(
-			'load-resource-translation-input',
+			'load-resource-translation-input-kind-platform-v1',
 			{
 				retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' },
 				timeout: '30 seconds',

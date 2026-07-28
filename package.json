@@ -7,11 +7,12 @@
 		"deploy": "wrangler deploy",
 		"deploy:dry-run": "pnpm run typecheck && wrangler deploy --dry-run",
 		"check:db-schema": "node scripts/check-drizzle-prisma-drift.mjs",
+		"check:resource-identity": "node --experimental-strip-types scripts/check-resource-identity.mjs",
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
 		"start": "wrangler dev --test-scheduled",
 		"cf-typegen": "wrangler types --env-interface BaseCoreEnv",
-		"typecheck": "pnpm cf-typegen && pnpm check:db-schema && tsc --noEmit",
+		"typecheck": "pnpm cf-typegen && pnpm check:db-schema && pnpm check:resource-identity && tsc --noEmit",
 		"typecheck:types": "wrangler types --check --env-interface BaseCoreEnv",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write ."

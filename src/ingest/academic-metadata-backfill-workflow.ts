@@ -56,7 +56,10 @@ async function loadAcademicMetadataBackfillPage(env: CoreEnv, cursor: string | n
 						lower(COALESCE(url, '')) ~ '^https?://([a-z0-9-]+\\.)*arxiv\\.org/(abs|html|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?(\\.pdf)?/?([?#].*)?$'
 						OR lower(COALESCE(url, '')) ~ '^https?://(dx\\.)?doi\\.org/10\\.[0-9]{4,9}/'
 						OR (
-							type = 'pdf'
+							(
+								file_type = 'application/pdf'
+								OR (kind IS NULL AND resource_platform IS NULL AND type = 'pdf')
+							)
 							AND COALESCE(platform_metadata #>> '{enrichments,academic,doi}', '') ~* '^10\\.[0-9]{4,9}/'
 						)
 					)

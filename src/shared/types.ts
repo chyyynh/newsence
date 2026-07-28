@@ -1,4 +1,12 @@
-import type { ContentResourceType, ResourceCategory, ResourceScope, ResourceTranslationSource } from '@core-shared/resource-types';
+import type {
+	ContentResourceType,
+	ResourceCategory,
+	ResourceKind,
+	ResourcePlatform,
+	ResourceScope,
+	ResourceTranslationSource,
+	SourceAcquisitionMode,
+} from '@core-shared/resource-types';
 
 export type ResourceLocaleText = {
 	title?: string | null;
@@ -13,6 +21,10 @@ export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefin
 export interface ResourceForProcessing {
 	id: string;
 	source_id: string | null;
+	source_acquisition_mode?: SourceAcquisitionMode | null;
+	kind: ResourceKind;
+	resource_platform: ResourcePlatform;
+	/** Legacy compatibility discriminator; remove after #251 contract cleanup. */
 	type: ContentResourceType;
 	scope: ResourceScope;
 	original_lang: string;
@@ -29,7 +41,7 @@ export interface ResourceForProcessing {
 	platform_metadata?: PlatformMetadata;
 	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;
-	file_type?: string;
+	file_type?: string | null;
 	normalized_url?: string | null;
 }
 
@@ -71,7 +83,10 @@ export interface YoutubeTranscript {
 }
 
 export interface NormalizedContent<T extends ContentResourceType = ContentResourceType> {
+	/** Legacy acquisition label retained only for dual-write compatibility. */
 	type: T;
+	resourcePlatform: ResourcePlatform;
+	fileType: string | null;
 	title: string;
 	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
@@ -155,7 +170,7 @@ export interface HackerNewsMetadata {
 	storyUrl?: string | null;
 }
 
-interface PdfMetadata {
+export interface ResourceRepresentationMetadata {
 	fileName: string;
 	fileSize: number;
 }
@@ -205,13 +220,10 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-interface PlatformMetadataDataByResourceType {
-	web: null;
-	rss: null;
+export interface PlatformMetadataDataByResourcePlatform {
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
-	pdf: PdfMetadata;
 }
 
 export interface PdfExtractionMetadata {
@@ -221,19 +233,27 @@ export interface PdfExtractionMetadata {
 	pages: number;
 }
 
-export type PlatformMetadata<T extends ContentResourceType = ContentResourceType> = {
+type PlatformMetadataData<T extends ContentResourceType | ResourcePlatform> = T extends keyof PlatformMetadataDataByResourcePlatform
+	? PlatformMetadataDataByResourcePlatform[T]
+	: null;
+
+export type PlatformMetadata<T extends ContentResourceType | ResourcePlatform = ResourcePlatform> = {
 	fetchedAt: string;
-	data: PlatformMetadataDataByResourceType[T];
+	data: PlatformMetadataData<T>;
 	/** Hash of normalized source fields used to skip unchanged resync runs. */
 	sourceSnapshotHash?: string;
 	enrichments?: PlatformEnrichments | null;
 	sourceName?: string;
+	/** Primary file representation facts; MIME and blob identity stay scalar. */
+	representation?: ResourceRepresentationMetadata;
 	extraction?: PdfExtractionMetadata;
 } & ClassificationEnvelope;
 
-export function platformMetadataFor<T extends ContentResourceType>(
-	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
-	type: T,
+export function platformMetadataFor<T extends Exclude<ResourcePlatform, null>>(
+	resource: Pick<ResourceForProcessing, 'resource_platform' | 'platform_metadata'>,
+	resourcePlatform: T,
 ): PlatformMetadata<T> | null {
-	return resource.type === type && resource.platform_metadata ? (resource.platform_metadata as PlatformMetadata<T>) : null;
+	return resource.resource_platform === resourcePlatform && resource.platform_metadata
+		? (resource.platform_metadata as PlatformMetadata<T>)
+		: null;
 }

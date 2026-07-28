@@ -83,7 +83,7 @@ export async function prepareYouTubeHighlights(
 	resource: ResourceForProcessing,
 	transcript?: YoutubeTranscript | null,
 ): Promise<YouTubeHighlightsUpdate | null> {
-	if (resource.type !== 'youtube') return null;
+	if (resource.resource_platform !== 'youtube') return null;
 	const metadata = platformMetadataFor(resource, 'youtube');
 	if (!metadata) return null;
 

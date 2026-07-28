@@ -16,9 +16,19 @@ export function isResourceType(value: unknown): value is ResourceType {
 	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
 
+export function legacyResourceTypeAfterAcquisition(current: ContentResourceType, acquired: ContentResourceType): ContentResourceType {
+	return current === 'rss' && acquired === 'web' ? 'rss' : acquired;
+}
+
 export const RESOURCE_KINDS = ['document', 'post', 'video', 'paper', 'image', 'file'] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
+
+export const CONTENT_RESOURCE_KINDS = ['document', 'post', 'video', 'paper'] as const satisfies readonly ResourceKind[];
+
+export type ContentResourceKind = (typeof CONTENT_RESOURCE_KINDS)[number];
+
+export const TRANSLATABLE_RESOURCE_KINDS = ['document', 'post', 'paper'] as const satisfies readonly ResourceKind[];
 
 export const RESOURCE_PLATFORMS = ['hackernews', 'twitter', 'youtube'] as const;
 
@@ -49,8 +59,33 @@ export const LEGACY_RESOURCE_IDENTITIES = {
 	file: { kind: 'file', resourcePlatform: null },
 } as const satisfies Readonly<Record<ResourceType, ResourceIdentity>>;
 
+export const RESOURCE_KIND_DISPLAY_LABELS = {
+	document: 'Document',
+	post: 'Post',
+	video: 'Video',
+	paper: 'Paper',
+	image: 'Image',
+	file: 'File',
+} as const satisfies Readonly<Record<ResourceKind, string>>;
+
+export const RESOURCE_PLATFORM_DISPLAY_LABELS = {
+	hackernews: 'Hacker News',
+	twitter: 'Twitter',
+	youtube: 'YouTube',
+} as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, string>>;
+
+export function resourceIdentityDisplayLabel(identity: ResourceIdentity): string {
+	return identity.resourcePlatform
+		? RESOURCE_PLATFORM_DISPLAY_LABELS[identity.resourcePlatform]
+		: RESOURCE_KIND_DISPLAY_LABELS[identity.kind];
+}
+
 export function isResourceKind(value: unknown): value is ResourceKind {
 	return typeof value === 'string' && (RESOURCE_KINDS as readonly string[]).includes(value);
+}
+
+export function isContentResourceKind(value: unknown): value is ContentResourceKind {
+	return typeof value === 'string' && (CONTENT_RESOURCE_KINDS as readonly string[]).includes(value);
 }
 
 export function isResourcePlatform(value: unknown): value is ResourcePlatform {
@@ -60,6 +95,11 @@ export function isResourcePlatform(value: unknown): value is ResourcePlatform {
 export function isValidKindPlatform(kind: unknown, resourcePlatform: unknown): kind is ResourceKind {
 	if (!isResourceKind(kind) || !isResourcePlatform(resourcePlatform)) return false;
 	return (VALID_KIND_PLATFORMS[kind] as readonly ResourcePlatform[]).includes(resourcePlatform);
+}
+
+export function parseResourceIdentity(kind: unknown, resourcePlatform: unknown): ResourceIdentity | null {
+	if (!isValidKindPlatform(kind, resourcePlatform)) return null;
+	return { kind, resourcePlatform: resourcePlatform as ResourcePlatform };
 }
 
 export function assertValidKindPlatform(kind: unknown, resourcePlatform: unknown): asserts kind is ResourceKind {
@@ -72,6 +112,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function needsResourcePlatformAcquisition(input: {
+	platformData: unknown;
+	resourcePlatform: ResourcePlatform;
+	type: ResourceType;
+}): boolean {
+	return input.resourcePlatform !== null && (input.type !== input.resourcePlatform || !isRecord(input.platformData));
+}
+
+export function resourceSourceSnapshotHash(platformMetadata: unknown): string | null {
+	if (!isRecord(platformMetadata) || typeof platformMetadata.sourceSnapshotHash !== 'string') return null;
+	return platformMetadata.sourceSnapshotHash.trim() || null;
+}
+
+function resourceSourceFetchedAt(platformMetadata: unknown): number | null {
+	if (!isRecord(platformMetadata) || typeof platformMetadata.fetchedAt !== 'string') return null;
+	const fetchedAt = Date.parse(platformMetadata.fetchedAt);
+	return Number.isNaN(fetchedAt) ? null : fetchedAt;
+}
+
+export function isIncomingResourceSnapshotSuperseded(incoming: unknown, stored: unknown): boolean {
+	const incomingHash = resourceSourceSnapshotHash(incoming);
+	const storedHash = resourceSourceSnapshotHash(stored);
+	if (!storedHash) return false;
+	if (!incomingHash) return true;
+	const incomingFetchedAt = resourceSourceFetchedAt(incoming);
+	const storedFetchedAt = resourceSourceFetchedAt(stored);
+	if (storedHash === incomingHash) {
+		return incomingFetchedAt !== null && storedFetchedAt !== null && storedFetchedAt > incomingFetchedAt;
+	}
+	if (incomingFetchedAt === null || storedFetchedAt === null) return true;
+	return storedFetchedAt >= incomingFetchedAt;
+}
+
 export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown): boolean {
 	if (!isRecord(platformMetadata) || !isRecord(platformMetadata.enrichments)) return false;
 	const academic = platformMetadata.enrichments.academic;
@@ -80,10 +153,7 @@ export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown):
 
 export function legacyResourceIdentity(type: ResourceType, hasAcademicEnrichment = false): ResourceIdentity {
 	const identity = LEGACY_RESOURCE_IDENTITIES[type];
-	if (hasAcademicEnrichment && identity.kind === 'document') {
-		return { kind: 'paper', resourcePlatform: identity.resourcePlatform };
-	}
-	return identity;
+	return resourceIdentityWithAcademic(identity, hasAcademicEnrichment);
 }
 
 export function resourceIdentityForDetectedPlatform(
@@ -91,6 +161,21 @@ export function resourceIdentityForDetectedPlatform(
 	hasAcademicEnrichment = false,
 ): ResourceIdentity {
 	return legacyResourceIdentity(resourcePlatform, hasAcademicEnrichment);
+}
+
+export function resourceIdentityWithAcademic(identity: ResourceIdentity, hasAcademicEnrichment: boolean): ResourceIdentity {
+	if (!hasAcademicEnrichment || identity.kind !== 'document') return identity;
+	return { kind: 'paper', resourcePlatform: identity.resourcePlatform };
+}
+
+export function isResourceTranslationIdentityEligible(input: {
+	kind: unknown;
+	resourcePlatform: unknown;
+	fileType: string | null | undefined;
+}): boolean {
+	if (!isValidKindPlatform(input.kind, input.resourcePlatform)) return false;
+	if (!(TRANSLATABLE_RESOURCE_KINDS as readonly ResourceKind[]).includes(input.kind)) return false;
+	return !(input.fileType === 'application/pdf' && input.resourcePlatform === null);
 }
 
 // Translation/enrichment completeness policy for legacy resource rows. Keep

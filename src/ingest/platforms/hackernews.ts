@@ -175,6 +175,8 @@ export async function scrapeHackerNews(
 	});
 	return {
 		type: 'hackernews',
+		resourcePlatform: 'hackernews',
+		fileType: target?.fileType ?? null,
 		title,
 		markdown,
 		metadata: {
@@ -184,7 +186,11 @@ export async function scrapeHackerNews(
 			siteName: 'Hacker News',
 			description,
 		},
-		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
+		platformMetadata: {
+			fetchedAt: new Date().toISOString(),
+			data: buildHnMetadata(item),
+			...(target?.platformMetadata.representation ? { representation: target.platformMetadata.representation } : {}),
+		},
 		...(target?.extraction ? { extraction: target.extraction } : {}),
 		...(target?.previewImageUrl ? { previewImageUrl: target.previewImageUrl } : {}),
 		hackerNewsItem: item,

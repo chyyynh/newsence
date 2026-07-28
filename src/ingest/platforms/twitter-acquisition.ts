@@ -335,6 +335,8 @@ async function scrapeTwitterLongform(
 
 	return {
 		type: 'twitter',
+		resourcePlatform: 'twitter',
+		fileType: null,
 		title,
 		markdown: contentText,
 		metadata: {
@@ -360,6 +362,8 @@ function buildExternalLinkTweet(
 	const title = `@${author.userName}: ${stripTweetUrls(tweetText) || tweetText}`.slice(0, 120);
 	return {
 		type: 'twitter',
+		resourcePlatform: 'twitter',
+		fileType: null,
 		title,
 		markdown: expandTweetUrls(tweetText, tweet),
 		metadata: {
@@ -416,6 +420,8 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 		kind: 'tweet' as const,
 		scraped: {
 			type: 'twitter' as const,
+			resourcePlatform: 'twitter' as const,
+			fileType: null,
 			title,
 			markdown: expandTweetUrls(tweet.text, tweet),
 			metadata: {
@@ -467,6 +473,8 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 	const parts = buildThreadResourceParts(thread);
 	return {
 		type: 'twitter',
+		resourcePlatform: 'twitter',
+		fileType: null,
 		title: buildTweetTitle(parts.first, 80),
 		markdown: parts.combinedText,
 		metadata: {

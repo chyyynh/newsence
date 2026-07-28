@@ -1,9 +1,14 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
+import {
+	hasSemanticScholarAcademicEnrichment,
+	needsResourcePlatformAcquisition,
+	resourceIdentityWithAcademic,
+} from '@core-shared/resource-types';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
 import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
-import { deleteCorpusItem, syncCorpusItem } from '../ai-search';
+import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
@@ -92,9 +97,18 @@ function shouldAcquireContent(
 ): boolean {
 	if (force) return !!resource.url;
 	const hasContent = 'has_content' in resource && !!resource.has_content;
-	const needsYouTubeAcquisition = resource.type === 'youtube' && !resource.has_youtube_transcript;
+	const needsYouTubeAcquisition = resource.resource_platform === 'youtube' && !resource.has_youtube_transcript;
+	const needsPlatformAcquisition = needsResourcePlatformAcquisition({
+		platformData: resource.platform_metadata?.data,
+		resourcePlatform: resource.resource_platform,
+		type: resource.type,
+	});
 	const needsAcquisitionIdentity = !resource.source || !resource.platform_metadata;
-	return (!hasContent || needsYouTubeAcquisition || needsAcquisitionIdentity) && !resource.storage_key && !!resource.url;
+	return (
+		(!hasContent || needsYouTubeAcquisition || needsPlatformAcquisition || needsAcquisitionIdentity) &&
+		!resource.storage_key &&
+		!!resource.url
+	);
 }
 
 /**
@@ -121,7 +135,7 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	// explicit save, which feed policies must not veto.
 	const origin = { monitored: !!resource.source_id };
 	return readAcquiredContentArtifact(
-		await step.do('acquire-content', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin)),
+		await step.do('acquire-content-kind-platform-v1', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin)),
 	);
 }
 
@@ -160,13 +174,15 @@ async function stageTweetLinkUnfurl(step: WorkflowStep, resource: ResourceForPro
 	return applyTweetLinkUnfurl(resource, outcome.unfurl);
 }
 
-function rssSourceId(resource: ResourceForProcessing): string | null {
-	return resource.type === 'rss' ? resource.source_id : null;
+function feedSourceId(resource: ResourceForProcessing): string | null {
+	// A detected special platform remains authoritative even when its URL came
+	// from an RSS/Atom source. Feed content policy applies only to generic docs.
+	return resource.resource_platform === null && resource.source_acquisition_mode === 'feed' ? resource.source_id : null;
 }
 
 async function stageRssFeedAcquisition(env: CoreEnv, step: WorkflowStep, input: RssFeedAcquisitionInput): Promise<AcquiredContent> {
 	return readAcquiredContentArtifact(
-		await step.do('acquire-rss-feed-content', ACQUISITION_STEP, () => scrapeRssFeedItemArtifact(input, env)),
+		await step.do('acquire-rss-feed-content-kind-platform-v1', ACQUISITION_STEP, () => scrapeRssFeedItemArtifact(input, env)),
 	);
 }
 
@@ -177,7 +193,7 @@ async function acquireResourceForOperation(
 	operation: WorkflowOperation,
 ): Promise<AcquiredContent | undefined> {
 	if (!shouldAcquireContent(resource, operation === 'resync')) return undefined;
-	const sourceId = rssSourceId(resource);
+	const sourceId = feedSourceId(resource);
 	if (sourceId) {
 		const source = await step.do(
 			'load-rss-source-policy',
@@ -203,10 +219,11 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			return await this.runResource(resourceId, step, operation);
 		} catch (error) {
 			if (operation === 'resync') throw error;
-			// Neither cleanup step may throw: whatever they raise would replace
-			// `error` as the instance's top-level failure, and the cause of the
-			// failure is the only reason anyone opens this record. A broken
-			// deleteCorpusItem masked every acquisition error this way.
+			// Cleanup must not throw: whatever it raises would replace `error`
+			// as the instance's top-level failure. Do not delete the search
+			// document here. Successful persistence is the only path that writes
+			// it, and a concurrent newer workflow may have refreshed it after
+			// this workflow failed.
 			const logCleanupFailure = (msg: string) => (cleanupError: unknown) =>
 				console.error({
 					tag: 'WORKFLOW',
@@ -215,24 +232,19 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
 			await step
-				.do('mark-resource-failed', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' }, () =>
-					markResourceEnrichmentFailed(this.env, resourceId),
+				.do(
+					'mark-resource-failed-if-not-enriched-v1',
+					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+					() => markResourceEnrichmentFailed(this.env, resourceId),
 				)
 				.catch(logCleanupFailure('Failed to mark resource as failed'));
-			await step
-				.do(
-					'remove-failed-resource-from-search-index',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => deleteCorpusItem(this.env, resourceId),
-				)
-				.catch(logCleanupFailure('Failed to remove failed resource from the search index'));
 			throw error;
 		}
 	}
 
 	private async runResource(resourceId: string, step: WorkflowStep, operation: WorkflowOperation) {
 		const initialResource = await step.do(
-			'fetch-resource-shell',
+			'fetch-resource-shell-kind-platform-v1',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceShellForProcessing(this.env, resourceId),
 		);
@@ -240,29 +252,45 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
-		const resource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
-		const paperEnrichment = await stagePaperEnrichment(this.env, step, resource);
+		const acquiredResource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
+		const paperEnrichment = await stagePaperEnrichment(this.env, step, acquiredResource);
+		const identity = resourceIdentityWithAcademic(
+			{ kind: acquiredResource.kind, resourcePlatform: acquiredResource.resource_platform },
+			!!paperEnrichment || hasSemanticScholarAcademicEnrichment(acquiredResource.platform_metadata),
+		);
+		const resource: ResourceForProcessing = {
+			...acquiredResource,
+			kind: identity.kind,
+			resource_platform: identity.resourcePlatform,
+		};
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
 		if (operation === 'resync' && previousSnapshotHash && previousSnapshotHash === nextSnapshotHash && acquiredContent) {
-			await step.do(
-				'record-unchanged-resync',
+			const persisted = await step.do(
+				'record-unchanged-resync-kind-platform-v1',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 				() => persistUnchangedResourceResync(this.env, resourceId, resource, paperEnrichment),
 			);
+			if (!persisted) return { success: true, resource_id: resourceId, operation, changed: false, superseded: true };
 			await stageResourceImageRehost(this.env, step, resourceId);
 			return { success: true, resource_id: resourceId, operation, changed: false };
 		}
-		const resourceType = resource.type;
 		const logContext = { resource_id: resourceId, table: 'resources' };
 
-		console.info({ tag: 'WORKFLOW', msg: 'Starting', resourceType, ...logContext });
+		console.info({
+			tag: 'WORKFLOW',
+			msg: 'Starting',
+			resourceKind: resource.kind,
+			resourcePlatform: resource.resource_platform,
+			...logContext,
+		});
 		if (operation === 'ingest') {
-			await step.do(
-				'persist-resource-image-snapshot',
+			const persisted = await step.do(
+				'persist-resource-acquisition-snapshot-kind-platform-v1',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistResourceImageSnapshot(this.env, resourceId, resource),
+				() => persistResourceImageSnapshot(this.env, resourceId, resource, paperEnrichment),
 			);
+			if (!persisted) return { success: true, resource_id: resourceId, operation, superseded: true };
 			await stageResourceImageRehost(this.env, step, resourceId);
 		}
 
@@ -295,7 +323,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 		const previewImageUrl = acquiredContent?.previewImageUrl?.trim() || null;
 
 		const hackerNewsContent =
-			resourceType === 'hackernews'
+			resource.resource_platform === 'hackernews'
 				? await step
 						.do(
 							'build-hacker-news-content',
@@ -322,7 +350,7 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				return classifyResource(
 					resourceToClassify,
 					this.env,
-					resourceType === 'twitter' ? ['Twitter'] : resourceType === 'hackernews' ? ['HackerNews'] : undefined,
+					resource.resource_platform === 'twitter' ? ['Twitter'] : resource.resource_platform === 'hackernews' ? ['HackerNews'] : undefined,
 				);
 			},
 		);
@@ -331,9 +359,9 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 			...(hackerNewsContent ? { content: hackerNewsContent } : {}),
 		};
 
-		const youtubeTranscript = resourceType === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
+		const youtubeTranscript = resource.resource_platform === 'youtube' ? acquiredContent?.youtubeTranscript : undefined;
 		const youtubeHighlights =
-			resourceType === 'youtube'
+			resource.resource_platform === 'youtube'
 				? await step
 						.do(
 							'prepare-youtube-highlights',
@@ -350,8 +378,8 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 							return null;
 						})
 				: null;
-		const persistedResourceId = await step.do(
-			'update-db',
+		const persistence = await step.do(
+			'update-db-kind-platform-v1',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => {
 				const resourceToPersist = await loadFull();
@@ -368,6 +396,10 @@ export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, Work
 				});
 			},
 		);
+		if (!persistence.persisted) {
+			return { success: true, resource_id: persistence.resourceId, operation, superseded: true };
+		}
+		const persistedResourceId = persistence.resourceId;
 		if (operation === 'resync') await stageResourceImageRehost(this.env, step, persistedResourceId);
 		const translationEligible = await step
 			.do(

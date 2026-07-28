@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { CONTENT_RESOURCE_TYPES, type ContentResourceType, type ResourceCategory } from '@core-shared/resource-types';
+import type { ContentResourceType, ResourceCategory } from '@core-shared/resource-types';
 import { type CoreDb, isValidUuid, queryRows, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
+import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
@@ -116,7 +117,13 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 				       COALESCE(r.published_date, r.scraped_date, r.created_at) AS effective_at,
 				       r.tags,
 				       r.category,
-				       COALESCE(NULLIF(s.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+				       ${resourceDisplaySourceSql({
+									kind: sql`r.kind`,
+									monitoredSourceName: sql`s.name`,
+									platformMetadata: sql`r.platform_metadata`,
+									resourcePlatform: sql`r.resource_platform`,
+									type: sql`r.type`,
+								})} AS source,
 				       COALESCE((
 				         SELECT jsonb_agg(
 				           jsonb_build_object(
@@ -137,7 +144,11 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 				WHERE r.id = ANY(${uuidArraySql(resourceIds)})
 					  AND r.scope = 'corpus'
 					  AND r.enrichment_status = 'enriched'
-					  AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+					  AND ${contentResourceIdentitySql({
+							kind: sql`r.kind`,
+							resourcePlatform: sql`r.resource_platform`,
+							type: sql`r.type`,
+						})}
 		`,
 	);
 }
@@ -269,13 +280,17 @@ async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null): Promise<
 		const rows = await queryRows<{ id: string }>(
 			db,
 			sql`
-				SELECT id::text
-				FROM resources
-				WHERE scope = 'corpus'
-				  AND enrichment_status = 'enriched'
-				  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
-				  AND (${cursor}::uuid IS NULL OR id > ${cursor}::uuid)
-				ORDER BY id
+				SELECT r.id::text
+				FROM resources r
+				WHERE r.scope = 'corpus'
+				  AND r.enrichment_status = 'enriched'
+				  AND ${contentResourceIdentitySql({
+						kind: sql`r.kind`,
+						resourcePlatform: sql`r.resource_platform`,
+						type: sql`r.type`,
+					})}
+				  AND (${cursor}::uuid IS NULL OR r.id > ${cursor}::uuid)
+				ORDER BY r.id
 				LIMIT ${REINDEX_PAGE_SIZE}
 			`,
 		);
@@ -301,12 +316,16 @@ async function loadEligibleCorpusIds(env: CoreEnv, resourceIds: readonly string[
 		const rows = await queryRows<{ id: string }>(
 			db,
 			sql`
-				SELECT id::text
-				FROM resources
-				WHERE id = ANY(${uuidArraySql(resourceIds)})
-				  AND scope = 'corpus'
-				  AND enrichment_status = 'enriched'
-				  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+				SELECT r.id::text
+				FROM resources r
+				WHERE r.id = ANY(${uuidArraySql(resourceIds)})
+				  AND r.scope = 'corpus'
+				  AND r.enrichment_status = 'enriched'
+				  AND ${contentResourceIdentitySql({
+						kind: sql`r.kind`,
+						resourcePlatform: sql`r.resource_platform`,
+						type: sql`r.type`,
+					})}
 			`,
 		);
 		return new Set(rows.map((row) => row.id));
@@ -380,18 +399,22 @@ async function listCorpusDeltaAfter(env: CoreEnv, startedAt: string, cursor: Sea
 		queryRows<SearchDeltaRow>(
 			db,
 			sql`
-				SELECT id::text, updated_at::text AS updated_at
-				FROM resources
-				WHERE scope = 'corpus'
-				  AND enrichment_status = 'enriched'
-				  AND type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
-				  AND updated_at >= ${startedAt}::timestamptz
+				SELECT r.id::text, r.updated_at::text AS updated_at
+				FROM resources r
+				WHERE r.scope = 'corpus'
+				  AND r.enrichment_status = 'enriched'
+				  AND ${contentResourceIdentitySql({
+						kind: sql`r.kind`,
+						resourcePlatform: sql`r.resource_platform`,
+						type: sql`r.type`,
+					})}
+				  AND r.updated_at >= ${startedAt}::timestamptz
 				  AND (
 				    ${cursor?.updatedAt ?? null}::timestamptz IS NULL
-				    OR updated_at > ${cursor?.updatedAt ?? null}::timestamptz
-				    OR (updated_at = ${cursor?.updatedAt ?? null}::timestamptz AND id > ${cursor?.id ?? null}::uuid)
+				    OR r.updated_at > ${cursor?.updatedAt ?? null}::timestamptz
+				    OR (r.updated_at = ${cursor?.updatedAt ?? null}::timestamptz AND r.id > ${cursor?.id ?? null}::uuid)
 				  )
-				ORDER BY updated_at, id
+				ORDER BY r.updated_at, r.id
 				LIMIT ${REINDEX_PAGE_SIZE}
 			`,
 		),
