@@ -26,6 +26,20 @@ import {
 	varchar,
 } from 'drizzle-orm/pg-core';
 
+// Durable rollout state for externally managed search indexes. The row is
+// intentionally keyed by the logical index rather than a Workflow instance:
+// Workflow history is execution state, not a stable reader cutover contract.
+export const searchIndexStates = pgTable('search_index_states', {
+	indexName: text('index_name').primaryKey(),
+	generation: integer('generation').notNull(),
+	generationKey: text('generation_key').notNull(),
+	status: text('status', { enum: ['rebuilding', 'ready'] }).notNull(),
+	rebuildEpoch: bigint('rebuild_epoch', { mode: 'bigint' }).default(0n).notNull(),
+	rebuildingAt: timestamp('rebuilding_at', { mode: 'date', withTimezone: true }).notNull(),
+	readyAt: timestamp('ready_at', { mode: 'date', withTimezone: true }),
+	updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+});
+
 export const resources = pgTable(
 	'resources',
 	{

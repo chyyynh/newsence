@@ -346,10 +346,24 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	return [...ranks.values()];
 }
 
-type SearchIndexRebuildPayload = Record<string, never>;
+type SearchIndexRebuildPayload =
+	| { mode?: 'rebuild' }
+	| {
+			// One-time bridge for a rebuild completed by a pinned pre-state
+			// Workflow version. The source instance must itself be terminal.
+			completedInstanceId: string;
+			mode: 'adopt';
+	  };
 
-const SEARCH_INDEX_GENERATION = 'canonical-3-kind';
-const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION}`;
+const SEARCH_INDEX_NAME = 'public-corpus';
+// Bump both values whenever the physical AI Search contract changes. The
+// ordinal prevents an older overlapping deployment from reclaiming the shared
+// index; the key keeps same-ordinal configuration mistakes fail-closed.
+const SEARCH_INDEX_GENERATION = { key: 'canonical-3-kind', ordinal: 3 } as const;
+// A Workflow instance remains pinned to the Worker version that created it.
+// Bump the runner suffix whenever rebuild execution semantics change; the
+// pre-state canonical-3 instance is retained solely as an adoption source.
+const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-state-v1`;
 const REINDEX_PAGE_SIZE = 50;
 // Workers allow at most six simultaneous outgoing connections per invocation.
 // Stay below that ceiling instead of relying on the runtime to queue the
@@ -364,15 +378,151 @@ const REINDEX_READY_POLL_INTERVAL = '10 minutes';
 const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } as const;
 const SHORT_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '60 seconds' } as const;
 const BATCH_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '300 seconds' } as const;
+const UTC_TIMESTAMP_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"';
 
 async function searchIndexKindMetadataReady(env: CoreEnv): Promise<boolean> {
 	try {
-		const instance = await env.SEARCH_INDEX_REBUILD_WORKFLOW.get(SEARCH_INDEX_REBUILD_INSTANCE_ID);
-		const status = await instance.status();
-		return status.status === 'complete';
+		const [row] = await withCoreDb(env, (db) =>
+			queryRows<{ ready: boolean }>(
+				db,
+				sql`
+					SELECT EXISTS (
+					  SELECT 1
+					  FROM search_index_states
+					  WHERE index_name = ${SEARCH_INDEX_NAME}
+					    AND generation = ${SEARCH_INDEX_GENERATION.ordinal}
+					    AND generation_key = ${SEARCH_INDEX_GENERATION.key}
+					    AND status = 'ready'
+					    AND ready_at IS NOT NULL
+					) AS ready
+				`,
+			),
+		);
+		return row?.ready === true;
 	} catch {
 		return false;
 	}
+}
+
+type SearchIndexRebuildLease = {
+	rebuildEpoch: string;
+	startedAt: string;
+};
+
+type SearchIndexRebuildingRow = {
+	rebuild_epoch: string;
+	started_at: string;
+};
+
+async function writeSearchIndexRebuildingState(env: CoreEnv, advanceEpoch: boolean): Promise<SearchIndexRebuildLease> {
+	const epochIncrement = advanceEpoch ? 1 : 0;
+	const [row] = await withCoreDb(env, (db) =>
+		queryRows<SearchIndexRebuildingRow>(
+			db,
+			sql`
+				INSERT INTO search_index_states (
+				  index_name,
+				  generation,
+				  generation_key,
+				  status,
+				  rebuild_epoch,
+				  rebuilding_at,
+				  ready_at,
+				  updated_at
+				)
+				VALUES (
+				  ${SEARCH_INDEX_NAME},
+				  ${SEARCH_INDEX_GENERATION.ordinal},
+				  ${SEARCH_INDEX_GENERATION.key},
+				  'rebuilding',
+				  ${epochIncrement},
+				  clock_timestamp(),
+				  NULL,
+				  clock_timestamp()
+				)
+				ON CONFLICT (index_name) DO UPDATE SET
+				  generation = EXCLUDED.generation,
+				  generation_key = EXCLUDED.generation_key,
+				  status = 'rebuilding',
+				  rebuild_epoch = search_index_states.rebuild_epoch + ${epochIncrement},
+				  rebuilding_at = clock_timestamp(),
+				  ready_at = NULL,
+				  updated_at = clock_timestamp()
+				WHERE search_index_states.generation < EXCLUDED.generation
+				   OR (
+				     search_index_states.generation = EXCLUDED.generation
+				     AND search_index_states.generation_key = EXCLUDED.generation_key
+				   )
+				RETURNING
+				  rebuild_epoch::text,
+				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
+			`,
+		),
+	);
+	if (!row) {
+		throw new Error(
+			`AI Search generation ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key} is superseded or conflicts with durable state`,
+		);
+	}
+	return { rebuildEpoch: row.rebuild_epoch, startedAt: row.started_at };
+}
+
+async function beginSearchIndexRebuild(env: CoreEnv): Promise<SearchIndexRebuildLease> {
+	return writeSearchIndexRebuildingState(env, true);
+}
+
+async function assertSearchIndexRebuildLease(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<void> {
+	const [row] = await withCoreDb(env, (db) =>
+		queryRows<{ current: boolean }>(
+			db,
+			sql`
+				SELECT EXISTS (
+				  SELECT 1
+				  FROM search_index_states
+				  WHERE index_name = ${SEARCH_INDEX_NAME}
+				    AND generation = ${SEARCH_INDEX_GENERATION.ordinal}
+				    AND generation_key = ${SEARCH_INDEX_GENERATION.key}
+				    AND status = 'rebuilding'
+				    AND rebuild_epoch = ${lease.rebuildEpoch}::bigint
+				) AS current
+			`,
+		),
+	);
+	if (row?.current !== true) {
+		throw new Error(
+			`AI Search rebuild lease ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}/${lease.rebuildEpoch} is no longer current`,
+		);
+	}
+}
+
+async function withSearchIndexRebuildLease<T>(env: CoreEnv, lease: SearchIndexRebuildLease, operation: () => Promise<T>): Promise<T> {
+	await assertSearchIndexRebuildLease(env, lease);
+	return operation();
+}
+
+async function markSearchIndexGenerationReady(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<{ readyAt: string }> {
+	const [row] = await withCoreDb(env, (db) =>
+		queryRows<{ ready_at: string }>(
+			db,
+			sql`
+				UPDATE search_index_states
+				SET status = 'ready',
+				    ready_at = COALESCE(ready_at, clock_timestamp()),
+				    updated_at = clock_timestamp()
+				WHERE index_name = ${SEARCH_INDEX_NAME}
+				  AND generation = ${SEARCH_INDEX_GENERATION.ordinal}
+				  AND generation_key = ${SEARCH_INDEX_GENERATION.key}
+				  AND rebuild_epoch = ${lease.rebuildEpoch}::bigint
+				RETURNING to_char(ready_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS ready_at
+			`,
+		),
+	);
+	if (!row) {
+		throw new Error(
+			`AI Search generation ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}/${lease.rebuildEpoch} lost its ready-state fence`,
+		);
+	}
+	return { readyAt: row.ready_at };
 }
 
 type SearchIdentityCountRow = {
@@ -569,7 +719,9 @@ async function listCorpusDeltaAfter(env: CoreEnv, startedAt: string, cursor: Sea
 		queryRows<SearchDeltaRow>(
 			db,
 			sql`
-				SELECT r.id::text, r.updated_at::text AS updated_at
+				SELECT
+				  r.id::text,
+				  to_char(r.updated_at, ${UTC_TIMESTAMP_FORMAT}) AS updated_at
 				FROM resources r
 				WHERE r.scope = 'corpus'
 				  AND r.enrichment_status = 'enriched'
@@ -578,13 +730,20 @@ async function listCorpusDeltaAfter(env: CoreEnv, startedAt: string, cursor: Sea
 						resourcePlatform: sql`r.resource_platform`,
 						type: sql`r.type`,
 					})}
-				  AND r.updated_at >= ${startedAt}::timestamptz
+				  -- resources.updated_at is a legacy timestamp-without-time-zone
+				  -- column whose stored contract is UTC. Convert it explicitly
+				  -- before every timestamptz boundary/cursor comparison so the
+				  -- Hyperdrive session timezone cannot change the delta window.
+				  AND (r.updated_at AT TIME ZONE 'UTC') >= ${startedAt}::timestamptz
 				  AND (
 				    ${cursor?.updatedAt ?? null}::timestamptz IS NULL
-				    OR r.updated_at > ${cursor?.updatedAt ?? null}::timestamptz
-				    OR (r.updated_at = ${cursor?.updatedAt ?? null}::timestamptz AND r.id > ${cursor?.id ?? null}::uuid)
+				    OR (r.updated_at AT TIME ZONE 'UTC') > ${cursor?.updatedAt ?? null}::timestamptz
+				    OR (
+				      (r.updated_at AT TIME ZONE 'UTC') = ${cursor?.updatedAt ?? null}::timestamptz
+				      AND r.id > ${cursor?.id ?? null}::uuid
+				    )
 				  )
-				ORDER BY r.updated_at, r.id
+				ORDER BY (r.updated_at AT TIME ZONE 'UTC'), r.id
 				LIMIT ${REINDEX_PAGE_SIZE}
 			`,
 		),
@@ -621,17 +780,19 @@ function normalizedCustomMetadata(
 		.sort((left, right) => left.field_name.localeCompare(right.field_name));
 }
 
-async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
-	const info = await env.AI_SEARCH.info();
-	if (
+function searchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
+	return (
 		info.index_method?.vector === true &&
 		info.index_method.keyword === true &&
 		info.fusion_method === 'rrf' &&
 		info.indexing_options?.keyword_tokenizer === 'trigram' &&
 		JSON.stringify(normalizedCustomMetadata(info.custom_metadata)) === JSON.stringify(normalizedCustomMetadata(CANONICAL_CUSTOM_METADATA))
-	) {
-		return 'unchanged';
-	}
+	);
+}
+
+async function ensureSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
+	const info = await env.AI_SEARCH.info();
+	if (searchInstanceConfigMatches(info)) return 'unchanged';
 	await env.AI_SEARCH.update({
 		index_method: { vector: true, keyword: true },
 		fusion_method: 'rrf',
@@ -651,6 +812,7 @@ type SearchIndexStatsSnapshot = {
 };
 
 type SearchIndexReadinessObservation = {
+	configReady: boolean;
 	expected: SearchIdentityCounts;
 	indexed: SearchIdentityCounts | null;
 	ownedStatuses: SearchIndexStatsSnapshot;
@@ -711,14 +873,15 @@ async function loadOwnedSearchItemStatuses(env: CoreEnv): Promise<SearchIndexSta
 			}),
 			`${status} item`,
 		);
-	const [completed, error, outdated, queued, running, skipped] = await Promise.all([
-		statusCount('completed'),
-		statusCount('error'),
-		statusCount('outdated'),
-		statusCount('queued'),
-		statusCount('running'),
-		statusCount('skipped'),
-	]);
+	// Keep readiness probes serialized. A surrounding readiness observation also
+	// talks to PostgreSQL and AI Search stats; fanning all six status listings
+	// out at once can exceed Workers' six-connection ceiling.
+	const completed = await statusCount('completed');
+	const error = await statusCount('error');
+	const outdated = await statusCount('outdated');
+	const queued = await statusCount('queued');
+	const running = await statusCount('running');
+	const skipped = await statusCount('skipped');
 	return { completed, error, outdated, queued, running, skipped };
 }
 
@@ -732,6 +895,7 @@ function searchIdentityCountsEqual(left: SearchIdentityCounts, right: SearchIden
 
 function searchIndexReady(observation: SearchIndexReadinessObservation): boolean {
 	return (
+		observation.configReady &&
 		searchIndexSettled(observation.ownedStatuses) &&
 		observation.ownedStatuses.error === 0 &&
 		observation.ownedStatuses.skipped === 0 &&
@@ -742,13 +906,15 @@ function searchIndexReady(observation: SearchIndexReadinessObservation): boolean
 }
 
 async function loadSearchIndexReadiness(env: CoreEnv): Promise<SearchIndexReadinessObservation> {
-	const [expected, ownedStatuses, rawStats] = await Promise.all([
-		loadSearchIdentityCounts(env),
-		loadOwnedSearchItemStatuses(env),
-		env.AI_SEARCH.stats(),
-	]);
+	// Each child performs external I/O. Sequence the groups so the five-way
+	// per-kind listing below remains the maximum fanout in this invocation.
+	const expected = await loadSearchIdentityCounts(env);
+	const configReady = searchInstanceConfigMatches(await env.AI_SEARCH.info());
+	const ownedStatuses = await loadOwnedSearchItemStatuses(env);
+	const rawStats = await env.AI_SEARCH.stats();
 	const stats = searchIndexStatsSnapshot(rawStats);
 	return {
+		configReady,
 		expected,
 		indexed: searchIndexSettled(ownedStatuses) ? await loadIndexedIdentityCounts(env) : null,
 		ownedStatuses,
@@ -756,10 +922,16 @@ async function loadSearchIndexReadiness(env: CoreEnv): Promise<SearchIndexReadin
 	};
 }
 
-async function waitForSearchIndexReady(env: CoreEnv, step: WorkflowStep): Promise<SearchIndexReadinessObservation> {
+async function waitForSearchIndexReady(
+	env: CoreEnv,
+	step: WorkflowStep,
+	lease: SearchIndexRebuildLease,
+): Promise<SearchIndexReadinessObservation> {
 	let last: SearchIndexReadinessObservation | null = null;
 	for (let attempt = 0; attempt < REINDEX_READY_POLL_ATTEMPTS; attempt++) {
-		last = await step.do(`load-search-index-readiness-${attempt}`, SHORT_STEP_OPTIONS, () => loadSearchIndexReadiness(env));
+		last = await step.do(`load-search-index-readiness-${attempt}`, SHORT_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(env, lease, () => loadSearchIndexReadiness(env)),
+		);
 		if (searchIndexReady(last)) return last;
 		if (searchIndexSettled(last.ownedStatuses) && (last.ownedStatuses.error > 0 || last.ownedStatuses.skipped > 0)) {
 			throw new Error(`AI Search indexing failed: ${JSON.stringify(last.ownedStatuses)}`);
@@ -771,17 +943,19 @@ async function waitForSearchIndexReady(env: CoreEnv, step: WorkflowStep): Promis
 	throw new Error(`AI Search index did not become ready: ${JSON.stringify(last)}`);
 }
 
-async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep) {
+async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, lease: SearchIndexRebuildLease) {
 	let deleted = 0;
 	for (let pass = 0; pass < REINDEX_MAX_PRUNE_PASSES; pass++) {
-		const itemPageCount = await step.do(`load-search-item-page-count-${pass}`, SHORT_STEP_OPTIONS, () => loadSearchItemPageCount(env));
+		const itemPageCount = await step.do(`load-search-item-page-count-${pass}`, SHORT_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(env, lease, () => loadSearchItemPageCount(env)),
+		);
 		let passDeleted = 0;
 		// Delete from the last page first to avoid ordinary pagination shifts.
 		// Repeat until a zero-delete pass to cover tie ordering and item movement.
 		for (let lastPage = itemPageCount; lastPage >= 1; lastPage -= REINDEX_PRUNE_PAGES_PER_STEP) {
 			const firstPage = Math.max(1, lastPage - REINDEX_PRUNE_PAGES_PER_STEP + 1);
 			const batchDeleted = await step.do(`prune-search-item-pages-${pass}-${firstPage}-${lastPage}`, BATCH_STEP_OPTIONS, () =>
-				pruneSearchItemPages(env, firstPage, lastPage),
+				withSearchIndexRebuildLease(env, lease, () => pruneSearchItemPages(env, firstPage, lastPage)),
 			);
 			passDeleted += batchDeleted;
 		}
@@ -792,26 +966,76 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep) {
 }
 
 export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, {});
+	// Only the execution's first durable step mutates readiness. If this stable
+	// runner is already active, enqueueOrRestartWorkflow intentionally returns it
+	// without starting another execution; clearing readiness here would strand
+	// the generation behind a lease that no execution owns.
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, { mode: 'rebuild' });
 }
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
-	async run(_event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		// restart() keeps an instance's immutable event payload. Capture this inside
-		// the execution so every full restart receives a fresh delta boundary while
-		// ordinary step retries keep the same durable value.
-		const startedAt = await step.do('capture-search-rebuild-started-at', async () => new Date().toISOString());
+	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		const requestedMode: unknown = event.payload.mode;
+		if (requestedMode !== undefined && requestedMode !== 'rebuild' && requestedMode !== 'adopt') {
+			throw new Error(`Unsupported AI Search rebuild mode: ${String(requestedMode)}`);
+		}
+		const adoptionSourceValue: unknown = event.payload.mode === 'adopt' ? event.payload.completedInstanceId : undefined;
+		const adoptionSourceInstanceId = typeof adoptionSourceValue === 'string' ? adoptionSourceValue.trim() : undefined;
+		if (requestedMode === 'adopt' && !adoptionSourceInstanceId) {
+			throw new Error('AI Search generation adoption requires a completed source Workflow instance id');
+		}
+
+		// First durable side effect for every execution, including a direct
+		// operator restart: clear readiness and advance the fencing epoch. The DB
+		// timestamp is returned as an explicit UTC delta boundary.
+		const lease = await step.do('begin-search-index-generation', SHORT_STEP_OPTIONS, () => beginSearchIndexRebuild(this.env));
+		const startedAt = lease.startedAt;
+
+		if (adoptionSourceInstanceId) {
+			const completedInstanceId = adoptionSourceInstanceId;
+			const sourceStatus = await step.do('verify-completed-search-rebuild', SHORT_STEP_OPTIONS, async () => {
+				const instance = await this.env.SEARCH_INDEX_REBUILD_WORKFLOW.get(completedInstanceId);
+				const status = await instance.status();
+				if (status.status !== 'complete') {
+					throw new Error(`AI Search adoption source ${completedInstanceId} is ${status.status}, not complete`);
+				}
+				return { status: status.status };
+			});
+			const readiness = await step.do('validate-adoptable-search-index', SHORT_STEP_OPTIONS, () =>
+				withSearchIndexRebuildLease(this.env, lease, () => loadSearchIndexReadiness(this.env)),
+			);
+			if (!searchIndexReady(readiness)) {
+				throw new Error(`AI Search generation cannot be adopted: ${JSON.stringify(readiness)}`);
+			}
+			const generationReadiness = await step.do('mark-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
+				markSearchIndexGenerationReady(this.env, lease),
+			);
+			return {
+				mode: 'adopt' as const,
+				sourceInstanceId: completedInstanceId,
+				sourceStatus,
+				startedAt,
+				generation: SEARCH_INDEX_GENERATION,
+				rebuildEpoch: lease.rebuildEpoch,
+				readiness,
+				generationReadiness,
+			};
+		}
 
 		const identityPreflight = await step.do('validate-search-resource-identities', SHORT_STEP_OPTIONS, () =>
-			loadSearchIdentityCounts(this.env),
+			withSearchIndexRebuildLease(this.env, lease, () => loadSearchIdentityCounts(this.env)),
 		);
-		const instanceConfig = await step.do('ensure-search-instance-config', SHORT_STEP_OPTIONS, () => ensureSearchInstanceConfig(this.env));
+		const instanceConfig = await step.do('ensure-search-instance-config', SHORT_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(this.env, lease, () => ensureSearchInstanceConfig(this.env)),
+		);
 		let cursor: string | null = null;
 		let uploaded = 0;
 		let page = 0;
 
 		while (true) {
-			const result = await step.do(`sync-corpus-page-${page}`, BATCH_STEP_OPTIONS, () => syncCorpusPageAfter(this.env, cursor));
+			const result = await step.do(`sync-corpus-page-${page}`, BATCH_STEP_OPTIONS, () =>
+				withSearchIndexRebuildLease(this.env, lease, () => syncCorpusPageAfter(this.env, cursor)),
+			);
 			if (result.done) break;
 			if (!result.cursor) throw new Error(`AI Search rebuild page ${page} did not return a cursor`);
 			uploaded += result.uploaded;
@@ -832,7 +1056,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		let deltaUploaded = 0;
 		while (true) {
 			const result = await step.do(`sync-corpus-delta-page-${deltaPage}`, BATCH_STEP_OPTIONS, () =>
-				syncCorpusDeltaAfter(this.env, startedAt, deltaCursor),
+				withSearchIndexRebuildLease(this.env, lease, () => syncCorpusDeltaAfter(this.env, startedAt, deltaCursor)),
 			);
 			if (result.done) break;
 			if (!result.cursor) throw new Error(`AI Search delta page ${deltaPage} did not return a cursor`);
@@ -840,14 +1064,21 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			deltaCursor = result.cursor;
 			deltaPage++;
 		}
-		const reconciliation = await reconcileSearchItems(this.env, step);
+		const reconciliation = await reconcileSearchItems(this.env, step, lease);
 		// items.upload() is intentionally queue-oriented for throughput. Workflow
-		// completion is the reader cutover gate, so do not return until Cloudflare
-		// reports no pending/error/outdated items and indexed kind counts match DB.
-		const readiness = await waitForSearchIndexReady(this.env, step);
+		// completion is not the reader contract: do not mark the durable generation
+		// ready until Cloudflare reports no pending/error/outdated items and indexed
+		// kind counts match DB.
+		const readiness = await waitForSearchIndexReady(this.env, step, lease);
+		const generationReadiness = await step.do('mark-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
+			markSearchIndexGenerationReady(this.env, lease),
+		);
 
 		return {
+			mode: 'rebuild' as const,
 			startedAt,
+			generation: SEARCH_INDEX_GENERATION,
+			rebuildEpoch: lease.rebuildEpoch,
 			identityPreflight,
 			instanceConfig,
 			uploaded,
@@ -856,6 +1087,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			deltaPages: deltaPage,
 			reconciliation,
 			readiness,
+			generationReadiness,
 		};
 	}
 }

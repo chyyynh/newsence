@@ -200,18 +200,35 @@ the #251 contract rebuild replaces `type`.
 Roll out an index schema change in this order:
 
 1. Apply and validate the database identity backfill.
-2. Deploy Core so new uploads carry the new metadata, while existing app
-   readers continue sending legacy `types`.
+2. Apply `web-tanstack/prisma/245-search-index-readiness.sql`, then deploy Core
+   so new uploads carry the new metadata while the durable generation row is
+   still absent and kind-native reads fail closed to legacy `types`.
 3. Call `startSearchIndexRebuild()` and poll
    `getSearchIndexRebuildStatus(instanceId)`.
-4. Deploy app/MCP readers that send `kinds` or `resourcePlatforms` only after
-   the Workflow succeeds.
+4. Deploy app/MCP readers that send `kinds` or `resourcePlatforms`. They use
+   native `kind` filters only after the current generation atomically reaches
+   `ready`; Workflow history retention is not part of the serving contract.
 
 The rebuild preflights missing identities and legacy platform-proxy drift. It
 does not report success merely because uploads were queued: it waits until all
 `resources/` items have no queued, running, outdated, error, or skipped status,
 then compares total and per-kind index counts with Postgres. This terminal
-success is the reader-cutover gate.
+success writes the durable reader-cutover gate.
+
+If a pinned pre-gate Worker version already completed the same physical index
+contract, deploy the migration and current Core version, then adopt that exact
+terminal instance without uploading the corpus again:
+
+```sh
+pnpm exec wrangler workflows trigger \
+  newsence-search-index-rebuild \
+  '{"mode":"adopt","completedInstanceId":"search-index-rebuild-canonical-3-kind"}' \
+  --id search-index-adopt-canonical-3-kind
+```
+
+Adoption remains fail closed: it checks the source Workflow is complete, the
+live index configuration matches, all owned item statuses are settled, and
+Postgres/index totals agree for every kind before marking the generation ready.
 
 ### Recent resource image warmup
 
