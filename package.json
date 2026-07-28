@@ -9,6 +9,8 @@
 		"check:db-schema": "node scripts/check-drizzle-prisma-drift.mjs",
 		"check:resource-identity-audit": "node scripts/check-resource-identity-audit.mjs",
 		"check:resource-identity": "node --experimental-strip-types scripts/check-resource-identity.mjs",
+		"check:resource-processing-canary": "node scripts/check-resource-processing-canary.mjs",
+		"check:resource-runtime-canary-state": "node scripts/check-resource-runtime-canary-state.mjs",
 		"check:search-rebuild": "node scripts/check-search-rebuild.mjs",
 		"check:search-rollout": "node scripts/check-search-rollout.mjs",
 		"check:startup": "wrangler check startup",
