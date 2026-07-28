@@ -360,9 +360,11 @@ const SEARCH_INDEX_NAME = 'public-corpus';
 // ordinal prevents an older overlapping deployment from reclaiming the shared
 // index; the key keeps same-ordinal configuration mistakes fail-closed.
 const SEARCH_INDEX_GENERATION = { key: 'canonical-3-kind', ordinal: 3 } as const;
-// A Workflow instance remains pinned to the Worker version that created it.
-// Bump the runner suffix whenever rebuild execution semantics change; the
-// pre-state canonical-3 instance is retained solely as an adoption source.
+// Retained Workflow instances preserve durable step history while deployments
+// can replay that history against a newer step graph. Bump the runner suffix
+// whenever execution semantics change so an explicit future start cannot reuse
+// an incompatible history. The pre-state canonical-3 id remains the rollout
+// bridge/adoption source for the rebuild already in flight.
 const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-state-v1`;
 const REINDEX_PAGE_SIZE = 50;
 // Workers allow at most six simultaneous outgoing connections per invocation.
@@ -985,11 +987,15 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			throw new Error('AI Search generation adoption requires a completed source Workflow instance id');
 		}
 
-		// First durable side effect for every execution, including a direct
-		// operator restart: clear readiness and advance the fencing epoch. The DB
-		// timestamp is returned as an explicit UTC delta boundary.
+		// Keep the legacy step name as the rebuild's delta boundary. A pre-gate
+		// instance can replay this newer graph after deployment while retaining
+		// its original durable output; using the DB generation timestamp instead
+		// would silently move that in-flight rebuild's delta window forward.
+		const startedAt = await step.do('capture-search-rebuild-started-at', async () => new Date().toISOString());
+
+		// First generation-state side effect for every execution, including a
+		// direct operator restart: clear readiness and advance the fencing epoch.
 		const lease = await step.do('begin-search-index-generation', SHORT_STEP_OPTIONS, () => beginSearchIndexRebuild(this.env));
-		const startedAt = lease.startedAt;
 
 		if (adoptionSourceInstanceId) {
 			const completedInstanceId = adoptionSourceInstanceId;

@@ -215,7 +215,7 @@ does not report success merely because uploads were queued: it waits until all
 then compares total and per-kind index counts with Postgres. This terminal
 success writes the durable reader-cutover gate.
 
-If a pinned pre-gate Worker version already completed the same physical index
+If a pre-gate Workflow execution already completed the same physical index
 contract, deploy the migration and current Core version, then adopt that exact
 terminal instance without uploading the corpus again:
 
