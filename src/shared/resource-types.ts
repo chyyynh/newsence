@@ -16,11 +16,18 @@ export function isResourceType(value: unknown): value is ResourceType {
 	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
 }
 
-export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const satisfies readonly ContentResourceType[];
+// Translation/enrichment completeness policy for legacy resource rows. Keep
+// this policy domain independent from the umbrella ContentResourceType alias
+// so the overloaded resource-type contract can be retired in stages (#245).
+export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const;
 
-export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies readonly ContentResourceType[];
+export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const;
 
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
+
+export function isSourcePlatform(value: unknown): value is SourcePlatform {
+	return typeof value === 'string' && (SOURCE_PLATFORMS as readonly string[]).includes(value);
+}
 
 // Editorial kind of an article-family source. Distinguishes reader-facing Blog
 // vs News, which resources.type (web/rss) can't express since both come from the
