@@ -48,6 +48,16 @@ export type ResourceIdentity = Readonly<{
 	resourcePlatform: ResourcePlatform;
 }>;
 
+export type LegacyResourceIdentityFilterCase = Readonly<{
+	type: ResourceType;
+	academic: boolean | 'irrelevant';
+}>;
+
+export type ResourceIdentityFilters = Readonly<{
+	kinds?: readonly ResourceKind[];
+	resourcePlatforms?: readonly ResourcePlatform[];
+}>;
+
 export const LEGACY_RESOURCE_IDENTITIES = {
 	web: { kind: 'document', resourcePlatform: null },
 	rss: { kind: 'document', resourcePlatform: null },
@@ -156,6 +166,25 @@ export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown):
 export function legacyResourceIdentity(type: ResourceType, hasAcademicEnrichment = false): ResourceIdentity {
 	const identity = LEGACY_RESOURCE_IDENTITIES[type];
 	return resourceIdentityWithAcademic(identity, hasAcademicEnrichment);
+}
+
+export function legacyResourceIdentityFilterCases(filters: ResourceIdentityFilters): LegacyResourceIdentityFilterCase[] {
+	const kinds = filters.kinds === undefined ? null : new Set<ResourceKind>(filters.kinds);
+	const resourcePlatforms = filters.resourcePlatforms === undefined ? null : new Set<ResourcePlatform>(filters.resourcePlatforms);
+	const matches = (identity: ResourceIdentity) =>
+		(kinds === null || kinds.has(identity.kind)) && (resourcePlatforms === null || resourcePlatforms.has(identity.resourcePlatform));
+
+	return RESOURCE_TYPES.flatMap((type) => {
+		const withoutAcademic = matches(legacyResourceIdentity(type, false));
+		const withAcademic = matches(legacyResourceIdentity(type, true));
+		if (!withoutAcademic && !withAcademic) return [];
+		return [
+			{
+				type,
+				academic: withoutAcademic === withAcademic ? 'irrelevant' : withAcademic,
+			} satisfies LegacyResourceIdentityFilterCase,
+		];
+	});
 }
 
 export function resourceIdentityForDetectedPlatform(

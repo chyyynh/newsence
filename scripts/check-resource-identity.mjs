@@ -3,6 +3,7 @@ import {
 	isIncomingResourceSnapshotSuperseded,
 	isResourceTranslationIdentityEligible,
 	legacyResourceIdentity,
+	legacyResourceIdentityFilterCases,
 	legacyResourceTypeAfterAcquisition,
 	needsResourcePlatformAcquisition,
 	resourceIdentityDisplayLabel,
@@ -40,6 +41,34 @@ assert.equal(resourceIdentityDisplayLabel({ kind: 'paper', resourcePlatform: nul
 assert.equal(legacyResourceTypeAfterAcquisition('rss', 'web'), 'rss');
 assert.equal(legacyResourceTypeAfterAcquisition('rss', 'hackernews'), 'hackernews');
 assert.equal(legacyResourceTypeAfterAcquisition('pdf', 'web'), 'web');
+
+const legacyFilterCases = [
+	['no identity filters', {}, Object.keys(legacyMatrix).map((type) => ({ type, academic: 'irrelevant' }))],
+	['document kind', { kinds: ['document'] }, ['web', 'rss', 'hackernews', 'pdf'].map((type) => ({ type, academic: false }))],
+	['paper kind', { kinds: ['paper'] }, ['web', 'rss', 'hackernews', 'pdf'].map((type) => ({ type, academic: true }))],
+	['post kind', { kinds: ['post'] }, [{ type: 'twitter', academic: 'irrelevant' }]],
+	[
+		'null platform',
+		{ resourcePlatforms: [null] },
+		['web', 'rss', 'pdf', 'image', 'file'].map((type) => ({ type, academic: 'irrelevant' })),
+	],
+	['Hacker News platform', { resourcePlatforms: ['hackernews'] }, [{ type: 'hackernews', academic: 'irrelevant' }]],
+	['null-platform paper', { kinds: ['paper'], resourcePlatforms: [null] }, ['web', 'rss', 'pdf'].map((type) => ({ type, academic: true }))],
+	[
+		'all content identities',
+		{
+			kinds: ['document', 'post', 'video', 'paper'],
+			resourcePlatforms: [null, 'hackernews', 'twitter', 'youtube'],
+		},
+		['web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf'].map((type) => ({ type, academic: 'irrelevant' })),
+	],
+	['incompatible identity', { kinds: ['video'], resourcePlatforms: [null] }, []],
+	['empty kind filter', { kinds: [] }, []],
+];
+
+for (const [label, filters, expected] of legacyFilterCases) {
+	assert.deepEqual(legacyResourceIdentityFilterCases(filters), expected, `${label} legacy filter cases`);
+}
 
 const translationCases = [
 	['generic document', { kind: 'document', resourcePlatform: null, fileType: null }, true],
@@ -116,6 +145,7 @@ console.info({
 	legacyCases: Object.keys(legacyMatrix).length,
 	displayLabelCases: 4,
 	detectedPlatformIdentityCases: 4,
+	legacyFilterCases: legacyFilterCases.length,
 	legacyTypeCases: 3,
 	platformAcquisitionCases: platformAcquisitionCases.length,
 	pdfExtractionCases: 2,

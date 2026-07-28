@@ -13,7 +13,7 @@ import {
 } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
 import { type CoreDb, isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
-import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
+import { contentResourceIdentitySql, resourceDisplaySourceSql, resourceIdentityFilterSql } from '@db/resource-identity-sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 
@@ -370,23 +370,19 @@ function corpusEnrichedSql(): SQL {
 
 function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
 	return sql`${filters.effectiveAfter ? sql` AND ${recencySql()} >= ${filters.effectiveAfter}` : sql``}
-		${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
-		${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
-		${filters.kinds ? sql` AND r.kind = ANY(${textArraySql(filters.kinds)})` : sql``}
-		${resourcePlatformsSql(filters.resourcePlatforms)}
-		${filters.types ? sql` AND r.type = ANY(${textArraySql(filters.types)})` : sql``}
-		${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
-}
-
-function resourcePlatformsSql(resourcePlatforms: ResourcePlatform[] | undefined): SQL {
-	if (resourcePlatforms === undefined) return sql``;
-	const includesNull = resourcePlatforms.includes(null);
-	const nonNullPlatforms = resourcePlatforms.filter((platform): platform is Exclude<ResourcePlatform, null> => platform !== null);
-	return sql` AND (
-		${includesNull}
-		AND r.resource_platform IS NULL
-		OR r.resource_platform = ANY(${textArraySql(nonNullPlatforms)})
-	)`;
+			${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
+			${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
+			AND ${resourceIdentityFilterSql(
+				{
+					kind: sql`r.kind`,
+					platformMetadata: sql`r.platform_metadata`,
+					resourcePlatform: sql`r.resource_platform`,
+					type: sql`r.type`,
+				},
+				{ kinds: filters.kinds, resourcePlatforms: filters.resourcePlatforms },
+			)}
+			${filters.types ? sql` AND r.type = ANY(${textArraySql(filters.types)})` : sql``}
+			${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
 }
 
 function truncate(content: string | null | undefined, max: number): string {

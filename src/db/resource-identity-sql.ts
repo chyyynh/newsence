@@ -2,9 +2,12 @@ import {
 	CONTENT_RESOURCE_KINDS,
 	CONTENT_RESOURCE_TYPES,
 	legacyResourceIdentity,
+	legacyResourceIdentityFilterCases,
 	RESOURCE_KIND_DISPLAY_LABELS,
 	RESOURCE_ORIGINAL_CONTENT_TYPES,
 	RESOURCE_PLATFORM_DISPLAY_LABELS,
+	type ResourceIdentityFilters,
+	type ResourcePlatform,
 	resourceIdentityDisplayLabel,
 	TRANSLATABLE_RESOURCE_KINDS,
 } from '@core-shared/resource-types';
@@ -46,6 +49,66 @@ export function translatableResourceIdentitySql(fields: ResourceIdentitySqlField
 			AND ${fields.type} = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
 		)
 	)) IS TRUE`;
+}
+
+function resourceKindFilterSql(field: SQL, kinds: ResourceIdentityFilters['kinds']): SQL {
+	return kinds === undefined ? sql`TRUE` : sql`${field} = ANY(${textArraySql(kinds)})`;
+}
+
+function resourcePlatformFilterSql(field: SQL, resourcePlatforms: ResourceIdentityFilters['resourcePlatforms']): SQL {
+	if (resourcePlatforms === undefined) return sql`TRUE`;
+	const includesNull = resourcePlatforms.includes(null);
+	const nonNullPlatforms = resourcePlatforms.filter((platform): platform is Exclude<ResourcePlatform, null> => platform !== null);
+	if (includesNull && nonNullPlatforms.length > 0) {
+		return sql`(${field} IS NULL OR ${field} = ANY(${textArraySql(nonNullPlatforms)}))`;
+	}
+	if (includesNull) return sql`${field} IS NULL`;
+	if (nonNullPlatforms.length > 0) return sql`${field} = ANY(${textArraySql(nonNullPlatforms)})`;
+	return sql`FALSE`;
+}
+
+function semanticScholarAcademicEnrichmentSql(platformMetadata: SQL): SQL {
+	return sql`COALESCE(
+		jsonb_typeof(${platformMetadata} #> '{enrichments,academic}') = 'object'
+		AND ${platformMetadata} #>> '{enrichments,academic,source}' = 'semanticscholar',
+		FALSE
+	)`;
+}
+
+export function resourceIdentityFilterSql(
+	fields: ResourceIdentitySqlFields & { platformMetadata: SQL },
+	filters: ResourceIdentityFilters,
+): SQL {
+	if (filters.kinds === undefined && filters.resourcePlatforms === undefined) return sql`TRUE`;
+
+	const legacyCases = legacyResourceIdentityFilterCases(filters);
+	const academicIrrelevantTypes = legacyCases.filter((entry) => entry.academic === 'irrelevant').map((entry) => entry.type);
+	const academicRequiredTypes = legacyCases.filter((entry) => entry.academic === true).map((entry) => entry.type);
+	const academicExcludedTypes = legacyCases.filter((entry) => entry.academic === false).map((entry) => entry.type);
+	const hasAcademicEnrichment = semanticScholarAcademicEnrichmentSql(fields.platformMetadata);
+
+	return sql`(
+		(
+			${fields.kind} IS NOT NULL
+			AND ${resourceKindFilterSql(fields.kind, filters.kinds)}
+			AND ${resourcePlatformFilterSql(fields.resourcePlatform, filters.resourcePlatforms)}
+		)
+		OR (
+			${fields.kind} IS NULL
+			AND ${fields.resourcePlatform} IS NULL
+			AND (
+				${fields.type} = ANY(${textArraySql(academicIrrelevantTypes)})
+				OR (
+					${fields.type} = ANY(${textArraySql(academicRequiredTypes)})
+					AND ${hasAcademicEnrichment}
+				)
+				OR (
+					${fields.type} = ANY(${textArraySql(academicExcludedTypes)})
+					AND NOT (${hasAcademicEnrichment})
+				)
+			)
+		)
+	)`;
 }
 
 export function resourceDisplaySourceSql(
