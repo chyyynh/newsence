@@ -17,8 +17,7 @@
 		"typecheck": "pnpm cf-typegen && pnpm check:db-schema && pnpm check:resource-identity && tsc --noEmit",
 		"typecheck:types": "wrangler types --check --env-interface BaseCoreEnv",
 		"lint": "biome check .",
-		"lint:fix": "biome check --write .",
-		"repair:hn-pdf-representations": "node scripts/repair-hn-pdf-representations.mjs"
+		"lint:fix": "biome check --write ."
 	},
 	"dependencies": {
 		"@extractus/article-extractor": "^8.1.0",
