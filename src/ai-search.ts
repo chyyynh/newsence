@@ -318,6 +318,17 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	const kindMetadataReady = options.kinds?.length ? await searchIndexKindMetadataReady(env) : false;
 	const filters = searchFilters(options, kindMetadataReady);
 	if (filters === null) return [];
+	if (options.kinds?.length) {
+		console.info({
+			tag: 'AI_SEARCH',
+			msg: 'Corpus search metadata contract selected',
+			metadata_contract: kindMetadataReady ? 'native-kind' : 'legacy-type',
+			uses_kind_metadata: Object.hasOwn(filters ?? {}, 'kind'),
+			uses_type_metadata: Object.hasOwn(filters ?? {}, 'type'),
+			requested_kind_count: options.kinds.length,
+			requested_platform_count: options.resourcePlatforms?.length ?? 0,
+		});
+	}
 	const response = await env.AI_SEARCH.search({
 		query,
 		ai_search_options: {
