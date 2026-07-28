@@ -68,6 +68,9 @@ type ResourceStoreRow = {
 	scope: string | null;
 	enrichment_status: string;
 	published_date: Date | string | null;
+	scraped_date: Date | string | null;
+	updated_at: Date | string;
+	created_at: Date | string;
 	tags: string[];
 	keywords: string[];
 	platform_metadata: unknown;
@@ -302,6 +305,9 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 			rl.scope AS scope,
 			rl.enrichment_status AS enrichment_status,
 			rl.published_date AS published_date,
+			rl.scraped_date AS scraped_date,
+			rl.updated_at AS updated_at,
+			rl.created_at AS created_at,
 			rl.tags AS tags,
 			rl.keywords AS keywords,
 			rl.platform_metadata AS platform_metadata,
@@ -340,7 +346,13 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		type: parseResourceType(row.type),
 		scope: parseResourceScope(row.scope),
 		platform_metadata:
-			row.platform_metadata === null || row.platform_metadata === undefined ? undefined : platformMetadataValue(row.platform_metadata),
+			row.platform_metadata === null || row.platform_metadata === undefined
+				? undefined
+				: storedPlatformMetadataValue(
+						row.platform_metadata,
+						dateValue(row.scraped_date ?? row.updated_at ?? row.created_at, 'platform_metadata fallback date').toISOString(),
+						row.id,
+					),
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
@@ -826,12 +838,25 @@ function requiredString(value: unknown, field: string): string {
 	return text;
 }
 
-function platformMetadataValue(value: unknown): PlatformMetadata {
+function storedPlatformMetadataValue(value: unknown, fallbackFetchedAt: string, resourceId: string): PlatformMetadata {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error('Invalid platform_metadata: expected object');
 	}
 	const metadata = value as Record<string, unknown>;
-	requiredString(metadata.fetchedAt, 'platform_metadata.fetchedAt');
+	const fetchedAt = typeof metadata.fetchedAt === 'string' ? metadata.fetchedAt.trim() : '';
+	if (!fetchedAt) {
+		console.warn({
+			tag: 'RESOURCE',
+			msg: 'Normalizing legacy platform metadata without fetchedAt',
+			resource_id: resourceId,
+			fallback_fetched_at: fallbackFetchedAt,
+		});
+		return {
+			...metadata,
+			data: Object.hasOwn(metadata, 'data') ? metadata.data : null,
+			fetchedAt: fallbackFetchedAt,
+		} as PlatformMetadata;
+	}
 	if (!Object.hasOwn(metadata, 'data')) throw new Error('Invalid platform_metadata: missing data');
 	return value as PlatformMetadata;
 }
