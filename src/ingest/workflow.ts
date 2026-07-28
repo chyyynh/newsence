@@ -103,7 +103,6 @@ function shouldAcquireContent(
 	const needsPlatformAcquisition = needsResourcePlatformAcquisition({
 		platformData: resource.platform_metadata?.data,
 		resourcePlatform: resource.resource_platform,
-		type: resource.type,
 	});
 	const needsAcquisitionIdentity = !resource.source || !resource.platform_metadata;
 	return (

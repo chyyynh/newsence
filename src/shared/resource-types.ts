@@ -59,6 +59,12 @@ export const LEGACY_RESOURCE_IDENTITIES = {
 	file: { kind: 'file', resourcePlatform: null },
 } as const satisfies Readonly<Record<ResourceType, ResourceIdentity>>;
 
+const DETECTED_PLATFORM_RESOURCE_IDENTITIES = {
+	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
+	twitter: { kind: 'post', resourcePlatform: 'twitter' },
+	youtube: { kind: 'video', resourcePlatform: 'youtube' },
+} as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, ResourceIdentity>>;
+
 export const RESOURCE_KIND_DISPLAY_LABELS = {
 	document: 'Document',
 	post: 'Post',
@@ -112,12 +118,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function needsResourcePlatformAcquisition(input: {
-	platformData: unknown;
-	resourcePlatform: ResourcePlatform;
-	type: ResourceType;
-}): boolean {
-	return input.resourcePlatform !== null && (input.type !== input.resourcePlatform || !isRecord(input.platformData));
+export function needsResourcePlatformAcquisition(input: { platformData: unknown; resourcePlatform: ResourcePlatform }): boolean {
+	return input.resourcePlatform !== null && !isRecord(input.platformData);
 }
 
 export function resourceSourceSnapshotHash(platformMetadata: unknown): string | null {
@@ -160,7 +162,7 @@ export function resourceIdentityForDetectedPlatform(
 	resourcePlatform: Exclude<ResourcePlatform, null>,
 	hasAcademicEnrichment = false,
 ): ResourceIdentity {
-	return legacyResourceIdentity(resourcePlatform, hasAcademicEnrichment);
+	return resourceIdentityWithAcademic(DETECTED_PLATFORM_RESOURCE_IDENTITIES[resourcePlatform], hasAcademicEnrichment);
 }
 
 export function resourceIdentityWithAcademic(identity: ResourceIdentity, hasAcademicEnrichment: boolean): ResourceIdentity {

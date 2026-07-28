@@ -6,6 +6,7 @@ import {
 	legacyResourceTypeAfterAcquisition,
 	needsResourcePlatformAcquisition,
 	resourceIdentityDisplayLabel,
+	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
 } from '../src/shared/resource-types.ts';
 import { withPdfExtractionMetadata } from '../src/shared/types.ts';
@@ -61,12 +62,20 @@ assert.equal(detectResourcePlatform('https://youtu.be/dQw4w9WgXcQ'), 'youtube');
 assert.equal(detectResourcePlatform('https://news.ycombinator.com/item?id=12345678'), 'hackernews');
 assert.equal(detectResourcePlatform('https://example.com/article'), null);
 
+assert.deepEqual(resourceIdentityForDetectedPlatform('twitter'), { kind: 'post', resourcePlatform: 'twitter' });
+assert.deepEqual(resourceIdentityForDetectedPlatform('youtube'), { kind: 'video', resourcePlatform: 'youtube' });
+assert.deepEqual(resourceIdentityForDetectedPlatform('hackernews'), { kind: 'document', resourcePlatform: 'hackernews' });
+assert.deepEqual(resourceIdentityForDetectedPlatform('hackernews', true), {
+	kind: 'paper',
+	resourcePlatform: 'hackernews',
+});
+
 const platformAcquisitionCases = [
-	['RSS-stamped Twitter', { type: 'rss', resourcePlatform: 'twitter', platformData: null }, true],
-	['RSS-stamped YouTube', { type: 'rss', resourcePlatform: 'youtube', platformData: null }, true],
-	['RSS-stamped Hacker News', { type: 'rss', resourcePlatform: 'hackernews', platformData: null }, true],
-	['complete Twitter', { type: 'twitter', resourcePlatform: 'twitter', platformData: { tweetId: '123' } }, false],
-	['generic feed document', { type: 'rss', resourcePlatform: null, platformData: null }, false],
+	['pending Twitter', { resourcePlatform: 'twitter', platformData: null }, true],
+	['pending YouTube', { resourcePlatform: 'youtube', platformData: null }, true],
+	['pending Hacker News', { resourcePlatform: 'hackernews', platformData: null }, true],
+	['complete Twitter', { resourcePlatform: 'twitter', platformData: { tweetId: '123' } }, false],
+	['generic document', { resourcePlatform: null, platformData: null }, false],
 ];
 
 for (const [label, resource, expected] of platformAcquisitionCases) {
@@ -106,6 +115,7 @@ console.info({
 	event: 'resource_identity_smoke_passed',
 	legacyCases: Object.keys(legacyMatrix).length,
 	displayLabelCases: 4,
+	detectedPlatformIdentityCases: 4,
 	legacyTypeCases: 3,
 	platformAcquisitionCases: platformAcquisitionCases.length,
 	pdfExtractionCases: 2,
