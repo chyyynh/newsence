@@ -120,10 +120,16 @@ terminal identities, and publishes readiness only after the strict six-pair
 contract converges.
 
 One pre-existing v6 item remained in `running` for more than one hour even
-though its item log reported a successful seven-chunk reindex. After v2's first
-readiness observation reports exactly that one running item and enters its next
-settle sleep, validate the exact item/resource/Workflow/epoch checkpoint and
-request Cloudflare's official single-item `INDEX` sync:
+though its item log reported a successful seven-chunk reindex. The first
+non-namespace single-item PATCH returned the undocumented combination
+`success: true, result: null`, produced no new log or last-seen timestamp, and
+the next v2 readiness probe still observed the same item as running. Never
+repeat that request or treat its null result as a valid ItemSyncResponse.
+
+During v2's next settle sleep, validate the exact
+item/resource/Workflow/epoch checkpoint and make one final non-destructive sync
+through Cloudflare's canonical `default` namespace endpoint with
+`wait_for_completion: true`:
 
 ```sh
 pnpm -C workers/core-worker exec node \
@@ -139,17 +145,14 @@ pnpm -C workers/core-worker exec node \
 The apply command is fail-closed unless the item is still the pinned one-hour
 `running` item, the canonical database resource is unchanged and eligible,
 generation 4 is rebuilding at epoch 2, and the exact v2 graph has completed all
-17 first-round batches, its first readiness probe reports `32335 completed + 1
+17 first-round batches, its second readiness probe reports `32336 completed + 1
 running`, and its pinned subsequent settle sleep is unfinished. Cloudflare may
 report the graph itself as either `running` or `waiting` during that sleep; no
 other top-level state is accepted. Immediately before PATCH, the script repeats
-the item, Workflow, and database assertions. If the item advances by itself, do
-not override the rejection and do not sync another item.
-
-The successful PATCH response is an acknowledgement envelope with a null
-`result`; the script then GETs the exact pinned item and validates its identity,
-non-terminal-or-completed status, and absence of an error. Do not treat the null
-result as a failed sync or repeat the PATCH.
+the item, Workflow, and database assertions. It requires a non-null exact item
+response and then performs a bounded follow-up that must observe queued,
+completed, a newer last-seen timestamp, or a new item log. If the item advances
+by itself, do not override the rejection and do not sync another item.
 
 After completion, verify the exact Workflow graph and durable ready publication,
 then run the independent current-state rollout check:

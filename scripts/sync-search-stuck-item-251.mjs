@@ -50,6 +50,13 @@ function itemUrl(accountId, suffix = '') {
 	);
 }
 
+function namespaceItemUrl(accountId) {
+	return (
+		`https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/namespaces/${checkpoint.aiSearchNamespace}/instances/` +
+		`${checkpoint.aiSearchInstanceName}/items/${checkpoint.item.id}`
+	);
+}
+
 function assertPinnedItem(item, label) {
 	assert.equal(item.id, checkpoint.item.id, `${label} id`);
 	assert.equal(item.key, checkpoint.item.key, `${label} key`);
@@ -63,12 +70,48 @@ function assertPinnedItem(item, label) {
 	assert.ok(Date.now() - Date.parse(normalizedLastSeenAt) > 60 * 60 * 1000, `${label} has been running for more than one hour`);
 }
 
-function assertSyncedItem(item) {
-	assert.equal(item.id, checkpoint.item.id, 'synced item id');
-	assert.equal(item.key, checkpoint.item.key, 'synced item key');
-	assert.equal(item.source_id, checkpoint.item.sourceId, 'synced item source');
-	assert.ok(['queued', 'running', 'completed'].includes(item.status), `synced item status ${item.status}`);
-	assert.equal(item.error ?? null, null, 'synced item error');
+function assertSyncedItem(item, label) {
+	assert.ok(item && typeof item === 'object', `${label} response item`);
+	assert.equal(item.id, checkpoint.item.id, `${label} id`);
+	assert.equal(item.key, checkpoint.item.key, `${label} key`);
+	assert.equal(item.source_id, checkpoint.item.sourceId, `${label} source`);
+	assert.ok(['queued', 'running', 'completed'].includes(item.status), `${label} status ${item.status}`);
+	assert.equal(item.error ?? null, null, `${label} error`);
+}
+
+function parseAiSearchTimestamp(value) {
+	if (typeof value !== 'string') return Number.NaN;
+	return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`);
+}
+
+function syncAdvanced(item, logs) {
+	if (item.status === 'queued' || item.status === 'completed') return true;
+	const beforeLastSeen = parseAiSearchTimestamp(checkpoint.item.lastSeenAt);
+	const currentLastSeen = parseAiSearchTimestamp(item.last_seen_at);
+	if (Number.isFinite(currentLastSeen) && currentLastSeen > beforeLastSeen) return true;
+	return logs.some((log) => log.timestamp !== checkpoint.itemLog.timestamp);
+}
+
+async function waitForSyncAdvancement(accountId, aiSearchToken) {
+	let observedItem = null;
+	let observedLogs = null;
+	for (let attempt = 0; attempt < 4; attempt++) {
+		if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 10_000));
+		[observedItem, observedLogs] = await Promise.all([
+			cloudflareApi(itemUrl(accountId), aiSearchToken, `synced item observation ${attempt}`),
+			cloudflareApi(itemUrl(accountId, '/logs'), aiSearchToken, `synced item logs ${attempt}`),
+		]);
+		assertSyncedItem(observedItem, `synced item observation ${attempt}`);
+		assert.ok(Array.isArray(observedLogs), `synced item logs ${attempt}`);
+		if (syncAdvanced(observedItem, observedLogs)) return { item: observedItem, logs: observedLogs };
+	}
+	assert.fail(
+		`namespace item sync did not advance after bounded observation: ${JSON.stringify({
+			lastSeenAt: observedItem?.last_seen_at ?? null,
+			logCount: observedLogs?.length ?? null,
+			status: observedItem?.status ?? null,
+		})}`,
+	);
 }
 
 function assertPinnedWorkflow(instance) {
@@ -91,10 +134,12 @@ function assertPinnedWorkflow(instance) {
 		Array.from({ length: 17 }, (_, index) => index),
 		'repair Workflow initial batch indexes',
 	);
-	const initialWaitStep = instance.steps.filter((step) => step.name === 'wait-search-index-repair-0-1');
-	assert.equal(initialWaitStep.length, 1, 'repair Workflow initial settle step count');
-	assert.equal(initialWaitStep[0]?.type, 'sleep', 'repair Workflow initial settle step type');
-	assert.equal(initialWaitStep[0]?.finished, true, 'repair Workflow initial settle step finished');
+	for (const completedWaitStepName of checkpoint.repairCompletedWaitStepNames) {
+		const completedWaitStep = instance.steps.filter((step) => step.name === completedWaitStepName);
+		assert.equal(completedWaitStep.length, 1, `repair Workflow completed settle step ${completedWaitStepName} count`);
+		assert.equal(completedWaitStep[0]?.type, 'sleep', `repair Workflow completed settle step ${completedWaitStepName} type`);
+		assert.equal(completedWaitStep[0]?.finished, true, `repair Workflow completed settle step ${completedWaitStepName} finished`);
+	}
 	const readinessStep = instance.steps.filter((step) => step.name === checkpoint.repairReadinessStepName);
 	assert.equal(readinessStep.length, 1, 'repair Workflow readiness step count');
 	assert.equal(readinessStep[0]?.type, 'step', 'repair Workflow readiness step type');
@@ -215,6 +260,7 @@ assertPinnedWorkflow(workflow);
 const { durableState } = await loadAndAssertDatabaseCheckpoint();
 
 let synced = null;
+let syncResponse = null;
 if (APPLY) {
 	const [currentItem, currentWorkflow] = await Promise.all([
 		cloudflareApi(itemUrl(accountId), aiSearchToken, 'stuck item mutation recheck'),
@@ -223,13 +269,12 @@ if (APPLY) {
 	]);
 	assertPinnedItem(currentItem, 'stuck item mutation recheck');
 	assertPinnedWorkflow(currentWorkflow);
-	const acknowledgement = await cloudflareApi(itemUrl(accountId), aiSearchToken, 'stuck item sync', {
-		body: JSON.stringify({ next_action: 'INDEX' }),
+	syncResponse = await cloudflareApi(namespaceItemUrl(accountId), aiSearchToken, 'namespace stuck item sync', {
+		body: JSON.stringify({ next_action: 'INDEX', wait_for_completion: true }),
 		method: 'PATCH',
 	});
-	assert.equal(acknowledgement, null, 'stuck item sync acknowledgement');
-	synced = await cloudflareApi(itemUrl(accountId), aiSearchToken, 'synced item observation');
-	assertSyncedItem(synced);
+	assertSyncedItem(syncResponse, 'namespace stuck item sync');
+	synced = await waitForSyncAdvancement(accountId, aiSearchToken);
 }
 
 process.stdout.write(
@@ -252,6 +297,7 @@ process.stdout.write(
 				status: workflow.status,
 				waitStepName: checkpoint.repairWaitStepName,
 			},
+			syncResponse,
 			synced,
 		},
 		null,
