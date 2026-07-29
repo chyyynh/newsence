@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const WORKFLOW_NAME = 'newsence-resource-processing';
-const EXPECTED_VERSION_ID = '1d8925fc-7e09-40a0-9fe8-2292779ae811';
+const EXPECTED_VERSION_ID = 'eadd2de4-9c68-4b02-9066-c62185172222';
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const RAW_INSTANCE_ID = process.env.RESOURCE_PROCESSING_CANARY_INSTANCE_ID;
@@ -25,12 +25,12 @@ const CANARIES = {
 		resourcePlatform: 'twitter',
 	},
 	'youtube-description': {
-		instanceId: 'issue245-canary-youtube-description-0fbbd6c4-v1',
+		instanceId: 'issue245-canary-youtube-description-e413960f-v1',
 		kind: 'video',
 		legacyType: 'youtube',
-		resourceId: '0fbbd6c4-bbb4-467a-9242-74172502c3d9',
+		resourceId: 'e413960f-1d87-4b9d-9c33-2ae67ea19dac',
 		resourcePlatform: 'youtube',
-		videoId: 'OcTMwjqje5Q',
+		videoId: '657wlbtrzG8',
 	},
 };
 

@@ -38,19 +38,19 @@ const FIXTURES = {
 		},
 	},
 	youtubeDescription: {
-		id: '0fbbd6c4-bbb4-467a-9242-74172502c3d9',
+		id: 'e413960f-1d87-4b9d-9c33-2ae67ea19dac',
 		type: 'youtube',
 		kind: 'video',
 		resourcePlatform: 'youtube',
 		scope: 'corpus',
-		sourceId: '5abfaa91-9f1b-4005-b769-542883e58aad',
-		url: 'https://youtube.com/watch?v=OcTMwjqje5Q',
-		normalizedUrl: 'https://youtube.com/watch?v=OcTMwjqje5Q',
+		sourceId: '8d54d028-4846-4d83-8d2a-9d2fff834e58',
+		url: 'https://youtube.com/watch?v=657wlbtrzG8',
+		normalizedUrl: 'https://youtube.com/watch?v=657wlbtrzG8',
 		storageKey: null,
 		fileType: null,
-		videoId: 'OcTMwjqje5Q',
+		videoId: '657wlbtrzG8',
 		translationCount: 2,
-		translationMd5: '4800b4ba1aef684be7a3013b01e65fde',
+		translationMd5: '59f70fba2cbc657f182ee1e1e55cea4b',
 		relationships: {
 			saveCount: 1,
 			savesMd5: '78bb24b808f44859fe16b2ef4f954b45',
@@ -255,7 +255,7 @@ try {
 assert.equal(state.index_name, STATE_INDEX_NAME, 'search generation index name');
 assert.equal(state.generation, GENERATION, 'search generation');
 assert.equal(state.generation_key, GENERATION_KEY, 'search generation key');
-assert.ok([2, 3].includes(Number(state.rebuild_epoch)), 'search generation canary epoch');
+assert.equal(Number(state.rebuild_epoch), 4, 'search generation canary epoch');
 assert.equal(state.status, 'ready', `${PHASE}-canary search generation status`);
 assert.ok(state.ready_at, `${PHASE}-canary search generation ready timestamp`);
 
@@ -285,7 +285,7 @@ assert.equal(youtubeDescription.translation_count, FIXTURES.youtubeDescription.t
 assert.equal(youtubeDescription.translation_md5, FIXTURES.youtubeDescription.translationMd5, 'YouTube description translation fingerprint');
 assert.ok(transcriptRows.length <= 1, 'YouTube description transcript row count');
 if (PHASE === 'before') {
-	assert.equal(youtubeDescription.description_length, 1923, 'YouTube baseline description length');
+	assert.equal(youtubeDescription.description_length, 304, 'YouTube baseline description length');
 	assert.equal(transcriptRows.length, 0, 'YouTube baseline transcript is absent');
 } else {
 	assert.ok(youtubeDescription.description_length > 0, 'YouTube description remains nonempty');
