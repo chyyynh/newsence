@@ -182,15 +182,17 @@ the Workflow verifies its runtime `version_metadata` binding against that
 Worker version before its read-only preflight.
 
 `--trigger` performs the last item/database/deployment checks and the instance
-POST in one process. The Workflow stops at a `waitForEvent` gate before its
-mutation. The operator sends the approval event only after the create response
-reports the pinned Workflow version, the read-only preflight confirms the
-pinned Worker version, the instance reaches that gate, and a final deployment
-check still finds the single pinned Workflow and Worker versions. A mismatched
-or concurrently redeployed version is terminated without approval. Termination
-is cleanup, not the safety boundary; withholding the approval event is the
-boundary. Run this while no other operator has deployment authority for the
-dedicated one-shot Worker.
+creation in one process. Its write calls use the locally authenticated Wrangler
+CLI; the scoped Workflow token remains read-only for the independent fences.
+The Workflow stops at a `waitForEvent` gate before its mutation. The operator
+sends the approval event only after the created instance reports the pinned
+Workflow version, the read-only preflight confirms the pinned Worker version,
+the instance reaches that gate, and a final deployment check still finds the
+single pinned Workflow and Worker versions. A mismatched or concurrently
+redeployed version is terminated without approval. Termination is cleanup, not
+the safety boundary; withholding the approval event is the boundary. Run this
+while no other operator has deployment authority for the dedicated one-shot
+Worker.
 
 If any preflight fence moves, do not deploy or trigger. Never retry an
 ambiguous trigger/approval request: inspect the fixed instance ID first. If

@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import pg from 'pg';
 import checkpoint from '../search-stuck-item-251.json' with { type: 'json' };
 
+const execFileAsync = promisify(execFile);
+const CORE_WORKER_DIRECTORY = fileURLToPath(new URL('../', import.meta.url));
+const WRANGLER_BINARY = fileURLToPath(new URL('../node_modules/.bin/wrangler', import.meta.url));
+const WRANGLER_CONFIG = 'wrangler.stuck-item-recovery-251.jsonc';
 const VERIFY_COMPLETE = process.argv.includes('--verify-complete');
 const CAPTURE_VERSION = process.argv.includes('--capture-version');
 const TRIGGER = process.argv.includes('--trigger');
@@ -40,19 +47,17 @@ async function cloudflareApi(url, token, label) {
 	return payload.result;
 }
 
-async function cloudflareMutation(url, token, label, method, body) {
-	const response = await fetch(url, {
-		body: JSON.stringify(body),
-		headers: {
-			Authorization: `Bearer ${token}`,
-			'Content-Type': 'application/json',
+async function wranglerMutation(arguments_, label) {
+	const result = await execFileAsync(WRANGLER_BINARY, [...arguments_, '--config', WRANGLER_CONFIG], {
+		cwd: CORE_WORKER_DIRECTORY,
+		env: {
+			...process.env,
+			WRANGLER_LOG_PATH: '/tmp/newsence-stuck-item-recovery-251-operator.log',
 		},
-		method,
+		maxBuffer: 1024 * 1024,
+		timeout: 60_000,
 	});
-	const payload = await response.json();
-	assert.equal(response.ok, true, `${label} HTTP ${response.status}: ${JSON.stringify(payload.errors ?? [])}`);
-	assert.equal(payload.success, true, `${label} API`);
-	return payload.result;
+	return { label, stderr: result.stderr.trim(), stdout: result.stdout.trim() };
 }
 
 function recoveryInstanceUrl(accountId) {
@@ -60,18 +65,6 @@ function recoveryInstanceUrl(accountId) {
 		`https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/${checkpoint.recovery.workflowName}/instances/` +
 		checkpoint.recovery.instanceId
 	);
-}
-
-function recoveryInstancesUrl(accountId) {
-	return `https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/${checkpoint.recovery.workflowName}/instances`;
-}
-
-function recoveryStatusUrl(accountId) {
-	return `${recoveryInstanceUrl(accountId)}/status`;
-}
-
-function recoveryApprovalEventUrl(accountId) {
-	return `${recoveryInstanceUrl(accountId)}/events/${checkpoint.recovery.approvalEventType}`;
 }
 
 function recoveryWorkflowUrl(accountId) {
@@ -379,10 +372,7 @@ function sleep(durationMs) {
 }
 
 async function terminateRecoveryInstance(accountId, workflowsToken, label) {
-	await cloudflareMutation(recoveryStatusUrl(accountId), workflowsToken, label, 'PATCH', {
-		rollback: false,
-		status: 'terminate',
-	});
+	await wranglerMutation(['workflows', 'instances', 'terminate', checkpoint.recovery.workflowName, checkpoint.recovery.instanceId], label);
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
 		const instance = await cloudflareApi(recoveryInstanceUrl(accountId), workflowsToken, `${label} confirmation`);
@@ -393,24 +383,21 @@ async function terminateRecoveryInstance(accountId, workflowsToken, label) {
 	throw new Error(`${label} did not reach terminated within 30 seconds`);
 }
 
-async function createRecoveryInstance(accountId, workflowsToken, deployment) {
-	const result = await cloudflareMutation(recoveryInstancesUrl(accountId), workflowsToken, 'recovery Workflow trigger', 'POST', {
-		instance_id: checkpoint.recovery.instanceId,
-		params: {
-			approvalToken: checkpoint.recovery.approvalToken,
-			selectedWorkerVersionId: checkpoint.recovery.workerVersionId,
-			selectedWorkflowVersionId: checkpoint.recovery.versionId,
-		},
+async function createRecoveryInstance() {
+	const params = JSON.stringify({
+		approvalToken: checkpoint.recovery.approvalToken,
+		selectedWorkerVersionId: checkpoint.recovery.workerVersionId,
+		selectedWorkflowVersionId: checkpoint.recovery.versionId,
 	});
-	assert.equal(result.id, checkpoint.recovery.instanceId, 'created recovery instance id');
-	assert.equal(result.workflow_id, deployment.workflow.id, 'created recovery Workflow id');
-	assert.equal(result.trigger_source, 'api', 'created recovery trigger source');
-	if (result.version_id !== checkpoint.recovery.versionId) {
-		await terminateRecoveryInstance(accountId, workflowsToken, 'mismatched recovery Workflow termination');
-		assert.equal(result.version_id, checkpoint.recovery.versionId, 'created recovery instance version');
-	}
-	assert.ok(['queued', 'running', 'waiting'].includes(result.status), `created recovery status ${result.status}`);
-	return result;
+	const result = await wranglerMutation(
+		['workflows', 'trigger', checkpoint.recovery.workflowName, params, '--id', checkpoint.recovery.instanceId],
+		'recovery Workflow trigger',
+	);
+	assert.match(result.stdout, /has been queued successfully/, 'recovery Workflow trigger acknowledgement');
+	return {
+		id: checkpoint.recovery.instanceId,
+		status: 'queued',
+	};
 }
 
 function optionalExactStep(steps, pattern, label) {
@@ -448,7 +435,8 @@ async function waitForRecoveryApprovalGate(accountId, workflowsToken) {
 }
 
 async function triggerPinnedRecovery(accountId, workflowsToken, deployment) {
-	const created = await createRecoveryInstance(accountId, workflowsToken, deployment);
+	assert.equal(deployment.workflow.name, checkpoint.recovery.workflowName, 'trigger pinned Workflow name');
+	const created = await createRecoveryInstance();
 	let gate;
 	try {
 		gate = await waitForRecoveryApprovalGate(accountId, workflowsToken);
@@ -464,7 +452,21 @@ async function triggerPinnedRecovery(accountId, workflowsToken, deployment) {
 		selectedWorkerVersionId: checkpoint.recovery.workerVersionId,
 		selectedWorkflowVersionId: checkpoint.recovery.versionId,
 	};
-	await cloudflareMutation(recoveryApprovalEventUrl(accountId), workflowsToken, 'recovery Workflow approval', 'POST', approval);
+	const approvalResult = await wranglerMutation(
+		[
+			'workflows',
+			'instances',
+			'send-event',
+			checkpoint.recovery.workflowName,
+			checkpoint.recovery.instanceId,
+			'--type',
+			checkpoint.recovery.approvalEventType,
+			'--payload',
+			JSON.stringify(approval),
+		],
+		'recovery Workflow approval',
+	);
+	assert.match(approvalResult.stdout, /was sent to the instance/, 'recovery Workflow approval acknowledgement');
 	return { approval, created, gate: gate.instance };
 }
 
