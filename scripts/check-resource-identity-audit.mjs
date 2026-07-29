@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const WORKFLOW_NAME = 'newsence-resource-identity-backfill';
-const EXPECTED_VERSION_ID = 'c6563784-422f-4b60-9236-68c9b7cf5d3f';
+const EXPECTED_VERSION_ID = 'd0b635ac-0790-4129-ac8d-11b44a84a51a';
 const INSTANCE_ID = process.env.RESOURCE_IDENTITY_AUDIT_INSTANCE_ID?.trim();
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
