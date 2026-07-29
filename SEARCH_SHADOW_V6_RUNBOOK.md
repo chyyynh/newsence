@@ -146,6 +146,11 @@ other top-level state is accepted. Immediately before PATCH, the script repeats
 the item, Workflow, and database assertions. If the item advances by itself, do
 not override the rejection and do not sync another item.
 
+The successful PATCH response is an acknowledgement envelope with a null
+`result`; the script then GETs the exact pinned item and validates its identity,
+non-terminal-or-completed status, and absence of an error. Do not treat the null
+result as a failed sync or repeat the PATCH.
+
 After completion, verify the exact Workflow graph and durable ready publication,
 then run the independent current-state rollout check:
 

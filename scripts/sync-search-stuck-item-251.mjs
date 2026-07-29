@@ -63,6 +63,14 @@ function assertPinnedItem(item, label) {
 	assert.ok(Date.now() - Date.parse(normalizedLastSeenAt) > 60 * 60 * 1000, `${label} has been running for more than one hour`);
 }
 
+function assertSyncedItem(item) {
+	assert.equal(item.id, checkpoint.item.id, 'synced item id');
+	assert.equal(item.key, checkpoint.item.key, 'synced item key');
+	assert.equal(item.source_id, checkpoint.item.sourceId, 'synced item source');
+	assert.ok(['queued', 'running', 'completed'].includes(item.status), `synced item status ${item.status}`);
+	assert.equal(item.error ?? null, null, 'synced item error');
+}
+
 function assertPinnedWorkflow(instance) {
 	assert.ok(checkpoint.repairWorkflowStatuses.includes(instance.status), `repair Workflow status ${instance.status}`);
 	assert.equal(instance.success ?? null, null, 'repair Workflow success');
@@ -215,15 +223,13 @@ if (APPLY) {
 	]);
 	assertPinnedItem(currentItem, 'stuck item mutation recheck');
 	assertPinnedWorkflow(currentWorkflow);
-	synced = await cloudflareApi(itemUrl(accountId), aiSearchToken, 'stuck item sync', {
+	const acknowledgement = await cloudflareApi(itemUrl(accountId), aiSearchToken, 'stuck item sync', {
 		body: JSON.stringify({ next_action: 'INDEX' }),
 		method: 'PATCH',
 	});
-	assert.equal(synced.id, checkpoint.item.id, 'synced item id');
-	assert.equal(synced.key, checkpoint.item.key, 'synced item key');
-	assert.equal(synced.source_id, checkpoint.item.sourceId, 'synced item source');
-	assert.ok(['queued', 'running', 'completed'].includes(synced.status), `synced item status ${synced.status}`);
-	assert.equal(synced.error ?? null, null, 'synced item error');
+	assert.equal(acknowledgement, null, 'stuck item sync acknowledgement');
+	synced = await cloudflareApi(itemUrl(accountId), aiSearchToken, 'synced item observation');
+	assertSyncedItem(synced);
 }
 
 process.stdout.write(
