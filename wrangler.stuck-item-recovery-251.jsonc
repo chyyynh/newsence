@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "newsence-search-stuck-item-recovery-251",
+	"name": "newsence-search-stuck-item-recovery-251-v2",
 	"main": "src/search-stuck-item-recovery-251-entry.ts",
 	"workers_dev": false,
 	"routes": [],
@@ -22,7 +22,7 @@
 	"workflows": [
 		{
 			"binding": "SEARCH_INDEX_STUCK_ITEM_RECOVERY_251_WORKFLOW",
-			"name": "newsence-search-index-stuck-item-recovery-251",
+			"name": "newsence-search-index-stuck-item-recovery-251-v2",
 			"class_name": "SearchIndexStuckItem251RecoveryWorkflow"
 		}
 	],

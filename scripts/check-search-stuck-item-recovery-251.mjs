@@ -100,7 +100,7 @@ function aiSearchItemsUrl(accountId) {
 }
 
 async function validateConfig() {
-	assert.equal(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251', 'recovery approval event type');
+	assert.equal(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251-v2', 'recovery approval event type');
 	assert.match(checkpoint.recovery.approvalToken, /^[0-9a-f-]{36}$/, 'recovery approval token');
 	assert.equal(checkpoint.recovery.approvalTimeoutMs, 300_000, 'recovery approval timeout');
 	if (checkpoint.recovery.versionId !== null) {
@@ -420,7 +420,9 @@ async function waitForRecoveryApprovalGate(accountId, workflowsToken) {
 		);
 		const preflightStep = optionalExactStep(instance.steps, /^verify-stuck-item-recovery-checkpoint-\d+$/, 'recovery approval preflight');
 		const approvalStep = optionalExactStep(instance.steps, /^wait-for-stuck-item-recovery-approval-\d+$/, 'recovery approval wait');
-		if (preflightStep && approvalStep && instance.status === 'waiting') {
+		if (preflightStep && approvalStep) {
+			assert.equal(approvalStep.type, 'waitForEvent', 'recovery approval gate step type');
+			assert.equal(approvalStep.success ?? null, null, 'recovery approval gate remains unresolved');
 			assert.equal(preflightStep.success, true, 'recovery approval preflight success');
 			const preflight = parseStepOutput(preflightStep, 'recovery approval preflight');
 			assert.match(preflight.canonical?.contentSha256 ?? '', /^[0-9a-f]{64}$/, 'recovery approval content digest');

@@ -132,6 +132,18 @@ recovery is exhausted; PUT-by-key is intentionally skipped because it supplies
 no new bytes or documented stronger reset semantics. The old sync script is
 read-only and rejects `--apply`.
 
+The first isolated admission attempt
+`newsence-search-index-stuck-item-recovery-251` completed its canonical
+read-only preflight, then correctly stopped at `waitForEvent`. The operator
+mistakenly required the instance's top-level status to be `waiting`; Cloudflare
+reported the event step while retaining a different non-terminal top-level
+status. No approval event was sent, no mutation step started, the fixed v1
+instance was terminated, and the item ID/status/last-seen/log remained exact.
+That Worker/Workflow is never restarted or redeployed. Its immutable evidence
+lives in `recoveryHistory`; the active checkpoint uses new `-v2` physical
+Worker, Workflow, and instance names and recognizes the unresolved
+`waitForEvent` step directly.
+
 Recover through a separate one-shot Worker so the active repair Worker and its
 pinned v2 graph are never redeployed. The recovery Worker has no route,
 workers.dev hostname, cron, R2, or service binding. It can reach only v6 AI
