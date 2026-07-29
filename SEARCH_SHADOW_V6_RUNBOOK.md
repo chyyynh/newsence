@@ -126,36 +126,81 @@ non-namespace single-item PATCH returned the undocumented combination
 the next v2 readiness probe still observed the same item as running. Never
 repeat that request or treat its null result as a valid ItemSyncResponse.
 
-During v2's next settle sleep, validate the exact
-item/resource/Workflow/epoch checkpoint and make one final non-destructive sync
-through Cloudflare's canonical `default` namespace endpoint with
-`wait_for_completion: true`:
+The one canonical `default` namespace PATCH with `wait_for_completion: true`
+also returned `result: null` immediately and produced no progress. REST PATCH
+recovery is exhausted; PUT-by-key is intentionally skipped because it supplies
+no new bytes or documented stronger reset semantics. The old sync script is
+read-only and rejects `--apply`.
+
+Recover through a separate one-shot Worker so the active repair Worker and its
+pinned v2 graph are never redeployed. The recovery Worker has no route,
+workers.dev hostname, cron, R2, or service binding. It can reach only v6 AI
+Search and the production database through Hyperdrive. Its single mutation
+step has retries disabled, rechecks the exact epoch/item/resource/translation
+checkpoint, rebuilds the canonical Markdown and five metadata fields through
+the product serializer, then uses the documented same-key `uploadAndPoll`
+upsert without deleting the searchable item:
 
 ```sh
 pnpm -C workers/core-worker exec node \
   --env-file="$PWD/web-tanstack/.env.local" \
-  scripts/sync-search-stuck-item-251.mjs
+  scripts/check-search-stuck-item-recovery-251.mjs
+
+pnpm -C workers/core-worker typecheck
+pnpm -C workers/core-worker lint
+pnpm -C workers/core-worker exec wrangler deploy \
+  --config wrangler.stuck-item-recovery-251.jsonc \
+  --dry-run
+
+pnpm -C workers/core-worker run deploy:search-stuck-item-recovery-251
 
 pnpm -C workers/core-worker exec node \
   --env-file="$PWD/web-tanstack/.env.local" \
-  scripts/sync-search-stuck-item-251.mjs \
-  --apply
+  scripts/check-search-stuck-item-recovery-251.mjs \
+  --capture-version
+
+# Copy the discovered Workflow versionId and workerVersionId into the matching
+# recovery fields in search-stuck-item-251.json, then commit and push that
+# exact checkpoint. Never redeploy this one-shot Worker after capture.
+
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/check-search-stuck-item-recovery-251.mjs \
+  --trigger
+
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/check-search-stuck-item-recovery-251.mjs \
+  --verify-complete
 ```
 
-The apply command is fail-closed unless the item is still the pinned one-hour
-`running` item, the canonical database resource is unchanged and eligible,
-generation 4 is rebuilding at epoch 2, and the exact v2 graph has completed all
-17 first-round batches, its second readiness probe reports `32336 completed + 1
-running`, and its pinned subsequent settle sleep is unfinished. Cloudflare may
-report the graph itself as either `running` or `waiting` during that sleep; no
-other top-level state is accepted. Immediately before PATCH, the script repeats
-the item, Workflow, and database assertions. It requires a non-null exact item
-response and then performs a bounded follow-up that must observe queued,
-completed, a newer last-seen timestamp, or a new item log. If the item advances
-by itself, do not override the rejection and do not sync another item.
+The pre-deploy check requires the dedicated Workflow to be absent. The capture
+check requires it to have exactly one deployed version; the committed
+checkpoint and every later preflight require that exact version to remain the
+only version. The same capture also pins the sole 100% Worker deployment, and
+the Workflow verifies its runtime `version_metadata` binding against that
+Worker version before its read-only preflight.
 
-After completion, verify the exact Workflow graph and durable ready publication,
-then run the independent current-state rollout check:
+`--trigger` performs the last item/database/deployment checks and the instance
+POST in one process. The Workflow stops at a `waitForEvent` gate before its
+mutation. The operator sends the approval event only after the create response
+reports the pinned Workflow version, the read-only preflight confirms the
+pinned Worker version, the instance reaches that gate, and a final deployment
+check still finds the single pinned Workflow and Worker versions. A mismatched
+or concurrently redeployed version is terminated without approval. Termination
+is cleanup, not the safety boundary; withholding the approval event is the
+boundary. Run this while no other operator has deployment authority for the
+dedicated one-shot Worker.
+
+If any preflight fence moves, do not deploy or trigger. Never retry an
+ambiguous trigger/approval request: inspect the fixed instance ID first. If
+`uploadAndPoll` does not return the exact completed item within four minutes,
+its Workflow errors without retrying the upsert; inspect the item before
+considering the separately designed delete/re-upload last resort.
+
+After recovery completes, let v2 observe the completed item and publish durable
+readiness. Then verify the exact repair graph and run the independent strict
+current-state rollout check:
 
 ```sh
 pnpm -C workers/core-worker exec node \

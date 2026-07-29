@@ -54,7 +54,7 @@ type CorpusTranslationRow = {
 	keywords: string[] | null;
 };
 
-type CorpusDocument = {
+export type CorpusDocument = {
 	id: string;
 	source_id: string | null;
 	kind: string;
@@ -81,7 +81,7 @@ type CorpusSearchOptions = {
 	sourceIds?: readonly string[];
 };
 
-function itemKey(id: string): string {
+export function itemKey(id: string): string {
 	return `${ITEM_PREFIX}${id}${ITEM_SUFFIX}`;
 }
 
@@ -137,7 +137,7 @@ function serializeTranslation(translation: CorpusTranslationRow, originalLang: s
 		.join('\n\n');
 }
 
-function serializeDocument(row: CorpusDocument): string {
+export function serializeDocument(row: CorpusDocument): string {
 	const original = row.translations.find((translation) => translation.lang === row.original_lang);
 	if (!original) throw new Error(`AI Search document ${row.id} is missing its ${row.original_lang} translation`);
 	const title = requiredDocumentText(original.title, 'title', row.id);
@@ -200,11 +200,11 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 	);
 }
 
-async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocument | null> {
+export async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocument | null> {
 	return (await loadCorpusDocuments(db, [resourceId]))[0] ?? null;
 }
 
-function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
+export function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	const effectiveAt = documentEffectiveAt(document);
 	const identity = corpusDocumentIdentity(document);
 	return {
@@ -948,7 +948,7 @@ function normalizedCustomMetadata(
 		.sort((left, right) => left.field_name.localeCompare(right.field_name));
 }
 
-function canonicalSearchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
+export function canonicalSearchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
 	return (
 		info.index_method?.vector === true &&
 		info.index_method.keyword === true &&

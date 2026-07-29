@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import pg from 'pg';
 import checkpoint from '../search-stuck-item-251.json' with { type: 'json' };
 
-const APPLY = process.argv.includes('--apply');
-const ALLOWED_ARGUMENTS = new Set(['--apply']);
+assert.equal(
+	process.argv.includes('--apply'),
+	false,
+	'REST item sync attempts are exhausted; use the isolated stuck-item recovery Workflow',
+);
+const APPLY = false;
+const ALLOWED_ARGUMENTS = new Set();
 assert.deepEqual(
 	process.argv.slice(2).filter((argument) => !ALLOWED_ARGUMENTS.has(argument)),
 	[],
