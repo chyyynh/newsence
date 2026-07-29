@@ -1,22 +1,27 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const WORKFLOW_NAME = 'newsence-search-index-rebuild';
 const DEFAULT_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind';
 const RESUME_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-resume-v1';
-const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v2';
+const RECOVERY_SOURCE_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v2';
+const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v3';
 const RESUME_VERSION_ID = '94064547-549b-4d1e-adb0-893c5f232792';
+const RECOVERY_SOURCE_VERSION_ID = '79976d47-7a3e-43f4-9aad-03ee2e93bae3';
 const READINESS_VERSION_ID = 'e0445ff4-222f-4e54-b6a5-1bdd95d2476f';
 const RESUME_STARTED_AT = '2026-07-28T05:31:32.516Z';
-const READINESS_CHECKPOINT_KEY = 'canonical-3-kind-resume-v1-readiness-timeout';
+const READINESS_CHECKPOINT_KEY = 'canonical-3-kind-readiness-v2-null-item-result';
 const READINESS_TIMEOUT_ERROR_PREFIX = 'AI Search index did not become ready:';
+const RECOVERY_SOURCE_ERROR_PREFIX = "Cannot read properties of null (reading 'status')";
 const READINESS_INITIAL_REPAIR_DIGEST = '710d51c0b740233a3634ab8e1b22e1d74f9dfc0c5954d303b8fcf2e717ce9c21';
 const READINESS_MAX_REPAIR_ROUNDS = 3;
 const RESUME_REBUILD_EPOCH = 2;
-const READINESS_REBUILD_EPOCH = 3;
+const RECOVERY_SOURCE_REBUILD_EPOCH = 3;
+const READINESS_REBUILD_EPOCH = 4;
 const RESUME_FINAL_READINESS_ATTEMPT = 35;
 const RESUME_TERMINAL_EXPECTED = {
 	total: 32_223,
@@ -38,35 +43,92 @@ const RESUME_TERMINAL_OWNED_STATUSES = {
 const INSTANCE_ID = process.env.SEARCH_REBUILD_INSTANCE_ID?.trim() || DEFAULT_INSTANCE_ID;
 const ALLOW_IN_PROGRESS = process.argv.includes('--allow-in-progress');
 const EXPECT_READINESS_TIMEOUT = process.argv.includes('--expect-readiness-timeout');
+const EXPECT_REPAIR_SOURCE_FAILURE = process.argv.includes('--expect-repair-source-failure');
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const NON_FAILURE_STATUSES = new Set(['queued', 'running', 'waiting', 'complete']);
 
-assert.equal(
-	ALLOW_IN_PROGRESS && EXPECT_READINESS_TIMEOUT,
-	false,
-	'--allow-in-progress and --expect-readiness-timeout are mutually exclusive',
+assert.ok(
+	[ALLOW_IN_PROGRESS, EXPECT_READINESS_TIMEOUT, EXPECT_REPAIR_SOURCE_FAILURE].filter(Boolean).length <= 1,
+	'progress and source-failure modes are mutually exclusive',
 );
 
 function describeWorkflowInstance() {
-	const result = spawnSync(
-		'pnpm',
-		['exec', 'wrangler', 'workflows', 'instances', 'describe', WORKFLOW_NAME, INSTANCE_ID, '--truncate-output-limit', '20000'],
-		{
-			cwd: PACKAGE_ROOT,
-			encoding: 'utf8',
-			env: {
-				...process.env,
-				WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH ?? '/tmp/newsence-search-rebuild-check.log',
-			},
-			maxBuffer: 64 * 1024 * 1024,
+	const result = spawnSync('pnpm', ['exec', 'wrangler', 'workflows', 'instances', 'describe', WORKFLOW_NAME, INSTANCE_ID], {
+		cwd: PACKAGE_ROOT,
+		encoding: 'utf8',
+		env: {
+			...process.env,
+			WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH ?? '/tmp/newsence-search-rebuild-check.log',
 		},
-	);
+		maxBuffer: 64 * 1024 * 1024,
+	});
 	if (result.error) throw result.error;
 	if (result.status !== 0) {
 		throw new Error(`Workflow describe failed (${result.status}): ${result.stderr.trim().slice(-2000)}`);
 	}
 	return result.stdout.replaceAll(ANSI_ESCAPE, '');
+}
+
+let cachedWranglerApiCredentials = null;
+
+function wranglerApiCredentials() {
+	if (cachedWranglerApiCredentials) return cachedWranglerApiCredentials;
+	const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+	const envApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+	if (envAccountId && envApiToken) {
+		assert.match(envAccountId, /^[0-9a-f]{32}$/, 'Cloudflare account id');
+		cachedWranglerApiCredentials = { accountId: envAccountId, apiToken: envApiToken };
+		return cachedWranglerApiCredentials;
+	}
+	const whoami = spawnSync('pnpm', ['exec', 'wrangler', 'whoami'], {
+		cwd: PACKAGE_ROOT,
+		encoding: 'utf8',
+		env: {
+			...process.env,
+			WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH ?? '/tmp/newsence-search-rebuild-check.log',
+		},
+		maxBuffer: 4 * 1024 * 1024,
+	});
+	if (whoami.error) throw whoami.error;
+	if (whoami.status !== 0) throw new Error(`Wrangler whoami failed (${whoami.status})`);
+	const output = whoami.stdout.replaceAll(ANSI_ESCAPE, '');
+	const accountId = envAccountId || output.match(/\b[0-9a-f]{32}\b/)?.[0];
+	assert.match(accountId ?? '', /^[0-9a-f]{32}$/, 'Cloudflare account id');
+	if (envApiToken) {
+		cachedWranglerApiCredentials = { accountId, apiToken: envApiToken };
+		return cachedWranglerApiCredentials;
+	}
+	const credentialsPath = output.match(/Credentials are stored in:\s*(.+)$/m)?.[1]?.trim();
+	assert.ok(credentialsPath, 'Wrangler OAuth credentials path');
+	const credentials = readFileSync(credentialsPath, 'utf8');
+	const encodedToken = credentials.match(/^oauth_token\s*=\s*("(?:[^"\\]|\\.)*")\s*$/m)?.[1];
+	assert.ok(encodedToken, 'Wrangler OAuth token');
+	cachedWranglerApiCredentials = { accountId, apiToken: JSON.parse(encodedToken) };
+	return cachedWranglerApiCredentials;
+}
+
+async function fullWorkflowStepOutput(instanceId, stepName) {
+	const { accountId, apiToken } = wranglerApiCredentials();
+	const endpoint = new URL(
+		`https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/${WORKFLOW_NAME}/instances/${instanceId}/step`,
+	);
+	endpoint.searchParams.set('name', stepName);
+	endpoint.searchParams.set('type', 'step');
+	const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${apiToken}` } });
+	const payload = await response.json();
+	assert.equal(response.ok, true, `full Workflow step output HTTP ${response.status}`);
+	assert.equal(payload.success, true, `full Workflow step output API ${stepName}`);
+	assert.equal(payload.result?.status, 'complete', `full Workflow step output status ${stepName}`);
+	return payload.result.output;
+}
+
+async function hydrateTruncatedStepOutputs(instanceId, steps) {
+	const truncated = steps.filter((step) => step.output?.includes('[truncated output]') || step.output?.includes('[...output truncated]'));
+	for (const step of truncated) {
+		step.output = JSON.stringify(await fullWorkflowStepOutput(instanceId, step.name));
+	}
+	return steps;
 }
 
 function header(output, label) {
@@ -424,48 +486,144 @@ function assertInitialRepairTargetSnapshot(snapshot, label) {
 	return snapshot;
 }
 
-function assertRepairSyncResult(result, snapshot, label) {
+function assertRepairBatchResult(result, snapshot, label) {
 	assert.equal(result.requested, snapshot.targets.length, `${label} requested count`);
 	assert.equal(result.requestedDigest, snapshot.digest, `${label} requested digest`);
 	assert.equal(result.results.length, snapshot.targets.length, `${label} result count`);
-	for (const [index, synced] of result.results.entries()) {
+	for (const [index, actionResult] of result.results.entries()) {
 		const target = snapshot.targets[index];
-		assert.ok(['synced', 'uploaded', 'already-advanced'].includes(synced.action), `${label} result ${index} action`);
-		assert.match(synced.itemId, /^[0-9a-f]{32}$/, `${label} result ${index} item id`);
-		assert.equal(synced.pinnedItemId, target.itemId, `${label} result ${index} pinned item id`);
-		assert.equal(synced.resourceId, target.resourceId, `${label} result ${index} resource id`);
-		assert.equal(Number.isSafeInteger(synced.latestUpdateMs), true, `${label} result ${index} latest update`);
+		assert.ok(['uploaded', 'already-advanced'].includes(actionResult.action), `${label} result ${index} action`);
+		assert.match(actionResult.itemId, /^[0-9a-f]{32}$/, `${label} result ${index} item id`);
+		assert.equal(actionResult.pinnedItemId, target.itemId, `${label} result ${index} pinned item id`);
+		assert.equal(actionResult.resourceId, target.resourceId, `${label} result ${index} resource id`);
+		assert.equal(Number.isSafeInteger(actionResult.latestUpdateMs), true, `${label} result ${index} latest update`);
 		assert.ok(
-			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(synced.previousStatus),
+			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(actionResult.previousStatus),
 			`${label} result ${index} previous status`,
 		);
 		assert.ok(
-			synced.previousLastSeenAt === null || typeof synced.previousLastSeenAt === 'string',
+			actionResult.previousLastSeenAt === null || typeof actionResult.previousLastSeenAt === 'string',
 			`${label} result ${index} previous last-seen`,
 		);
-		const previousLastSeenMs = parseAiSearchTimestamp(synced.previousLastSeenAt);
-		const storedItemWasStale = Number.isNaN(previousLastSeenMs) || synced.latestUpdateMs > previousLastSeenMs;
+		const previousLastSeenMs = parseAiSearchTimestamp(actionResult.previousLastSeenAt);
+		const storedItemWasStale = Number.isNaN(previousLastSeenMs) || actionResult.latestUpdateMs > previousLastSeenMs;
 		assert.ok(
-			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(synced.status),
+			actionResult.uploadReason === null || ['stale-stored-document', 'terminal-retry'].includes(actionResult.uploadReason),
+			`${label} result ${index} upload reason`,
+		);
+		assert.ok(
+			['completed', 'error', 'skipped', 'queued', 'running', 'outdated'].includes(actionResult.status),
 			`${label} result ${index} status`,
 		);
-		if (synced.action === 'already-advanced') {
-			assert.ok(['completed', 'queued', 'running'].includes(synced.previousStatus), `${label} result ${index} advanced prior status`);
-			assert.equal(synced.status, synced.previousStatus, `${label} result ${index} advanced status`);
-			if (synced.previousStatus === 'completed') {
+		if (actionResult.action === 'already-advanced') {
+			assert.ok(['completed', 'queued', 'running'].includes(actionResult.previousStatus), `${label} result ${index} advanced prior status`);
+			assert.equal(actionResult.status, actionResult.previousStatus, `${label} result ${index} advanced status`);
+			if (actionResult.previousStatus === 'completed') {
 				assert.equal(storedItemWasStale, false, `${label} result ${index} completed item freshness`);
 			}
-		} else if (synced.action === 'uploaded') {
-			assert.equal(storedItemWasStale, true, `${label} result ${index} upload reason`);
-			assert.notEqual(synced.status, 'skipped', `${label} result ${index} upload status`);
-		} else {
-			assert.ok(['error', 'outdated'].includes(synced.previousStatus), `${label} result ${index} sync prior status`);
-			assert.equal(storedItemWasStale, false, `${label} result ${index} sync freshness`);
-			assert.notEqual(synced.status, 'skipped', `${label} result ${index} sync status`);
+		} else if (actionResult.action === 'uploaded') {
+			assert.equal(
+				actionResult.uploadReason,
+				storedItemWasStale ? 'stale-stored-document' : 'terminal-retry',
+				`${label} result ${index} upload reason`,
+			);
+			assert.ok(
+				storedItemWasStale || ['error', 'outdated'].includes(actionResult.previousStatus),
+				`${label} result ${index} upload eligibility`,
+			);
+			assert.notEqual(actionResult.status, 'skipped', `${label} result ${index} upload status`);
 		}
-		assert.ok(synced.error === null || typeof synced.error === 'string', `${label} result ${index} error`);
+		if (actionResult.action === 'already-advanced') {
+			assert.equal(actionResult.uploadReason, null, `${label} result ${index} advanced upload reason`);
+		}
+		assert.ok(actionResult.error === null || typeof actionResult.error === 'string', `${label} result ${index} error`);
 	}
 	return result;
+}
+
+function assertRepairSourceFailure(steps, versionId, status, lastSuccessfulStep, workflowError) {
+	assert.equal(versionId, RECOVERY_SOURCE_VERSION_ID, 'repair source Workflow version');
+	assert.equal(status, 'errored', 'repair source terminal status');
+	assert.match(lastSuccessfulStep, /^inspect-search-index-repair-targets-postclaim-\d+$/, 'repair source last successful step');
+	assert.match(
+		workflowError ?? '',
+		new RegExp(`^TypeError: ${RECOVERY_SOURCE_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+		'repair source terminal error',
+	);
+	const failedStep = exactStep(steps, /^sync-search-index-repair-targets-0-0-\d+$/, 'repair source failed batch');
+	assert.match(failedStep.success, /\bNo\b/i, 'repair source failed batch status');
+	assert.ok(failedStep.output === null || failedStep.output === 'null', 'repair source failed batch output');
+	assert.ok(failedStep.attempts.length >= 1, 'repair source failed batch attempts');
+	assert.equal(
+		failedStep.attempts.every((attempt) => attempt.state === 'error'),
+		true,
+		'repair source failed batch attempt states',
+	);
+	assert.equal(
+		steps.some((step) => /^load-search-index-readiness-\d+-\d+$/.test(step.name)),
+		false,
+		'repair source must not reach readiness',
+	);
+	assert.equal(
+		steps.some((step) => /^mark-search-index-generation-ready-\d+$/.test(step.name)),
+		false,
+		'repair source must not publish readiness',
+	);
+
+	const sourceBeforeClaim = parsedStepOutput(
+		exactStep(steps, /^verify-readiness-timeout-source-\d+$/, 'repair source source preclaim'),
+		'repair source source preclaim',
+	);
+	const sourceAfterClaim = parsedStepOutput(
+		exactStep(steps, /^reverify-readiness-timeout-source-\d+$/, 'repair source source postclaim'),
+		'repair source source postclaim',
+	);
+	assert.deepEqual(sourceAfterClaim, sourceBeforeClaim, 'repair source original timeout source stability');
+	assert.equal(sourceBeforeClaim.instanceId, RESUME_INSTANCE_ID, 'repair source original timeout instance');
+	assert.equal(sourceBeforeClaim.status, 'errored', 'repair source original timeout status');
+	assert.match(sourceBeforeClaim.error?.message ?? '', new RegExp(`^${READINESS_TIMEOUT_ERROR_PREFIX}`), 'repair source original timeout');
+
+	const repairBeforeClaim = assertInitialRepairTargetSnapshot(
+		parsedStepOutput(
+			exactStep(steps, /^inspect-search-index-repair-targets-preclaim-\d+$/, 'repair source targets preclaim'),
+			'repair source targets preclaim',
+		),
+		'repair source targets preclaim',
+	);
+	const repairAfterClaim = assertInitialRepairTargetSnapshot(
+		parsedStepOutput(
+			exactStep(steps, /^inspect-search-index-repair-targets-postclaim-\d+$/, 'repair source targets postclaim'),
+			'repair source targets postclaim',
+		),
+		'repair source targets postclaim',
+	);
+	assert.deepEqual(repairAfterClaim, repairBeforeClaim, 'repair source target stability');
+	const claim = parsedStepOutput(
+		exactStep(steps, /^claim-search-index-readiness-continuation-\d+$/, 'repair source lease claim'),
+		'repair source lease claim',
+	);
+	assert.equal(Number(claim.sourceRebuildEpoch), RESUME_REBUILD_EPOCH, 'repair source prior epoch');
+	assert.equal(Number(claim.rebuildEpoch), RECOVERY_SOURCE_REBUILD_EPOCH, 'repair source claimed epoch');
+	assertUtcTimestamp(claim.startedAt, 'repair source claim timestamp');
+	assertStepOrder(
+		steps,
+		[
+			{ pattern: /^verify-readiness-timeout-source-\d+$/, stepLabel: 'source preclaim' },
+			{ pattern: /^inspect-search-index-repair-targets-preclaim-\d+$/, stepLabel: 'targets preclaim' },
+			{ pattern: /^claim-search-index-readiness-continuation-\d+$/, stepLabel: 'lease claim' },
+			{ pattern: /^reverify-readiness-timeout-source-\d+$/, stepLabel: 'source postclaim' },
+			{ pattern: /^inspect-search-index-repair-targets-postclaim-\d+$/, stepLabel: 'targets postclaim' },
+			{ pattern: /^sync-search-index-repair-targets-0-0-\d+$/, stepLabel: 'failed batch' },
+		],
+		'repair source fence',
+	);
+	return {
+		source: { beforeClaim: sourceBeforeClaim, afterClaim: sourceAfterClaim },
+		repair: { beforeClaim: repairBeforeClaim, afterClaim: repairAfterClaim },
+		claim,
+		failedBatch: retrySummary(failedStep),
+		workflowError,
+	};
 }
 
 function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulStep) {
@@ -479,7 +637,7 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		/^reverify-readiness-timeout-source-\d+$/,
 		/^inspect-search-index-repair-targets-postclaim-\d+$/,
 		/^inspect-search-index-repair-targets-\d+-\d+$/,
-		/^sync-search-index-repair-targets-\d+-\d+-\d+$/,
+		/^apply-search-index-repair-targets-\d+-\d+-\d+$/,
 		/^wait-search-index-repair-0-\d+$/,
 		/^load-search-index-readiness-\d+-\d+$/,
 		/^wait-search-index-readiness-\d+-\d+$/,
@@ -502,12 +660,12 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		'readiness continuation source postclaim',
 	);
 	assert.deepEqual(sourceAfterClaim, sourceBeforeClaim, 'readiness continuation source error remained stable across claim');
-	assert.equal(sourceBeforeClaim.instanceId, RESUME_INSTANCE_ID, 'readiness continuation source instance');
+	assert.equal(sourceBeforeClaim.instanceId, RECOVERY_SOURCE_INSTANCE_ID, 'readiness continuation source instance');
 	assert.equal(sourceBeforeClaim.status, 'errored', 'readiness continuation source status');
-	assert.equal(sourceBeforeClaim.error?.name, 'Error', 'readiness continuation source error name');
+	assert.equal(sourceBeforeClaim.error?.name, 'TypeError', 'readiness continuation source error name');
 	assert.match(
 		sourceBeforeClaim.error?.message ?? '',
-		new RegExp(`^${READINESS_TIMEOUT_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+		new RegExp(`^${RECOVERY_SOURCE_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
 		'readiness continuation source error',
 	);
 
@@ -524,7 +682,7 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 	);
 	assert.equal(claim.generation, 3, 'readiness continuation generation');
 	assert.equal(claim.generationKey, 'canonical-3-kind', 'readiness continuation generation key');
-	assert.equal(Number(claim.sourceRebuildEpoch), RESUME_REBUILD_EPOCH, 'readiness continuation source epoch');
+	assert.equal(Number(claim.sourceRebuildEpoch), RECOVERY_SOURCE_REBUILD_EPOCH, 'readiness continuation source epoch');
 	assert.equal(Number(claim.rebuildEpoch), READINESS_REBUILD_EPOCH, 'readiness continuation claimed epoch');
 	assertUtcTimestamp(claim.startedAt, 'readiness continuation claim timestamp');
 
@@ -555,15 +713,15 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		}
 		repairSnapshots.set(index, snapshot);
 	}
-	const repairSyncSteps = steps
+	const repairBatchSteps = steps
 		.flatMap((step) => {
-			const match = step.name.match(/^sync-search-index-repair-targets-(\d+)-(\d+)-\d+$/);
+			const match = step.name.match(/^apply-search-index-repair-targets-(\d+)-(\d+)-\d+$/);
 			return match ? [{ repairRound: Number(match[1]), batch: Number(match[2]), step }] : [];
 		})
 		.sort((left, right) => left.repairRound - right.repairRound || left.batch - right.batch);
 	for (const [repairRound, snapshot] of repairSnapshots) {
 		const expectedBatchCount = Math.ceil(snapshot.targets.length / 5);
-		const roundBatches = repairSyncSteps.filter((entry) => entry.repairRound === repairRound);
+		const roundBatches = repairBatchSteps.filter((entry) => entry.repairRound === repairRound);
 		assert.deepEqual(
 			roundBatches.map((entry) => entry.batch),
 			Array.from({ length: expectedBatchCount }, (_, batch) => batch),
@@ -571,7 +729,7 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		);
 		for (const { batch, step } of roundBatches) {
 			const batchSnapshot = repairTargetSnapshot(snapshot.targets.slice(batch * 5, batch * 5 + 5));
-			assertRepairSyncResult(
+			assertRepairBatchResult(
 				parsedStepOutput(step, `readiness continuation repair round ${repairRound} batch ${batch}`),
 				batchSnapshot,
 				`readiness continuation repair round ${repairRound} batch ${batch}`,
@@ -579,9 +737,9 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 		}
 	}
 	assert.equal(
-		repairSyncSteps.every((entry) => repairSnapshots.has(entry.repairRound)),
+		repairBatchSteps.every((entry) => repairSnapshots.has(entry.repairRound)),
 		true,
-		'readiness continuation repair sync rounds',
+		'readiness continuation repair action rounds',
 	);
 	exactStep(steps, /^wait-search-index-repair-0-\d+$/, 'readiness continuation initial repair wait');
 
@@ -609,7 +767,7 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 			{ pattern: /^claim-search-index-readiness-continuation-\d+$/, stepLabel: 'lease claim' },
 			{ pattern: /^reverify-readiness-timeout-source-\d+$/, stepLabel: 'source postclaim' },
 			{ pattern: /^inspect-search-index-repair-targets-postclaim-\d+$/, stepLabel: 'repair postclaim' },
-			{ pattern: /^sync-search-index-repair-targets-0-0-\d+$/, stepLabel: 'initial repair sync' },
+			{ pattern: /^apply-search-index-repair-targets-0-0-\d+$/, stepLabel: 'initial repair action' },
 			{ pattern: /^mark-search-index-generation-ready-\d+$/, stepLabel: 'generation ready' },
 		],
 		'readiness continuation fence',
@@ -625,7 +783,7 @@ function assertReadinessContinuationCompletion(steps, versionId, lastSuccessfulS
 			beforeClaim: repairTargetsBeforeClaim,
 			afterClaim: repairTargetsAfterClaim,
 			rounds: repairSnapshots.size,
-			batches: repairSyncSteps.length,
+			batches: repairBatchSteps.length,
 		},
 		readiness,
 		generationReadiness,
@@ -676,7 +834,7 @@ const versionId = header(output, 'Version Id');
 const status = normalizedStatus(header(output, 'Status'));
 const lastSuccessfulStep = header(output, 'Last Successful Step');
 const workflowError = optionalHeader(output, 'Error');
-const steps = workflowSteps(output);
+const steps = await hydrateTruncatedStepOutputs(instanceId, workflowSteps(output));
 const failedSteps = steps.filter((step) => /\bNo\b/i.test(step.success)).map((step) => step.name);
 const runningStepRecord = steps.findLast((step) => /\bRunning\b/i.test(step.success)) ?? null;
 const failedStepRecord = steps.findLast((step) => /\bNo\b/i.test(step.success)) ?? null;
@@ -687,8 +845,10 @@ const completedPage = completedPageMatch ? Number(completedPageMatch[1]) : null;
 
 assert.equal(workflowName, WORKFLOW_NAME, 'Workflow name');
 assert.equal(instanceId, INSTANCE_ID, 'Workflow instance id');
-assert.deepEqual(failedSteps, [], 'Workflow failed steps');
+if (!EXPECT_REPAIR_SOURCE_FAILURE) assert.deepEqual(failedSteps, [], 'Workflow failed steps');
+else assert.deepEqual(failedSteps, ['sync-search-index-repair-targets-0-0-1'], 'repair source exact failed step');
 let readinessTimeoutEvidence = null;
+let repairSourceFailureEvidence = null;
 let resumeEvidence = null;
 let readinessContinuationEvidence = null;
 let durableState = null;
@@ -698,7 +858,16 @@ if (EXPECT_READINESS_TIMEOUT) {
 	durableState = await assertSearchIndexDurableState({
 		label: 'readiness-timeout source',
 		ready: false,
-		rebuildEpoch: RESUME_REBUILD_EPOCH,
+		rebuildEpoch: RECOVERY_SOURCE_REBUILD_EPOCH,
+		status: 'rebuilding',
+	});
+} else if (EXPECT_REPAIR_SOURCE_FAILURE) {
+	assert.equal(instanceId, RECOVERY_SOURCE_INSTANCE_ID, 'repair source instance id');
+	repairSourceFailureEvidence = assertRepairSourceFailure(steps, versionId, status, lastSuccessfulStep, workflowError);
+	durableState = await assertSearchIndexDurableState({
+		label: 'repair source',
+		ready: false,
+		rebuildEpoch: RECOVERY_SOURCE_REBUILD_EPOCH,
 		status: 'rebuilding',
 	});
 } else {
@@ -737,9 +906,11 @@ if (EXPECT_READINESS_TIMEOUT) {
 console.info({
 	event: EXPECT_READINESS_TIMEOUT
 		? 'search_rebuild_readiness_timeout_validated'
-		: ALLOW_IN_PROGRESS
-			? 'search_rebuild_progress_validated'
-			: 'search_rebuild_completion_validated',
+		: EXPECT_REPAIR_SOURCE_FAILURE
+			? 'search_rebuild_repair_source_failure_validated'
+			: ALLOW_IN_PROGRESS
+				? 'search_rebuild_progress_validated'
+				: 'search_rebuild_completion_validated',
 	workflowName,
 	instanceId,
 	versionId,
@@ -751,6 +922,7 @@ console.info({
 	failedSteps,
 	retry,
 	readinessTimeoutEvidence,
+	repairSourceFailureEvidence,
 	resumeEvidence,
 	readinessContinuationEvidence,
 	durableState,

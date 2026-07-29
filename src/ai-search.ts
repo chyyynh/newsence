@@ -212,16 +212,16 @@ function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	};
 }
 
-async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo> {
+async function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo | null> {
 	const startedAt = Date.now();
-	const result = await env.AI_SEARCH.items.upload(itemKey(document.id), serializeDocument(document), {
+	const result: AiSearchItemInfo | null = await env.AI_SEARCH.items.upload(itemKey(document.id), serializeDocument(document), {
 		metadata: corpusItemMetadata(document),
 	});
 	console.info({
 		tag: 'AI_SEARCH',
 		msg: 'Corpus item queued',
 		resource_id: document.id,
-		item_id: result.id,
+		item_id: result?.id ?? null,
 		latency_ms: Date.now() - startedAt,
 	});
 	return result;
@@ -416,6 +416,19 @@ const SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS = {
 		readinessErrorPrefix: 'AI Search index did not become ready:',
 		sourceInstanceId: 'search-index-rebuild-canonical-3-kind-resume-v1',
 		sourceRebuildEpoch: 2,
+		sourceResumeCheckpoint: 'canonical-3-kind-page-365',
+	},
+	'canonical-3-kind-readiness-v2-null-item-result': {
+		generation: 3,
+		generationKey: 'canonical-3-kind',
+		initialRepairErrorCount: 1,
+		initialRepairOutdatedCount: 29,
+		initialRepairTargetDigest: '710d51c0b740233a3634ab8e1b22e1d74f9dfc0c5954d303b8fcf2e717ce9c21',
+		maxRepairRounds: 3,
+		readinessErrorName: 'TypeError',
+		readinessErrorPrefix: "Cannot read properties of null (reading 'status')",
+		sourceInstanceId: 'search-index-rebuild-canonical-3-kind-readiness-v2',
+		sourceRebuildEpoch: 3,
 		sourceResumeCheckpoint: 'canonical-3-kind-page-365',
 	},
 } as const satisfies Record<string, Omit<SearchIndexReadinessContinuationCheckpoint, 'key'>>;
@@ -686,7 +699,7 @@ async function claimSearchIndexReadinessContinuation(
 				UNION ALL
 				-- A step retry after a committed response loss may observe its own
 				-- completed claim. The immutable Workflow timestamp is the claim
-				-- token, so it can recover epoch 3 without advancing it again.
+				-- token, so it can recover the claimed epoch without advancing it again.
 				SELECT
 				  rebuild_epoch::text,
 				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
@@ -1148,11 +1161,11 @@ type SearchIndexRepairTargetSnapshot = {
 	targets: SearchIndexRepairTarget[];
 };
 
-type SearchIndexRepairSyncResult = {
+type SearchIndexRepairBatchResult = {
 	requested: number;
 	requestedDigest: string;
 	results: Array<{
-		action: 'already-advanced' | 'synced' | 'uploaded';
+		action: 'already-advanced' | 'uploaded';
 		error: string | null;
 		itemId: string;
 		latestUpdateMs: number;
@@ -1161,6 +1174,7 @@ type SearchIndexRepairSyncResult = {
 		previousStatus: AiSearchItemInfo['status'];
 		resourceId: string;
 		status: AiSearchItemInfo['status'];
+		uploadReason: 'stale-stored-document' | 'terminal-retry' | null;
 	}>;
 };
 
@@ -1342,21 +1356,24 @@ async function resolveSearchIndexRepairCurrentTarget(
 
 function searchIndexRepairTargetNeedsUpload(current: AiSearchItemInfo, latestUpdateMs: number): boolean {
 	if (current.status === 'queued' || current.status === 'running') return false;
+	if (current.status === 'error' || current.status === 'outdated') return true;
 	const lastSeenMs = parseAiSearchTimestamp(current.last_seen_at);
 	return Number.isNaN(lastSeenMs) || latestUpdateMs > lastSeenMs;
 }
 
 function searchIndexRepairResult(
-	action: SearchIndexRepairSyncResult['results'][number]['action'],
+	action: SearchIndexRepairBatchResult['results'][number]['action'],
 	entry: SearchIndexRepairCurrentTarget,
 	item: AiSearchItemInfo,
 	latestUpdateMs: number,
-): SearchIndexRepairSyncResult['results'][number] {
+): SearchIndexRepairBatchResult['results'][number] {
 	const { current, target } = entry;
 	if (item.status === 'skipped') throw new Error(`AI Search repair action skipped ${item.id}/${target.resourceId}`);
 	if (item.key !== itemKey(target.resourceId) || item.source_id !== 'builtin') {
 		throw new Error(`AI Search repair action returned the wrong item for ${target.itemId}/${target.resourceId}`);
 	}
+	const previousLastSeenMs = parseAiSearchTimestamp(current.last_seen_at);
+	const storedItemWasStale = Number.isNaN(previousLastSeenMs) || latestUpdateMs > previousLastSeenMs;
 	return {
 		action,
 		error: item.error?.trim() || null,
@@ -1367,6 +1384,7 @@ function searchIndexRepairResult(
 		previousStatus: current.status,
 		resourceId: target.resourceId,
 		status: item.status,
+		uploadReason: action === 'uploaded' ? (storedItemWasStale ? 'stale-stored-document' : 'terminal-retry') : null,
 	};
 }
 
@@ -1375,25 +1393,28 @@ async function applySearchIndexRepairTarget(
 	entry: SearchIndexRepairCurrentTarget,
 	latestUpdateMs: number,
 	uploadDocument: CorpusDocument | undefined,
-): Promise<SearchIndexRepairSyncResult['results'][number]> {
-	const { current } = entry;
+): Promise<SearchIndexRepairBatchResult['results'][number]> {
+	const { current, target } = entry;
 	if (current.status === 'queued' || current.status === 'running') {
 		return searchIndexRepairResult('already-advanced', entry, current, latestUpdateMs);
 	}
 	if (uploadDocument) {
 		const uploaded = await uploadCorpusDocument(env, uploadDocument);
-		return searchIndexRepairResult('uploaded', entry, uploaded, latestUpdateMs);
+		const observed = uploaded ?? (await resolveSearchIndexRepairCurrentTarget(env, target)).current;
+		return searchIndexRepairResult('uploaded', entry, observed, latestUpdateMs);
 	}
 	if (current.status === 'completed') {
 		return searchIndexRepairResult('already-advanced', entry, current, latestUpdateMs);
 	}
-	const synced = await env.AI_SEARCH.items.get(current.id).sync();
-	return searchIndexRepairResult('synced', entry, synced, latestUpdateMs);
+	throw new Error(`AI Search repair target ${target.itemId}/${target.resourceId} had no valid upload or advanced action`);
 }
 
-async function syncSearchIndexRepairTargets(env: CoreEnv, snapshot: SearchIndexRepairTargetSnapshot): Promise<SearchIndexRepairSyncResult> {
+async function applySearchIndexRepairTargets(
+	env: CoreEnv,
+	snapshot: SearchIndexRepairTargetSnapshot,
+): Promise<SearchIndexRepairBatchResult> {
 	if (snapshot.targets.length > REINDEX_AI_SEARCH_CONCURRENCY) {
-		throw new Error(`AI Search repair sync batch exceeded ${REINDEX_AI_SEARCH_CONCURRENCY} targets`);
+		throw new Error(`AI Search repair action batch exceeded ${REINDEX_AI_SEARCH_CONCURRENCY} targets`);
 	}
 	const currentTargets = await Promise.all(snapshot.targets.map((target) => resolveSearchIndexRepairCurrentTarget(env, target)));
 	const latestUpdates = await loadEligibleCorpusLatestUpdates(
@@ -1430,7 +1451,7 @@ async function syncSearchIndexRepairTargets(env: CoreEnv, snapshot: SearchIndexR
 	};
 }
 
-async function syncSearchIndexRepairRound(
+async function applySearchIndexRepairRound(
 	env: CoreEnv,
 	step: WorkflowStep,
 	lease: SearchIndexRebuildLease,
@@ -1440,8 +1461,8 @@ async function syncSearchIndexRepairRound(
 	let batchCount = 0;
 	for (let offset = 0; offset < snapshot.targets.length; offset += REINDEX_AI_SEARCH_CONCURRENCY) {
 		const batchSnapshot = await searchIndexRepairTargetSnapshot(snapshot.targets.slice(offset, offset + REINDEX_AI_SEARCH_CONCURRENCY));
-		await step.do(`sync-search-index-repair-targets-${repairRound}-${batchCount}`, BATCH_STEP_OPTIONS, () =>
-			withSearchIndexRebuildLease(env, lease, () => syncSearchIndexRepairTargets(env, batchSnapshot)),
+		await step.do(`apply-search-index-repair-targets-${repairRound}-${batchCount}`, BATCH_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(env, lease, () => applySearchIndexRepairTargets(env, batchSnapshot)),
 		);
 		batchCount++;
 	}
@@ -1591,7 +1612,7 @@ async function repairAndWaitForSearchIndexReady(
 	if (!Number.isSafeInteger(maxRepairRounds) || maxRepairRounds <= 0) {
 		throw new Error(`AI Search repair rounds must be a positive safe integer: ${maxRepairRounds}`);
 	}
-	await syncSearchIndexRepairRound(env, step, lease, initialTargets, 0);
+	await applySearchIndexRepairRound(env, step, lease, initialTargets, 0);
 	await step.sleep('wait-search-index-repair-0', REINDEX_READY_POLL_INTERVAL);
 
 	let last: SearchIndexReadinessObservation | null = null;
@@ -1616,7 +1637,7 @@ async function repairAndWaitForSearchIndexReady(
 					return snapshot;
 				}),
 			);
-			await syncSearchIndexRepairRound(env, step, lease, retryTargets, repairRound);
+			await applySearchIndexRepairRound(env, step, lease, retryTargets, repairRound);
 			repairRoundsUsed++;
 		}
 		if (attempt < pollAttempts - 1) {
