@@ -13,6 +13,7 @@
 		"check:resource-runtime-canary-state": "node scripts/check-resource-runtime-canary-state.mjs",
 		"check:search-rebuild": "node scripts/check-search-rebuild.mjs",
 		"check:search-rollout": "node scripts/check-search-rollout.mjs",
+		"check:search-shadow-rollout": "node scripts/check-search-shadow-rollout.mjs",
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
 		"start": "wrangler dev --test-scheduled",

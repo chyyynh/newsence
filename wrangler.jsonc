@@ -100,6 +100,11 @@
 			"binding": "AI_SEARCH",
 			"instance_name": "newsence-corpus-v5",
 			"remote": true
+		},
+		{
+			"binding": "AI_SEARCH_NEXT",
+			"instance_name": "newsence-corpus-v6",
+			"remote": true
 		}
 	],
 	/**
