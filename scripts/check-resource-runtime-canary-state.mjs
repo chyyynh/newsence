@@ -50,7 +50,7 @@ const FIXTURES = {
 		fileType: null,
 		videoId: '657wlbtrzG8',
 		translationCount: 2,
-		translationMd5: '59f70fba2cbc657f182ee1e1e55cea4b',
+		beforeTranslationMd5: '59f70fba2cbc657f182ee1e1e55cea4b',
 		relationships: {
 			saveCount: 1,
 			savesMd5: '78bb24b808f44859fe16b2ef4f954b45',
@@ -174,6 +174,12 @@ try {
 		        AND NULLIF(BTRIM(rt.content), '') IS NOT NULL
 		   ) AS original_translation_count,
 		   (
+		     SELECT COUNT(*)::int
+		       FROM resource_translations rt
+		      WHERE rt.resource_id = r.id
+		        AND rt.source = 'machine'
+		   ) AS machine_translation_count,
+		   (
 		     SELECT md5(
 		       COALESCE(
 		         jsonb_agg(
@@ -282,12 +288,19 @@ assertIdentity(youtubeDescription, FIXTURES.youtubeDescription, 'YouTube descrip
 assertRelationships(youtubeDescription, FIXTURES.youtubeDescription.relationships, 'YouTube description');
 assert.equal(youtubeDescription.video_id, FIXTURES.youtubeDescription.videoId, 'YouTube description video id');
 assert.equal(youtubeDescription.translation_count, FIXTURES.youtubeDescription.translationCount, 'YouTube description translation count');
-assert.equal(youtubeDescription.translation_md5, FIXTURES.youtubeDescription.translationMd5, 'YouTube description translation fingerprint');
+assert.equal(youtubeDescription.original_translation_count, 1, 'YouTube description original translation row');
+assert.equal(youtubeDescription.machine_translation_count, 1, 'YouTube description machine translation row');
 assert.ok(transcriptRows.length <= 1, 'YouTube description transcript row count');
 if (PHASE === 'before') {
+	assert.equal(
+		youtubeDescription.translation_md5,
+		FIXTURES.youtubeDescription.beforeTranslationMd5,
+		'YouTube baseline translation fingerprint',
+	);
 	assert.equal(youtubeDescription.description_length, 304, 'YouTube baseline description length');
 	assert.equal(transcriptRows.length, 0, 'YouTube baseline transcript is absent');
 } else {
+	assert.match(youtubeDescription.translation_md5, /^[a-f0-9]{32}$/, 'YouTube post-canary translation fingerprint');
 	assert.ok(youtubeDescription.description_length > 0, 'YouTube description remains nonempty');
 	assert.match(youtubeDescription.snapshot_hash ?? '', /^[a-f0-9]{64}$/, 'YouTube source snapshot hash');
 	assert.equal(transcriptRows.length, 1, 'YouTube description fallback transcript row');

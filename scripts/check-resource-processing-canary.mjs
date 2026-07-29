@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const WORKFLOW_NAME = 'newsence-resource-processing';
 const EXPECTED_VERSION_ID = 'eadd2de4-9c68-4b02-9066-c62185172222';
+const EXPECTED_CORE_VERSION_ID = '093ac86e-0408-41a4-a660-be1f20bbceda';
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const RAW_INSTANCE_ID = process.env.RESOURCE_PROCESSING_CANARY_INSTANCE_ID;
 const RAW_CANARY_CASE = process.env.CANARY_CASE;
+const RAW_TAIL_FILE = process.env.RESOURCE_PROCESSING_CANARY_TAIL_FILE;
 
 const CANARIES = {
 	'saved-web': {
@@ -47,35 +50,165 @@ const CANARY = CANARIES[CANARY_CASE];
 
 assert.equal(INSTANCE_ID, CANARY.instanceId, `${CANARY_CASE} exact Workflow instance id`);
 
-function describeWorkflowInstance() {
-	const result = spawnSync(
-		'pnpm',
-		['exec', 'wrangler', 'workflows', 'instances', 'describe', WORKFLOW_NAME, INSTANCE_ID, '--truncate-output-limit', '200000'],
-		{
-			cwd: PACKAGE_ROOT,
-			encoding: 'utf8',
-			env: {
-				...process.env,
-				WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH ?? '/tmp/newsence-resource-processing-canary-check.log',
-			},
-			maxBuffer: 64 * 1024 * 1024,
-		},
-	);
-	if (result.error) throw result.error;
-	if (result.status !== 0) {
-		throw new Error(`Workflow describe failed (${result.status}): ${result.stderr.trim().slice(-2000)}`);
+let cachedWranglerApiCredentials = null;
+
+function wranglerApiCredentials() {
+	if (cachedWranglerApiCredentials) return cachedWranglerApiCredentials;
+	const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+	const envApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+	if (envAccountId && envApiToken) {
+		assert.match(envAccountId, /^[0-9a-f]{32}$/, 'Cloudflare account id');
+		cachedWranglerApiCredentials = { accountId: envAccountId, apiToken: envApiToken };
+		return cachedWranglerApiCredentials;
 	}
-	return result.stdout.replaceAll(ANSI_ESCAPE, '').replaceAll('\r', '');
+	const whoami = spawnSync('pnpm', ['exec', 'wrangler', 'whoami'], {
+		cwd: PACKAGE_ROOT,
+		encoding: 'utf8',
+		env: {
+			...process.env,
+			WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH ?? '/tmp/newsence-resource-processing-canary-check.log',
+		},
+		maxBuffer: 4 * 1024 * 1024,
+	});
+	if (whoami.error) throw whoami.error;
+	if (whoami.status !== 0) throw new Error(`Wrangler whoami failed (${whoami.status})`);
+	const output = whoami.stdout.replaceAll(ANSI_ESCAPE, '');
+	const accountId = envAccountId || output.match(/\b[0-9a-f]{32}\b/)?.[0];
+	assert.match(accountId ?? '', /^[0-9a-f]{32}$/, 'Cloudflare account id');
+	if (envApiToken) {
+		cachedWranglerApiCredentials = { accountId, apiToken: envApiToken };
+		return cachedWranglerApiCredentials;
+	}
+	const credentialsPath = output.match(/Credentials are stored in:\s*(.+)$/m)?.[1]?.trim();
+	assert.ok(credentialsPath, 'Wrangler OAuth credentials path');
+	const credentials = readFileSync(credentialsPath, 'utf8');
+	const encodedToken = credentials.match(/^oauth_token\s*=\s*("(?:[^"\\]|\\.)*")\s*$/m)?.[1];
+	assert.ok(encodedToken, 'Wrangler OAuth token');
+	cachedWranglerApiCredentials = { accountId, apiToken: JSON.parse(encodedToken) };
+	return cachedWranglerApiCredentials;
 }
 
-function header(output, label) {
-	const match = output.match(new RegExp(`^${label}:\\s*(.+)$`, 'm'));
-	assert.ok(match, `Workflow describe ${label}`);
-	return match[1].trim();
+function retryDelay(response, attempt) {
+	const seconds = Number(response.headers.get('retry-after'));
+	return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, 20_000) : Math.min(500 * 2 ** attempt, 5000);
 }
 
-function optionalHeader(output, label) {
-	return output.match(new RegExp(`^${label}:\\s*(.+)$`, 'm'))?.[1]?.trim() ?? null;
+async function workflowApi(pathname = '', searchParams = {}, attempt = 0) {
+	const { accountId, apiToken } = wranglerApiCredentials();
+	const endpoint = new URL(
+		`https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/${WORKFLOW_NAME}/instances/${INSTANCE_ID}${pathname}`,
+	);
+	for (const [key, value] of Object.entries(searchParams)) endpoint.searchParams.set(key, value);
+	const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${apiToken}` } });
+	if (response.status === 429 && attempt < 6) {
+		const delay = retryDelay(response, attempt);
+		await response.text();
+		await new Promise((resolve) => setTimeout(resolve, delay));
+		return workflowApi(pathname, searchParams, attempt + 1);
+	}
+	const contentType = response.headers.get('content-type') ?? '';
+	if (response.ok && contentType.includes('application/octet-stream')) {
+		assert.equal(pathname, '/step', 'Workflow stream response is a step output');
+		const rawOutput = await response.text();
+		assert.ok(rawOutput.length > 0, 'Workflow stream step output');
+		let output = rawOutput;
+		try {
+			output = JSON.parse(rawOutput);
+		} catch {
+			// A Workflow step may intentionally return arbitrary stream bytes.
+		}
+		return { output, responseMode: 'octet-stream', statusObserved: false };
+	}
+	const payload = await response.json();
+	assert.equal(response.ok, true, `Workflow API HTTP ${response.status}`);
+	assert.equal(payload.success, true, 'Workflow API success');
+	return { ...payload.result, responseMode: 'json', statusObserved: true };
+}
+
+function expectedApiStepSequence(stepCount) {
+	const commonStart = ['fetch-resource-shell-kind-platform-v1', 'acquire-content-kind-platform-v1'];
+	switch (CANARY_CASE) {
+		case 'saved-web':
+			if (stepCount === 9) {
+				return [
+					...commonStart,
+					'validate-resource-content',
+					'classify-resource',
+					'update-db-kind-platform-v1',
+					'rehost-resource-images',
+					'check-resource-translation-eligibility',
+					'enqueue-resource-translation',
+					'sync-ai-search',
+				];
+			}
+			if (stepCount === 4 || stepCount === 5) {
+				return [
+					...commonStart,
+					'record-unchanged-resync-index-relevance-v2',
+					'rehost-resource-images',
+					...(stepCount === 5 ? ['sync-ai-search-unchanged-resync-index-relevance-v1'] : []),
+				];
+			}
+			break;
+		case 'twitter-unchanged':
+			if (stepCount === 4 || stepCount === 5) {
+				return [
+					...commonStart,
+					...(stepCount === 5 ? ['unfurl-tweet-external-link'] : []),
+					'record-unchanged-resync-index-relevance-v2',
+					'rehost-resource-images',
+				];
+			}
+			break;
+		case 'youtube-description':
+			if (stepCount === 9) {
+				return [
+					...commonStart,
+					'validate-resource-content',
+					'classify-resource',
+					'prepare-youtube-highlights',
+					'update-db-kind-platform-v1',
+					'rehost-resource-images',
+					'check-resource-translation-eligibility',
+					'sync-ai-search',
+				];
+			}
+			break;
+		default:
+			break;
+	}
+	assert.fail(`${CANARY_CASE} unexpected Workflow step count: ${stepCount}`);
+}
+
+async function workflowInstanceEvidence() {
+	const metadata = await workflowApi('', { simple: 'true' });
+	const stepCount = metadata?.step_count;
+	assert.ok(Number.isInteger(stepCount), 'Workflow API step count');
+	assert.ok(Array.isArray(metadata.steps), 'Workflow API simple steps');
+	assert.equal(metadata.steps.length, 0, 'Workflow API simple response omits step details');
+	const logicalNames = expectedApiStepSequence(stepCount);
+	assert.equal(logicalNames.length, stepCount, `${CANARY_CASE} exact Workflow step count`);
+	const steps = [];
+	for (const logicalName of logicalNames) {
+		if (steps.length > 0) await new Promise((resolve) => setTimeout(resolve, 350));
+		const name = `${logicalName}-1`;
+		const result = await workflowApi('/step', { name, type: 'step' });
+		if (result.statusObserved) {
+			assert.equal(result?.status, 'complete', `${name} full step status`);
+			assert.equal(result.error ?? null, null, `${name} full step error`);
+			assert.equal(Object.hasOwn(result, 'output'), true, `${name} full step output field`);
+		}
+		steps.push({
+			logicalName,
+			name,
+			output: JSON.stringify(result.output),
+			responseMode: result.responseMode,
+			statusObserved: result.statusObserved,
+			type: 'Step',
+		});
+	}
+	assert.equal(new Set(steps.map((step) => step.name)).size, stepCount, `${CANARY_CASE} distinct physical step names`);
+	return { metadata, steps };
 }
 
 function normalizedStatus(value) {
@@ -83,32 +216,6 @@ function normalizedStatus(value) {
 	assert.ok(match, `Workflow status: ${value}`);
 	const status = match[1].toLowerCase();
 	return status === 'completed' ? 'complete' : status;
-}
-
-function logicalStepName(name) {
-	const match = name.match(/^(.+)-(\d+)$/);
-	assert.ok(match, `Workflow step has a durable numeric suffix: ${name}`);
-	return match[1];
-}
-
-function workflowSteps(output) {
-	const steps = [];
-	for (const block of output.split(/\n(?=\s+Name:\s+)/)) {
-		const name = block.match(/^\s+Name:\s+(.+)$/m)?.[1]?.trim();
-		const type = block.match(/^\s+Type:\s+(.+)$/m)?.[1]?.trim();
-		const success = block.match(/^\s+Success:\s+(.+)$/m)?.[1]?.trim();
-		if (!name) continue;
-		assert.ok(type, `${name} step type`);
-		assert.ok(success, `${name} step success`);
-		steps.push({
-			logicalName: logicalStepName(name),
-			name,
-			output: block.match(/^\s+Output:\s+(.+)$/m)?.[1]?.trim() ?? null,
-			success,
-			type,
-		});
-	}
-	return steps;
 }
 
 function exactStep(steps, logicalName, label = logicalName) {
@@ -146,6 +253,7 @@ function parsedStepOutput(step, label = step.logicalName) {
 function parsedObjectPrefix(step, marker, label = step.logicalName) {
 	assert.ok(step.output, `${label} output`);
 	const decoded = JSON.parse(step.output);
+	if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) return decoded;
 	assert.equal(typeof decoded, 'string', `${label} encoded output`);
 	const markerIndex = decoded.indexOf(marker);
 	assert.ok(markerIndex > 0, `${label} marker`);
@@ -157,12 +265,8 @@ function assertRecord(value, label) {
 	return value;
 }
 
-function assertStepSequence(steps, expected, label) {
-	assert.deepEqual(
-		steps.map((step) => step.logicalName),
-		expected,
-		`${label} canonical durable step sequence`,
-	);
+function assertStepContract(steps, expected, label) {
+	assert.deepEqual(steps.map((step) => step.logicalName).toSorted(), expected.toSorted(), `${label} exact durable step set`);
 }
 
 function assertShell(steps) {
@@ -229,7 +333,7 @@ function assertSavedWebCanary(steps, workflowSuccess) {
 			'enqueue-resource-translation',
 			'sync-ai-search',
 		];
-		assertStepSequence(steps, expected, 'saved-web changed branch');
+		assertStepContract(steps, expected, 'saved-web changed branch');
 		const persistence = assertChangedPersistence(steps);
 		assertSyncUploaded(steps);
 		return {
@@ -254,7 +358,7 @@ function assertSavedWebCanary(steps, workflowSuccess) {
 		'rehost-resource-images',
 		...(persistence.indexRelevantChanged ? ['sync-ai-search-unchanged-resync-index-relevance-v1'] : []),
 	];
-	assertStepSequence(steps, expected, 'saved-web unchanged branch');
+	assertStepContract(steps, expected, 'saved-web unchanged branch');
 	if (persistence.indexRelevantChanged) assertSyncUploaded(steps, 'sync-ai-search-unchanged-resync-index-relevance-v1');
 	const returnContract = {
 		changed: false,
@@ -294,7 +398,7 @@ function assertTwitterUnchangedCanary(steps, workflowSuccess) {
 	}
 
 	const hasUnfurl = hasStep(steps, 'unfurl-tweet-external-link');
-	assertStepSequence(
+	assertStepContract(
 		steps,
 		[
 			'fetch-resource-shell-kind-platform-v1',
@@ -334,7 +438,7 @@ function assertTwitterUnchangedCanary(steps, workflowSuccess) {
 function assertYoutubeDescriptionCanary(steps, workflowSuccess) {
 	assert.equal(hasStep(steps, 'record-unchanged-resync-index-relevance-v2'), false, 'youtube-description must take changed branch');
 	assert.equal(hasStep(steps, 'enqueue-resource-translation'), false, 'youtube-description must not enqueue translation');
-	assertStepSequence(
+	assertStepContract(
 		steps,
 		[
 			'fetch-resource-shell-kind-platform-v1',
@@ -356,6 +460,19 @@ function assertYoutubeDescriptionCanary(steps, workflowSuccess) {
 	);
 	assert.equal(acquired.type, 'youtube', 'youtube-description acquired legacy type');
 	assert.equal(acquired.resourcePlatform, 'youtube', 'youtube-description acquired resource platform');
+	assert.equal(acquired.markdown?.length, 304, 'youtube-description acquired Markdown length');
+	assert.equal(acquired.metadata?.description?.length, 304, 'youtube-description acquired description length');
+	assert.equal(acquired.platformMetadata?.data?.videoId, CANARY.videoId, 'youtube-description acquired platform video id');
+	assert.equal(
+		acquired.platformMetadata?.sourceSnapshotHash,
+		'7cf09dc954db38a54b37dfa9b541385022303ba8efc56f7c2647a037cf79ce9f',
+		'youtube-description acquired source snapshot',
+	);
+	assert.equal(acquired.youtubeTranscript?.videoId, CANARY.videoId, 'youtube-description transcript video id');
+	assert.deepEqual(acquired.youtubeTranscript?.segments, [], 'youtube-description acquired zero transcript segments');
+	assert.equal(acquired.youtubeTranscript?.language, 'zh', 'youtube-description transcript language');
+	assert.equal(acquired.youtubeTranscript?.chapters?.length, 5, 'youtube-description inferred chapters');
+	assert.equal(acquired.youtubeTranscript?.chaptersFromDescription, true, 'youtube-description chapters from description');
 	assert.equal(
 		parsedStepOutput(exactStep(steps, 'prepare-youtube-highlights'), 'youtube-description highlight preparation'),
 		null,
@@ -377,16 +494,49 @@ function assertYoutubeDescriptionCanary(steps, workflowSuccess) {
 	};
 }
 
-const output = describeWorkflowInstance();
-const workflowName = header(output, 'Workflow Name');
-const describedInstanceId = header(output, 'Instance Id');
-const versionId = header(output, 'Version Id');
-const status = normalizedStatus(header(output, 'Status'));
-const workflowSuccess = /\bYes\b/i.test(header(output, 'Success'));
-const workflowError = optionalHeader(output, 'Error');
-const lastSuccessfulStep = header(output, 'Last Successful Step');
-const steps = workflowSteps(output);
-const failedSteps = steps.filter((step) => !/\bYes\b/i.test(step.success)).map((step) => step.name);
+function youtubeTailEvidence() {
+	if (CANARY_CASE !== 'youtube-description') return null;
+	assert.ok(RAW_TAIL_FILE, 'Set RESOURCE_PROCESSING_CANARY_TAIL_FILE to the exact pinned Core tail JSON');
+	const tail = JSON.parse(readFileSync(RAW_TAIL_FILE, 'utf8'));
+	assert.equal(tail.scriptVersion?.id, EXPECTED_CORE_VERSION_ID, 'YouTube tail Core version');
+	assert.equal(tail.scriptName, 'newsence-core', 'YouTube tail Worker name');
+	assert.equal(tail.entrypoint, 'ResourceProcessingWorkflow', 'YouTube tail entrypoint');
+	assert.equal(tail.tailAttributes?.workflowName, WORKFLOW_NAME, 'YouTube tail Workflow name');
+	assert.equal(tail.tailAttributes?.instanceId, INSTANCE_ID, 'YouTube tail Workflow instance');
+	assert.equal(tail.event?.rpcMethod, 'run', 'YouTube tail RPC method');
+	assert.deepEqual(tail.exceptions ?? [], [], 'YouTube tail exceptions');
+	const messages =
+		tail.logs
+			?.flatMap((log) => (log.message ?? []).map((message) => ({ level: log.level, message })))
+			.filter(({ message }) => message && typeof message === 'object') ?? [];
+	const fallback = messages.filter(
+		({ level, message }) =>
+			level === 'warn' &&
+			message.tag === 'YOUTUBE' &&
+			message.msg === 'Transcript unavailable; using video description' &&
+			message.videoId === CANARY.videoId,
+	);
+	assert.equal(fallback.length, 1, 'YouTube description fallback tail event');
+	const completed = messages.filter(
+		({ message }) => message.tag === 'WORKFLOW' && message.msg === 'Completed' && message.resource_id === CANARY.resourceId,
+	);
+	assert.equal(completed.length, 1, 'YouTube description completed tail event');
+	return {
+		coreVersionId: tail.scriptVersion.id,
+		fallbackMessage: fallback[0].message.msg,
+		videoId: fallback[0].message.videoId,
+		workflowCompleted: true,
+	};
+}
+
+const { metadata, steps } = await workflowInstanceEvidence();
+const workflowName = WORKFLOW_NAME;
+const describedInstanceId = INSTANCE_ID;
+const versionId = metadata.versionId;
+const status = normalizedStatus(metadata.status);
+const workflowSuccess = metadata.success === true;
+const workflowError = metadata.error ?? null;
+const expectedTerminalStep = steps.at(-1)?.name;
 
 assert.equal(workflowName, WORKFLOW_NAME, 'Workflow name');
 assert.equal(describedInstanceId, INSTANCE_ID, 'Workflow instance id');
@@ -395,8 +545,15 @@ assert.equal(status, 'complete', 'Workflow terminal status');
 assert.equal(workflowSuccess, true, 'Workflow terminal success');
 assert.equal(workflowError, null, 'Workflow terminal error');
 assert.ok(steps.length > 0, 'Workflow durable steps');
-assert.deepEqual(failedSteps, [], 'Workflow failed steps');
-assert.equal(lastSuccessfulStep, steps.at(-1)?.name, 'Workflow final successful step');
+assert.deepEqual(metadata.params, { resourceId: CANARY.resourceId, operation: 'resync' }, 'Workflow input parameters');
+assert.equal(metadata.trigger?.source, 'api', 'Workflow trigger source');
+assert.equal(metadata.rollback ?? null, null, 'Workflow rollback');
+assert.ok(metadata.end, 'Workflow terminal end timestamp');
+for (const timestamp of [metadata.queued, metadata.start, metadata.end]) {
+	assert.ok(Number.isFinite(Date.parse(timestamp)), `Workflow timestamp: ${timestamp}`);
+}
+assert.ok(Date.parse(metadata.queued) <= Date.parse(metadata.start), 'Workflow queued before start');
+assert.ok(Date.parse(metadata.start) <= Date.parse(metadata.end), 'Workflow start before end');
 for (const step of steps) assert.match(step.type, /\bStep\b/i, `${step.name} durable step type`);
 
 const shell = assertShell(steps);
@@ -414,6 +571,8 @@ switch (CANARY_CASE) {
 	default:
 		throw new Error(`Unsupported canary case: ${CANARY_CASE}`);
 }
+assert.deepEqual(metadata.output, evidence.returnContract, `${CANARY_CASE} observed Workflow return contract`);
+const tailEvidence = youtubeTailEvidence();
 
 console.info({
 	event: 'resource_processing_canary_validated',
@@ -422,7 +581,9 @@ console.info({
 	instanceId: describedInstanceId,
 	versionId,
 	status,
-	lastSuccessfulStep,
+	expectedTerminalStep,
+	stepOrderObserved: false,
+	streamStepCompletionInferredFromTerminalInstance: steps.filter((step) => !step.statusObserved).map((step) => step.name),
 	resourceIdentity: {
 		kind: shell.kind,
 		resourceId: shell.id,
@@ -434,9 +595,7 @@ console.info({
 		authoritativeGate: 'check:resource-runtime-canary-state',
 	},
 	...evidence,
-	workflowReturnObserved: false,
-	tailEvidenceRequired:
-		CANARY_CASE === 'youtube-description'
-			? `Confirm the exact Core tail for ${CANARY.videoId} contains "Transcript unavailable; using video description"; the post-canary DB verifier must prove a non-empty description and one zero-segment transcript row. Workflow describe cannot prove either from its truncated output.`
-			: null,
+	workflowReturnObserved: true,
+	workflowEvidenceSource: 'Cloudflare simple instance metadata plus full step output API',
+	tailEvidence,
 });
