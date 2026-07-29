@@ -1,0 +1,20 @@
+{
+	"aiSearchInstanceName": "newsence-corpus-v6",
+	"generation": 4,
+	"generationKey": "canonical-4-kind-platform",
+	"initialRepairCounts": {
+		"error": 53,
+		"outdated": 32,
+		"total": 85
+	},
+	"initialRepairTargetDigest": "1fff261d1b3571ac4f7110b375a9e74065272ce7cdb46f40e5501b5ef8416953",
+	"maxRepairRounds": 3,
+	"repairInstanceId": "search-index-terminal-repair-251-v1",
+	"repairWorkerName": "newsence-search-repair-251",
+	"repairWorkflowName": "newsence-search-index-terminal-repair-251",
+	"sourceErrorName": "Error",
+	"sourceErrorPrefix": "AI Search index did not become ready:",
+	"sourceInstanceId": "search-index-rebuild-canonical-4-kind-platform-shadow-v2",
+	"sourceRebuildEpoch": 1,
+	"sourceWorkflowName": "newsence-search-index-shadow-rebuild"
+}

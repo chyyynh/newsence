@@ -47,6 +47,81 @@ For any incompatible rebuild-graph revision, create all four together:
 Never trigger the historical `newsence-search-index-rebuild` or
 `newsence-search-index-shadow-rebuild` resources for the active generation.
 
+## One-time #251 terminal repair
+
+The phase-1 shadow run
+`search-index-rebuild-canonical-4-kind-platform-shadow-v2` reached its final
+readiness fence but errored because its repair listing was limited to one
+50-item page. Do not restart or redeploy that historical Workflow. The isolated
+repair below is pinned to its terminal source state and to the exact 85-item
+target snapshot; any drift fails closed before mutation.
+
+| Role | Identifier |
+| --- | --- |
+| Worker | `newsence-search-repair-251` |
+| Physical Workflow | `newsence-search-index-terminal-repair-251` |
+| Runner | `search-index-terminal-repair-251-v1` |
+| Config | `wrangler.repair-251.jsonc` |
+| Checkpoint | `search-terminal-repair-251.json` |
+
+The repair Worker has no route, `workers.dev` hostname, cron, R2 binding, or
+application service binding. It can reach only v6 AI Search, Hyperdrive, and the
+errored phase-1 Workflow used as a read-only source fence.
+
+From the repository root, validate the pinned source, durable epoch, database
+eligibility, target counts, and digest before deployment:
+
+```sh
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/check-search-terminal-repair-251.mjs
+
+pnpm -C workers/core-worker typecheck
+pnpm -C workers/core-worker lint
+pnpm -C workers/core-worker exec wrangler deploy \
+  --config wrangler.repair-251.jsonc \
+  --dry-run
+```
+
+Deploy only the isolated Worker, confirm the exact runner does not already
+exist, then trigger it exactly once:
+
+```sh
+pnpm -C workers/core-worker run deploy:search-terminal-repair-251
+
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/check-search-terminal-repair-251.mjs
+
+pnpm -C workers/core-worker exec wrangler workflows trigger \
+  newsence-search-index-terminal-repair-251 \
+  '{}' \
+  --id search-index-terminal-repair-251-v1
+```
+
+Never use a different payload, instance ID, physical Workflow, generation,
+epoch, or target digest. The Workflow claims epoch 2, repairs only the pinned
+resource identities in batches of at most five, rejects newly introduced
+terminal identities, and publishes readiness only after the strict six-pair
+contract converges.
+
+After completion, verify the exact Workflow graph and durable ready publication,
+then run the independent current-state rollout check:
+
+```sh
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/check-search-terminal-repair-251.mjs \
+  --verify-complete
+
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/check-search-rollout.mjs
+```
+
+Retain the isolated Workflow through the #251 contraction evidence window. Add
+its physical name to every queued/running/paused drain; never invoke it again.
+
 ## Bootstrap or rebuild
 
 First confirm that the v6 instance exists. Create it only for a fresh
@@ -98,11 +173,11 @@ printing or shell-sourcing it, then run the active generation-4 checks:
 
 ```sh
 pnpm -C workers/core-worker exec node \
-  --env-file=../../web-tanstack/.env.local \
+  --env-file="$PWD/web-tanstack/.env.local" \
   scripts/check-search-rebuild.mjs
 
 pnpm -C workers/core-worker exec node \
-  --env-file=../../web-tanstack/.env.local \
+  --env-file="$PWD/web-tanstack/.env.local" \
   scripts/check-search-rollout.mjs
 ```
 

@@ -11,6 +11,7 @@ import { type CoreDb, isValidUuid, queryRows, textArraySql, uuidArraySql, withCo
 import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
 import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import { sql } from 'drizzle-orm';
+import terminalRepair251Checkpoint from '../search-terminal-repair-251.json';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
 // Cloudflare AI Search allows at most five custom metadata fields per instance.
@@ -361,6 +362,7 @@ const REINDEX_MAX_PRUNE_PASSES = 3;
 // Batch prune pages and combine corpus reads/uploads below so the current full
 // rebuild stays under the 1,024-step Workflow limit on Workers Free.
 const REINDEX_PRUNE_PAGES_PER_STEP = 10;
+const REINDEX_REPAIR_LIST_PAGE_SIZE = 50;
 const REINDEX_READY_POLL_ATTEMPTS = 36;
 const REINDEX_READY_POLL_INTERVAL = '10 minutes';
 const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } as const;
@@ -377,6 +379,82 @@ type SearchIndexRebuildingRow = {
 	rebuild_epoch: string;
 	started_at: string;
 };
+
+type SearchIndexTerminalRepair251Checkpoint = {
+	aiSearchInstanceName: string;
+	generation: number;
+	generationKey: string;
+	initialRepairCounts: {
+		error: number;
+		outdated: number;
+		total: number;
+	};
+	initialRepairTargetDigest: string;
+	maxRepairRounds: number;
+	repairInstanceId: string;
+	repairWorkerName: string;
+	repairWorkflowName: string;
+	sourceErrorName: string;
+	sourceErrorPrefix: string;
+	sourceInstanceId: string;
+	sourceRebuildEpoch: number;
+	sourceWorkflowName: string;
+};
+
+type SearchIndexTerminalRepair251Env = CoreEnv & {
+	PHASE1_SEARCH_REBUILD_SOURCE: Workflow<Record<string, unknown>>;
+};
+
+function searchIndexTerminalRepair251Checkpoint(): SearchIndexTerminalRepair251Checkpoint {
+	const checkpoint = terminalRepair251Checkpoint as SearchIndexTerminalRepair251Checkpoint;
+	if (checkpoint.generation !== SEARCH_INDEX_GENERATION.ordinal || checkpoint.generationKey !== SEARCH_INDEX_GENERATION.key) {
+		throw new Error(
+			`AI Search terminal repair checkpoint generation ${checkpoint.generation}/${checkpoint.generationKey} does not match ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}`,
+		);
+	}
+	if (
+		!checkpoint.aiSearchInstanceName.trim() ||
+		!checkpoint.repairWorkerName.trim() ||
+		!checkpoint.repairWorkflowName.trim() ||
+		!checkpoint.repairInstanceId.trim() ||
+		!checkpoint.sourceWorkflowName.trim() ||
+		!checkpoint.sourceInstanceId.trim()
+	) {
+		throw new Error('AI Search terminal repair checkpoint identity is empty');
+	}
+	if (!Number.isSafeInteger(checkpoint.sourceRebuildEpoch) || checkpoint.sourceRebuildEpoch < 0) {
+		throw new Error('AI Search terminal repair checkpoint source epoch must be a non-negative safe integer');
+	}
+	if (!checkpoint.sourceErrorName.trim() || !checkpoint.sourceErrorPrefix.trim()) {
+		throw new Error('AI Search terminal repair checkpoint source error fence is empty');
+	}
+	if (!/^[0-9a-f]{64}$/.test(checkpoint.initialRepairTargetDigest)) {
+		throw new Error('AI Search terminal repair checkpoint target digest must be lowercase SHA-256 hex');
+	}
+	const { error, outdated, total } = checkpoint.initialRepairCounts;
+	if (
+		![error, outdated, total, checkpoint.maxRepairRounds].every((value) => Number.isSafeInteger(value) && value >= 0) ||
+		total !== error + outdated ||
+		checkpoint.maxRepairRounds <= 0
+	) {
+		throw new Error('AI Search terminal repair checkpoint counts or repair bound are invalid');
+	}
+	return checkpoint;
+}
+
+async function verifySearchIndexTerminalRepair251Binding(
+	env: CoreEnv,
+	checkpoint: SearchIndexTerminalRepair251Checkpoint,
+): Promise<{ configReady: true; id: string; paused: false }> {
+	const info = await env.AI_SEARCH.info();
+	if (info.id !== checkpoint.aiSearchInstanceName) {
+		throw new Error(`AI Search terminal repair binding ${info.id} does not match ${checkpoint.aiSearchInstanceName}`);
+	}
+	if (info.paused !== false || !canonicalSearchInstanceConfigMatches(info)) {
+		throw new Error(`AI Search terminal repair binding ${info.id} is paused or has the wrong canonical config`);
+	}
+	return { configReady: true, id: info.id, paused: false };
+}
 
 async function writeSearchIndexRebuildingState(env: CoreEnv, advanceEpoch: boolean): Promise<SearchIndexRebuildLease> {
 	const epochIncrement = advanceEpoch ? 1 : 0;
@@ -434,6 +512,64 @@ async function writeSearchIndexRebuildingState(env: CoreEnv, advanceEpoch: boole
 async function beginSearchIndexRebuild(env: CoreEnv): Promise<SearchIndexRebuildLease> {
 	await assertResourceWritesEnabled(env, 'begin AI Search canonical rebuild');
 	return writeSearchIndexRebuildingState(env, true);
+}
+
+async function claimSearchIndexTerminalRepair251(
+	env: CoreEnv,
+	checkpoint: SearchIndexTerminalRepair251Checkpoint,
+	claimStartedAt: string,
+): Promise<SearchIndexRebuildLease & { sourceRebuildEpoch: string }> {
+	await assertResourceWritesEnabled(env, 'claim AI Search terminal repair #251');
+	const sourceRebuildEpoch = String(checkpoint.sourceRebuildEpoch);
+	const expectedRebuildEpoch = String(checkpoint.sourceRebuildEpoch + 1);
+	const [row] = await withCoreDb(env, (db) =>
+		queryRows<SearchIndexRebuildingRow>(
+			db,
+			sql`
+				WITH claimed AS (
+				  UPDATE search_index_states
+				  SET status = 'rebuilding',
+				      rebuild_epoch = rebuild_epoch + 1,
+				      rebuilding_at = ${claimStartedAt}::timestamptz,
+				      ready_at = NULL,
+				      updated_at = ${claimStartedAt}::timestamptz
+				  WHERE index_name = ${SEARCH_INDEX_NAME}
+				    AND generation = ${checkpoint.generation}
+				    AND generation_key = ${checkpoint.generationKey}
+				    AND status = 'rebuilding'
+				    AND rebuild_epoch = ${sourceRebuildEpoch}::bigint
+				    AND ready_at IS NULL
+				  RETURNING rebuild_epoch, rebuilding_at
+				)
+				SELECT
+				  rebuild_epoch::text,
+				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
+				FROM claimed
+				UNION ALL
+				SELECT
+				  rebuild_epoch::text,
+				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
+				FROM search_index_states
+				WHERE index_name = ${SEARCH_INDEX_NAME}
+				  AND generation = ${checkpoint.generation}
+				  AND generation_key = ${checkpoint.generationKey}
+				  AND status = 'rebuilding'
+				  AND rebuild_epoch = ${expectedRebuildEpoch}::bigint
+				  AND rebuilding_at = ${claimStartedAt}::timestamptz
+				  AND ready_at IS NULL
+				  AND NOT EXISTS (SELECT 1 FROM claimed)
+				LIMIT 1
+			`,
+		),
+	);
+	if (!row || row.rebuild_epoch !== expectedRebuildEpoch) {
+		throw new Error(`AI Search terminal repair could not claim ${checkpoint.generation}/${checkpoint.generationKey}/${sourceRebuildEpoch}`);
+	}
+	return {
+		sourceRebuildEpoch,
+		rebuildEpoch: row.rebuild_epoch,
+		startedAt: row.started_at,
+	};
 }
 
 async function assertSearchIndexRebuildLease(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<void> {
@@ -911,25 +1047,43 @@ async function searchIndexRepairTargetSnapshot(targets: readonly SearchIndexRepa
 }
 
 async function listOwnedSearchRepairStatusItems(env: CoreEnv, status: SearchIndexRepairTargetStatus): Promise<AiSearchItemInfo[]> {
-	const listed = await env.AI_SEARCH.items.list({
-		metadata_filter: JSON.stringify({ folder: ITEM_PREFIX }),
-		page: 1,
-		per_page: REINDEX_PAGE_SIZE,
-		source: 'builtin',
-		status,
-	});
-	const total = listedItemCount(listed, `${status} repair candidate`);
-	if (total > REINDEX_PAGE_SIZE || listed.result.length !== total) {
-		throw new Error(
-			`AI Search ${status} repair candidate set exceeded its single-page fence: ${listed.result.length}/${total}/${REINDEX_PAGE_SIZE}`,
-		);
+	const items: AiSearchItemInfo[] = [];
+	let expectedTotal: number | null = null;
+	for (let page = 1; ; page++) {
+		const listed = await env.AI_SEARCH.items.list({
+			metadata_filter: JSON.stringify({ folder: ITEM_PREFIX }),
+			page,
+			per_page: REINDEX_REPAIR_LIST_PAGE_SIZE,
+			sort_by: 'modified_at',
+			source: 'builtin',
+			status,
+		});
+		const total = listedItemCount(listed, `${status} repair candidate page ${page}`);
+		if (!Number.isSafeInteger(total) || total < 0) {
+			throw new Error(`AI Search ${status} repair candidate page ${page} returned an invalid total: ${total}`);
+		}
+		expectedTotal ??= total;
+		if (total !== expectedTotal) {
+			throw new Error(`AI Search ${status} repair candidate count changed while paging: ${expectedTotal}/${total}`);
+		}
+		items.push(...listed.result);
+		if (items.length >= total) break;
+		if (listed.result.length === 0) {
+			throw new Error(`AI Search ${status} repair candidate paging stopped early: ${items.length}/${total}`);
+		}
 	}
-	return listed.result;
+	if (items.length !== expectedTotal) {
+		throw new Error(`AI Search ${status} repair candidate paging mismatch: ${items.length}/${expectedTotal}`);
+	}
+	return items;
 }
 
 function parseSearchIndexRepairTarget(item: AiSearchItemInfo, status: SearchIndexRepairTargetStatus): SearchIndexRepairTarget {
 	if (item.status !== status || item.source_id !== 'builtin') {
 		throw new Error(`AI Search repair candidate ${item.id} did not match ${status}/builtin`);
+	}
+	if (!item.id.trim()) {
+		throw new Error(`AI Search ${status} repair candidate is missing its item identity`);
 	}
 	const resourceId = idFromItemKey(item.key);
 	if (!resourceId || item.key !== itemKey(resourceId)) {
@@ -980,6 +1134,63 @@ function assertSearchIndexRepairTargetSubset(snapshot: SearchIndexRepairTargetSn
 			throw new Error(`AI Search repair retry introduced an unpinned target: ${target.itemId}/${target.resourceId}`);
 		}
 	}
+}
+
+function assertSearchIndexTerminalRepair251Targets(
+	snapshot: SearchIndexRepairTargetSnapshot,
+	checkpoint: SearchIndexTerminalRepair251Checkpoint,
+): void {
+	if (
+		snapshot.counts.error !== checkpoint.initialRepairCounts.error ||
+		snapshot.counts.outdated !== checkpoint.initialRepairCounts.outdated ||
+		snapshot.counts.total !== checkpoint.initialRepairCounts.total ||
+		snapshot.digest !== checkpoint.initialRepairTargetDigest
+	) {
+		throw new Error(
+			`AI Search terminal repair target checkpoint mismatch: ${JSON.stringify({
+				actual: { counts: snapshot.counts, digest: snapshot.digest },
+				expected: {
+					counts: checkpoint.initialRepairCounts,
+					digest: checkpoint.initialRepairTargetDigest,
+				},
+			})}`,
+		);
+	}
+}
+
+async function verifySearchIndexTerminalRepair251Source(
+	env: SearchIndexTerminalRepair251Env,
+	checkpoint: SearchIndexTerminalRepair251Checkpoint,
+) {
+	const instance = await env.PHASE1_SEARCH_REBUILD_SOURCE.get(checkpoint.sourceInstanceId);
+	const status = await instance.status();
+	if (status.status !== 'errored') {
+		throw new Error(`AI Search terminal repair source ${checkpoint.sourceInstanceId} is ${status.status}, not errored`);
+	}
+	const errorName = status.error?.name ?? '';
+	const errorMessage = status.error?.message ?? '';
+	if (errorName !== checkpoint.sourceErrorName || !errorMessage.startsWith(checkpoint.sourceErrorPrefix)) {
+		throw new Error(`AI Search terminal repair source ${checkpoint.sourceInstanceId} did not fail at the pinned readiness fence`);
+	}
+	return {
+		workflowName: checkpoint.sourceWorkflowName,
+		instanceId: checkpoint.sourceInstanceId,
+		status: status.status,
+		error: { name: errorName, message: errorMessage },
+	};
+}
+
+function searchIndexTerminalRepair251SourcesEqual(
+	left: Awaited<ReturnType<typeof verifySearchIndexTerminalRepair251Source>>,
+	right: Awaited<ReturnType<typeof verifySearchIndexTerminalRepair251Source>>,
+): boolean {
+	return (
+		left.workflowName === right.workflowName &&
+		left.instanceId === right.instanceId &&
+		left.status === right.status &&
+		left.error.name === right.error.name &&
+		left.error.message === right.error.message
+	);
 }
 
 type SearchIndexRepairCurrentTarget = {
@@ -1439,6 +1650,89 @@ export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<Co
 			reconciliation,
 			repair,
 			readiness,
+			generationReadiness,
+		};
+	}
+}
+
+export class SearchIndexTerminalRepair251Workflow extends WorkflowEntrypoint<SearchIndexTerminalRepair251Env, Record<string, never>> {
+	async run(event: WorkflowEvent<Record<string, never>>, step: WorkflowStep) {
+		await assertResourceWritesEnabled(this.env, 'AI Search terminal repair #251 workflow');
+		const checkpoint = searchIndexTerminalRepair251Checkpoint();
+		if (event.workflowName !== checkpoint.repairWorkflowName || event.instanceId !== checkpoint.repairInstanceId) {
+			throw new Error(`AI Search terminal repair #251 rejected Workflow identity ${event.workflowName}/${event.instanceId}`);
+		}
+		if (Object.keys(event.payload).length > 0) {
+			throw new Error('AI Search terminal repair #251 does not accept operator-supplied parameters');
+		}
+		const bindingBeforeClaim = await step.do('verify-terminal-repair-search-binding', SHORT_STEP_OPTIONS, () =>
+			verifySearchIndexTerminalRepair251Binding(this.env, checkpoint),
+		);
+		const sourceBeforeClaim = await step.do('verify-phase1-search-rebuild-source', SHORT_STEP_OPTIONS, () =>
+			verifySearchIndexTerminalRepair251Source(this.env, checkpoint),
+		);
+		const initialTargets = await step.do('snapshot-terminal-search-repair-targets', SHORT_STEP_OPTIONS, async () => {
+			const snapshot = await loadSearchIndexRepairTargets(this.env);
+			assertSearchIndexTerminalRepair251Targets(snapshot, checkpoint);
+			return snapshot;
+		});
+		const claim = await step.do('claim-terminal-search-repair-lease', SHORT_STEP_OPTIONS, () =>
+			claimSearchIndexTerminalRepair251(this.env, checkpoint, event.timestamp.toISOString()),
+		);
+		const sourceAfterClaim = await step.do('reverify-phase1-search-rebuild-source', SHORT_STEP_OPTIONS, () =>
+			verifySearchIndexTerminalRepair251Source(this.env, checkpoint),
+		);
+		if (!searchIndexTerminalRepair251SourcesEqual(sourceBeforeClaim, sourceAfterClaim)) {
+			throw new Error('AI Search terminal repair source changed while claiming the fenced lease');
+		}
+		const targetsAfterClaim = await step.do('recheck-terminal-search-repair-targets', SHORT_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(this.env, claim, async () => {
+				const snapshot = await loadSearchIndexRepairTargets(this.env);
+				assertSearchIndexRepairTargetSubset(snapshot, initialTargets);
+				return snapshot;
+			}),
+		);
+		const repaired = await repairAndWaitForSearchIndexReady(this.env, step, claim, initialTargets, checkpoint.maxRepairRounds);
+		if (!searchIndexReady(repaired.readiness)) {
+			throw new Error(`AI Search terminal repair #251 readiness contract failed: ${JSON.stringify(repaired.readiness)}`);
+		}
+		const sourceBeforeReady = await step.do('final-reverify-phase1-search-rebuild-source', SHORT_STEP_OPTIONS, () =>
+			verifySearchIndexTerminalRepair251Source(this.env, checkpoint),
+		);
+		if (!searchIndexTerminalRepair251SourcesEqual(sourceAfterClaim, sourceBeforeReady)) {
+			throw new Error('AI Search terminal repair source changed before ready publication');
+		}
+		const bindingBeforeReady = await step.do('final-reverify-terminal-repair-search-binding', SHORT_STEP_OPTIONS, () =>
+			verifySearchIndexTerminalRepair251Binding(this.env, checkpoint),
+		);
+		if (JSON.stringify(bindingBeforeClaim) !== JSON.stringify(bindingBeforeReady)) {
+			throw new Error('AI Search terminal repair binding changed before ready publication');
+		}
+		const finalReadiness = await step.do('final-load-terminal-repair-readiness', SHORT_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(this.env, claim, () => loadSearchIndexReadiness(this.env)),
+		);
+		if (!searchIndexReady(finalReadiness)) {
+			throw new Error(`AI Search terminal repair #251 final readiness fence failed: ${JSON.stringify(finalReadiness)}`);
+		}
+		const generationReadiness = await step.do('mark-terminal-repair-generation-ready', SHORT_STEP_OPTIONS, () =>
+			markSearchIndexGenerationReady(this.env, claim),
+		);
+		return {
+			mode: 'terminal-repair-251' as const,
+			checkpoint: {
+				generation: checkpoint.generation,
+				generationKey: checkpoint.generationKey,
+				sourceInstanceId: checkpoint.sourceInstanceId,
+				sourceRebuildEpoch: checkpoint.sourceRebuildEpoch,
+				initialRepairCounts: checkpoint.initialRepairCounts,
+				initialRepairTargetDigest: checkpoint.initialRepairTargetDigest,
+			},
+			binding: { beforeClaim: bindingBeforeClaim, beforeReady: bindingBeforeReady },
+			source: { beforeClaim: sourceBeforeClaim, afterClaim: sourceAfterClaim, beforeReady: sourceBeforeReady },
+			claim,
+			targets: { initial: initialTargets, afterClaim: targetsAfterClaim },
+			repairRoundsUsed: repaired.repairRoundsUsed,
+			readiness: finalReadiness,
 			generationReadiness,
 		};
 	}
