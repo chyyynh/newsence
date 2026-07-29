@@ -12,7 +12,7 @@ const RECOVERY_SOURCE_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readi
 const READINESS_INSTANCE_ID = 'search-index-rebuild-canonical-3-kind-readiness-v3';
 const RESUME_VERSION_ID = '94064547-549b-4d1e-adb0-893c5f232792';
 const RECOVERY_SOURCE_VERSION_ID = '79976d47-7a3e-43f4-9aad-03ee2e93bae3';
-const READINESS_VERSION_ID = 'e0445ff4-222f-4e54-b6a5-1bdd95d2476f';
+const READINESS_VERSION_ID = 'ea3e0354-4167-4002-8b78-97a284f2ca66';
 const RESUME_STARTED_AT = '2026-07-28T05:31:32.516Z';
 const READINESS_CHECKPOINT_KEY = 'canonical-3-kind-readiness-v2-null-item-result';
 const READINESS_TIMEOUT_ERROR_PREFIX = 'AI Search index did not become ready:';
@@ -900,6 +900,8 @@ if (EXPECT_READINESS_TIMEOUT) {
 				status: 'ready',
 			});
 		}
+	} else if (instanceId === READINESS_INSTANCE_ID) {
+		assert.equal(versionId, READINESS_VERSION_ID, 'in-progress readiness continuation Workflow version');
 	}
 }
 
