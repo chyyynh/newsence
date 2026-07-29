@@ -67,6 +67,13 @@ function recoveryInstanceUrl(accountId) {
 	);
 }
 
+function recoveryStepUrl(accountId, step) {
+	const url = new URL(`${recoveryInstanceUrl(accountId)}/step`);
+	url.searchParams.set('name', step.name);
+	url.searchParams.set('type', step.type);
+	return url;
+}
+
 function recoveryWorkflowUrl(accountId) {
 	return `https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/${checkpoint.recovery.workflowName}`;
 }
@@ -100,7 +107,7 @@ function aiSearchItemsUrl(accountId) {
 }
 
 async function validateConfig() {
-	assert.equal(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251-v2', 'recovery approval event type');
+	assert.equal(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251-v3', 'recovery approval event type');
 	assert.match(checkpoint.recovery.approvalToken, /^[0-9a-f-]{36}$/, 'recovery approval token');
 	assert.equal(checkpoint.recovery.approvalTimeoutMs, 300_000, 'recovery approval timeout');
 	if (checkpoint.recovery.versionId !== null) {
@@ -296,9 +303,12 @@ function exactStep(steps, pattern, label) {
 	return matches[0];
 }
 
-function parseStepOutput(step, label) {
-	assert.equal(typeof step.output, 'string', `${label} output`);
-	return JSON.parse(step.output);
+async function loadFullStepOutput(accountId, workflowsToken, step, label) {
+	const result = await cloudflareApi(recoveryStepUrl(accountId, step), workflowsToken, `${label} full output`);
+	assert.equal(result.status, 'complete', `${label} full output status`);
+	assert.equal(result.error ?? null, null, `${label} full output error`);
+	assert.ok(result.output && typeof result.output === 'object', `${label} full output value`);
+	return result.output;
 }
 
 async function assertRecoveryRunnerAbsent(accountId, workflowsToken) {
@@ -424,7 +434,7 @@ async function waitForRecoveryApprovalGate(accountId, workflowsToken) {
 			assert.equal(approvalStep.type, 'waitForEvent', 'recovery approval gate step type');
 			assert.equal(approvalStep.success ?? null, null, 'recovery approval gate remains unresolved');
 			assert.equal(preflightStep.success, true, 'recovery approval preflight success');
-			const preflight = parseStepOutput(preflightStep, 'recovery approval preflight');
+			const preflight = await loadFullStepOutput(accountId, workflowsToken, preflightStep, 'recovery approval preflight');
 			assert.match(preflight.canonical?.contentSha256 ?? '', /^[0-9a-f]{64}$/, 'recovery approval content digest');
 			assert.deepEqual(preflight.canonical?.metadata, checkpoint.item.customMetadata, 'recovery approval metadata');
 			assert.equal(preflight.binding?.workerVersionId, checkpoint.recovery.workerVersionId, 'recovery approval runtime Worker version');
@@ -481,22 +491,31 @@ async function verifyRecoveryComplete(accountId, workflowsToken, aiSearchToken) 
 	assert.equal(instance.versionId, checkpoint.recovery.versionId, 'recovery Workflow ran the pinned version');
 	const failedSteps = instance.steps.filter((step) => step.type === 'step' && step.success !== true).map((step) => step.name);
 	assert.deepEqual(failedSteps, [], 'recovery Workflow failed steps');
-	const preflight = parseStepOutput(
+	const preflight = await loadFullStepOutput(
+		accountId,
+		workflowsToken,
 		exactStep(instance.steps, /^verify-stuck-item-recovery-checkpoint-\d+$/, 'recovery preflight'),
 		'recovery preflight',
 	);
-	const approval = parseStepOutput(
+	const approvalOutput = await loadFullStepOutput(
+		accountId,
+		workflowsToken,
 		exactStep(instance.steps, /^wait-for-stuck-item-recovery-approval-\d+$/, 'recovery approval'),
 		'recovery approval',
 	);
-	const upsert = parseStepOutput(
+	const upsert = await loadFullStepOutput(
+		accountId,
+		workflowsToken,
 		exactStep(instance.steps, /^upsert-stuck-item-from-canonical-corpus-\d+$/, 'recovery upsert'),
 		'recovery upsert',
 	);
-	const postflight = parseStepOutput(
+	const postflight = await loadFullStepOutput(
+		accountId,
+		workflowsToken,
 		exactStep(instance.steps, /^verify-stuck-item-recovery-result-\d+$/, 'recovery postflight'),
 		'recovery postflight',
 	);
+	const approval = approvalOutput.payload ? approvalOutput : { payload: approvalOutput, type: checkpoint.recovery.approvalEventType };
 	assert.match(preflight.canonical?.contentSha256 ?? '', /^[0-9a-f]{64}$/, 'recovery canonical content digest');
 	assert.ok(preflight.canonical?.contentBytes > 0, 'recovery canonical content bytes');
 	assert.deepEqual(preflight.canonical?.metadata, checkpoint.item.customMetadata, 'recovery preflight metadata');

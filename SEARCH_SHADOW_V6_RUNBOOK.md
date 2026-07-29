@@ -140,9 +140,16 @@ reported the event step while retaining a different non-terminal top-level
 status. No approval event was sent, no mutation step started, the fixed v1
 instance was terminated, and the item ID/status/last-seen/log remained exact.
 That Worker/Workflow is never restarted or redeployed. Its immutable evidence
-lives in `recoveryHistory`; the active checkpoint uses new `-v2` physical
-Worker, Workflow, and instance names and recognizes the unresolved
-`waitForEvent` step directly.
+lives in `recoveryHistory`.
+
+The isolated `-v2` attempt recognized the unresolved event step, but the
+general instance summary truncated the successful preflight's JSON output.
+Parsing failed, so the operator again withheld approval and terminated the
+fixed instance before any mutation step. The exact item and log remained
+unchanged. That physical deployment is also immutable history. The active
+checkpoint uses new `-v3` names and reads step values only through Cloudflare's
+dedicated full-step-output endpoint with the exact step name and type; the
+endpoint was verified against the completed v2 preflight before v3 deployment.
 
 Recover through a separate one-shot Worker so the active repair Worker and its
 pinned v2 graph are never redeployed. The recovery Worker has no route,

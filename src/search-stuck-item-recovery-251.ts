@@ -165,10 +165,10 @@ function validateCheckpoint(): void {
 	assertEqual(checkpoint.durableState.generationKey, 'canonical-4-kind-platform', 'recovery generation key');
 	assertEqual(checkpoint.durableState.rebuildEpoch, 2, 'recovery rebuild epoch');
 	assertEqual(checkpoint.item.key, itemKey(checkpoint.resource.id), 'recovery item key');
-	assertEqual(checkpoint.recovery.workerName, 'newsence-search-stuck-item-recovery-251-v2', 'recovery Worker');
-	assertEqual(checkpoint.recovery.workflowName, 'newsence-search-index-stuck-item-recovery-251-v2', 'recovery Workflow');
-	assertEqual(checkpoint.recovery.instanceId, 'search-index-stuck-item-recovery-251-v2', 'recovery instance');
-	assertEqual(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251-v2', 'recovery approval event type');
+	assertEqual(checkpoint.recovery.workerName, 'newsence-search-stuck-item-recovery-251-v3', 'recovery Worker');
+	assertEqual(checkpoint.recovery.workflowName, 'newsence-search-index-stuck-item-recovery-251-v3', 'recovery Workflow');
+	assertEqual(checkpoint.recovery.instanceId, 'search-index-stuck-item-recovery-251-v3', 'recovery instance');
+	assertEqual(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251-v3', 'recovery approval event type');
 	if (!/^[0-9a-f-]{36}$/.test(checkpoint.recovery.approvalToken)) {
 		throw new Error('Recovery approval token is invalid');
 	}
