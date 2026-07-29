@@ -14,6 +14,7 @@ import {
 } from '@core-shared/resource-types';
 import { detectResourcePlatform } from '@core-shared/url';
 import { withCoreDb, withCoreTx } from '@db/client';
+import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import type { QueryResultRow } from 'pg';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 
@@ -493,6 +494,7 @@ function unsafeWriteRows(rows: ResourceIdentityBackfillRow[], mode: ResourceIden
 }
 
 async function writePage(env: CoreEnv, cursor: string | null, snapshotAt: string, mode: ResourceIdentityWriteMode): Promise<WritePage> {
+	await assertResourceWritesEnabled(env, `resource identity ${mode} page`);
 	return withCoreTx(env, async (_db, client) => {
 		const result = await client.query<ResourceIdentityBackfillRow>(
 			`
@@ -745,7 +747,8 @@ export function resourceIdentityBackfillInstanceId(mode: ResourceIdentityBackfil
 	return WORKFLOW_IDS[parseMode(mode)];
 }
 
-export function startResourceIdentityBackfill(env: CoreEnv, mode: ResourceIdentityBackfillMode = 'dry-run'): Promise<string> {
+export async function startResourceIdentityBackfill(env: CoreEnv, mode: ResourceIdentityBackfillMode = 'dry-run'): Promise<string> {
+	await assertResourceWritesEnabled(env, 'resource identity backfill enqueue');
 	const parsedMode = parseMode(mode);
 	return enqueueOrRestartWorkflow(env.RESOURCE_IDENTITY_BACKFILL_WORKFLOW, resourceIdentityBackfillInstanceId(parsedMode), {
 		mode: parsedMode,
@@ -754,6 +757,7 @@ export function startResourceIdentityBackfill(env: CoreEnv, mode: ResourceIdenti
 
 export class ResourceIdentityBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceIdentityBackfillPayload> {
 	async run(event: WorkflowEvent<ResourceIdentityBackfillPayload>, step: WorkflowStep) {
+		await assertResourceWritesEnabled(this.env, 'resource identity backfill workflow');
 		const mode = parseMode(event.payload.mode);
 		const snapshotAt = await step.do(
 			'resolve-resource-identity-backfill-snapshot',

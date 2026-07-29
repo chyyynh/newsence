@@ -15,6 +15,7 @@ import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } 
 import { SearchIndexRebuildWorkflow, SearchIndexShadowRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
+import { assertResourceWritesEnabled, shouldDispatchResourceWriters } from './db/resource-write-guard';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 
 export {
@@ -30,6 +31,7 @@ export {
 type MonitorHandler = (env: CoreEnv) => Promise<void>;
 
 async function reconcileOfficialPublications(env: CoreEnv): Promise<void> {
+	if (!(await shouldDispatchResourceWriters(env, 'official publication reconciliation'))) return;
 	try {
 		const result = await env.DOMAIN.reconcileOfficialPublications();
 		console.info({
@@ -49,6 +51,14 @@ async function reconcileOfficialPublications(env: CoreEnv): Promise<void> {
 }
 
 async function runMonitorCycle(env: CoreEnv, handler: MonitorHandler): Promise<void> {
+	if (!(await shouldDispatchResourceWriters(env, handler.name || 'scheduled monitor'))) {
+		console.warn({
+			tag: 'RESOURCE_WRITE_GUARD',
+			event: 'scheduled_resource_writer_skipped',
+			surface: handler.name || 'scheduled monitor',
+		});
+		return;
+	}
 	try {
 		await handler(env);
 	} finally {
@@ -80,18 +90,21 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Enqueue canonical resources for the enrichment workflow after app-side persistence. */
 	async enqueueResourceProcessing(resourceId: string) {
+		await assertResourceWritesEnabled(this.env, 'enqueue resource processing RPC');
 		if (await isResourceEnrichmentComplete(this.env, resourceId)) return undefined;
 		return enqueueProcessing(this.env, resourceId);
 	}
 
 	/** Reacquire a URL-backed resource through the enrichment workflow. */
 	async resyncResource(resourceId: string) {
+		await assertResourceWritesEnabled(this.env, 'resync resource RPC');
 		await assertResourceProcessable(this.env, resourceId);
 		return enqueueResourceResync(this.env, resourceId);
 	}
 
 	/** Start or resume the revision-scoped public corpus AI Search rebuild. */
-	startSearchIndexRebuild() {
+	async startSearchIndexRebuild() {
+		await assertResourceWritesEnabled(this.env, 'start AI Search rebuild RPC');
 		return startSearchIndexRebuild(this.env);
 	}
 
@@ -102,7 +115,8 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	}
 
 	/** Start or resume the versioned academic metadata backfill. */
-	startAcademicMetadataBackfill() {
+	async startAcademicMetadataBackfill() {
+		await assertResourceWritesEnabled(this.env, 'start academic metadata backfill RPC');
 		return startAcademicMetadataBackfill(this.env);
 	}
 
@@ -113,7 +127,8 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	}
 
 	/** Start or resume a versioned resource kind/platform migration mode. */
-	startResourceIdentityBackfill(mode: ResourceIdentityBackfillMode = 'dry-run') {
+	async startResourceIdentityBackfill(mode: ResourceIdentityBackfillMode = 'dry-run') {
+		await assertResourceWritesEnabled(this.env, 'start resource identity backfill RPC');
 		return startResourceIdentityBackfill(this.env, mode);
 	}
 

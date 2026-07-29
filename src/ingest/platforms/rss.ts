@@ -1,5 +1,6 @@
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb, withCoreTx } from '@db/client';
+import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import {
 	attachSourceToResources,
 	type ExistingResourceRecord,
@@ -130,6 +131,7 @@ async function processFeed(env: CoreEnv, feed: RssSource): Promise<void> {
 }
 
 export async function handleRSSCron(env: CoreEnv): Promise<void> {
+	await assertResourceWritesEnabled(env, 'RSS/YouTube monitor cycle');
 	console.info({ tag: 'RSS', msg: 'start' });
 	// Every feed-discovered source, whatever its platform says: a YouTube channel
 	// handle is an Atom feed URL, so there is nothing for a separate monitor to do.

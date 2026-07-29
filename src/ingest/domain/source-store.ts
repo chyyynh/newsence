@@ -1,5 +1,6 @@
 import type { SourceAcquisitionMode } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
+import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import { sources } from '@db/schema';
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
 
@@ -86,6 +87,7 @@ export async function loadFeedSourcePolicy(env: CoreEnv, sourceId: string): Prom
 
 export async function markSourcesScraped(env: CoreEnv, sourceIds: string[], scrapedAt: Date = new Date()): Promise<void> {
 	if (!sourceIds.length) return;
+	await assertResourceWritesEnabled(env, 'mark monitored sources scraped');
 	await withCoreDb(env, async (db) => {
 		// Success also settles the #237 lifecycle: pending/failed rows become
 		// active and the scrape_state failure counters reset.
@@ -106,6 +108,7 @@ export async function recordSourceFailure(env: CoreEnv, sourceId: string, error:
 	const failedAt = new Date();
 	const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
 	try {
+		await assertResourceWritesEnabled(env, 'record monitored source failure');
 		await withCoreDb(env, async (db) => {
 			await db.execute(sql`
 				UPDATE sources SET

@@ -1,5 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
+import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 
 const DEFAULT_BACKFILL_DAYS = 7;
 const MAX_BACKFILL_DAYS = 7;
@@ -18,6 +19,7 @@ function backfillDays(value: number | undefined): number {
 
 export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceImageBackfillPayload> {
 	async run(event: WorkflowEvent<ResourceImageBackfillPayload>, step: WorkflowStep) {
+		await assertResourceWritesEnabled(this.env, 'recent resource image backfill workflow');
 		const days = backfillDays(event.payload.days);
 		const window = await step.do(
 			'resolve-recent-image-window',
@@ -45,12 +47,14 @@ export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<Core
 			const result = await step.do(
 				`rehost-recent-images-page-${page}`,
 				{ retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '10 minutes' },
-				() =>
-					this.env.DOMAIN.rehostRecentResourceImagesPage({
+				async () => {
+					await assertResourceWritesEnabled(this.env, 'recent resource image backfill page');
+					return this.env.DOMAIN.rehostRecentResourceImagesPage({
 						...window,
 						cursor,
 						limit: PAGE_SIZE,
-					}),
+					});
+				},
 			);
 			available += result.available;
 			attempted += result.attempted;

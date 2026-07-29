@@ -14,6 +14,7 @@ import {
 } from '@core-shared/resource-types';
 import { type CoreDb, isValidUuid, queryRows, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
 import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
+import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
@@ -299,6 +300,7 @@ function uploadShadowCorpusDocument(env: CoreEnv, document: CorpusDocument): Pro
 }
 
 export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<'uploaded' | 'deleted' | 'skipped'> {
+	await assertResourceWritesEnabled(env, 'AI Search corpus sync');
 	if (!isValidUuid(resourceId)) return 'skipped';
 	const document = await withCoreDb(env, (db) => loadCorpusDocument(db, resourceId));
 	if (!document) {
@@ -335,6 +337,7 @@ async function deleteCorpusItemFrom(index: AiSearchInstance, resourceId: string,
 }
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
+	await assertResourceWritesEnabled(env, 'AI Search corpus delete');
 	const currentDeleted = await deleteCorpusItemFrom(env.AI_SEARCH, resourceId, 'current');
 	const shadowDeleted = await deleteCorpusItemFrom(env.AI_SEARCH_NEXT, resourceId, 'shadow');
 	return currentDeleted || shadowDeleted;
@@ -741,6 +744,7 @@ async function writeSearchIndexRebuildingState(env: CoreEnv, advanceEpoch: boole
 }
 
 async function beginSearchIndexRebuild(env: CoreEnv): Promise<SearchIndexRebuildLease> {
+	await assertResourceWritesEnabled(env, 'begin AI Search shadow rebuild');
 	return writeSearchIndexRebuildingState(env, true);
 }
 
@@ -755,6 +759,7 @@ async function claimSearchIndexReadinessContinuation(
 	checkpoint: SearchIndexReadinessContinuationCheckpoint,
 	claimStartedAt: string,
 ): Promise<SearchIndexReadinessContinuationClaim> {
+	await assertResourceWritesEnabled(env, 'claim AI Search readiness continuation');
 	const sourceRebuildEpoch = String(checkpoint.sourceRebuildEpoch);
 	const expectedRebuildEpoch = String(checkpoint.sourceRebuildEpoch + 1);
 	const [row] = await withCoreDb(env, (db) =>
@@ -860,11 +865,13 @@ async function assertSearchIndexRebuildLease(env: CoreEnv, lease: SearchIndexReb
 }
 
 async function withSearchIndexRebuildLease<T>(env: CoreEnv, lease: SearchIndexRebuildLease, operation: () => Promise<T>): Promise<T> {
+	await assertResourceWritesEnabled(env, 'continue AI Search shadow rebuild');
 	await assertSearchIndexRebuildLease(env, lease);
 	return operation();
 }
 
 async function markSearchIndexGenerationReady(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<{ readyAt: string }> {
+	await assertResourceWritesEnabled(env, 'publish AI Search shadow readiness');
 	const [row] = await withCoreDb(env, (db) =>
 		queryRows<{ ready_at: string }>(
 			db,
@@ -1783,7 +1790,8 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, lease: Sea
 	throw new Error(`AI Search stale-item reconciliation did not converge after ${REINDEX_MAX_PRUNE_PASSES} passes`);
 }
 
-export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
+export async function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
+	await assertResourceWritesEnabled(env, 'AI Search shadow rebuild enqueue');
 	// Only the execution's first durable step mutates readiness. If this stable
 	// runner is already active, enqueueOrRestartWorkflow intentionally returns it
 	// without starting another execution; clearing readiness here would strand
@@ -1855,6 +1863,7 @@ async function continueSearchIndexReadiness(
 
 export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		await assertResourceWritesEnabled(this.env, 'AI Search shadow rebuild workflow');
 		const requestedMode = parseSearchIndexRebuildMode(event.payload);
 		const readinessCheckpoint = parseSearchIndexReadinessContinuationCheckpoint(event.payload);
 		if (readinessCheckpoint) {

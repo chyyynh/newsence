@@ -6,6 +6,7 @@ import { resources, resourceTranslations } from '@db/schema';
 import { loadResourceForProcessing, resourceTranslationIdentityPredicate, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
 import { syncCorpusItem } from '../ai-search';
+import { assertResourceWritesEnabled } from '../db/resource-write-guard';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	CONTENT_TRANSLATION_MAX_LENGTH,
@@ -49,6 +50,7 @@ type MachineTranslationPatch = {
 };
 
 async function persistMachineZhHantTranslation(env: CoreEnv, resourceId: string, patch: MachineTranslationPatch): Promise<void> {
+	await assertResourceWritesEnabled(env, 'resource translation persistence');
 	const persisted = await withCoreDb(env, (db) =>
 		upsertResourceTranslation(db, {
 			resourceId,
@@ -67,6 +69,7 @@ function persistMachineZhHantContent(env: CoreEnv, resourceId: string, content: 
 }
 
 async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Promise<void> {
+	await assertResourceWritesEnabled(env, 'resource translation content clear');
 	await withCoreDb(env, (db) =>
 		db.execute(sql`
 			UPDATE resource_translations
@@ -88,12 +91,14 @@ function workflowId(resourceId: string): string {
 
 // One stable instance per resource: enqueueOrRestartWorkflow leaves a running
 // instance alone and restarts a finished one, which is what re-processing wants.
-export function enqueueResourceTranslation(env: CoreEnv, resourceId: string): Promise<string> {
+export async function enqueueResourceTranslation(env: CoreEnv, resourceId: string): Promise<string> {
+	await assertResourceWritesEnabled(env, 'resource translation enqueue');
 	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_WORKFLOW, workflowId(resourceId), { resourceId });
 }
 
 export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
 	async run(event: WorkflowEvent<ResourceTranslationPayload>, step: WorkflowStep) {
+		await assertResourceWritesEnabled(this.env, `resource translation workflow ${event.payload.resourceId}`);
 		return this.translateResource(event.payload.resourceId, step);
 	}
 
