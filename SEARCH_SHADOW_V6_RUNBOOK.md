@@ -75,6 +75,13 @@ the Worker ran (`step_count = 0`). It did not claim an epoch or touch AI Search.
 It is retained as evidence and must never be restarted. The v2 physical resource
 exists so the corrected service-binding graph cannot replay through v1.
 
+Hard ordering gate: keep production Core on compatibility version
+`f34f2aaf-1275-4529-b7dd-1b7e94bc44d2` (source `4c0b34f92`) until v2 is
+complete and both completion checks below pass. That version's
+`getSearchIndexRebuildStatus()` targets the phase-1 shadow Workflow. The final
+Core targets the canonical Workflow through the same RPC name, so deploying it
+during repair would deliberately fail the final source fence.
+
 From the repository root, validate the pinned source, durable epoch, database
 eligibility, target counts, and digest before deployment:
 
