@@ -119,6 +119,33 @@ resource identities in batches of at most five, rejects newly introduced
 terminal identities, and publishes readiness only after the strict six-pair
 contract converges.
 
+One pre-existing v6 item remained in `running` for more than one hour even
+though its item log reported a successful seven-chunk reindex. After v2's first
+readiness observation reports exactly that one running item and enters its next
+settle sleep, validate the exact item/resource/Workflow/epoch checkpoint and
+request Cloudflare's official single-item `INDEX` sync:
+
+```sh
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/sync-search-stuck-item-251.mjs
+
+pnpm -C workers/core-worker exec node \
+  --env-file="$PWD/web-tanstack/.env.local" \
+  scripts/sync-search-stuck-item-251.mjs \
+  --apply
+```
+
+The apply command is fail-closed unless the item is still the pinned one-hour
+`running` item, the canonical database resource is unchanged and eligible,
+generation 4 is rebuilding at epoch 2, and the exact v2 graph has completed all
+17 first-round batches, its first readiness probe reports `32335 completed + 1
+running`, and its pinned subsequent settle sleep is unfinished. Cloudflare may
+report the graph itself as either `running` or `waiting` during that sleep; no
+other top-level state is accepted. Immediately before PATCH, the script repeats
+the item, Workflow, and database assertions. If the item advances by itself, do
+not override the rejection and do not sync another item.
+
 After completion, verify the exact Workflow graph and durable ready publication,
 then run the independent current-state rollout check:
 
