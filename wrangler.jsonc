@@ -73,6 +73,11 @@
 			"class_name": "SearchIndexRebuildWorkflow"
 		},
 		{
+			"binding": "SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW",
+			"name": "newsence-search-index-shadow-rebuild",
+			"class_name": "SearchIndexShadowRebuildWorkflow"
+		},
+		{
 			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW",
 			"name": "newsence-recent-resource-image-backfill",
 			"class_name": "RecentResourceImageBackfillWorkflow"

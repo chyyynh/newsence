@@ -12,7 +12,7 @@ import {
 import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
-import { SearchIndexRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
+import { SearchIndexRebuildWorkflow, SearchIndexShadowRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -24,6 +24,7 @@ export {
 	ResourceProcessingWorkflow,
 	ResourceTranslationWorkflow,
 	SearchIndexRebuildWorkflow,
+	SearchIndexShadowRebuildWorkflow,
 };
 
 type MonitorHandler = (env: CoreEnv) => Promise<void>;
@@ -96,7 +97,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read search-index rebuild status for operator polling. */
 	async getSearchIndexRebuildStatus(instanceId: string) {
-		const instance = await this.env.SEARCH_INDEX_REBUILD_WORKFLOW.get(instanceId);
+		const instance = await this.env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 

@@ -554,7 +554,7 @@ const SEARCH_INDEX_NAME = 'public-corpus-v6';
 const SEARCH_INDEX_GENERATION = { key: 'canonical-4-kind-platform', ordinal: 4 } as const;
 // A new runner id prevents generation-4 execution from replaying any durable
 // generation-3 step output.
-const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-shadow-v1`;
+const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-shadow-v2`;
 const REINDEX_PAGE_SIZE = 50;
 // Workers allow at most six simultaneous outgoing connections per invocation.
 // Stay below that ceiling instead of relying on the runtime to queue the
@@ -815,7 +815,7 @@ async function claimSearchIndexReadinessContinuation(
 }
 
 async function verifySearchIndexReadinessTimeoutSource(env: CoreEnv, checkpoint: SearchIndexReadinessContinuationCheckpoint) {
-	const instance = await env.SEARCH_INDEX_REBUILD_WORKFLOW.get(checkpoint.sourceInstanceId);
+	const instance = await env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(checkpoint.sourceInstanceId);
 	const status = await instance.status();
 	if (status.status !== 'errored') {
 		throw new Error(`AI Search readiness continuation source ${checkpoint.sourceInstanceId} is ${status.status}, not errored`);
@@ -1788,7 +1788,7 @@ export function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
 	// runner is already active, enqueueOrRestartWorkflow intentionally returns it
 	// without starting another execution; clearing readiness here would strand
 	// the generation behind a lease that no execution owns.
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, { mode: 'rebuild' });
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, { mode: 'rebuild' });
 }
 
 async function continueSearchIndexReadiness(
@@ -1868,7 +1868,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		const resumeCheckpoint = parseSearchIndexResumeCheckpoint(event.payload);
 		const resumeSourceStatus = resumeCheckpoint
 			? await step.do('verify-errored-search-rebuild-source', SHORT_STEP_OPTIONS, async () => {
-					const instance = await this.env.SEARCH_INDEX_REBUILD_WORKFLOW.get(resumeCheckpoint.erroredInstanceId);
+					const instance = await this.env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(resumeCheckpoint.erroredInstanceId);
 					const status = await instance.status();
 					if (status.status !== 'errored') {
 						throw new Error(`AI Search resume source ${resumeCheckpoint.erroredInstanceId} is ${status.status}, not errored`);
@@ -1893,7 +1893,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		if (adoptionSourceInstanceId) {
 			const completedInstanceId = adoptionSourceInstanceId;
 			const sourceStatus = await step.do('verify-completed-search-rebuild', SHORT_STEP_OPTIONS, async () => {
-				const instance = await this.env.SEARCH_INDEX_REBUILD_WORKFLOW.get(completedInstanceId);
+				const instance = await this.env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(completedInstanceId);
 				const status = await instance.status();
 				if (status.status !== 'complete') {
 					throw new Error(`AI Search adoption source ${completedInstanceId} is ${status.status}, not complete`);
@@ -1996,5 +1996,15 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			readiness,
 			generationReadiness,
 		};
+	}
+}
+
+// Use a distinct physical Workflow resource for the generation-4 shadow
+// rebuild. Cloudflare Workflow definitions can remain pinned independently of
+// the Worker's serving deployment, so reusing the generation-3 resource risks
+// starting a new instance on its legacy step graph.
+export class SearchIndexShadowRebuildWorkflow extends SearchIndexRebuildWorkflow {
+	override run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
+		return super.run(event, step);
 	}
 }

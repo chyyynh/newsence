@@ -61,9 +61,9 @@ Trigger the fresh generation-4 runner exactly once:
 
 ```sh
 pnpm -C workers/core-worker exec wrangler workflows trigger \
-  newsence-search-index-rebuild \
+  newsence-search-index-shadow-rebuild \
   '{"mode":"rebuild"}' \
-  --id search-index-rebuild-canonical-4-kind-platform-shadow-v1
+  --id search-index-rebuild-canonical-4-kind-platform-shadow-v2
 ```
 
 Normal resource synchronization writes the serving index first and then the
@@ -103,7 +103,7 @@ the shadow build fails:
 
 1. Leave v5 and its `public-corpus` state untouched.
 2. Inspect or terminate only
-   `search-index-rebuild-canonical-4-kind-platform-shadow-v1`.
+   `search-index-rebuild-canonical-4-kind-platform-shadow-v2`.
 3. Fix the shadow path and start a new source-controlled runner suffix rather
    than replaying incompatible durable history.
 4. If necessary, roll back the Core deployment to stop dual writes; v5 remains
