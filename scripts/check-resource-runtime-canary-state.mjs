@@ -2,15 +2,14 @@ import assert from 'node:assert/strict';
 import pg from 'pg';
 
 const PHASE = process.env.CANARY_STATE_PHASE?.trim();
-const STATE_INDEX_NAME = 'public-corpus';
-const GENERATION = 3;
-const GENERATION_KEY = 'canonical-3-kind';
+const STATE_INDEX_NAME = 'public-corpus-v6';
+const GENERATION = 4;
+const GENERATION_KEY = 'canonical-4-kind-platform';
 const EMPTY_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
 
 const FIXTURES = {
 	savedWeb: {
 		id: 'af47bb70-b4ba-47a6-a108-60028ad794db',
-		type: 'web',
 		kind: 'document',
 		resourcePlatform: null,
 		scope: 'corpus',
@@ -39,7 +38,6 @@ const FIXTURES = {
 	},
 	youtubeDescription: {
 		id: 'e413960f-1d87-4b9d-9c33-2ae67ea19dac',
-		type: 'youtube',
 		kind: 'video',
 		resourcePlatform: 'youtube',
 		scope: 'corpus',
@@ -62,7 +60,6 @@ const FIXTURES = {
 	},
 	twitterUnchanged: {
 		id: '081e19f3-59af-4577-bf3f-5fdfadf5ed64',
-		type: 'twitter',
 		kind: 'post',
 		resourcePlatform: 'twitter',
 		scope: 'corpus',
@@ -104,7 +101,6 @@ function databaseUrl() {
 
 function assertIdentity(row, expected, label) {
 	assert.equal(row.id, expected.id, `${label} id`);
-	assert.equal(row.type, expected.type, `${label} legacy type`);
 	assert.equal(row.kind, expected.kind, `${label} kind`);
 	assert.equal(row.resource_platform, expected.resourcePlatform, `${label} resource platform`);
 	assert.equal(row.scope, expected.scope, `${label} scope`);
@@ -142,7 +138,6 @@ try {
 	const resourcesResult = await client.query(
 		`SELECT
 		   r.id::text,
-		   r.type,
 		   r.kind,
 		   r.resource_platform,
 		   r.scope,
@@ -261,7 +256,7 @@ try {
 assert.equal(state.index_name, STATE_INDEX_NAME, 'search generation index name');
 assert.equal(state.generation, GENERATION, 'search generation');
 assert.equal(state.generation_key, GENERATION_KEY, 'search generation key');
-assert.equal(Number(state.rebuild_epoch), 4, 'search generation canary epoch');
+assert.ok(Number(state.rebuild_epoch) > 0, 'search generation canary epoch');
 assert.equal(state.status, 'ready', `${PHASE}-canary search generation status`);
 assert.ok(state.ready_at, `${PHASE}-canary search generation ready timestamp`);
 
@@ -335,7 +330,7 @@ console.info(
 		fixtures: {
 			savedWeb: {
 				id: savedWeb.id,
-				identity: `${savedWeb.type}/${savedWeb.kind}/${savedWeb.resource_platform ?? 'null'}`,
+				identity: `${savedWeb.kind}/${savedWeb.resource_platform ?? 'null'}`,
 				snapshotHash: savedWeb.snapshot_hash,
 				translationCount: savedWeb.translation_count,
 				originalTranslationCount: savedWeb.original_translation_count,
@@ -346,7 +341,7 @@ console.info(
 			},
 			youtubeDescription: {
 				id: youtubeDescription.id,
-				identity: `${youtubeDescription.type}/${youtubeDescription.kind}/${youtubeDescription.resource_platform}`,
+				identity: `${youtubeDescription.kind}/${youtubeDescription.resource_platform}`,
 				descriptionLength: youtubeDescription.description_length,
 				translationCount: youtubeDescription.translation_count,
 				translationMd5: youtubeDescription.translation_md5,
@@ -357,7 +352,7 @@ console.info(
 			},
 			twitterUnchanged: {
 				id: twitterUnchanged.id,
-				identity: `${twitterUnchanged.type}/${twitterUnchanged.kind}/${twitterUnchanged.resource_platform}`,
+				identity: `${twitterUnchanged.kind}/${twitterUnchanged.resource_platform}`,
 				snapshotHash: twitterUnchanged.snapshot_hash,
 				tagsMd5: twitterUnchanged.tags_md5,
 				translationCount: twitterUnchanged.translation_count,

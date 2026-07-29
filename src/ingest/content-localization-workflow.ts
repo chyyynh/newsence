@@ -83,7 +83,7 @@ async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Prom
 
 type ResourceTranslationPayload = { resourceId: string };
 
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v16';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'canonical-v2';
 
 function workflowId(resourceId: string): string {
 	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${resourceId}`;
@@ -93,10 +93,10 @@ function workflowId(resourceId: string): string {
 // instance alone and restarts a finished one, which is what re-processing wants.
 export async function enqueueResourceTranslation(env: CoreEnv, resourceId: string): Promise<string> {
 	await assertResourceWritesEnabled(env, 'resource translation enqueue');
-	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_WORKFLOW, workflowId(resourceId), { resourceId });
+	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_V2_WORKFLOW, workflowId(resourceId), { resourceId });
 }
 
-export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
+export class ResourceTranslationV2Workflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
 	async run(event: WorkflowEvent<ResourceTranslationPayload>, step: WorkflowStep) {
 		await assertResourceWritesEnabled(this.env, `resource translation workflow ${event.payload.resourceId}`);
 		return this.translateResource(event.payload.resourceId, step);

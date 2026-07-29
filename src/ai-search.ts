@@ -1,12 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import {
 	CONTENT_RESOURCE_KINDS,
-	CONTENT_RESOURCE_TYPES,
 	type ContentResourceKind,
-	type ContentResourceType,
-	hasSemanticScholarAcademicEnrichment,
-	LEGACY_RESOURCE_IDENTITIES,
-	legacyResourceIdentity,
 	parseResourceIdentity,
 	type ResourceCategory,
 	type ResourceKind,
@@ -18,27 +13,18 @@ import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import { sql } from 'drizzle-orm';
 import { enqueueOrRestartWorkflow } from './workflow-control';
 
-// Cloudflare AI Search allows at most five custom metadata fields per
-// instance. Keep the current contract intact for serving traffic while the
-// shadow instance is built with the canonical kind/platform contract.
+// Cloudflare AI Search allows at most five custom metadata fields per instance.
 // https://developers.cloudflare.com/ai-search/configuration/indexing/metadata/
 const AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT = 5;
-const CURRENT_CUSTOM_METADATA = [
-	{ field_name: 'effective_at', data_type: 'datetime' },
-	{ field_name: 'source_id', data_type: 'text' },
-	{ field_name: 'type', data_type: 'text' },
-	{ field_name: 'category', data_type: 'text' },
-	{ field_name: 'kind', data_type: 'text' },
-] as const satisfies NonNullable<AiSearchConfig['custom_metadata']>;
 const NULL_RESOURCE_PLATFORM_METADATA = 'none';
-const SHADOW_CUSTOM_METADATA = [
+const CANONICAL_CUSTOM_METADATA = [
 	{ field_name: 'effective_at', data_type: 'datetime' },
 	{ field_name: 'source_id', data_type: 'text' },
 	{ field_name: 'category', data_type: 'text' },
 	{ field_name: 'kind', data_type: 'text' },
 	{ field_name: 'resource_platform', data_type: 'text' },
 ] as const satisfies NonNullable<AiSearchConfig['custom_metadata']>;
-const SHADOW_CONTENT_IDENTITIES = [
+const CANONICAL_CONTENT_IDENTITIES = [
 	{ kind: 'document', resourcePlatform: null },
 	{ kind: 'document', resourcePlatform: 'hackernews' },
 	{ kind: 'post', resourcePlatform: 'twitter' },
@@ -49,13 +35,8 @@ const SHADOW_CONTENT_IDENTITIES = [
 	kind: ContentResourceKind;
 	resourcePlatform: ResourcePlatform;
 }[];
-for (const [label, fields] of [
-	['current', CURRENT_CUSTOM_METADATA],
-	['shadow', SHADOW_CUSTOM_METADATA],
-] as const) {
-	if (fields.length > AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT) {
-		throw new Error(`AI Search ${label} metadata exceeds the ${AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT}-field limit`);
-	}
+if (CANONICAL_CUSTOM_METADATA.length > AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT) {
+	throw new Error(`AI Search metadata exceeds the ${AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT}-field limit`);
 }
 const ITEM_PREFIX = 'resources/';
 const ITEM_SUFFIX = '.md';
@@ -75,8 +56,7 @@ type CorpusTranslationRow = {
 type CorpusDocument = {
 	id: string;
 	source_id: string | null;
-	type: ContentResourceType;
-	kind: string | null;
+	kind: string;
 	resource_platform: string | null;
 	platform_metadata: unknown;
 	original_lang: string;
@@ -98,7 +78,6 @@ type CorpusSearchOptions = {
 	profile?: CorpusSearchProfile;
 	resourcePlatforms?: readonly ResourcePlatform[];
 	sourceIds?: readonly string[];
-	types?: readonly ContentResourceType[];
 };
 
 function itemKey(id: string): string {
@@ -132,30 +111,10 @@ function corpusDocumentIdentity(document: CorpusDocument): {
 	kind: ContentResourceKind;
 	resourcePlatform: ResourcePlatform;
 } {
-	const persisted = parseResourceIdentity(document.kind, document.resource_platform);
-	if (!persisted && (document.kind !== null || document.resource_platform !== null)) {
-		throw new Error(
-			`AI Search document ${document.id} has invalid persisted identity ${String(document.kind)} / ${String(document.resource_platform)}`,
-		);
-	}
-	const identity = persisted ?? legacyResourceIdentity(document.type, hasSemanticScholarAcademicEnrichment(document.platform_metadata));
-	if (!(CONTENT_RESOURCE_KINDS as readonly ResourceKind[]).includes(identity.kind)) {
-		throw new Error(`AI Search document ${document.id} has non-content kind ${identity.kind}`);
-	}
-	return {
-		kind: identity.kind as ContentResourceKind,
-		resourcePlatform: identity.resourcePlatform,
-	};
-}
-
-function strictCorpusDocumentIdentity(document: CorpusDocument): {
-	kind: ContentResourceKind;
-	resourcePlatform: ResourcePlatform;
-} {
 	const identity = parseResourceIdentity(document.kind, document.resource_platform);
 	if (!identity || !(CONTENT_RESOURCE_KINDS as readonly ResourceKind[]).includes(identity.kind)) {
 		throw new Error(
-			`AI Search shadow document ${document.id} requires a canonical content identity, received ${String(document.kind)} / ${String(document.resource_platform)}`,
+			`AI Search document ${document.id} has invalid persisted identity ${String(document.kind)} / ${String(document.resource_platform)}`,
 		);
 	}
 	return {
@@ -199,7 +158,6 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 		sql`
 				SELECT r.id::text,
 				       r.source_id::text,
-				       r.type,
 				       r.kind,
 				       r.resource_platform,
 				       r.platform_metadata,
@@ -212,7 +170,6 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 									monitoredSourceName: sql`s.name`,
 									platformMetadata: sql`r.platform_metadata`,
 									resourcePlatform: sql`r.resource_platform`,
-									type: sql`r.type`,
 								})} AS source,
 				       COALESCE((
 				         SELECT jsonb_agg(
@@ -237,7 +194,6 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 					  AND ${contentResourceIdentitySql({
 							kind: sql`r.kind`,
 							resourcePlatform: sql`r.resource_platform`,
-							type: sql`r.type`,
 						})}
 		`,
 	);
@@ -247,20 +203,9 @@ async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<Corpu
 	return (await loadCorpusDocuments(db, [resourceId]))[0] ?? null;
 }
 
-function currentCorpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
+function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	const effectiveAt = documentEffectiveAt(document);
-	return {
-		...(effectiveAt ? { effective_at: effectiveAt } : {}),
-		...(document.source_id ? { source_id: document.source_id } : {}),
-		type: document.type,
-		...(document.category ? { category: document.category } : {}),
-		kind: corpusDocumentIdentity(document).kind,
-	};
-}
-
-function shadowCorpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
-	const effectiveAt = documentEffectiveAt(document);
-	const identity = strictCorpusDocumentIdentity(document);
+	const identity = corpusDocumentIdentity(document);
 	return {
 		...(effectiveAt ? { effective_at: effectiveAt } : {}),
 		...(document.source_id ? { source_id: document.source_id } : {}),
@@ -274,7 +219,6 @@ async function uploadCorpusDocumentTo(
 	index: AiSearchInstance,
 	document: CorpusDocument,
 	metadata: Record<string, unknown>,
-	indexRole: 'current' | 'shadow',
 ): Promise<AiSearchItemInfo | null> {
 	const startedAt = Date.now();
 	const result: AiSearchItemInfo | null = await index.items.upload(itemKey(document.id), serializeDocument(document), {
@@ -283,7 +227,6 @@ async function uploadCorpusDocumentTo(
 	console.info({
 		tag: 'AI_SEARCH',
 		msg: 'Corpus item queued',
-		index_role: indexRole,
 		resource_id: document.id,
 		item_id: result?.id ?? null,
 		latency_ms: Date.now() - startedAt,
@@ -291,12 +234,8 @@ async function uploadCorpusDocumentTo(
 	return result;
 }
 
-function uploadCurrentCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo | null> {
-	return uploadCorpusDocumentTo(env.AI_SEARCH, document, currentCorpusItemMetadata(document), 'current');
-}
-
-function uploadShadowCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo | null> {
-	return uploadCorpusDocumentTo(env.AI_SEARCH_NEXT, document, shadowCorpusItemMetadata(document), 'shadow');
+function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo | null> {
+	return uploadCorpusDocumentTo(env.AI_SEARCH, document, corpusItemMetadata(document));
 }
 
 export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<'uploaded' | 'deleted' | 'skipped'> {
@@ -307,14 +246,11 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 		await deleteCorpusItem(env, resourceId);
 		return 'deleted';
 	}
-	// The serving index is written first. A shadow failure is retryable and
-	// must never prevent the current v5 document from being refreshed.
-	await uploadCurrentCorpusDocument(env, document);
-	await uploadShadowCorpusDocument(env, document);
+	await uploadCorpusDocument(env, document);
 	return 'uploaded';
 }
 
-async function deleteCorpusItemFrom(index: AiSearchInstance, resourceId: string, indexRole: 'current' | 'shadow'): Promise<boolean> {
+async function deleteCorpusItemFrom(index: AiSearchInstance, resourceId: string): Promise<boolean> {
 	const key = itemKey(resourceId);
 	// Search by the bare id, not the full key: a value containing `/` is parsed as
 	// a folder metadata filter and rejected with 7001 "metadata filter pattern
@@ -328,7 +264,6 @@ async function deleteCorpusItemFrom(index: AiSearchInstance, resourceId: string,
 		console.info({
 			tag: 'AI_SEARCH',
 			msg: 'Corpus item deleted',
-			index_role: indexRole,
 			resource_id: resourceId,
 			count: matches.length,
 		});
@@ -338,44 +273,15 @@ async function deleteCorpusItemFrom(index: AiSearchInstance, resourceId: string,
 
 export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	await assertResourceWritesEnabled(env, 'AI Search corpus delete');
-	const currentDeleted = await deleteCorpusItemFrom(env.AI_SEARCH, resourceId, 'current');
-	const shadowDeleted = await deleteCorpusItemFrom(env.AI_SEARCH_NEXT, resourceId, 'shadow');
-	return currentDeleted || shadowDeleted;
+	return deleteCorpusItemFrom(env.AI_SEARCH, resourceId);
 }
 
-function legacyTypesForContentKind(kind: ContentResourceKind): ContentResourceType[] {
-	return CONTENT_RESOURCE_TYPES.filter((type) => {
-		const legacyKind = LEGACY_RESOURCE_IDENTITIES[type].kind;
-		return legacyKind === kind || (kind === 'paper' && legacyKind === 'document');
-	});
-}
-
-function legacyTypeFilter(options: CorpusSearchOptions, kindMetadataReady: boolean): ContentResourceType[] | null | undefined {
-	const constraints: Array<Set<ContentResourceType>> = [];
-	if (options.types) constraints.push(new Set(options.types));
-	if (options.resourcePlatforms) {
-		const resourcePlatforms = new Set(options.resourcePlatforms);
-		const compatibleTypes = CONTENT_RESOURCE_TYPES.filter((type) =>
-			resourcePlatforms.has(LEGACY_RESOURCE_IDENTITIES[type].resourcePlatform),
-		);
-		constraints.push(new Set(compatibleTypes));
-	}
-	if (options.kinds && !kindMetadataReady) {
-		const compatibleTypes = options.kinds.flatMap(legacyTypesForContentKind);
-		constraints.push(new Set(compatibleTypes));
-	}
-	if (constraints.length === 0) return undefined;
-	const compatible = CONTENT_RESOURCE_TYPES.filter((type) => constraints.every((constraint) => constraint.has(type)));
-	return compatible.length ? compatible : null;
-}
-
-function searchFilters(options: CorpusSearchOptions, kindMetadataReady: boolean): VectorizeVectorMetadataFilter | null | undefined {
+function searchFilters(options: CorpusSearchOptions): VectorizeVectorMetadataFilter | null | undefined {
 	if (
 		options.sourceIds?.length === 0 ||
 		options.categories?.length === 0 ||
 		options.kinds?.length === 0 ||
-		options.resourcePlatforms?.length === 0 ||
-		options.types?.length === 0
+		options.resourcePlatforms?.length === 0
 	) {
 		return null;
 	}
@@ -383,11 +289,11 @@ function searchFilters(options: CorpusSearchOptions, kindMetadataReady: boolean)
 	if (options.sourceIds?.length) {
 		filters.source_id = { $in: [...options.sourceIds] };
 	}
-	const types = legacyTypeFilter(options, kindMetadataReady);
-	if (types === null) return null;
-	if (types) filters.type = { $in: types };
 	if (options.categories?.length) filters.category = { $in: [...options.categories] };
-	if (kindMetadataReady && options.kinds?.length) filters.kind = { $in: [...options.kinds] };
+	if (options.kinds?.length) filters.kind = { $in: [...options.kinds] };
+	if (options.resourcePlatforms?.length) {
+		filters.resource_platform = { $in: options.resourcePlatforms.map(resourcePlatformMetadata) };
+	}
 	if (options.effectiveAfter || options.effectiveBefore) {
 		filters.effective_at = {
 			...(options.effectiveAfter ? { $gte: options.effectiveAfter.toISOString() } : {}),
@@ -400,16 +306,13 @@ function searchFilters(options: CorpusSearchOptions, kindMetadataReady: boolean)
 export async function searchCorpusRanks(env: CoreEnv, query: string, options: CorpusSearchOptions = {}): Promise<AiSearchRank[]> {
 	const profile = options.profile ?? 'discovery';
 	const retrievalType = profile === 'related' ? 'vector' : 'hybrid';
-	const kindMetadataReady = options.kinds?.length ? await searchIndexKindMetadataReady(env) : false;
-	const filters = searchFilters(options, kindMetadataReady);
+	const filters = searchFilters(options);
 	if (filters === null) return [];
 	if (options.kinds?.length) {
 		console.info({
 			tag: 'AI_SEARCH',
 			msg: 'Corpus search metadata contract selected',
-			metadata_contract: kindMetadataReady ? 'native-kind' : 'legacy-type',
-			uses_kind_metadata: Object.hasOwn(filters ?? {}, 'kind'),
-			uses_type_metadata: Object.hasOwn(filters ?? {}, 'type'),
+			metadata_contract: 'canonical-kind-platform',
 			requested_kind_count: options.kinds.length,
 			requested_platform_count: options.resourcePlatforms?.length ?? 0,
 		});
@@ -442,122 +345,13 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 	return [...ranks.values()];
 }
 
-type SearchIndexResumeCheckpoint = {
-	completedPage: number;
-	erroredInstanceId: string;
-	generation: number;
-	generationKey: string;
-	key: string;
-	resumeAfterCursor: string;
-	startedAt: string;
-	uploadedBeforeResume: number;
-};
+type SearchIndexRebuildPayload = Record<string, never>;
 
-// One-time, source-controlled recovery boundary for the pre-concurrency-fix
-// generation-3 bridge. Keeping the cursor out of the trigger payload prevents
-// an operator typo from silently skipping an arbitrary corpus range.
-const SEARCH_INDEX_RESUME_CHECKPOINTS = {
-	'canonical-3-kind-page-365': {
-		completedPage: 364,
-		erroredInstanceId: 'search-index-rebuild-canonical-3-kind',
-		generation: 3,
-		generationKey: 'canonical-3-kind',
-		resumeAfterCursor: '8c65c3d0-f5de-44ce-a435-0bc95e2ea335',
-		startedAt: '2026-07-28T05:31:32.516Z',
-		uploadedBeforeResume: 18_250,
-	},
-} as const satisfies Record<string, Omit<SearchIndexResumeCheckpoint, 'key'>>;
-
-type SearchIndexResumeCheckpointKey = keyof typeof SEARCH_INDEX_RESUME_CHECKPOINTS;
-
-type SearchIndexReadinessContinuationCheckpoint = {
-	generation: number;
-	generationKey: string;
-	initialRepairErrorCount: number;
-	initialRepairOutdatedCount: number;
-	initialRepairTargetDigest: string;
-	key: string;
-	maxRepairRounds: number;
-	readinessErrorName: string;
-	readinessErrorPrefix: string;
-	sourceInstanceId: string;
-	sourceRebuildEpoch: number;
-	sourceResumeCheckpoint: SearchIndexResumeCheckpointKey;
-};
-
-// One-time, source-controlled handoff for the generation-3 recovery instance.
-// The trigger selects only this key; source identity, failure reason, and the
-// exact lease being retired cannot be supplied by an operator.
-const SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS = {
-	'canonical-3-kind-resume-v1-readiness-timeout': {
-		generation: 3,
-		generationKey: 'canonical-3-kind',
-		initialRepairErrorCount: 1,
-		initialRepairOutdatedCount: 29,
-		initialRepairTargetDigest: '710d51c0b740233a3634ab8e1b22e1d74f9dfc0c5954d303b8fcf2e717ce9c21',
-		maxRepairRounds: 3,
-		readinessErrorName: 'Error',
-		readinessErrorPrefix: 'AI Search index did not become ready:',
-		sourceInstanceId: 'search-index-rebuild-canonical-3-kind-resume-v1',
-		sourceRebuildEpoch: 2,
-		sourceResumeCheckpoint: 'canonical-3-kind-page-365',
-	},
-	'canonical-3-kind-readiness-v2-null-item-result': {
-		generation: 3,
-		generationKey: 'canonical-3-kind',
-		initialRepairErrorCount: 1,
-		initialRepairOutdatedCount: 29,
-		initialRepairTargetDigest: '710d51c0b740233a3634ab8e1b22e1d74f9dfc0c5954d303b8fcf2e717ce9c21',
-		maxRepairRounds: 3,
-		readinessErrorName: 'TypeError',
-		readinessErrorPrefix: "Cannot read properties of null (reading 'status')",
-		sourceInstanceId: 'search-index-rebuild-canonical-3-kind-readiness-v2',
-		sourceRebuildEpoch: 3,
-		sourceResumeCheckpoint: 'canonical-3-kind-page-365',
-	},
-} as const satisfies Record<string, Omit<SearchIndexReadinessContinuationCheckpoint, 'key'>>;
-
-type SearchIndexReadinessContinuationCheckpointKey = keyof typeof SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS;
-
-type SearchIndexRebuildMode = 'rebuild' | 'adopt' | 'resume' | 'readiness';
-
-type SearchIndexRebuildPayload =
-	| { mode?: 'rebuild' }
-	| {
-			// One-time bridge for a rebuild completed by a pinned pre-state
-			// Workflow version. The source instance must itself be terminal.
-			completedInstanceId: string;
-			mode: 'adopt';
-	  }
-	| {
-			checkpoint: SearchIndexResumeCheckpointKey;
-			mode: 'resume';
-	  }
-	| {
-			checkpoint: SearchIndexReadinessContinuationCheckpointKey;
-			mode: 'readiness';
-	  };
-
-function parseSearchIndexRebuildMode(payload: SearchIndexRebuildPayload): SearchIndexRebuildMode {
-	const requestedMode: unknown = payload.mode;
-	if (requestedMode === undefined || requestedMode === 'rebuild') return 'rebuild';
-	throw new Error(
-		`AI Search generation 4 shadow accepts only rebuild mode; use a new source-controlled runner for ${String(requestedMode)}`,
-	);
-}
-
-const CURRENT_SEARCH_INDEX_STATE = {
-	generation: 3,
-	generationKey: 'canonical-3-kind',
-	indexName: 'public-corpus',
-} as const;
 const SEARCH_INDEX_NAME = 'public-corpus-v6';
-// The shadow generation uses a separate durable state row, so starting it
-// cannot clear readiness for the serving v5 index.
 const SEARCH_INDEX_GENERATION = { key: 'canonical-4-kind-platform', ordinal: 4 } as const;
-// A new runner id prevents generation-4 execution from replaying any durable
-// generation-3 step output.
-const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-shadow-v2`;
+// The physical Workflow resource is generation-specific. This runner id is
+// stable only inside that isolated resource; it is not itself a replay boundary.
+const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-canonical-v1`;
 const REINDEX_PAGE_SIZE = 50;
 // Workers allow at most six simultaneous outgoing connections per invocation.
 // Stay below that ceiling instead of relying on the runtime to queue the
@@ -568,117 +362,11 @@ const REINDEX_MAX_PRUNE_PASSES = 3;
 // rebuild stays under the 1,024-step Workflow limit on Workers Free.
 const REINDEX_PRUNE_PAGES_PER_STEP = 10;
 const REINDEX_READY_POLL_ATTEMPTS = 36;
-const REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS = 144;
 const REINDEX_READY_POLL_INTERVAL = '10 minutes';
 const STEP_RETRIES = { limit: 5, delay: '10 seconds', backoff: 'exponential' } as const;
 const SHORT_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '60 seconds' } as const;
 const BATCH_STEP_OPTIONS = { retries: STEP_RETRIES, timeout: '300 seconds' } as const;
 const UTC_TIMESTAMP_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"';
-
-function parseSearchIndexResumeCheckpoint(payload: SearchIndexRebuildPayload): SearchIndexResumeCheckpoint | null {
-	if (payload.mode !== 'resume') return null;
-	const checkpointKey: unknown = payload.checkpoint;
-	if (typeof checkpointKey !== 'string' || !(checkpointKey in SEARCH_INDEX_RESUME_CHECKPOINTS)) {
-		throw new Error(`Unsupported AI Search resume checkpoint: ${String(checkpointKey)}`);
-	}
-	const checkpoint: Omit<SearchIndexResumeCheckpoint, 'key'> =
-		SEARCH_INDEX_RESUME_CHECKPOINTS[checkpointKey as SearchIndexResumeCheckpointKey];
-	if (checkpoint.generation !== SEARCH_INDEX_GENERATION.ordinal || checkpoint.generationKey !== SEARCH_INDEX_GENERATION.key) {
-		throw new Error(
-			`AI Search resume checkpoint generation ${checkpoint.generation}/${checkpoint.generationKey} does not match ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}`,
-		);
-	}
-	if (!Number.isSafeInteger(checkpoint.completedPage) || checkpoint.completedPage < 0) {
-		throw new Error('AI Search resume checkpoint completedPage must be a non-negative safe integer');
-	}
-	if (checkpoint.uploadedBeforeResume !== (checkpoint.completedPage + 1) * REINDEX_PAGE_SIZE) {
-		throw new Error('AI Search resume checkpoint uploaded count does not match its completed page boundary');
-	}
-	if (!checkpoint.erroredInstanceId.trim()) throw new Error('AI Search resume checkpoint source instance is empty');
-	if (!isValidUuid(checkpoint.resumeAfterCursor)) throw new Error('AI Search resume checkpoint cursor must be a UUID');
-	const startedAtDate = new Date(checkpoint.startedAt);
-	if (Number.isNaN(startedAtDate.getTime()) || startedAtDate.toISOString() !== checkpoint.startedAt) {
-		throw new Error('AI Search resume checkpoint startedAt must be a canonical UTC timestamp');
-	}
-	return {
-		...checkpoint,
-		key: checkpointKey,
-		startedAt: checkpoint.startedAt,
-	};
-}
-
-function parseSearchIndexReadinessContinuationCheckpoint(
-	payload: SearchIndexRebuildPayload,
-): SearchIndexReadinessContinuationCheckpoint | null {
-	if (payload.mode !== 'readiness') return null;
-	const checkpointKey: unknown = payload.checkpoint;
-	if (typeof checkpointKey !== 'string' || !(checkpointKey in SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS)) {
-		throw new Error(`Unsupported AI Search readiness continuation checkpoint: ${String(checkpointKey)}`);
-	}
-	const checkpoint: Omit<SearchIndexReadinessContinuationCheckpoint, 'key'> =
-		SEARCH_INDEX_READINESS_CONTINUATION_CHECKPOINTS[checkpointKey as SearchIndexReadinessContinuationCheckpointKey];
-	if (checkpoint.generation !== SEARCH_INDEX_GENERATION.ordinal || checkpoint.generationKey !== SEARCH_INDEX_GENERATION.key) {
-		throw new Error(
-			`AI Search readiness continuation checkpoint generation ${checkpoint.generation}/${checkpoint.generationKey} does not match ${SEARCH_INDEX_GENERATION.ordinal}/${SEARCH_INDEX_GENERATION.key}`,
-		);
-	}
-	if (!checkpoint.sourceInstanceId.trim()) {
-		throw new Error('AI Search readiness continuation checkpoint source instance is empty');
-	}
-	if (!Number.isSafeInteger(checkpoint.sourceRebuildEpoch) || checkpoint.sourceRebuildEpoch < 0) {
-		throw new Error('AI Search readiness continuation checkpoint source epoch must be a non-negative safe integer');
-	}
-	if (!checkpoint.readinessErrorPrefix) {
-		throw new Error('AI Search readiness continuation checkpoint error prefix is empty');
-	}
-	if (!checkpoint.readinessErrorName) {
-		throw new Error('AI Search readiness continuation checkpoint error name is empty');
-	}
-	if (!Number.isSafeInteger(checkpoint.initialRepairErrorCount) || checkpoint.initialRepairErrorCount < 0) {
-		throw new Error('AI Search readiness continuation initial error count must be a non-negative safe integer');
-	}
-	if (!Number.isSafeInteger(checkpoint.initialRepairOutdatedCount) || checkpoint.initialRepairOutdatedCount < 0) {
-		throw new Error('AI Search readiness continuation initial outdated count must be a non-negative safe integer');
-	}
-	if (!/^[0-9a-f]{64}$/.test(checkpoint.initialRepairTargetDigest)) {
-		throw new Error('AI Search readiness continuation repair target digest must be lowercase SHA-256 hex');
-	}
-	if (!Number.isSafeInteger(checkpoint.maxRepairRounds) || checkpoint.maxRepairRounds <= 0) {
-		throw new Error('AI Search readiness continuation max repair rounds must be a positive safe integer');
-	}
-	const sourceResumeCheckpoint = SEARCH_INDEX_RESUME_CHECKPOINTS[checkpoint.sourceResumeCheckpoint];
-	if (
-		Number(sourceResumeCheckpoint.generation) !== Number(checkpoint.generation) ||
-		String(sourceResumeCheckpoint.generationKey) !== String(checkpoint.generationKey)
-	) {
-		throw new Error('AI Search readiness continuation source resume checkpoint generation does not match');
-	}
-	return { ...checkpoint, key: checkpointKey };
-}
-
-async function searchIndexKindMetadataReady(env: CoreEnv): Promise<boolean> {
-	try {
-		const [row] = await withCoreDb(env, (db) =>
-			queryRows<{ ready: boolean }>(
-				db,
-				sql`
-					SELECT EXISTS (
-					  SELECT 1
-					  FROM search_index_states
-					  WHERE index_name = ${CURRENT_SEARCH_INDEX_STATE.indexName}
-					    AND generation = ${CURRENT_SEARCH_INDEX_STATE.generation}
-					    AND generation_key = ${CURRENT_SEARCH_INDEX_STATE.generationKey}
-					    AND status = 'ready'
-					    AND ready_at IS NOT NULL
-					) AS ready
-				`,
-			),
-		);
-		return row?.ready === true;
-	} catch {
-		return false;
-	}
-}
 
 type SearchIndexRebuildLease = {
 	rebuildEpoch: string;
@@ -744,100 +432,8 @@ async function writeSearchIndexRebuildingState(env: CoreEnv, advanceEpoch: boole
 }
 
 async function beginSearchIndexRebuild(env: CoreEnv): Promise<SearchIndexRebuildLease> {
-	await assertResourceWritesEnabled(env, 'begin AI Search shadow rebuild');
+	await assertResourceWritesEnabled(env, 'begin AI Search canonical rebuild');
 	return writeSearchIndexRebuildingState(env, true);
-}
-
-type SearchIndexReadinessContinuationClaim = SearchIndexRebuildLease & {
-	generation: number;
-	generationKey: string;
-	sourceRebuildEpoch: string;
-};
-
-async function claimSearchIndexReadinessContinuation(
-	env: CoreEnv,
-	checkpoint: SearchIndexReadinessContinuationCheckpoint,
-	claimStartedAt: string,
-): Promise<SearchIndexReadinessContinuationClaim> {
-	await assertResourceWritesEnabled(env, 'claim AI Search readiness continuation');
-	const sourceRebuildEpoch = String(checkpoint.sourceRebuildEpoch);
-	const expectedRebuildEpoch = String(checkpoint.sourceRebuildEpoch + 1);
-	const [row] = await withCoreDb(env, (db) =>
-		queryRows<SearchIndexRebuildingRow>(
-			db,
-			sql`
-				WITH claimed AS (
-				  UPDATE search_index_states
-				  SET status = 'rebuilding',
-				      rebuild_epoch = rebuild_epoch + 1,
-				      rebuilding_at = ${claimStartedAt}::timestamptz,
-				      ready_at = NULL,
-				      updated_at = ${claimStartedAt}::timestamptz
-				  WHERE index_name = ${SEARCH_INDEX_NAME}
-				    AND generation = ${checkpoint.generation}
-				    AND generation_key = ${checkpoint.generationKey}
-				    AND status = 'rebuilding'
-				    AND rebuild_epoch = ${sourceRebuildEpoch}::bigint
-				    AND ready_at IS NULL
-				  RETURNING rebuild_epoch, rebuilding_at
-				)
-				SELECT
-				  rebuild_epoch::text,
-				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
-				FROM claimed
-				UNION ALL
-				-- A step retry after a committed response loss may observe its own
-				-- completed claim. The immutable Workflow timestamp is the claim
-				-- token, so it can recover the claimed epoch without advancing it again.
-				SELECT
-				  rebuild_epoch::text,
-				  to_char(rebuilding_at AT TIME ZONE 'UTC', ${UTC_TIMESTAMP_FORMAT}) AS started_at
-				FROM search_index_states
-				WHERE index_name = ${SEARCH_INDEX_NAME}
-				  AND generation = ${checkpoint.generation}
-				  AND generation_key = ${checkpoint.generationKey}
-				  AND status = 'rebuilding'
-				  AND rebuild_epoch = ${expectedRebuildEpoch}::bigint
-				  AND rebuilding_at = ${claimStartedAt}::timestamptz
-				  AND ready_at IS NULL
-				  AND NOT EXISTS (SELECT 1 FROM claimed)
-				LIMIT 1
-			`,
-		),
-	);
-	if (!row || row.rebuild_epoch !== expectedRebuildEpoch) {
-		throw new Error(
-			`AI Search readiness continuation could not claim ${checkpoint.generation}/${checkpoint.generationKey}/${sourceRebuildEpoch}`,
-		);
-	}
-	return {
-		generation: checkpoint.generation,
-		generationKey: checkpoint.generationKey,
-		sourceRebuildEpoch,
-		rebuildEpoch: row.rebuild_epoch,
-		startedAt: row.started_at,
-	};
-}
-
-async function verifySearchIndexReadinessTimeoutSource(env: CoreEnv, checkpoint: SearchIndexReadinessContinuationCheckpoint) {
-	const instance = await env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(checkpoint.sourceInstanceId);
-	const status = await instance.status();
-	if (status.status !== 'errored') {
-		throw new Error(`AI Search readiness continuation source ${checkpoint.sourceInstanceId} is ${status.status}, not errored`);
-	}
-	if (status.error?.name !== checkpoint.readinessErrorName || !status.error.message.startsWith(checkpoint.readinessErrorPrefix)) {
-		throw new Error(
-			`AI Search readiness continuation source ${checkpoint.sourceInstanceId} did not fail from the pinned readiness timeout`,
-		);
-	}
-	return {
-		instanceId: checkpoint.sourceInstanceId,
-		status: status.status,
-		error: {
-			name: status.error.name,
-			message: status.error.message,
-		},
-	};
 }
 
 async function assertSearchIndexRebuildLease(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<void> {
@@ -865,13 +461,13 @@ async function assertSearchIndexRebuildLease(env: CoreEnv, lease: SearchIndexReb
 }
 
 async function withSearchIndexRebuildLease<T>(env: CoreEnv, lease: SearchIndexRebuildLease, operation: () => Promise<T>): Promise<T> {
-	await assertResourceWritesEnabled(env, 'continue AI Search shadow rebuild');
+	await assertResourceWritesEnabled(env, 'continue AI Search canonical rebuild');
 	await assertSearchIndexRebuildLease(env, lease);
 	return operation();
 }
 
 async function markSearchIndexGenerationReady(env: CoreEnv, lease: SearchIndexRebuildLease): Promise<{ readyAt: string }> {
-	await assertResourceWritesEnabled(env, 'publish AI Search shadow readiness');
+	await assertResourceWritesEnabled(env, 'publish AI Search canonical readiness');
 	const [row] = await withCoreDb(env, (db) =>
 		queryRows<{ ready_at: string }>(
 			db,
@@ -898,8 +494,7 @@ async function markSearchIndexGenerationReady(env: CoreEnv, lease: SearchIndexRe
 
 type SearchIdentityCountRow = {
 	count: string;
-	kind: string | null;
-	platform_proxy_drift: string;
+	kind: string;
 	resource_platform: string | null;
 };
 
@@ -917,7 +512,9 @@ function searchIdentityKey(kind: ContentResourceKind, resourcePlatform: Resource
 }
 
 function emptySearchIdentityCounts(): Record<string, number> {
-	return Object.fromEntries(SHADOW_CONTENT_IDENTITIES.map(({ kind, resourcePlatform }) => [searchIdentityKey(kind, resourcePlatform), 0]));
+	return Object.fromEntries(
+		CANONICAL_CONTENT_IDENTITIES.map(({ kind, resourcePlatform }) => [searchIdentityKey(kind, resourcePlatform), 0]),
+	);
 }
 
 function databaseCount(value: string, field: string): number {
@@ -933,22 +530,13 @@ async function loadSearchIdentityCounts(env: CoreEnv): Promise<SearchIdentityCou
 			sql`
 				SELECT r.kind,
 				       r.resource_platform,
-				       COUNT(*)::text AS count,
-				       COUNT(*) FILTER (
-				         WHERE NOT (
-				           (r.type = 'twitter' AND r.resource_platform IS NOT DISTINCT FROM 'twitter')
-				           OR (r.type = 'youtube' AND r.resource_platform IS NOT DISTINCT FROM 'youtube')
-				           OR (r.type = 'hackernews' AND r.resource_platform IS NOT DISTINCT FROM 'hackernews')
-				           OR (r.type = ANY(${textArraySql(['web', 'rss', 'pdf'])}) AND r.resource_platform IS NULL)
-				         )
-				       )::text AS platform_proxy_drift
+				       COUNT(*)::text AS count
 				FROM resources r
 				WHERE r.scope = 'corpus'
 				  AND r.enrichment_status = 'enriched'
 				  AND ${contentResourceIdentitySql({
 						kind: sql`r.kind`,
 						resourcePlatform: sql`r.resource_platform`,
-						type: sql`r.type`,
 					})}
 				GROUP BY r.kind, r.resource_platform
 			`,
@@ -956,17 +544,10 @@ async function loadSearchIdentityCounts(env: CoreEnv): Promise<SearchIdentityCou
 	);
 	const byIdentity = emptySearchIdentityCounts();
 	let total = 0;
-	let missing = 0;
 	let invalid = 0;
-	let platformProxyDrift = 0;
 	for (const row of rows) {
 		const count = databaseCount(row.count, 'resource identity');
 		total += count;
-		platformProxyDrift += databaseCount(row.platform_proxy_drift, 'platform proxy drift');
-		if (row.kind === null) {
-			missing += count;
-			continue;
-		}
 		const identity = parseResourceIdentity(row.kind, row.resource_platform);
 		if (!identity || !(CONTENT_RESOURCE_KINDS as readonly ResourceKind[]).includes(identity.kind)) {
 			invalid += count;
@@ -979,10 +560,8 @@ async function loadSearchIdentityCounts(env: CoreEnv): Promise<SearchIdentityCou
 		}
 		byIdentity[key] += count;
 	}
-	if (missing > 0 || invalid > 0 || platformProxyDrift > 0) {
-		throw new Error(
-			`AI Search shadow preflight failed: missing_kind=${missing}, invalid_identity=${invalid}, legacy_platform_proxy_drift=${platformProxyDrift}`,
-		);
+	if (invalid > 0) {
+		throw new Error(`AI Search canonical preflight failed: invalid_identity=${invalid}`);
 	}
 	return { total, byIdentity };
 }
@@ -999,7 +578,6 @@ async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null): Promise<
 				  AND ${contentResourceIdentitySql({
 						kind: sql`r.kind`,
 						resourcePlatform: sql`r.resource_platform`,
-						type: sql`r.type`,
 					})}
 				  AND (${cursor}::uuid IS NULL OR r.id > ${cursor}::uuid)
 				ORDER BY r.id
@@ -1011,7 +589,7 @@ async function listCorpusIdsAfter(env: CoreEnv, cursor: string | null): Promise<
 }
 
 async function loadSearchItemPageCount(env: CoreEnv): Promise<number> {
-	const listed = await env.AI_SEARCH_NEXT.items.list({
+	const listed = await env.AI_SEARCH.items.list({
 		page: 1,
 		per_page: REINDEX_PAGE_SIZE,
 		sort_by: 'modified_at',
@@ -1036,7 +614,6 @@ async function loadEligibleCorpusIds(env: CoreEnv, resourceIds: readonly string[
 				  AND ${contentResourceIdentitySql({
 						kind: sql`r.kind`,
 						resourcePlatform: sql`r.resource_platform`,
-						type: sql`r.type`,
 					})}
 			`,
 		);
@@ -1069,7 +646,6 @@ async function loadEligibleCorpusLatestUpdates(env: CoreEnv, resourceIds: readon
 				  AND ${contentResourceIdentitySql({
 						kind: sql`r.kind`,
 						resourcePlatform: sql`r.resource_platform`,
-						type: sql`r.type`,
 					})}
 				GROUP BY r.id, r.updated_at
 			`,
@@ -1087,7 +663,7 @@ async function loadEligibleCorpusLatestUpdates(env: CoreEnv, resourceIds: readon
 }
 
 async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<number> {
-	const listed = await env.AI_SEARCH_NEXT.items.list({
+	const listed = await env.AI_SEARCH.items.list({
 		page,
 		per_page: REINDEX_PAGE_SIZE,
 		sort_by: 'modified_at',
@@ -1103,7 +679,7 @@ async function pruneSearchItemPage(env: CoreEnv, page: number): Promise<number> 
 
 	for (let offset = 0; offset < staleItems.length; offset += REINDEX_AI_SEARCH_CONCURRENCY) {
 		const batch = staleItems.slice(offset, offset + REINDEX_AI_SEARCH_CONCURRENCY);
-		await Promise.all(batch.map((item) => env.AI_SEARCH_NEXT.items.delete(item.id)));
+		await Promise.all(batch.map((item) => env.AI_SEARCH.items.delete(item.id)));
 	}
 	if (staleItems.length) {
 		console.info({ tag: 'AI_SEARCH', msg: 'Stale corpus items deleted', page, count: staleItems.length });
@@ -1123,7 +699,7 @@ async function uploadCorpusIds(env: CoreEnv, ids: readonly string[]): Promise<nu
 	let uploaded = 0;
 	for (let offset = 0; offset < ids.length; offset += REINDEX_AI_SEARCH_CONCURRENCY) {
 		const documents = await withCoreDb(env, (db) => loadCorpusDocuments(db, ids.slice(offset, offset + REINDEX_AI_SEARCH_CONCURRENCY)));
-		await Promise.all(documents.map((document) => uploadShadowCorpusDocument(env, document)));
+		await Promise.all(documents.map((document) => uploadCorpusDocument(env, document)));
 		uploaded += documents.length;
 	}
 	return uploaded;
@@ -1162,7 +738,6 @@ async function listCorpusDeltaAfter(env: CoreEnv, startedAt: string, cursor: Sea
 				  AND ${contentResourceIdentitySql({
 						kind: sql`r.kind`,
 						resourcePlatform: sql`r.resource_platform`,
-						type: sql`r.type`,
 					})}
 				  -- resources.updated_at is a legacy timestamp-without-time-zone
 				  -- column whose stored contract is UTC. Convert it explicitly
@@ -1214,24 +789,24 @@ function normalizedCustomMetadata(
 		.sort((left, right) => left.field_name.localeCompare(right.field_name));
 }
 
-function shadowSearchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
+function canonicalSearchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
 	return (
 		info.index_method?.vector === true &&
 		info.index_method.keyword === true &&
 		info.fusion_method === 'rrf' &&
 		info.indexing_options?.keyword_tokenizer === 'trigram' &&
-		JSON.stringify(normalizedCustomMetadata(info.custom_metadata)) === JSON.stringify(normalizedCustomMetadata(SHADOW_CUSTOM_METADATA))
+		JSON.stringify(normalizedCustomMetadata(info.custom_metadata)) === JSON.stringify(normalizedCustomMetadata(CANONICAL_CUSTOM_METADATA))
 	);
 }
 
-async function ensureShadowSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
-	const info = await env.AI_SEARCH_NEXT.info();
-	if (shadowSearchInstanceConfigMatches(info)) return 'unchanged';
-	await env.AI_SEARCH_NEXT.update({
+async function ensureCanonicalSearchInstanceConfig(env: CoreEnv): Promise<'unchanged' | 'updated'> {
+	const info = await env.AI_SEARCH.info();
+	if (canonicalSearchInstanceConfigMatches(info)) return 'unchanged';
+	await env.AI_SEARCH.update({
 		index_method: { vector: true, keyword: true },
 		fusion_method: 'rrf',
 		indexing_options: { keyword_tokenizer: 'trigram' },
-		custom_metadata: [...SHADOW_CUSTOM_METADATA],
+		custom_metadata: [...CANONICAL_CUSTOM_METADATA],
 	});
 	return 'updated';
 }
@@ -1336,7 +911,7 @@ async function searchIndexRepairTargetSnapshot(targets: readonly SearchIndexRepa
 }
 
 async function listOwnedSearchRepairStatusItems(env: CoreEnv, status: SearchIndexRepairTargetStatus): Promise<AiSearchItemInfo[]> {
-	const listed = await env.AI_SEARCH_NEXT.items.list({
+	const listed = await env.AI_SEARCH.items.list({
 		metadata_filter: JSON.stringify({ folder: ITEM_PREFIX }),
 		page: 1,
 		per_page: REINDEX_PAGE_SIZE,
@@ -1398,33 +973,6 @@ async function loadSearchIndexRepairTargets(env: CoreEnv): Promise<SearchIndexRe
 	return searchIndexRepairTargetSnapshot(targets);
 }
 
-function assertInitialSearchIndexRepairTargets(
-	snapshot: SearchIndexRepairTargetSnapshot,
-	checkpoint: SearchIndexReadinessContinuationCheckpoint,
-): void {
-	const expectedTotal = checkpoint.initialRepairErrorCount + checkpoint.initialRepairOutdatedCount;
-	if (
-		snapshot.counts.error !== checkpoint.initialRepairErrorCount ||
-		snapshot.counts.outdated !== checkpoint.initialRepairOutdatedCount ||
-		snapshot.counts.total !== expectedTotal ||
-		snapshot.digest !== checkpoint.initialRepairTargetDigest
-	) {
-		throw new Error(
-			`AI Search initial repair target fence mismatch: ${JSON.stringify({
-				actual: { counts: snapshot.counts, digest: snapshot.digest },
-				expected: {
-					counts: {
-						error: checkpoint.initialRepairErrorCount,
-						outdated: checkpoint.initialRepairOutdatedCount,
-						total: expectedTotal,
-					},
-					digest: checkpoint.initialRepairTargetDigest,
-				},
-			})}`,
-		);
-	}
-}
-
 function assertSearchIndexRepairTargetSubset(snapshot: SearchIndexRepairTargetSnapshot, initial: SearchIndexRepairTargetSnapshot): void {
 	const initialResourceIds = new Set(initial.targets.map((target) => target.resourceId));
 	for (const target of snapshot.targets) {
@@ -1443,7 +991,7 @@ async function resolveSearchIndexRepairCurrentTarget(
 	env: CoreEnv,
 	target: SearchIndexRepairTarget,
 ): Promise<SearchIndexRepairCurrentTarget> {
-	const listed = await env.AI_SEARCH_NEXT.items.list({
+	const listed = await env.AI_SEARCH.items.list({
 		per_page: REINDEX_PAGE_SIZE,
 		search: target.resourceId,
 		source: 'builtin',
@@ -1511,7 +1059,7 @@ async function applySearchIndexRepairTarget(
 		return searchIndexRepairResult('already-advanced', entry, current, latestUpdateMs);
 	}
 	if (uploadDocument) {
-		const uploaded = await uploadShadowCorpusDocument(env, uploadDocument);
+		const uploaded = await uploadCorpusDocument(env, uploadDocument);
 		const observed = uploaded ?? (await resolveSearchIndexRepairCurrentTarget(env, target)).current;
 		return searchIndexRepairResult('uploaded', entry, observed, latestUpdateMs);
 	}
@@ -1589,7 +1137,7 @@ function listedItemCount(listed: AiSearchListItemsResponse, label: string): numb
 
 async function loadIndexedIdentityCounts(env: CoreEnv): Promise<SearchIdentityCounts> {
 	const folderFilter = { folder: ITEM_PREFIX };
-	const all = await env.AI_SEARCH_NEXT.items.list({
+	const all = await env.AI_SEARCH.items.list({
 		metadata_filter: JSON.stringify(folderFilter),
 		page: 1,
 		per_page: 1,
@@ -1598,9 +1146,9 @@ async function loadIndexedIdentityCounts(env: CoreEnv): Promise<SearchIdentityCo
 	const byIdentity = emptySearchIdentityCounts();
 	// Keep pair probes serialized. Total plus all six valid identity listings in
 	// one fanout would exceed the Worker's six simultaneous connection ceiling.
-	for (const { kind, resourcePlatform } of SHADOW_CONTENT_IDENTITIES) {
+	for (const { kind, resourcePlatform } of CANONICAL_CONTENT_IDENTITIES) {
 		const platform = resourcePlatformMetadata(resourcePlatform);
-		const listed = await env.AI_SEARCH_NEXT.items.list({
+		const listed = await env.AI_SEARCH.items.list({
 			metadata_filter: JSON.stringify({
 				...folderFilter,
 				kind,
@@ -1618,7 +1166,7 @@ async function loadIndexedIdentityCounts(env: CoreEnv): Promise<SearchIdentityCo
 async function loadOwnedSearchItemStatuses(env: CoreEnv): Promise<SearchIndexStatsSnapshot> {
 	const statusCount = async (status: AiSearchItemInfo['status']) =>
 		listedItemCount(
-			await env.AI_SEARCH_NEXT.items.list({
+			await env.AI_SEARCH.items.list({
 				metadata_filter: JSON.stringify({ folder: ITEM_PREFIX }),
 				page: 1,
 				per_page: 1,
@@ -1639,29 +1187,21 @@ async function loadOwnedSearchItemStatuses(env: CoreEnv): Promise<SearchIndexSta
 	return { completed, error, outdated, queued, running, skipped };
 }
 
+function searchIndexQueueDrained(stats: SearchIndexStatsSnapshot): boolean {
+	return stats.queued === 0 && stats.running === 0;
+}
+
 function searchIndexSettled(stats: SearchIndexStatsSnapshot): boolean {
-	return stats.queued === 0 && stats.running === 0 && stats.outdated === 0;
+	return searchIndexQueueDrained(stats) && stats.outdated === 0;
 }
 
 function searchIdentityCountsEqual(left: SearchIdentityCounts, right: SearchIdentityCounts): boolean {
 	return (
 		left.total === right.total &&
-		SHADOW_CONTENT_IDENTITIES.every(
+		CANONICAL_CONTENT_IDENTITIES.every(
 			({ kind, resourcePlatform }) =>
 				left.byIdentity[searchIdentityKey(kind, resourcePlatform)] === right.byIdentity[searchIdentityKey(kind, resourcePlatform)],
 		)
-	);
-}
-
-function readinessTimeoutSourcesEqual(
-	left: Awaited<ReturnType<typeof verifySearchIndexReadinessTimeoutSource>>,
-	right: Awaited<ReturnType<typeof verifySearchIndexReadinessTimeoutSource>>,
-): boolean {
-	return (
-		left.instanceId === right.instanceId &&
-		left.status === right.status &&
-		left.error.name === right.error.name &&
-		left.error.message === right.error.message
 	);
 }
 
@@ -1681,9 +1221,9 @@ async function loadSearchIndexReadiness(env: CoreEnv): Promise<SearchIndexReadin
 	// Each child performs external I/O. Sequence the groups so database, config,
 	// status, and per-identity probes never compete for the connection ceiling.
 	const expected = await loadSearchIdentityCounts(env);
-	const configReady = shadowSearchInstanceConfigMatches(await env.AI_SEARCH_NEXT.info());
+	const configReady = canonicalSearchInstanceConfigMatches(await env.AI_SEARCH.info());
 	const ownedStatuses = await loadOwnedSearchItemStatuses(env);
-	const rawStats = await env.AI_SEARCH_NEXT.stats();
+	const rawStats = await env.AI_SEARCH.stats();
 	const stats = searchIndexStatsSnapshot(rawStats);
 	return {
 		configReady,
@@ -1709,8 +1249,11 @@ async function waitForSearchIndexReady(
 			withSearchIndexRebuildLease(env, lease, () => loadSearchIndexReadiness(env)),
 		);
 		if (searchIndexReady(last)) return last;
-		if (searchIndexSettled(last.ownedStatuses) && (last.ownedStatuses.error > 0 || last.ownedStatuses.skipped > 0)) {
-			throw new Error(`AI Search indexing failed: ${JSON.stringify(last.ownedStatuses)}`);
+		if (
+			searchIndexQueueDrained(last.ownedStatuses) &&
+			(last.ownedStatuses.error > 0 || last.ownedStatuses.outdated > 0 || last.ownedStatuses.skipped > 0)
+		) {
+			return last;
 		}
 		if (attempt < pollAttempts - 1) {
 			await step.sleep(`wait-search-index-readiness-${attempt}`, REINDEX_READY_POLL_INTERVAL);
@@ -1725,7 +1268,7 @@ async function repairAndWaitForSearchIndexReady(
 	lease: SearchIndexRebuildLease,
 	initialTargets: SearchIndexRepairTargetSnapshot,
 	maxRepairRounds: number,
-	pollAttempts = REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS,
+	pollAttempts = REINDEX_READY_POLL_ATTEMPTS,
 ): Promise<{ readiness: SearchIndexReadinessObservation; repairRoundsUsed: number }> {
 	if (!Number.isSafeInteger(pollAttempts) || pollAttempts <= 0) {
 		throw new Error(`AI Search repair readiness poll attempts must be a positive safe integer: ${pollAttempts}`);
@@ -1739,7 +1282,7 @@ async function repairAndWaitForSearchIndexReady(
 	let last: SearchIndexReadinessObservation | null = null;
 	let repairRoundsUsed = 1;
 	for (let attempt = 0; attempt < pollAttempts; attempt++) {
-		last = await step.do(`load-search-index-readiness-${attempt}`, SHORT_STEP_OPTIONS, () =>
+		last = await step.do(`load-search-index-repair-readiness-${attempt}`, SHORT_STEP_OPTIONS, () =>
 			withSearchIndexRebuildLease(env, lease, () => loadSearchIndexReadiness(env)),
 		);
 		if (searchIndexReady(last)) return { readiness: last, repairRoundsUsed };
@@ -1762,7 +1305,7 @@ async function repairAndWaitForSearchIndexReady(
 			repairRoundsUsed++;
 		}
 		if (attempt < pollAttempts - 1) {
-			await step.sleep(`wait-search-index-readiness-${attempt}`, REINDEX_READY_POLL_INTERVAL);
+			await step.sleep(`wait-search-index-repair-readiness-${attempt}`, REINDEX_READY_POLL_INTERVAL);
 		}
 	}
 	throw new Error(`AI Search index did not become ready after targeted repair: ${JSON.stringify(last)}`);
@@ -1791,157 +1334,43 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, lease: Sea
 }
 
 export async function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	await assertResourceWritesEnabled(env, 'AI Search shadow rebuild enqueue');
-	// Only the execution's first durable step mutates readiness. If this stable
-	// runner is already active, enqueueOrRestartWorkflow intentionally returns it
-	// without starting another execution; clearing readiness here would strand
-	// the generation behind a lease that no execution owns.
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, { mode: 'rebuild' });
+	await assertResourceWritesEnabled(env, 'AI Search canonical rebuild enqueue');
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, {});
 }
 
-async function continueSearchIndexReadiness(
-	env: CoreEnv,
-	step: WorkflowStep,
-	checkpoint: SearchIndexReadinessContinuationCheckpoint,
-	claimStartedAt: string,
-) {
-	const sourceBeforeClaim = await step.do('verify-readiness-timeout-source', SHORT_STEP_OPTIONS, () =>
-		verifySearchIndexReadinessTimeoutSource(env, checkpoint),
-	);
-	const repairTargetsBeforeClaim = await step.do('inspect-search-index-repair-targets-preclaim', SHORT_STEP_OPTIONS, async () => {
-		const snapshot = await loadSearchIndexRepairTargets(env);
-		assertInitialSearchIndexRepairTargets(snapshot, checkpoint);
-		return snapshot;
-	});
-	const claim = await step.do('claim-search-index-readiness-continuation', SHORT_STEP_OPTIONS, () =>
-		claimSearchIndexReadinessContinuation(env, checkpoint, claimStartedAt),
-	);
-	const sourceAfterClaim = await step.do('reverify-readiness-timeout-source', SHORT_STEP_OPTIONS, () =>
-		verifySearchIndexReadinessTimeoutSource(env, checkpoint),
-	);
-	if (!readinessTimeoutSourcesEqual(sourceBeforeClaim, sourceAfterClaim)) {
-		throw new Error('AI Search readiness continuation source changed while claiming the fenced lease');
-	}
-	const repairTargetsAfterClaim = await step.do('inspect-search-index-repair-targets-postclaim', SHORT_STEP_OPTIONS, () =>
-		withSearchIndexRebuildLease(env, claim, async () => {
-			const snapshot = await loadSearchIndexRepairTargets(env);
-			assertSearchIndexRepairTargetSubset(snapshot, repairTargetsBeforeClaim);
-			return snapshot;
-		}),
-	);
-	const repair = await repairAndWaitForSearchIndexReady(
-		env,
-		step,
-		claim,
-		repairTargetsBeforeClaim,
-		checkpoint.maxRepairRounds,
-		REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS,
-	);
-	const generationReadiness = await step.do('mark-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
-		markSearchIndexGenerationReady(env, claim),
-	);
+export async function probeSearchIndexCutover(env: CoreEnv) {
+	const observation = await loadSearchIndexReadiness(env);
+	const indexed = observation.indexed ?? (await loadIndexedIdentityCounts(env));
+	const completeObservation = { ...observation, indexed };
 	return {
-		mode: 'readiness' as const,
-		checkpoint,
-		source: {
-			beforeClaim: sourceBeforeClaim,
-			afterClaim: sourceAfterClaim,
-		},
-		claim,
+		indexName: SEARCH_INDEX_NAME,
 		generation: SEARCH_INDEX_GENERATION,
-		rebuildEpoch: claim.rebuildEpoch,
-		repair: {
-			beforeClaim: repairTargetsBeforeClaim,
-			afterClaim: repairTargetsAfterClaim,
-			roundsUsed: repair.repairRoundsUsed,
-		},
-		pollAttempts: REINDEX_READINESS_CONTINUATION_POLL_ATTEMPTS,
-		readiness: repair.readiness,
-		generationReadiness,
+		ready: searchIndexReady(completeObservation),
+		...completeObservation,
 	};
 }
 
-export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
+// This class must remain attached to its own physical Workflow resource. Durable
+// executions replay the graph bound when they started; a new class or step name
+// on an existing resource is not a contract boundary.
+export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		await assertResourceWritesEnabled(this.env, 'AI Search shadow rebuild workflow');
-		const requestedMode = parseSearchIndexRebuildMode(event.payload);
-		const readinessCheckpoint = parseSearchIndexReadinessContinuationCheckpoint(event.payload);
-		if (readinessCheckpoint) {
-			return continueSearchIndexReadiness(this.env, step, readinessCheckpoint, event.timestamp.toISOString());
-		}
-		const adoptionSourceValue: unknown = event.payload.mode === 'adopt' ? event.payload.completedInstanceId : undefined;
-		const adoptionSourceInstanceId = typeof adoptionSourceValue === 'string' ? adoptionSourceValue.trim() : undefined;
-		if (requestedMode === 'adopt' && !adoptionSourceInstanceId) {
-			throw new Error('AI Search generation adoption requires a completed source Workflow instance id');
-		}
-		const resumeCheckpoint = parseSearchIndexResumeCheckpoint(event.payload);
-		const resumeSourceStatus = resumeCheckpoint
-			? await step.do('verify-errored-search-rebuild-source', SHORT_STEP_OPTIONS, async () => {
-					const instance = await this.env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(resumeCheckpoint.erroredInstanceId);
-					const status = await instance.status();
-					if (status.status !== 'errored') {
-						throw new Error(`AI Search resume source ${resumeCheckpoint.erroredInstanceId} is ${status.status}, not errored`);
-					}
-					return { status: status.status };
-				})
-			: null;
+		await assertResourceWritesEnabled(this.env, 'AI Search canonical rebuild workflow');
+		const startedAt = await step.do('capture-canonical-v6-rebuild-started-at', async () => event.timestamp.toISOString());
+		const lease = await step.do('begin-canonical-v6-search-index-generation', SHORT_STEP_OPTIONS, () => beginSearchIndexRebuild(this.env));
 
-		// Keep the legacy step name as the rebuild's delta boundary. A pre-gate
-		// instance can replay this newer graph after deployment while retaining
-		// its original durable output; using the DB generation timestamp instead
-		// would silently move that in-flight rebuild's delta window forward.
-		const startedAt = await step.do(
-			'capture-search-rebuild-started-at',
-			async () => resumeCheckpoint?.startedAt ?? new Date().toISOString(),
-		);
-
-		// First generation-state side effect for every execution, including a
-		// direct operator restart: clear readiness and advance the fencing epoch.
-		const lease = await step.do('begin-search-index-generation', SHORT_STEP_OPTIONS, () => beginSearchIndexRebuild(this.env));
-
-		if (adoptionSourceInstanceId) {
-			const completedInstanceId = adoptionSourceInstanceId;
-			const sourceStatus = await step.do('verify-completed-search-rebuild', SHORT_STEP_OPTIONS, async () => {
-				const instance = await this.env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(completedInstanceId);
-				const status = await instance.status();
-				if (status.status !== 'complete') {
-					throw new Error(`AI Search adoption source ${completedInstanceId} is ${status.status}, not complete`);
-				}
-				return { status: status.status };
-			});
-			const readiness = await step.do('validate-adoptable-search-index', SHORT_STEP_OPTIONS, () =>
-				withSearchIndexRebuildLease(this.env, lease, () => loadSearchIndexReadiness(this.env)),
-			);
-			if (!searchIndexReady(readiness)) {
-				throw new Error(`AI Search generation cannot be adopted: ${JSON.stringify(readiness)}`);
-			}
-			const generationReadiness = await step.do('mark-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
-				markSearchIndexGenerationReady(this.env, lease),
-			);
-			return {
-				mode: 'adopt' as const,
-				sourceInstanceId: completedInstanceId,
-				sourceStatus,
-				startedAt,
-				generation: SEARCH_INDEX_GENERATION,
-				rebuildEpoch: lease.rebuildEpoch,
-				readiness,
-				generationReadiness,
-			};
-		}
-
-		const identityPreflight = await step.do('validate-search-resource-identities', SHORT_STEP_OPTIONS, () =>
+		const identityPreflight = await step.do('validate-canonical-v6-resource-identities', SHORT_STEP_OPTIONS, () =>
 			withSearchIndexRebuildLease(this.env, lease, () => loadSearchIdentityCounts(this.env)),
 		);
-		const instanceConfig = await step.do('ensure-shadow-search-instance-config', SHORT_STEP_OPTIONS, () =>
-			withSearchIndexRebuildLease(this.env, lease, () => ensureShadowSearchInstanceConfig(this.env)),
+		const instanceConfig = await step.do('ensure-canonical-v6-search-instance-config', SHORT_STEP_OPTIONS, () =>
+			withSearchIndexRebuildLease(this.env, lease, () => ensureCanonicalSearchInstanceConfig(this.env)),
 		);
-		let cursor: string | null = resumeCheckpoint?.resumeAfterCursor ?? null;
-		let uploaded = resumeCheckpoint?.uploadedBeforeResume ?? 0;
-		let page = resumeCheckpoint ? resumeCheckpoint.completedPage + 1 : 0;
+		let cursor: string | null = null;
+		let uploaded = 0;
+		let page = 0;
 
 		while (true) {
-			const result = await step.do(`sync-corpus-page-${page}`, BATCH_STEP_OPTIONS, () =>
+			const result = await step.do(`sync-canonical-v6-corpus-page-${page}`, BATCH_STEP_OPTIONS, () =>
 				withSearchIndexRebuildLease(this.env, lease, () => syncCorpusPageAfter(this.env, cursor)),
 			);
 			if (result.done) break;
@@ -1963,7 +1392,7 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 		let deltaPage = 0;
 		let deltaUploaded = 0;
 		while (true) {
-			const result = await step.do(`sync-corpus-delta-page-${deltaPage}`, BATCH_STEP_OPTIONS, () =>
+			const result = await step.do(`sync-canonical-v6-corpus-delta-page-${deltaPage}`, BATCH_STEP_OPTIONS, () =>
 				withSearchIndexRebuildLease(this.env, lease, () => syncCorpusDeltaAfter(this.env, startedAt, deltaCursor)),
 			);
 			if (result.done) break;
@@ -1973,28 +1402,34 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			deltaPage++;
 		}
 		const reconciliation = await reconcileSearchItems(this.env, step, lease);
-		// items.upload() is intentionally queue-oriented for throughput. Workflow
-		// completion is not the reader contract: do not mark the durable generation
-		// ready until Cloudflare reports no pending/error/outdated items and every
-		// indexed kind/platform count matches DB.
-		const readiness = await waitForSearchIndexReady(this.env, step, lease);
-		const generationReadiness = await step.do('mark-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
+		let readiness = await waitForSearchIndexReady(this.env, step, lease);
+		let repair: { roundsUsed: number; targets: SearchIndexRepairTargetSnapshot } | null = null;
+		if (!searchIndexReady(readiness)) {
+			if (readiness.ownedStatuses.skipped > 0) {
+				throw new Error(`AI Search indexing produced skipped items: ${JSON.stringify(readiness.ownedStatuses)}`);
+			}
+			const targets = await step.do('inspect-canonical-v6-search-index-repair-targets', SHORT_STEP_OPTIONS, () =>
+				withSearchIndexRebuildLease(this.env, lease, () => loadSearchIndexRepairTargets(this.env)),
+			);
+			if (targets.targets.length === 0) {
+				throw new Error(`AI Search index is not ready and has no repairable terminal items: ${JSON.stringify(readiness)}`);
+			}
+			const repaired = await repairAndWaitForSearchIndexReady(this.env, step, lease, targets, 3);
+			readiness = repaired.readiness;
+			repair = { roundsUsed: repaired.repairRoundsUsed, targets };
+		}
+		if (!searchIndexReady(readiness)) {
+			throw new Error(`AI Search canonical v6 readiness contract failed: ${JSON.stringify(readiness)}`);
+		}
+		const generationReadiness = await step.do('mark-canonical-v6-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
 			markSearchIndexGenerationReady(this.env, lease),
 		);
 
 		return {
-			mode: resumeCheckpoint ? ('resume' as const) : ('rebuild' as const),
+			mode: 'rebuild' as const,
 			startedAt,
 			generation: SEARCH_INDEX_GENERATION,
 			rebuildEpoch: lease.rebuildEpoch,
-			...(resumeCheckpoint
-				? {
-						resume: {
-							...resumeCheckpoint,
-							sourceStatus: resumeSourceStatus,
-						},
-					}
-				: {}),
 			identityPreflight,
 			instanceConfig,
 			uploaded,
@@ -2002,18 +1437,9 @@ export class SearchIndexRebuildWorkflow extends WorkflowEntrypoint<CoreEnv, Sear
 			deltaUploaded,
 			deltaPages: deltaPage,
 			reconciliation,
+			repair,
 			readiness,
 			generationReadiness,
 		};
-	}
-}
-
-// Use a distinct physical Workflow resource for the generation-4 shadow
-// rebuild. Cloudflare Workflow definitions can remain pinned independently of
-// the Worker's serving deployment, so reusing the generation-3 resource risks
-// starting a new instance on its legacy step graph.
-export class SearchIndexShadowRebuildWorkflow extends SearchIndexRebuildWorkflow {
-	override run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		return super.run(event, step);
 	}
 }

@@ -1,23 +1,25 @@
-# AI Search v6 shadow rollout
+# AI Search v6 canonical operations
 
-This is the non-serving preparation phase for resource identity contraction
-(#251). Production search continues to read `newsence-corpus-v5` through
-`AI_SEARCH`. The rebuild, canonical metadata checks, and readiness state in this
-runbook apply only to `newsence-corpus-v6` through `AI_SEARCH_NEXT`.
+This file began as the #251 shadow-rollout runbook. Its active sections now
+define the serving generation-4 contract; generation-3 identifiers and phase-1
+shadow artifacts are isolated at the end so they cannot be mistaken for new
+operator targets.
 
-## Contracts
+## Active contract
 
-| Role | Instance | Durable state | Generation | Metadata identity |
-| --- | --- | --- | --- | --- |
-| Current reader | `newsence-corpus-v5` | `public-corpus` | `3 / canonical-3-kind` | `type` + `kind` |
-| Shadow candidate | `newsence-corpus-v6` | `public-corpus-v6` | `4 / canonical-4-kind-platform` | `kind` + `resource_platform` |
+| Role | Instance or resource | Durable state | Generation |
+| --- | --- | --- | --- |
+| Serving AI Search binding | `AI_SEARCH → newsence-corpus-v6` | `public-corpus-v6` | `4 / canonical-4-kind-platform` |
+| Rebuild Workflow binding | `SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW` | — | — |
+| Physical rebuild Workflow | `newsence-search-index-canonical-v6-rebuild` | — | — |
+| Stable runner | `search-index-rebuild-canonical-4-kind-platform-canonical-v1` | — | — |
 
-The shadow instance has exactly five custom metadata fields:
+The v6 instance has exactly these project-owned custom metadata fields:
 `effective_at`, `source_id`, `category`, `kind`, and `resource_platform`.
 Canonical null platforms are stored as the reserved text sentinel `none`.
 
-Shadow readiness compares the database and AI Search by every valid content
-identity pair, not only by kind:
+Readiness compares PostgreSQL and AI Search by every searchable content identity
+pair:
 
 - `document / none`
 - `document / hackernews`
@@ -26,89 +28,159 @@ identity pair, not only by kind:
 - `paper / none`
 - `paper / hackernews`
 
-## One-time preparation
+Image and file resources are private/blob-oriented and do not enter the public
+search corpus.
 
-Create the built-in shadow instance before deploying a Worker version that
-contains the `AI_SEARCH_NEXT` binding:
+## Workflow isolation
+
+A durable execution replays the graph attached to the physical Cloudflare
+Workflow resource that started it. A new runner ID on an old physical resource
+does not select a newly deployed graph.
+
+For any incompatible rebuild-graph revision, create all four together:
+
+1. a new binding;
+2. a new physical Workflow name;
+3. a new exported class;
+4. a new source-controlled runner ID.
+
+Never trigger the historical `newsence-search-index-rebuild` or
+`newsence-search-index-shadow-rebuild` resources for the active generation.
+
+## Bootstrap or rebuild
+
+First confirm that the v6 instance exists. Create it only for a fresh
+environment; never recreate or replace the production instance:
 
 ```sh
+pnpm -C workers/core-worker exec wrangler ai-search get newsence-corpus-v6
+
+# Fresh environments only:
 pnpm -C workers/core-worker exec wrangler ai-search create \
   newsence-corpus-v6 \
   --type builtin \
   --hybrid-search
 ```
 
-The rebuild Workflow applies the exact RRF, trigram, and custom metadata
-configuration before uploading the corpus. Do not update the v5 schema.
-
-## Deploy and start
-
-Run the ordinary Core static gates and deploy. Verify that the serving v5
-contract is still ready before starting the shadow rebuild:
+Run the Core gates and deploy a compatible Worker version before starting a
+rebuild:
 
 ```sh
-set -a
-. web-tanstack/.env.local
-set +a
-
 pnpm -C workers/core-worker typecheck
 pnpm -C workers/core-worker lint
-pnpm -C workers/core-worker check:search-rollout
 pnpm -C workers/core-worker run deploy
 ```
 
-Trigger the fresh generation-4 runner exactly once:
+Prefer the service-binding RPC `startSearchIndexRebuild()`. The equivalent
+operator trigger is:
 
 ```sh
 pnpm -C workers/core-worker exec wrangler workflows trigger \
-  newsence-search-index-shadow-rebuild \
-  '{"mode":"rebuild"}' \
-  --id search-index-rebuild-canonical-4-kind-platform-shadow-v2
+  newsence-search-index-canonical-v6-rebuild \
+  '{}' \
+  --id search-index-rebuild-canonical-4-kind-platform-canonical-v1
 ```
 
-Normal resource synchronization writes the serving index first and then the
-shadow index. Deletions follow the same order. A shadow failure is retryable,
-but the current v5 document is already refreshed before that failure surfaces.
-The full rebuild, stale-item prune, repair, and readiness probes operate only on
-v6.
+Before using the explicit trigger, inspect that exact runner and do not start a
+second execution concurrently. Transient failures may restart the same
+source-compatible runner; a graph change requires a new physical resource as
+described above.
 
-## Observe and verify
+The Workflow configures the instance, validates the canonical identity matrix,
+uploads the full corpus plus a start-time delta, prunes stale owned items,
+repairs retryable terminal items, and marks generation 4 ready only after
+PostgreSQL and AI Search converge.
 
-During the rebuild, run both checks. The first protects the serving contract;
-the second validates v6 configuration, state fencing, database invariants, and
-progress:
+## Verify
+
+Use Node's dotenv parser to load the direct database environment without
+printing or shell-sourcing it, then run the active generation-4 checks:
 
 ```sh
-pnpm -C workers/core-worker check:search-rollout
-pnpm -C workers/core-worker check:search-shadow-rollout -- --allow-in-progress
+pnpm -C workers/core-worker exec node \
+  --env-file=../../web-tanstack/.env.local \
+  scripts/check-search-rebuild.mjs
+
+pnpm -C workers/core-worker exec node \
+  --env-file=../../web-tanstack/.env.local \
+  scripts/check-search-rollout.mjs
 ```
 
-After the Workflow is complete, remove the progress flag:
+The rollout checker requires explicit `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_AISEARCH_API_TOKEN` environment variables. Use a dedicated token
+with `AI Search:Edit` and `AI Search:Run` permissions. The checker never loads
+Wrangler OAuth credentials or falls back to `CLOUDFLARE_API_TOKEN`.
 
-```sh
-pnpm -C workers/core-worker check:search-rollout
-pnpm -C workers/core-worker check:search-shadow-rollout
-```
+The strict rollout check requires:
 
-The strict shadow check requires generation 4 to be ready, every non-completed
-item status to be zero, the completed count to equal the enriched content
-corpus, the database identity invariants to remain zero, and the matrix
-constraint to remain validated. The Workflow marks the state ready only after
-AI Search's joint kind/platform counts equal the database counts.
+- durable generation 4 status `ready`;
+- zero queued, running, outdated, error, and skipped owned items;
+- completed item count equal to the enriched searchable corpus;
+- the canonical resource identity constraints validated;
+- all six joint kind/platform counts equal between PostgreSQL and AI Search.
+
+Immediately before a schema or reader cutover, also call
+`probeSearchIndexCutover()` through the deployed Core service binding. This
+fresh probe is independent of the durable ready row and must return `ready:
+true` with matching six-pair counts.
+
+## #251 schema contraction sequence
+
+Search readiness does not authorize the database contraction by itself. Follow
+`web-tanstack/prisma/251-resource-type-runbook.md` as the source of truth:
+
+1. prove generation 4 ready and complete its observation window;
+2. deploy the freeze-aware compatibility Web/Core release while the legacy
+   schema, v5 serving, and v6 dual-write contract are still active;
+3. quiesce cron/operator starts and drain every pre-contract processing,
+   translation, search-rebuild, image-backfill, academic-backfill, and identity
+   Workflow resource, including the historical shadow resource;
+4. install the writer marker plus database trigger, verify maintenance
+   rejection canaries, and repeat the complete Workflow drain;
+5. deploy the canonical-only Web first and Core second while writes remain
+   frozen;
+6. rerun `check:search-rollout` and `probeSearchIndexCutover()`;
+7. run the #251 preflight, atomic contract, postflight, final-source drift, and
+   active deployment/search/R2 checks;
+8. inspect and archive the freeze snapshot/pending reconciliation set, then
+   remove the exact writer freeze with the resume script;
+9. reconcile any recorded pending IDs through the V2 Workflow and run the
+   production writer canaries.
+
+Do not resume writers between the contract and the postflight/final
+drift/search/R2 gates. Saved-URL, upload, processing, and deletion canaries are
+writer canaries and therefore run only after the exact resume succeeds.
 
 ## Failure and rollback
 
-Phase 1 does not route reads to v6 and does not change the database schema. If
-the shadow build fails:
+If a rebuild fails before a schema contraction:
 
-1. Leave v5 and its `public-corpus` state untouched.
-2. Inspect or terminate only
-   `search-index-rebuild-canonical-4-kind-platform-shadow-v2`.
-3. Fix the shadow path and start a new source-controlled runner suffix rather
-   than replaying incompatible durable history.
-4. If necessary, roll back the Core deployment to stop dual writes; v5 remains
-   the serving index throughout.
+1. keep the existing database schema unchanged;
+2. inspect only the active canonical runner;
+3. repair transient item failures and restart the source-compatible runner, or
+   deploy a newly named physical Workflow for a graph change;
+4. require the strict rollout check and fresh cutover probe again.
 
-Do not remap `AI_SEARCH` to v6 or drop the legacy database column in this phase.
-Those are separate cutover and contraction actions after the shadow observation
-gate passes.
+After the #251 contraction, remapping `AI_SEARCH` to v5 is not a standalone
+rollback. Restore the exact backed-up database discriminator with the #251
+rollback procedure, deploy the compatible Worker versions, verify v5, and only
+then remap the binding. Retain `newsence-corpus-v5` and the migration backup
+during the declared rollback window.
+
+## Historical generation-3 and phase-1 shadow record
+
+The following identifiers describe generation-3 evidence or the isolated
+phase-1 shadow run. They are not active final-contract operator targets:
+
+| Historical role | Identifier |
+| --- | --- |
+| Generation-3 serving index | `newsence-corpus-v5` |
+| Generation-3 durable state | `public-corpus`, `3 / canonical-3-kind` |
+| Generation-3 Workflow | `newsence-search-index-rebuild` |
+| Phase-1 shadow binding | `AI_SEARCH_NEXT → newsence-corpus-v6` |
+| Isolated shadow Workflow | `newsence-search-index-shadow-rebuild` |
+| Phase-1 shadow runner | `search-index-rebuild-canonical-4-kind-platform-shadow-v2` |
+
+Historical check scripts, logs, and issue comments may legitimately mention
+these exact names. Keep those records labeled as historical instead of
+rewriting them into the active contract.

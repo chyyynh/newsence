@@ -74,7 +74,7 @@ async function extractHtmlArticle(html: string, url: string): Promise<ExtractedH
 	};
 }
 
-export type AcquiredWebContent = NormalizedContent<'web' | 'pdf'> & {
+export type AcquiredWebContent = NormalizedContent<null> & {
 	extraction?: PdfExtractionMetadata;
 };
 
@@ -124,7 +124,7 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 	const parsed = await parsePdfBytes(bytes);
 	const title = titleFromFileName(fileName);
 	return {
-		type: 'pdf',
+		kind: 'document',
 		resourcePlatform: null,
 		fileType: PDF_MIME,
 		title,
@@ -159,7 +159,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Prom
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
 	return {
-		type: 'web',
+		kind: 'document',
 		resourcePlatform: null,
 		fileType: null,
 		title: article.title,

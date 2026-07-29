@@ -1,25 +1,3 @@
-export const CONTENT_RESOURCE_TYPES = ['web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf'] as const;
-
-export type ContentResourceType = (typeof CONTENT_RESOURCE_TYPES)[number];
-
-const MEDIA_RESOURCE_TYPES = ['image', 'file'] as const;
-
-export const RESOURCE_TYPES = [...CONTENT_RESOURCE_TYPES, ...MEDIA_RESOURCE_TYPES] as const;
-
-export type ResourceType = (typeof RESOURCE_TYPES)[number];
-
-export function isContentResourceType(value: unknown): value is ContentResourceType {
-	return typeof value === 'string' && (CONTENT_RESOURCE_TYPES as readonly string[]).includes(value);
-}
-
-export function isResourceType(value: unknown): value is ResourceType {
-	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
-}
-
-export function legacyResourceTypeAfterAcquisition(current: ContentResourceType, acquired: ContentResourceType): ContentResourceType {
-	return current === 'rss' && acquired === 'web' ? 'rss' : acquired;
-}
-
 export const RESOURCE_KINDS = ['document', 'post', 'video', 'paper', 'image', 'file'] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
@@ -48,26 +26,10 @@ export type ResourceIdentity = Readonly<{
 	resourcePlatform: ResourcePlatform;
 }>;
 
-export type LegacyResourceIdentityFilterCase = Readonly<{
-	type: ResourceType;
-	academic: boolean | 'irrelevant';
-}>;
-
 export type ResourceIdentityFilters = Readonly<{
 	kinds?: readonly ResourceKind[];
 	resourcePlatforms?: readonly ResourcePlatform[];
 }>;
-
-export const LEGACY_RESOURCE_IDENTITIES = {
-	web: { kind: 'document', resourcePlatform: null },
-	rss: { kind: 'document', resourcePlatform: null },
-	twitter: { kind: 'post', resourcePlatform: 'twitter' },
-	youtube: { kind: 'video', resourcePlatform: 'youtube' },
-	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
-	pdf: { kind: 'document', resourcePlatform: null },
-	image: { kind: 'image', resourcePlatform: null },
-	file: { kind: 'file', resourcePlatform: null },
-} as const satisfies Readonly<Record<ResourceType, ResourceIdentity>>;
 
 const DETECTED_PLATFORM_RESOURCE_IDENTITIES = {
 	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
@@ -163,30 +125,6 @@ export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown):
 	return isRecord(academic) && academic.source === 'semanticscholar';
 }
 
-export function legacyResourceIdentity(type: ResourceType, hasAcademicEnrichment = false): ResourceIdentity {
-	const identity = LEGACY_RESOURCE_IDENTITIES[type];
-	return resourceIdentityWithAcademic(identity, hasAcademicEnrichment);
-}
-
-export function legacyResourceIdentityFilterCases(filters: ResourceIdentityFilters): LegacyResourceIdentityFilterCase[] {
-	const kinds = filters.kinds === undefined ? null : new Set<ResourceKind>(filters.kinds);
-	const resourcePlatforms = filters.resourcePlatforms === undefined ? null : new Set<ResourcePlatform>(filters.resourcePlatforms);
-	const matches = (identity: ResourceIdentity) =>
-		(kinds === null || kinds.has(identity.kind)) && (resourcePlatforms === null || resourcePlatforms.has(identity.resourcePlatform));
-
-	return RESOURCE_TYPES.flatMap((type) => {
-		const withoutAcademic = matches(legacyResourceIdentity(type, false));
-		const withAcademic = matches(legacyResourceIdentity(type, true));
-		if (!withoutAcademic && !withAcademic) return [];
-		return [
-			{
-				type,
-				academic: withoutAcademic === withAcademic ? 'irrelevant' : withAcademic,
-			} satisfies LegacyResourceIdentityFilterCase,
-		];
-	});
-}
-
 export function resourceIdentityForDetectedPlatform(
 	resourcePlatform: Exclude<ResourcePlatform, null>,
 	hasAcademicEnrichment = false,
@@ -209,11 +147,6 @@ export function isResourceTranslationIdentityEligible(input: {
 	return !(input.fileType === 'application/pdf' && input.resourcePlatform === null);
 }
 
-// Translation/enrichment completeness policy for legacy resource rows. Keep
-// this policy domain independent from the umbrella ContentResourceType alias
-// so the overloaded resource-type contract can be retired in stages (#245).
-export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const;
-
 export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const;
 
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
@@ -223,8 +156,8 @@ export function isSourcePlatform(value: unknown): value is SourcePlatform {
 }
 
 // Editorial kind of an article-family source. Distinguishes reader-facing Blog
-// vs News, which resources.type (web/rss) can't express since both come from the
-// same ingest kinds. Only meaningful for rss/web sources.
+// vs News independently from the canonical resource identity. Only meaningful
+// for rss/web sources.
 export const SOURCE_KINDS = ['blog', 'news'] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];

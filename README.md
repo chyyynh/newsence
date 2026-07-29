@@ -172,14 +172,14 @@ Bindings (in `wrangler.jsonc`):
 | Binding            | Purpose                                      |
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
-| `RESOURCE_PROCESSING_WORKFLOW` | Fetch, parse, classify, and persist a resource |
-| `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
-| `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
-| `RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW` | Warm recent public resource images into app-owned R2 |
-| `ACADEMIC_METADATA_BACKFILL_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
+| `RESOURCE_PROCESSING_V2_WORKFLOW` | Fetch, parse, classify, and persist a canonical resource |
+| `RESOURCE_TRANSLATION_V2_WORKFLOW` | Translate a persisted resource into zh-Hant |
+| `SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW` | Rebuild and verify the generation-4 canonical search index |
+| `RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW` | Warm recent public resource images into app-owned R2 |
+| `ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
-| `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |
+| `AI_SEARCH`        | `newsence-corpus-v6` canonical public corpus |
 
 Secrets (via `wrangler secret put`):
 
@@ -189,46 +189,54 @@ Secrets (via `wrangler secret put`):
 | `YOUTUBE_API_KEY`              | Yes      | Enables YouTube channel monitoring       |
 | `S2_API_KEY`                   | Yes      | Increases Semantic Scholar quota for paper enrichment |
 
-### Search index rebuild and reader cutover
+### Canonical AI Search v6
 
-The resource-identity dual-read index uses exactly five custom metadata fields:
-`effective_at`, `source_id`, `type`, `category`, and `kind`. Cloudflare AI
-Search currently limits an instance to five custom fields, so
-`resource_platform` remains represented by the verified legacy-type proxy until
-the #251 contract rebuild replaces `type`.
+`AI_SEARCH` serves `newsence-corpus-v6`. Its five custom metadata fields are
+`effective_at`, `source_id`, `category`, `kind`, and `resource_platform`; null
+platforms use the reserved `none` sentinel. Durable readiness lives in
+`search_index_states` as `public-corpus-v6`, generation
+`4 / canonical-4-kind-platform`.
 
-Roll out an index schema change in this order:
+The canonical rebuild verifies every searchable identity pair, not only totals:
+`document / none`, `document / hackernews`, `post / twitter`,
+`video / youtube`, `paper / none`, and `paper / hackernews`. It waits for all
+owned items to leave queued, running, outdated, error, and skipped states, then
+compares AI Search with PostgreSQL before marking the generation ready.
 
-1. Apply and validate the database identity backfill.
-2. Apply `web-tanstack/prisma/245-search-index-readiness.sql`, then deploy Core
-   so new uploads carry the new metadata while the durable generation row is
-   still absent and kind-native reads fail closed to legacy `types`.
-3. Call `startSearchIndexRebuild()` and poll
-   `getSearchIndexRebuildStatus(instanceId)`.
-4. Deploy app/MCP readers that send `kinds` or `resourcePlatforms`. They use
-   native `kind` filters only after the current generation atomically reaches
-   `ready`; Workflow history retention is not part of the serving contract.
-
-The rebuild preflights missing identities and legacy platform-proxy drift. It
-does not report success merely because uploads were queued: it waits until all
-`resources/` items have no queued, running, outdated, error, or skipped status,
-then compares total and per-kind index counts with Postgres. This terminal
-success writes the durable reader-cutover gate.
-
-If a pre-gate Workflow execution already completed the same physical index
-contract, deploy the migration and current Core version, then adopt that exact
-terminal instance without uploading the corpus again:
+Run the static gates, start the generation-specific Workflow through
+`startSearchIndexRebuild()`, and poll
+`getSearchIndexRebuildStatus(instanceId)`. The equivalent operator trigger is:
 
 ```sh
 pnpm exec wrangler workflows trigger \
-  newsence-search-index-rebuild \
-  '{"mode":"adopt","completedInstanceId":"search-index-rebuild-canonical-3-kind"}' \
-  --id search-index-adopt-canonical-3-kind
+  newsence-search-index-canonical-v6-rebuild \
+  '{}' \
+  --id search-index-rebuild-canonical-4-kind-platform-canonical-v1
+
+pnpm check:search-rebuild
+pnpm check:search-rollout
 ```
 
-Adoption remains fail closed: it checks the source Workflow is complete, the
-live index configuration matches, all owned item statuses are settled, and
-Postgres/index totals agree for every kind before marking the generation ready.
+`check:search-rollout` talks directly to the AI Search REST API and deliberately
+does not reuse Wrangler OAuth credentials. Set `CLOUDFLARE_ACCOUNT_ID` and a
+dedicated `CLOUDFLARE_AISEARCH_API_TOKEN` with `AI Search:Edit` and
+`AI Search:Run` permissions in the operator environment before running it.
+
+Immediately before a reader or schema cutover, call
+`probeSearchIndexCutover()` for an independent six-pair DB/index comparison.
+Cloudflare Workflow executions replay the graph attached to their physical
+Workflow resource, so incompatible graph revisions require a new binding,
+resource name, class, and runner ID; changing only a runner ID is not isolation.
+See `SEARCH_SHADOW_V6_RUNBOOK.md` for the complete operator and recovery
+procedure.
+
+#### Historical generation-3 evidence
+
+`newsence-corpus-v5`, durable state `public-corpus`, generation
+`3 / canonical-3-kind`, and `newsence-search-index-rebuild` belong to the
+completed #245 rollout. Historical scripts and logs retain those exact names as
+evidence. They are not active bindings and must not be triggered or adopted for
+the generation-4 contract.
 
 ### Recent resource image warmup
 
@@ -237,7 +245,7 @@ New ingest eagerly rehosts every trusted resource image through the app Worker's
 with a bounded Workflow run:
 
 ```sh
-pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill '{"days":7}'
+pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill-v2 '{"days":7}'
 ```
 
 The Workflow accepts only 1–7 days, pages through enriched public corpus rows by
@@ -252,7 +260,7 @@ Workflow through the core service-binding RPC `startAcademicMetadataBackfill()`,
 or directly with Wrangler:
 
 ```sh
-pnpm exec wrangler workflows trigger newsence-academic-metadata-backfill '{}'
+pnpm exec wrangler workflows trigger newsence-academic-metadata-backfill-v3 '{}'
 ```
 
 The Workflow keyset-pages only through explicit `doi.org` and arXiv

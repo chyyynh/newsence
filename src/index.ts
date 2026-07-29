@@ -1,31 +1,23 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { AcademicMetadataBackfillWorkflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
-import { ResourceTranslationWorkflow } from '@ingest/content-localization-workflow';
+import { AcademicMetadataBackfillV3Workflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
+import { ResourceTranslationV2Workflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
-import {
-	type ResourceIdentityBackfillMode,
-	ResourceIdentityBackfillWorkflow,
-	resourceIdentityBackfillInstanceId,
-	startResourceIdentityBackfill,
-} from '@ingest/resource-identity-backfill-workflow';
-import { RecentResourceImageBackfillWorkflow } from '@ingest/resource-image-backfill-workflow';
+import { RecentResourceImageBackfillV2Workflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
-import { enqueueProcessing, enqueueResourceResync, ResourceProcessingWorkflow } from '@ingest/workflow';
-import { SearchIndexRebuildWorkflow, SearchIndexShadowRebuildWorkflow, startSearchIndexRebuild } from './ai-search';
+import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow } from '@ingest/workflow';
+import { probeSearchIndexCutover, SearchIndexCanonicalV6RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceWritesEnabled, shouldDispatchResourceWriters } from './db/resource-write-guard';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 
 export {
-	AcademicMetadataBackfillWorkflow,
-	RecentResourceImageBackfillWorkflow,
-	ResourceIdentityBackfillWorkflow,
-	ResourceProcessingWorkflow,
-	ResourceTranslationWorkflow,
-	SearchIndexRebuildWorkflow,
-	SearchIndexShadowRebuildWorkflow,
+	AcademicMetadataBackfillV3Workflow,
+	RecentResourceImageBackfillV2Workflow,
+	ResourceProcessingV2Workflow,
+	ResourceTranslationV2Workflow,
+	SearchIndexCanonicalV6RebuildWorkflow,
 };
 
 type MonitorHandler = (env: CoreEnv) => Promise<void>;
@@ -110,8 +102,13 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read search-index rebuild status for operator polling. */
 	async getSearchIndexRebuildStatus(instanceId: string) {
-		const instance = await this.env.SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW.get(instanceId);
+		const instance = await this.env.SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW.get(instanceId);
 		return instance.status();
+	}
+
+	/** Validate DB/index counts for all six canonical identity pairs immediately before cutover. */
+	probeSearchIndexCutover() {
+		return probeSearchIndexCutover(this.env);
 	}
 
 	/** Start or resume the versioned academic metadata backfill. */
@@ -122,19 +119,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read academic metadata backfill status for operator polling. */
 	async getAcademicMetadataBackfillStatus(instanceId: string) {
-		const instance = await this.env.ACADEMIC_METADATA_BACKFILL_WORKFLOW.get(instanceId);
-		return instance.status();
-	}
-
-	/** Start or resume a versioned resource kind/platform migration mode. */
-	async startResourceIdentityBackfill(mode: ResourceIdentityBackfillMode = 'dry-run') {
-		await assertResourceWritesEnabled(this.env, 'start resource identity backfill RPC');
-		return startResourceIdentityBackfill(this.env, mode);
-	}
-
-	/** Read the stable resource kind/platform migration instance for a mode. */
-	async getResourceIdentityBackfillStatus(mode: ResourceIdentityBackfillMode = 'dry-run') {
-		const instance = await this.env.RESOURCE_IDENTITY_BACKFILL_WORKFLOW.get(resourceIdentityBackfillInstanceId(mode));
+		const instance = await this.env.ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 
@@ -155,7 +140,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read workflow status for app-side polling. */
 	async getWorkflowStatus(instanceId: string) {
-		const instance = await this.env.RESOURCE_PROCESSING_WORKFLOW.get(instanceId);
+		const instance = await this.env.RESOURCE_PROCESSING_V2_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 

@@ -41,12 +41,15 @@ type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
 	await assertResourceWritesEnabled(env, 'resource processing enqueue');
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, storedWorkflowId(resourceId), { resourceId, operation: 'ingest' });
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId), {
+		resourceId,
+		operation: 'ingest',
+	});
 }
 
 export async function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
 	await assertResourceWritesEnabled(env, 'resource resync enqueue');
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_WORKFLOW, `resource-resync-${workflowIdPart(resourceId)}`, {
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, `resource-resync-v2-${workflowIdPart(resourceId)}`, {
 		resourceId,
 		operation: 'resync',
 	});
@@ -57,7 +60,7 @@ function workflowIdPart(value: string): string {
 }
 
 function storedWorkflowId(resourceId: string): string {
-	return ['resource', workflowIdPart(resourceId)].join('-');
+	return ['resource-v2', workflowIdPart(resourceId)].join('-');
 }
 
 async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resourceId: string): Promise<void> {
@@ -243,7 +246,7 @@ async function acquireResourceForOperation(
 	return stageSavedUrlAcquisition(env, step, resource);
 }
 
-export class ResourceProcessingWorkflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
+export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId, operation } = event.payload;
 		await assertResourceWritesEnabled(this.env, `resource processing workflow ${resourceId}`);

@@ -1,14 +1,8 @@
 import {
-	CONTENT_RESOURCE_KINDS,
-	CONTENT_RESOURCE_TYPES,
-	legacyResourceIdentity,
-	legacyResourceIdentityFilterCases,
 	RESOURCE_KIND_DISPLAY_LABELS,
-	RESOURCE_ORIGINAL_CONTENT_TYPES,
 	RESOURCE_PLATFORM_DISPLAY_LABELS,
 	type ResourceIdentityFilters,
 	type ResourcePlatform,
-	resourceIdentityDisplayLabel,
 	TRANSLATABLE_RESOURCE_KINDS,
 } from '@core-shared/resource-types';
 import { type SQL, sql } from 'drizzle-orm';
@@ -17,38 +11,25 @@ import { textArraySql } from './client';
 export type ResourceIdentitySqlFields = {
 	kind: SQL;
 	resourcePlatform: SQL;
-	type: SQL;
 };
 
-// `IS TRUE` collapses rollout NULLs to false. Callers negate these predicates
-// in completeness checks, where SQL's three-valued NOT NULL would otherwise
-// preserve NULL and accidentally require content from legacy PDF/YouTube rows.
 export function contentResourceIdentitySql(fields: ResourceIdentitySqlFields): SQL {
-	return sql`((
-		${fields.kind} = ANY(${textArraySql(CONTENT_RESOURCE_KINDS)})
-		OR (
-			${fields.kind} IS NULL
-			AND ${fields.resourcePlatform} IS NULL
-			AND ${fields.type} = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
-		)
-	)) IS TRUE`;
+	return sql`(
+		(${fields.kind} = 'document' AND (${fields.resourcePlatform} IS NULL OR ${fields.resourcePlatform} = 'hackernews'))
+		OR (${fields.kind} = 'post' AND ${fields.resourcePlatform} = 'twitter')
+		OR (${fields.kind} = 'video' AND ${fields.resourcePlatform} = 'youtube')
+		OR (${fields.kind} = 'paper' AND (${fields.resourcePlatform} IS NULL OR ${fields.resourcePlatform} = 'hackernews'))
+	)`;
 }
 
 export function translatableResourceIdentitySql(fields: ResourceIdentitySqlFields & { fileType: SQL }): SQL {
-	return sql`((
-		(
-			${fields.kind} = ANY(${textArraySql(TRANSLATABLE_RESOURCE_KINDS)})
-			AND (
-				${fields.fileType} IS DISTINCT FROM 'application/pdf'
-				OR ${fields.resourcePlatform} IS NOT NULL
-			)
+	return sql`(
+		${fields.kind} = ANY(${textArraySql(TRANSLATABLE_RESOURCE_KINDS)})
+		AND (
+			${fields.fileType} IS DISTINCT FROM 'application/pdf'
+			OR ${fields.resourcePlatform} IS NOT NULL
 		)
-		OR (
-			${fields.kind} IS NULL
-			AND ${fields.resourcePlatform} IS NULL
-			AND ${fields.type} = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
-		)
-	)) IS TRUE`;
+	)`;
 }
 
 function resourceKindFilterSql(field: SQL, kinds: ResourceIdentityFilters['kinds']): SQL {
@@ -67,47 +48,11 @@ function resourcePlatformFilterSql(field: SQL, resourcePlatforms: ResourceIdenti
 	return sql`FALSE`;
 }
 
-function semanticScholarAcademicEnrichmentSql(platformMetadata: SQL): SQL {
-	return sql`COALESCE(
-		jsonb_typeof(${platformMetadata} #> '{enrichments,academic}') = 'object'
-		AND ${platformMetadata} #>> '{enrichments,academic,source}' = 'semanticscholar',
-		FALSE
-	)`;
-}
-
-export function resourceIdentityFilterSql(
-	fields: ResourceIdentitySqlFields & { platformMetadata: SQL },
-	filters: ResourceIdentityFilters,
-): SQL {
+export function resourceIdentityFilterSql(fields: ResourceIdentitySqlFields, filters: ResourceIdentityFilters): SQL {
 	if (filters.kinds === undefined && filters.resourcePlatforms === undefined) return sql`TRUE`;
-
-	const legacyCases = legacyResourceIdentityFilterCases(filters);
-	const academicIrrelevantTypes = legacyCases.filter((entry) => entry.academic === 'irrelevant').map((entry) => entry.type);
-	const academicRequiredTypes = legacyCases.filter((entry) => entry.academic === true).map((entry) => entry.type);
-	const academicExcludedTypes = legacyCases.filter((entry) => entry.academic === false).map((entry) => entry.type);
-	const hasAcademicEnrichment = semanticScholarAcademicEnrichmentSql(fields.platformMetadata);
-
 	return sql`(
-		(
-			${fields.kind} IS NOT NULL
-			AND ${resourceKindFilterSql(fields.kind, filters.kinds)}
-			AND ${resourcePlatformFilterSql(fields.resourcePlatform, filters.resourcePlatforms)}
-		)
-		OR (
-			${fields.kind} IS NULL
-			AND ${fields.resourcePlatform} IS NULL
-			AND (
-				${fields.type} = ANY(${textArraySql(academicIrrelevantTypes)})
-				OR (
-					${fields.type} = ANY(${textArraySql(academicRequiredTypes)})
-					AND ${hasAcademicEnrichment}
-				)
-				OR (
-					${fields.type} = ANY(${textArraySql(academicExcludedTypes)})
-					AND NOT (${hasAcademicEnrichment})
-				)
-			)
-		)
+		${resourceKindFilterSql(fields.kind, filters.kinds)}
+		AND ${resourcePlatformFilterSql(fields.resourcePlatform, filters.resourcePlatforms)}
 	)`;
 }
 
@@ -132,14 +77,6 @@ export function resourceDisplaySourceSql(
 			WHEN 'paper' THEN ${RESOURCE_KIND_DISPLAY_LABELS.paper}
 			WHEN 'image' THEN ${RESOURCE_KIND_DISPLAY_LABELS.image}
 			WHEN 'file' THEN ${RESOURCE_KIND_DISPLAY_LABELS.file}
-		END,
-		CASE ${fields.type}
-			WHEN 'twitter' THEN ${resourceIdentityDisplayLabel(legacyResourceIdentity('twitter'))}
-			WHEN 'youtube' THEN ${resourceIdentityDisplayLabel(legacyResourceIdentity('youtube'))}
-			WHEN 'hackernews' THEN ${resourceIdentityDisplayLabel(legacyResourceIdentity('hackernews'))}
-			WHEN 'image' THEN ${resourceIdentityDisplayLabel(legacyResourceIdentity('image'))}
-			WHEN 'file' THEN ${resourceIdentityDisplayLabel(legacyResourceIdentity('file'))}
-			ELSE ${resourceIdentityDisplayLabel(legacyResourceIdentity('web'))}
 		END
 	)`;
 }

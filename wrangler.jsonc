@@ -58,39 +58,29 @@
 	 */
 	"workflows": [
 		{
-			"binding": "RESOURCE_PROCESSING_WORKFLOW",
-			"name": "newsence-resource-processing",
-			"class_name": "ResourceProcessingWorkflow"
+			"binding": "RESOURCE_PROCESSING_V2_WORKFLOW",
+			"name": "newsence-resource-processing-v2",
+			"class_name": "ResourceProcessingV2Workflow"
 		},
 		{
-			"binding": "RESOURCE_TRANSLATION_WORKFLOW",
-			"name": "newsence-resource-translation",
-			"class_name": "ResourceTranslationWorkflow"
+			"binding": "RESOURCE_TRANSLATION_V2_WORKFLOW",
+			"name": "newsence-resource-translation-v2",
+			"class_name": "ResourceTranslationV2Workflow"
 		},
 		{
-			"binding": "SEARCH_INDEX_REBUILD_WORKFLOW",
-			"name": "newsence-search-index-rebuild",
-			"class_name": "SearchIndexRebuildWorkflow"
+			"binding": "SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW",
+			"name": "newsence-search-index-canonical-v6-rebuild",
+			"class_name": "SearchIndexCanonicalV6RebuildWorkflow"
 		},
 		{
-			"binding": "SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW",
-			"name": "newsence-search-index-shadow-rebuild",
-			"class_name": "SearchIndexShadowRebuildWorkflow"
+			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW",
+			"name": "newsence-recent-resource-image-backfill-v2",
+			"class_name": "RecentResourceImageBackfillV2Workflow"
 		},
 		{
-			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW",
-			"name": "newsence-recent-resource-image-backfill",
-			"class_name": "RecentResourceImageBackfillWorkflow"
-		},
-		{
-			"binding": "ACADEMIC_METADATA_BACKFILL_WORKFLOW",
-			"name": "newsence-academic-metadata-backfill",
-			"class_name": "AcademicMetadataBackfillWorkflow"
-		},
-		{
-			"binding": "RESOURCE_IDENTITY_BACKFILL_WORKFLOW",
-			"name": "newsence-resource-identity-backfill",
-			"class_name": "ResourceIdentityBackfillWorkflow"
+			"binding": "ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW",
+			"name": "newsence-academic-metadata-backfill-v3",
+			"class_name": "AcademicMetadataBackfillV3Workflow"
 		}
 	],
 	/**
@@ -103,11 +93,6 @@
 	"ai_search": [
 		{
 			"binding": "AI_SEARCH",
-			"instance_name": "newsence-corpus-v5",
-			"remote": true
-		},
-		{
-			"binding": "AI_SEARCH_NEXT",
 			"instance_name": "newsence-corpus-v6",
 			"remote": true
 		}

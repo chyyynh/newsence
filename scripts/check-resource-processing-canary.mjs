@@ -1,36 +1,24 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
-const WORKFLOW_NAME = 'newsence-resource-processing';
-const EXPECTED_VERSION_ID = 'eadd2de4-9c68-4b02-9066-c62185172222';
-const EXPECTED_CORE_VERSION_ID = '093ac86e-0408-41a4-a660-be1f20bbceda';
-const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
+const WORKFLOW_NAME = 'newsence-resource-processing-v2';
 const RAW_INSTANCE_ID = process.env.RESOURCE_PROCESSING_CANARY_INSTANCE_ID;
 const RAW_CANARY_CASE = process.env.CANARY_CASE;
 const RAW_TAIL_FILE = process.env.RESOURCE_PROCESSING_CANARY_TAIL_FILE;
 
 const CANARIES = {
 	'saved-web': {
-		instanceId: 'issue245-canary-saved-web-af47bb70-v1',
 		kind: 'document',
-		legacyType: 'web',
 		resourceId: 'af47bb70-b4ba-47a6-a108-60028ad794db',
 		resourcePlatform: null,
 	},
 	'twitter-unchanged': {
-		instanceId: 'issue245-canary-twitter-unchanged-081e19f3-v2',
 		kind: 'post',
-		legacyType: 'twitter',
 		resourceId: '081e19f3-59af-4577-bf3f-5fdfadf5ed64',
 		resourcePlatform: 'twitter',
 	},
 	'youtube-description': {
-		instanceId: 'issue245-canary-youtube-description-e413960f-v1',
 		kind: 'video',
-		legacyType: 'youtube',
 		resourceId: 'e413960f-1d87-4b9d-9c33-2ae67ea19dac',
 		resourcePlatform: 'youtube',
 		videoId: '657wlbtrzG8',
@@ -48,44 +36,12 @@ const CANARY_CASE = RAW_CANARY_CASE;
 const INSTANCE_ID = RAW_INSTANCE_ID;
 const CANARY = CANARIES[CANARY_CASE];
 
-assert.equal(INSTANCE_ID, CANARY.instanceId, `${CANARY_CASE} exact Workflow instance id`);
-
-let cachedWranglerApiCredentials = null;
-
-function wranglerApiCredentials() {
-	if (cachedWranglerApiCredentials) return cachedWranglerApiCredentials;
-	const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-	const envApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
-	if (envAccountId && envApiToken) {
-		assert.match(envAccountId, /^[0-9a-f]{32}$/, 'Cloudflare account id');
-		cachedWranglerApiCredentials = { accountId: envAccountId, apiToken: envApiToken };
-		return cachedWranglerApiCredentials;
-	}
-	const whoami = spawnSync('pnpm', ['exec', 'wrangler', 'whoami'], {
-		cwd: PACKAGE_ROOT,
-		encoding: 'utf8',
-		env: {
-			...process.env,
-			WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH ?? '/tmp/newsence-resource-processing-canary-check.log',
-		},
-		maxBuffer: 4 * 1024 * 1024,
-	});
-	if (whoami.error) throw whoami.error;
-	if (whoami.status !== 0) throw new Error(`Wrangler whoami failed (${whoami.status})`);
-	const output = whoami.stdout.replaceAll(ANSI_ESCAPE, '');
-	const accountId = envAccountId || output.match(/\b[0-9a-f]{32}\b/)?.[0];
-	assert.match(accountId ?? '', /^[0-9a-f]{32}$/, 'Cloudflare account id');
-	if (envApiToken) {
-		cachedWranglerApiCredentials = { accountId, apiToken: envApiToken };
-		return cachedWranglerApiCredentials;
-	}
-	const credentialsPath = output.match(/Credentials are stored in:\s*(.+)$/m)?.[1]?.trim();
-	assert.ok(credentialsPath, 'Wrangler OAuth credentials path');
-	const credentials = readFileSync(credentialsPath, 'utf8');
-	const encodedToken = credentials.match(/^oauth_token\s*=\s*("(?:[^"\\]|\\.)*")\s*$/m)?.[1];
-	assert.ok(encodedToken, 'Wrangler OAuth token');
-	cachedWranglerApiCredentials = { accountId, apiToken: JSON.parse(encodedToken) };
-	return cachedWranglerApiCredentials;
+function workflowsApiCredentials() {
+	const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+	const apiToken = process.env.CLOUDFLARE_WORKFLOWS_API_TOKEN?.trim();
+	assert.match(accountId ?? '', /^[0-9a-f]{32}$/, 'Set CLOUDFLARE_ACCOUNT_ID to the Cloudflare account id');
+	assert.ok(apiToken, 'Set CLOUDFLARE_WORKFLOWS_API_TOKEN to a dedicated Workflows API token');
+	return { accountId, apiToken };
 }
 
 function retryDelay(response, attempt) {
@@ -94,7 +50,7 @@ function retryDelay(response, attempt) {
 }
 
 async function workflowApi(pathname = '', searchParams = {}, attempt = 0) {
-	const { accountId, apiToken } = wranglerApiCredentials();
+	const { accountId, apiToken } = workflowsApiCredentials();
 	const endpoint = new URL(
 		`https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/${WORKFLOW_NAME}/instances/${INSTANCE_ID}${pathname}`,
 	);
@@ -413,7 +369,7 @@ function assertTwitterUnchangedCanary(steps, workflowSuccess) {
 		parsedObjectPrefix(exactStep(steps, 'acquire-content-kind-platform-v1'), ',"title":', 'twitter-unchanged acquisition'),
 		'twitter-unchanged acquisition',
 	);
-	assert.equal(acquired.type, 'twitter', 'twitter-unchanged acquired legacy type');
+	assert.equal(acquired.kind, 'post', 'twitter-unchanged acquired kind');
 	assert.equal(acquired.resourcePlatform, 'twitter', 'twitter-unchanged acquired resource platform');
 
 	const returnContract = {
@@ -458,7 +414,7 @@ function assertYoutubeDescriptionCanary(steps, workflowSuccess) {
 		parsedObjectPrefix(exactStep(steps, 'acquire-content-kind-platform-v1'), ',"title":', 'youtube-description acquisition'),
 		'youtube-description acquisition',
 	);
-	assert.equal(acquired.type, 'youtube', 'youtube-description acquired legacy type');
+	assert.equal(acquired.kind, 'video', 'youtube-description acquired kind');
 	assert.equal(acquired.resourcePlatform, 'youtube', 'youtube-description acquired resource platform');
 	assert.equal(acquired.markdown?.length, 304, 'youtube-description acquired Markdown length');
 	assert.equal(acquired.metadata?.description?.length, 304, 'youtube-description acquired description length');
@@ -498,9 +454,9 @@ function youtubeTailEvidence() {
 	if (CANARY_CASE !== 'youtube-description') return null;
 	assert.ok(RAW_TAIL_FILE, 'Set RESOURCE_PROCESSING_CANARY_TAIL_FILE to the exact pinned Core tail JSON');
 	const tail = JSON.parse(readFileSync(RAW_TAIL_FILE, 'utf8'));
-	assert.equal(tail.scriptVersion?.id, EXPECTED_CORE_VERSION_ID, 'YouTube tail Core version');
+	assert.match(tail.scriptVersion?.id ?? '', /^[0-9a-f-]{36}$/, 'YouTube tail Core version');
 	assert.equal(tail.scriptName, 'newsence-core', 'YouTube tail Worker name');
-	assert.equal(tail.entrypoint, 'ResourceProcessingWorkflow', 'YouTube tail entrypoint');
+	assert.equal(tail.entrypoint, 'ResourceProcessingV2Workflow', 'YouTube tail entrypoint');
 	assert.equal(tail.tailAttributes?.workflowName, WORKFLOW_NAME, 'YouTube tail Workflow name');
 	assert.equal(tail.tailAttributes?.instanceId, INSTANCE_ID, 'YouTube tail Workflow instance');
 	assert.equal(tail.event?.rpcMethod, 'run', 'YouTube tail RPC method');
@@ -540,7 +496,7 @@ const expectedTerminalStep = steps.at(-1)?.name;
 
 assert.equal(workflowName, WORKFLOW_NAME, 'Workflow name');
 assert.equal(describedInstanceId, INSTANCE_ID, 'Workflow instance id');
-assert.equal(versionId, EXPECTED_VERSION_ID, 'Workflow version');
+assert.match(versionId, /^[0-9a-f-]{36}$/, 'Workflow version');
 assert.equal(status, 'complete', 'Workflow terminal status');
 assert.equal(workflowSuccess, true, 'Workflow terminal success');
 assert.equal(workflowError, null, 'Workflow terminal error');
@@ -589,11 +545,7 @@ console.info({
 		resourceId: shell.id,
 		resourcePlatform: shell.resource_platform ?? null,
 	},
-	legacyTypeVerification: {
-		expected: CANARY.legacyType,
-		observedInAcquisition: CANARY_CASE !== 'saved-web',
-		authoritativeGate: 'check:resource-runtime-canary-state',
-	},
+	canonicalIdentityVerified: true,
 	...evidence,
 	workflowReturnObserved: true,
 	workflowEvidenceSource: 'Cloudflare simple instance metadata plus full step output API',

@@ -10,7 +10,7 @@ import { enqueueOrRestartWorkflow } from '../workflow-control';
 const PAGE_SIZE = 10;
 const MAX_PAGES = 2500;
 const ACADEMIC_SCHEMA_VERSION = 2;
-const WORKFLOW_ID = `academic-metadata-backfill-v${ACADEMIC_SCHEMA_VERSION}`;
+const WORKFLOW_ID = `academic-metadata-backfill-v${ACADEMIC_SCHEMA_VERSION}-canonical-v3`;
 const PROVIDER_REQUEST_INTERVAL = '3 seconds';
 
 type AcademicMetadataBackfillPayload = Record<string, never>;
@@ -58,10 +58,7 @@ async function loadAcademicMetadataBackfillPage(env: CoreEnv, cursor: string | n
 						lower(COALESCE(url, '')) ~ '^https?://([a-z0-9-]+\\.)*arxiv\\.org/(abs|html|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?(\\.pdf)?/?([?#].*)?$'
 						OR lower(COALESCE(url, '')) ~ '^https?://(dx\\.)?doi\\.org/10\\.[0-9]{4,9}/'
 						OR (
-							(
-								file_type = 'application/pdf'
-								OR (kind IS NULL AND resource_platform IS NULL AND type = 'pdf')
-							)
+							file_type = 'application/pdf'
 							AND COALESCE(platform_metadata #>> '{enrichments,academic,doi}', '') ~* '^10\\.[0-9]{4,9}/'
 						)
 					)
@@ -112,10 +109,10 @@ async function recordSummary(step: WorkflowStep, summary: AcademicMetadataBackfi
 
 export async function startAcademicMetadataBackfill(env: CoreEnv): Promise<string> {
 	await assertResourceWritesEnabled(env, 'academic metadata backfill enqueue');
-	return enqueueOrRestartWorkflow(env.ACADEMIC_METADATA_BACKFILL_WORKFLOW, WORKFLOW_ID, {});
+	return enqueueOrRestartWorkflow(env.ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW, WORKFLOW_ID, {});
 }
 
-export class AcademicMetadataBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, AcademicMetadataBackfillPayload> {
+export class AcademicMetadataBackfillV3Workflow extends WorkflowEntrypoint<CoreEnv, AcademicMetadataBackfillPayload> {
 	async run(_event: WorkflowEvent<AcademicMetadataBackfillPayload>, step: WorkflowStep) {
 		await assertResourceWritesEnabled(this.env, 'academic metadata backfill workflow');
 		let cursor: string | null = null;

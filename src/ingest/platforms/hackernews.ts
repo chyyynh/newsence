@@ -174,7 +174,7 @@ export async function scrapeHackerNews(
 		targetStatus: target?.markdown.trim() ? 'fetched' : 'unavailable',
 	});
 	return {
-		type: 'hackernews',
+		kind: 'document',
 		resourcePlatform: 'hackernews',
 		fileType: target?.fileType ?? null,
 		title,

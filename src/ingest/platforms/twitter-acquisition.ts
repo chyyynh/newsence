@@ -334,7 +334,7 @@ async function scrapeTwitterLongform(
 	console.info({ tag: 'TWITTER', msg: 'Longform fetched', title });
 
 	return {
-		type: 'twitter',
+		kind: 'post',
 		resourcePlatform: 'twitter',
 		fileType: null,
 		title,
@@ -361,7 +361,7 @@ function buildExternalLinkTweet(
 	if (!tweetText) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
 	const title = `@${author.userName}: ${stripTweetUrls(tweetText) || tweetText}`.slice(0, 120);
 	return {
-		type: 'twitter',
+		kind: 'post',
 		resourcePlatform: 'twitter',
 		fileType: null,
 		title,
@@ -419,7 +419,7 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	return {
 		kind: 'tweet' as const,
 		scraped: {
-			type: 'twitter' as const,
+			kind: 'post' as const,
 			resourcePlatform: 'twitter' as const,
 			fileType: null,
 			title,
@@ -472,7 +472,7 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 
 	const parts = buildThreadResourceParts(thread);
 	return {
-		type: 'twitter',
+		kind: 'post',
 		resourcePlatform: 'twitter',
 		fileType: null,
 		title: buildTweetTitle(parts.first, 80),

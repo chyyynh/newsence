@@ -1,5 +1,5 @@
 import type {
-	ContentResourceType,
+	ContentResourceKind,
 	ResourceCategory,
 	ResourceKind,
 	ResourcePlatform,
@@ -24,8 +24,6 @@ export interface ResourceForProcessing {
 	source_acquisition_mode?: SourceAcquisitionMode | null;
 	kind: ResourceKind;
 	resource_platform: ResourcePlatform;
-	/** Legacy compatibility discriminator; remove after #251 contract cleanup. */
-	type: ContentResourceType;
 	scope: ResourceScope;
 	original_lang: string;
 	title: string;
@@ -82,10 +80,9 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent<T extends ContentResourceType = ContentResourceType> {
-	/** Legacy acquisition label retained only for dual-write compatibility. */
-	type: T;
-	resourcePlatform: ResourcePlatform;
+export interface NormalizedContent<T extends ResourcePlatform = ResourcePlatform> {
+	kind: ContentResourceKind;
+	resourcePlatform: T;
 	fileType: string | null;
 	title: string;
 	/** Platform APIs return markdown or plain text for resource drafts. */
@@ -233,11 +230,11 @@ export interface PdfExtractionMetadata {
 	pages: number;
 }
 
-type PlatformMetadataData<T extends ContentResourceType | ResourcePlatform> = T extends keyof PlatformMetadataDataByResourcePlatform
+type PlatformMetadataData<T extends ResourcePlatform> = T extends keyof PlatformMetadataDataByResourcePlatform
 	? PlatformMetadataDataByResourcePlatform[T]
 	: null;
 
-export type PlatformMetadata<T extends ContentResourceType | ResourcePlatform = ResourcePlatform> = {
+export type PlatformMetadata<T extends ResourcePlatform = ResourcePlatform> = {
 	fetchedAt: string;
 	data: PlatformMetadataData<T>;
 	/** Hash of normalized source fields used to skip unchanged resync runs. */
@@ -249,7 +246,7 @@ export type PlatformMetadata<T extends ContentResourceType | ResourcePlatform = 
 	extraction?: PdfExtractionMetadata;
 } & ClassificationEnvelope;
 
-export function withPdfExtractionMetadata<T extends ContentResourceType | ResourcePlatform>(
+export function withPdfExtractionMetadata<T extends ResourcePlatform>(
 	platformMetadata: PlatformMetadata<T>,
 	extraction: PdfExtractionMetadata | undefined,
 ): PlatformMetadata<T> {

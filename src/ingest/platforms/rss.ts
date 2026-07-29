@@ -35,7 +35,8 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 			source: feed.name,
 			publishedDate: feedPublishedDate(item.published),
 			summary: feedSummary(item.summary),
-			type: 'rss',
+			kind: 'document',
+			resourcePlatform: null,
 			originalLang: item.language,
 			content,
 			platformMetadata: mode === 'feed' ? { fetchedAt: new Date().toISOString(), data: null } : null,
@@ -59,8 +60,8 @@ function dedupedFeedItems(items: FeedItem[], feedName: string): Array<{ item: Fe
 
 /**
  * Claims rows that already existed before this feed was monitored — a saved URL,
- * or an entry that resolved to another type ('hackernews' from hnrss, 'youtube'
- * from a channel feed). Only unowned rows are sent, so after the first cycle
+ * or an entry that resolved to a special platform (Hacker News from hnrss,
+ * YouTube from a channel feed). Only unowned rows are sent, so after the first cycle
  * this issues no statement at all.
  */
 async function reattachFeedProvenance(env: CoreEnv, feed: RssSource, existing: ExistingResourceRecord[]): Promise<void> {

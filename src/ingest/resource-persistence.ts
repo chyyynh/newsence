@@ -1,8 +1,6 @@
 import {
 	hasSemanticScholarAcademicEnrichment,
 	isIncomingResourceSnapshotSuperseded,
-	isResourceType,
-	legacyResourceIdentity,
 	parseResourceIdentity,
 	resourceIdentityWithAcademic,
 } from '@core-shared/resource-types';
@@ -46,8 +44,7 @@ type BuildResourceUpdateInput = {
 type LockedResourceState = {
 	created_at: Date | string;
 	file_type: string | null;
-	kind: string | null;
-	legacy_type: string;
+	kind: string;
 	monitored_source_name: string | null;
 	og_image_url: string | null;
 	platform_metadata: unknown;
@@ -124,7 +121,6 @@ async function lockResourceState(db: CoreDb, resourceId: string): Promise<Locked
 			r.created_at,
 			r.file_type,
 			r.kind,
-			r.type AS legacy_type,
 			monitored_source.name AS monitored_source_name,
 			r.og_image_url,
 			r.platform_metadata,
@@ -183,7 +179,7 @@ function mergeLockedResourceState(
 	incomingPaperEnrichment: PaperMetadata | null,
 ): { paperEnrichment: PaperMetadata | null; resource: ResourceForProcessing } {
 	const lockedIdentity = parseResourceIdentity(lockedResource.kind, lockedResource.resource_platform);
-	if ((lockedResource.kind !== null || lockedResource.resource_platform !== null) && !lockedIdentity) {
+	if (!lockedIdentity) {
 		throw new Error(
 			`Cannot persist resource ${resource.id} with invalid stored identity ${String(lockedResource.kind)} / ${String(lockedResource.resource_platform)}`,
 		);
@@ -313,9 +309,7 @@ export async function persistUnchangedResourceResync(
 			academicEnrichmentFrom(platformMetadata),
 		);
 		const identityChanged =
-			lockedResource.legacy_type !== resourceWithDate.type ||
-			lockedResource.kind !== resourceWithDate.kind ||
-			lockedResource.resource_platform !== resourceWithDate.resource_platform;
+			lockedResource.kind !== resourceWithDate.kind || lockedResource.resource_platform !== resourceWithDate.resource_platform;
 		const effectiveAtChanged =
 			effectiveTimestamp({
 				createdAt: lockedResource.created_at,
@@ -341,7 +335,6 @@ export async function persistUnchangedResourceResync(
 		const updated = await db
 			.update(resources)
 			.set({
-				type: resourceWithDate.type,
 				kind: resourceWithDate.kind,
 				resourcePlatform: resourceWithDate.resource_platform,
 				fileType: resourceWithDate.file_type ?? null,
@@ -367,8 +360,7 @@ export async function persistAcademicMetadataBackfill(
 	return withCoreTx(env, async (_db, client) => {
 		const locked = await client.query<{
 			created_at: Date | string;
-			legacy_type: string;
-			kind: string | null;
+			kind: string;
 			platform_metadata: unknown;
 			published_date: Date | string | null;
 			resource_platform: string | null;
@@ -377,7 +369,6 @@ export async function persistAcademicMetadataBackfill(
 			`
 				SELECT
 					created_at,
-					type AS legacy_type,
 					kind,
 					platform_metadata,
 					published_date,
@@ -391,12 +382,7 @@ export async function persistAcademicMetadataBackfill(
 		);
 		const row = locked.rows[0];
 		if (!row) throw new Error(`Failed to persist academic metadata for resource ${resourceId}: not found`);
-		const storedIdentity = parseResourceIdentity(row.kind, row.resource_platform);
-		const currentIdentity =
-			storedIdentity ??
-			(row.kind === null && row.resource_platform === null && isResourceType(row.legacy_type)
-				? legacyResourceIdentity(row.legacy_type)
-				: null);
+		const currentIdentity = parseResourceIdentity(row.kind, row.resource_platform);
 		if (!currentIdentity) {
 			throw new Error(
 				`Cannot persist academic metadata for resource ${resourceId} with invalid identity ${String(row.kind)} / ${String(row.resource_platform)}`,
@@ -489,7 +475,6 @@ export async function persistResourceImageSnapshot(
 		const updated = await db
 			.update(resources)
 			.set({
-				type: merged.resource.type,
 				kind: merged.resource.kind,
 				resourcePlatform: merged.resource.resource_platform,
 				fileType: merged.resource.file_type ?? null,

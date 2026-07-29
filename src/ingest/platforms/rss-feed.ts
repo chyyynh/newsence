@@ -229,7 +229,7 @@ export async function feedItemMarkdown(env: CoreEnv, item: FeedItem, url: string
 	return markdown;
 }
 
-export async function acquireRssFeedItem(env: CoreEnv, input: RssFeedAcquisitionInput): Promise<NormalizedContent<'rss'>> {
+export async function acquireRssFeedItem(env: CoreEnv, input: RssFeedAcquisitionInput): Promise<NormalizedContent<null>> {
 	const articleUrl = normalizeUrl(input.articleUrl);
 	const item = (await loadFeedEntries(input.feedUrl)).find((entry) => canonicalFeedItemUrl(entry) === articleUrl);
 	if (!item) throw new Error(`RSS article is no longer present in the current feed: ${articleUrl}`);
@@ -237,7 +237,7 @@ export async function acquireRssFeedItem(env: CoreEnv, input: RssFeedAcquisition
 	if (!title) throw new Error(`RSS article has no title: ${articleUrl}`);
 	console.info({ tag: 'RSS', msg: 'Acquired feed item', source: input.sourceName, url: articleUrl });
 	return {
-		type: 'rss',
+		kind: 'document',
 		resourcePlatform: null,
 		fileType: null,
 		title,

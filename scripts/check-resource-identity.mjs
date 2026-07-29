@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import {
 	isIncomingResourceSnapshotSuperseded,
 	isResourceTranslationIdentityEligible,
-	legacyResourceIdentity,
-	legacyResourceIdentityFilterCases,
-	legacyResourceTypeAfterAcquisition,
+	isValidKindPlatform,
 	needsResourcePlatformAcquisition,
 	resourceIdentityDisplayLabel,
 	resourceIdentityForDetectedPlatform,
@@ -13,62 +11,38 @@ import {
 import { withPdfExtractionMetadata } from '../src/shared/types.ts';
 import { detectResourcePlatform } from '../src/shared/url.ts';
 
-const legacyMatrix = {
-	web: { kind: 'document', resourcePlatform: null },
-	rss: { kind: 'document', resourcePlatform: null },
-	twitter: { kind: 'post', resourcePlatform: 'twitter' },
-	youtube: { kind: 'video', resourcePlatform: 'youtube' },
-	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
-	pdf: { kind: 'document', resourcePlatform: null },
-	image: { kind: 'image', resourcePlatform: null },
-	file: { kind: 'file', resourcePlatform: null },
-};
-
-for (const [legacyType, identity] of Object.entries(legacyMatrix)) {
-	assert.deepEqual(legacyResourceIdentity(legacyType), identity, `${legacyType} identity`);
+const canonicalIdentities = [
+	{ kind: 'document', resourcePlatform: null },
+	{ kind: 'document', resourcePlatform: 'hackernews' },
+	{ kind: 'post', resourcePlatform: 'twitter' },
+	{ kind: 'video', resourcePlatform: 'youtube' },
+	{ kind: 'paper', resourcePlatform: null },
+	{ kind: 'paper', resourcePlatform: 'hackernews' },
+	{ kind: 'image', resourcePlatform: null },
+	{ kind: 'file', resourcePlatform: null },
+];
+for (const identity of canonicalIdentities) {
+	assert.equal(isValidKindPlatform(identity.kind, identity.resourcePlatform), true, JSON.stringify(identity));
 }
+assert.equal(isValidKindPlatform('post', null), false);
+assert.equal(isValidKindPlatform('document', 'twitter'), false);
 
-assert.deepEqual(resourceIdentityWithAcademic(legacyMatrix.web, true), { kind: 'paper', resourcePlatform: null });
-assert.deepEqual(resourceIdentityWithAcademic(legacyMatrix.hackernews, true), {
+assert.deepEqual(resourceIdentityWithAcademic({ kind: 'document', resourcePlatform: null }, true), {
+	kind: 'paper',
+	resourcePlatform: null,
+});
+assert.deepEqual(resourceIdentityWithAcademic({ kind: 'document', resourcePlatform: 'hackernews' }, true), {
 	kind: 'paper',
 	resourcePlatform: 'hackernews',
 });
-assert.deepEqual(resourceIdentityWithAcademic(legacyMatrix.twitter, true), legacyMatrix.twitter);
-assert.equal(resourceIdentityDisplayLabel(legacyMatrix.hackernews), 'Hacker News');
-assert.equal(resourceIdentityDisplayLabel(legacyMatrix.twitter), 'Twitter');
-assert.equal(resourceIdentityDisplayLabel(legacyMatrix.web), 'Document');
+assert.deepEqual(resourceIdentityWithAcademic({ kind: 'post', resourcePlatform: 'twitter' }, true), {
+	kind: 'post',
+	resourcePlatform: 'twitter',
+});
+assert.equal(resourceIdentityDisplayLabel({ kind: 'document', resourcePlatform: 'hackernews' }), 'Hacker News');
+assert.equal(resourceIdentityDisplayLabel({ kind: 'post', resourcePlatform: 'twitter' }), 'Twitter');
+assert.equal(resourceIdentityDisplayLabel({ kind: 'document', resourcePlatform: null }), 'Document');
 assert.equal(resourceIdentityDisplayLabel({ kind: 'paper', resourcePlatform: null }), 'Paper');
-assert.equal(legacyResourceTypeAfterAcquisition('rss', 'web'), 'rss');
-assert.equal(legacyResourceTypeAfterAcquisition('rss', 'hackernews'), 'hackernews');
-assert.equal(legacyResourceTypeAfterAcquisition('pdf', 'web'), 'web');
-
-const legacyFilterCases = [
-	['no identity filters', {}, Object.keys(legacyMatrix).map((type) => ({ type, academic: 'irrelevant' }))],
-	['document kind', { kinds: ['document'] }, ['web', 'rss', 'hackernews', 'pdf'].map((type) => ({ type, academic: false }))],
-	['paper kind', { kinds: ['paper'] }, ['web', 'rss', 'hackernews', 'pdf'].map((type) => ({ type, academic: true }))],
-	['post kind', { kinds: ['post'] }, [{ type: 'twitter', academic: 'irrelevant' }]],
-	[
-		'null platform',
-		{ resourcePlatforms: [null] },
-		['web', 'rss', 'pdf', 'image', 'file'].map((type) => ({ type, academic: 'irrelevant' })),
-	],
-	['Hacker News platform', { resourcePlatforms: ['hackernews'] }, [{ type: 'hackernews', academic: 'irrelevant' }]],
-	['null-platform paper', { kinds: ['paper'], resourcePlatforms: [null] }, ['web', 'rss', 'pdf'].map((type) => ({ type, academic: true }))],
-	[
-		'all content identities',
-		{
-			kinds: ['document', 'post', 'video', 'paper'],
-			resourcePlatforms: [null, 'hackernews', 'twitter', 'youtube'],
-		},
-		['web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf'].map((type) => ({ type, academic: 'irrelevant' })),
-	],
-	['incompatible identity', { kinds: ['video'], resourcePlatforms: [null] }, []],
-	['empty kind filter', { kinds: [] }, []],
-];
-
-for (const [label, filters, expected] of legacyFilterCases) {
-	assert.deepEqual(legacyResourceIdentityFilterCases(filters), expected, `${label} legacy filter cases`);
-}
 
 const translationCases = [
 	['generic document', { kind: 'document', resourcePlatform: null, fileType: null }, true],
@@ -142,11 +116,10 @@ assert.equal(withPdfExtractionMetadata(pdfPlatformMetadata, undefined), pdfPlatf
 
 console.info({
 	event: 'resource_identity_smoke_passed',
-	legacyCases: Object.keys(legacyMatrix).length,
+	canonicalIdentityCases: canonicalIdentities.length,
 	displayLabelCases: 4,
 	detectedPlatformIdentityCases: 4,
-	legacyFilterCases: legacyFilterCases.length,
-	legacyTypeCases: 3,
+	invalidIdentityCases: 2,
 	platformAcquisitionCases: platformAcquisitionCases.length,
 	pdfExtractionCases: 2,
 	snapshotCasCases: 5,

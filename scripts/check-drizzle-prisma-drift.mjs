@@ -8,18 +8,12 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const drizzlePath = resolve(root, 'src/db/schema.ts');
 const prismaPath = resolve(root, '../../web-tanstack/prisma/schema.prisma');
 const manualIndexesPath = resolve(root, '../../web-tanstack/prisma/manual-indexes.sql');
-const resourceIdentityExpandPath = resolve(root, '../../web-tanstack/prisma/245-expand.sql');
-const resourceIdentityInvariantsPath = resolve(root, '../../web-tanstack/prisma/245-resource-identity-invariants.sql');
-const resourceSourceProvenancePath = resolve(root, '../../web-tanstack/prisma/resource-source-provenance.sql');
 const resourceTypesPath = resolve(root, 'src/shared/resource-types.ts');
 const systemIdentitiesPath = resolve(root, 'src/shared/system-identities.ts');
 
 const drizzleSource = readFileSync(drizzlePath, 'utf8');
 const prismaSource = readFileSync(prismaPath, 'utf8');
 const manualIndexesSource = readFileSync(manualIndexesPath, 'utf8');
-const resourceIdentityExpandSource = readFileSync(resourceIdentityExpandPath, 'utf8');
-const resourceIdentityInvariantsSource = readFileSync(resourceIdentityInvariantsPath, 'utf8');
-const resourceSourceProvenanceSource = readFileSync(resourceSourceProvenancePath, 'utf8');
 const resourceTypesSource = readFileSync(resourceTypesPath, 'utf8');
 const systemIdentitiesSource = readFileSync(systemIdentitiesPath, 'utf8');
 
@@ -131,9 +125,9 @@ function sqlStringValues(source) {
 	return [...source.matchAll(/'([^']+)'/g)].map((match) => match[1]);
 }
 
-function parseNullableDomainConstraint(source, constraintName, columnName) {
+function parseDomainConstraint(source, constraintName, columnName) {
 	const match = source.match(
-		new RegExp(`ADD CONSTRAINT ${constraintName}\\s+CHECK \\(${columnName} IS NULL OR ${columnName} IN \\(([^)]+)\\)\\);`),
+		new RegExp(`ADD CONSTRAINT ${constraintName}\\s+CHECK \\((?:${columnName} IS NULL OR )?${columnName} IN \\(([^)]+)\\)\\);`),
 	);
 	return match ? sqlStringValues(match[1]) : null;
 }
@@ -152,11 +146,6 @@ function parseKindPlatformMatrixBody(body) {
 
 function parseConstraintKindPlatformMatrix(source) {
 	const body = source.match(/ADD CONSTRAINT resources_kind_platform_check\s+CHECK\s*\(\s*\(([\s\S]*?)\)\s+IS TRUE\s*\);/)?.[1];
-	return parseKindPlatformMatrixBody(body);
-}
-
-function parseInvariantKindPlatformMatrix(source) {
-	const body = source.match(/INTO invalid_matrix_count[\s\S]*?FROM resources\s+WHERE NOT\s*\(\s*\(([\s\S]*?)\)\s+IS TRUE\s*\);/)?.[1];
 	return parseKindPlatformMatrixBody(body);
 }
 
@@ -226,24 +215,11 @@ for (const table of drizzleTables) {
 	}
 }
 
-const contentResourceTypes = parseStringArray(resourceTypesSource, 'CONTENT_RESOURCE_TYPES');
-const mediaResourceTypes = parseStringArray(resourceTypesSource, 'MEDIA_RESOURCE_TYPES');
-if (!contentResourceTypes || !mediaResourceTypes) {
-	errors.push(`Unable to parse canonical resource types from ${resourceTypesPath}`);
-} else {
-	const expectedResourceTypes = [...contentResourceTypes, ...mediaResourceTypes];
-	if (!/type:\s*text\('type',\s*\{\s*enum:\s*RESOURCE_TYPES\s*\}\)/.test(drizzleSource)) {
-		errors.push('Drizzle resources.type must use the complete canonical RESOURCE_TYPES domain');
-	}
-	const constraint = manualIndexesSource.match(/ADD CONSTRAINT resources_type_check\s+CHECK \(type IN \(([^)]+)\)\);/);
-	const constrainedTypes = constraint ? [...constraint[1].matchAll(/'([^']+)'/g)].map((match) => match[1]) : null;
-	if (!constrainedTypes) {
-		errors.push(`Unable to parse resources_type_check from ${manualIndexesPath}`);
-	} else if (!sameValues(constrainedTypes, expectedResourceTypes)) {
-		errors.push(
-			`resources_type_check domain [${constrainedTypes.join(', ')}] differs from canonical RESOURCE_TYPES [${expectedResourceTypes.join(', ')}]`,
-		);
-	}
+if (/\bRESOURCE_TYPES\b|type:\s*text\('type'/.test(drizzleSource)) {
+	errors.push('Drizzle resources must not expose the retired type column/domain');
+}
+if (/resources_type_check/.test(manualIndexesSource)) {
+	errors.push('manual-indexes.sql must not recreate resources_type_check');
 }
 
 const resourceKinds = parseStringArray(resourceTypesSource, 'RESOURCE_KINDS');
@@ -263,67 +239,36 @@ if (!resourceKinds || !resourcePlatforms || !validKindPlatforms) {
 		errors.push(`VALID_KIND_PLATFORMS contains unknown platforms: ${[...new Set(unknownMatrixPlatforms)].join(', ')}`);
 	}
 
-	if (!/kind:\s*text\('kind',\s*\{\s*enum:\s*RESOURCE_KINDS\s*\}\),/.test(drizzleSource)) {
-		errors.push('Drizzle resources.kind must be nullable and use the canonical RESOURCE_KINDS domain');
+	if (!/kind:\s*text\('kind',\s*\{\s*enum:\s*RESOURCE_KINDS\s*\}\)\.notNull\(\),/.test(drizzleSource)) {
+		errors.push('Drizzle resources.kind must be required and use the canonical RESOURCE_KINDS domain');
 	}
 	if (!/resourcePlatform:\s*text\('resource_platform',\s*\{\s*enum:\s*RESOURCE_PLATFORMS\s*\}\),/.test(drizzleSource)) {
 		errors.push('Drizzle resources.resourcePlatform must be nullable and use the canonical RESOURCE_PLATFORMS domain');
 	}
 
 	const resourceModelBody = prismaSource.match(/model Resource \{([\s\S]*?)\n\}/)?.[1] ?? '';
-	if (!/^\s*kind\s+String\?\s*$/m.test(resourceModelBody)) {
-		errors.push('Prisma Resource.kind must be nullable and have no default during the expand phase');
+	if (!/^\s*kind\s+String\s*$/m.test(resourceModelBody)) {
+		errors.push('Prisma Resource.kind must be required and have no default');
 	}
 	if (!/^\s*resourcePlatform\s+String\?\s+@map\("resource_platform"\)\s*$/m.test(resourceModelBody)) {
 		errors.push('Prisma Resource.resourcePlatform must be nullable, mapped to resource_platform, and have no default');
 	}
 
 	const expectedPairs = expectedKindPlatformPairs(validKindPlatforms);
-	for (const [label, source] of [
-		['manual-indexes.sql', manualIndexesSource],
-		['245-expand.sql', resourceIdentityExpandSource],
-	]) {
-		const constrainedKinds = parseNullableDomainConstraint(source, 'resources_kind_check', 'kind');
-		if (!constrainedKinds || !sameValues(constrainedKinds, resourceKinds)) {
-			errors.push(`${label} resources_kind_check differs from canonical RESOURCE_KINDS`);
-		}
-		const constrainedPlatforms = parseNullableDomainConstraint(source, 'resources_resource_platform_check', 'resource_platform');
-		if (!constrainedPlatforms || !sameValues(constrainedPlatforms, resourcePlatforms)) {
-			errors.push(`${label} resources_resource_platform_check differs from canonical RESOURCE_PLATFORMS`);
-		}
-		const matrix = parseConstraintKindPlatformMatrix(source);
-		if (!matrix?.allowsLegacyNullPair || !sameMembers(matrix.pairs, expectedPairs)) {
-			errors.push(`${label} resources_kind_platform_check differs from canonical VALID_KIND_PLATFORMS`);
-		}
+	const constrainedKinds = parseDomainConstraint(manualIndexesSource, 'resources_kind_check', 'kind');
+	if (!constrainedKinds || !sameValues(constrainedKinds, resourceKinds)) {
+		errors.push('manual-indexes.sql resources_kind_check differs from canonical RESOURCE_KINDS');
 	}
-
-	const invariantKinds = resourceIdentityInvariantsSource.match(/WHERE kind NOT IN \(([^)]+)\)/)?.[1];
-	if (!invariantKinds || !sameValues(sqlStringValues(invariantKinds), resourceKinds)) {
-		errors.push('245-resource-identity-invariants.sql kind audit differs from canonical RESOURCE_KINDS');
+	const constrainedPlatforms = parseDomainConstraint(manualIndexesSource, 'resources_resource_platform_check', 'resource_platform');
+	if (!constrainedPlatforms || !sameValues(constrainedPlatforms, resourcePlatforms)) {
+		errors.push('manual-indexes.sql resources_resource_platform_check differs from canonical RESOURCE_PLATFORMS');
 	}
-	const invariantPlatforms = resourceIdentityInvariantsSource.match(/resource_platform NOT IN \(([^)]+)\)/)?.[1];
-	if (!invariantPlatforms || !sameValues(sqlStringValues(invariantPlatforms), resourcePlatforms)) {
-		errors.push('245-resource-identity-invariants.sql platform audit differs from canonical RESOURCE_PLATFORMS');
+	const matrix = parseConstraintKindPlatformMatrix(manualIndexesSource);
+	if (!matrix || matrix.allowsLegacyNullPair || !sameMembers(matrix.pairs, expectedPairs)) {
+		errors.push('manual-indexes.sql resources_kind_platform_check differs from canonical VALID_KIND_PLATFORMS');
 	}
-	const invariantMatrix = parseInvariantKindPlatformMatrix(resourceIdentityInvariantsSource);
-	if (!invariantMatrix?.allowsLegacyNullPair || !sameMembers(invariantMatrix.pairs, expectedPairs)) {
-		errors.push('245-resource-identity-invariants.sql matrix audit differs from canonical VALID_KIND_PLATFORMS');
-	}
-
-	if (!/ADD COLUMN IF NOT EXISTS kind text;/.test(resourceIdentityExpandSource)) {
-		errors.push('245-expand.sql must add nullable resources.kind without a default');
-	}
-	if (!/ADD COLUMN IF NOT EXISTS resource_platform text;/.test(resourceIdentityExpandSource)) {
-		errors.push('245-expand.sql must add nullable resources.resource_platform without a default');
-	}
-	for (const [label, source] of [
-		['manual-indexes.sql', manualIndexesSource],
-		['245-expand.sql', resourceIdentityExpandSource],
-		['resource-source-provenance.sql', resourceSourceProvenanceSource],
-	]) {
-		if (!/(\w+)\.source_id,\s*\1\.kind,\s*\1\.resource_platform\s+FROM resources/.test(source)) {
-			errors.push(`${label} resources_localized must append kind and resource_platform after source_id`);
-		}
+	if (!/r\.source_id,\s*r\.kind,\s*r\.resource_platform\s+FROM resources/.test(manualIndexesSource)) {
+		errors.push('manual-indexes.sql resources_localized must append kind and resource_platform after source_id');
 	}
 }
 

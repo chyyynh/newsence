@@ -1,18 +1,12 @@
 import {
 	hasSemanticScholarAcademicEnrichment,
-	isContentResourceType,
+	isContentResourceKind,
 	isResourcePlatform,
-	legacyResourceIdentity,
-	legacyResourceTypeAfterAcquisition,
+	parseResourceIdentity,
 	resourceIdentityForDetectedPlatform,
+	resourceIdentityWithAcademic,
 } from '@core-shared/resource-types';
-import type {
-	NormalizedContent,
-	PdfExtractionMetadata,
-	PlatformMetadata,
-	ResourceForProcessing,
-	ResourceRepresentationMetadata,
-} from '@core-shared/types';
+import type { NormalizedContent, PdfExtractionMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { withPdfExtractionMetadata } from '@core-shared/types';
 import { detectResourcePlatform, detectResourceUrl, normalizeUrl } from '@core-shared/url';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
@@ -52,11 +46,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 	const acquiredPlatform = acquired.resourcePlatform ?? detectedPlatform;
 	const identity = acquiredPlatform
 		? resourceIdentityForDetectedPlatform(acquiredPlatform, hasAcademicEnrichment)
-		: legacyResourceIdentity(acquired.type, hasAcademicEnrichment);
-	// `type` remains a public compatibility field until #250/#251. Preserve the
-	// legacy RSS bucket for web-mode feed items while all Core behavior uses the
-	// authoritative kind/platform/MIME fields above.
-	const legacyType = legacyResourceTypeAfterAcquisition(resource.type, acquired.type);
+		: resourceIdentityWithAcademic({ kind: acquired.kind, resourcePlatform: null }, hasAcademicEnrichment);
 	return {
 		...resource,
 		kind: identity.kind,
@@ -65,7 +55,6 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		summary: acquired.metadata.description,
 		content: acquired.markdown,
 		source: acquired.metadata.siteName,
-		type: legacyType,
 		og_image_url: acquired.previewImageUrl?.trim() || resource.og_image_url?.trim() || null,
 		platform_metadata: platformMetadata,
 		file_type: acquired.fileType,
@@ -102,7 +91,7 @@ export function validateAcquisitionUrl(url: string): string {
 
 async function sourceSnapshotHash(acquired: AcquiredContent): Promise<string> {
 	const input = JSON.stringify({
-		type: acquired.type,
+		kind: acquired.kind,
 		resourcePlatform: acquired.resourcePlatform,
 		fileType: acquired.fileType,
 		title: acquired.title,
@@ -175,17 +164,14 @@ function isNonEmptyString(value: unknown): value is string {
 	return typeof value === 'string' && !!value.trim();
 }
 
-type AcquiredContentArtifact = Omit<AcquiredContent, 'resourcePlatform' | 'fileType'> & {
-	resourcePlatform?: AcquiredContent['resourcePlatform'];
-	fileType?: AcquiredContent['fileType'];
-};
-
-function isAcquiredContent(value: unknown): value is AcquiredContentArtifact {
+function isAcquiredContent(value: unknown): value is AcquiredContent {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const content = value as Record<string, unknown>;
-	if (!isContentResourceType(content.type) || !isNonEmptyString(content.title) || typeof content.markdown !== 'string') return false;
-	if (content.resourcePlatform !== undefined && !isResourcePlatform(content.resourcePlatform)) return false;
-	if (content.fileType !== undefined && !isNullableString(content.fileType)) return false;
+	const identity = parseResourceIdentity(content.kind, content.resourcePlatform);
+	if (!identity || !isContentResourceKind(identity.kind) || !isNonEmptyString(content.title) || typeof content.markdown !== 'string') {
+		return false;
+	}
+	if (!isResourcePlatform(content.resourcePlatform) || !isNullableString(content.fileType)) return false;
 	if (!content.metadata || typeof content.metadata !== 'object' || Array.isArray(content.metadata)) return false;
 	if (!content.platformMetadata || typeof content.platformMetadata !== 'object' || Array.isArray(content.platformMetadata)) return false;
 	const metadata = content.metadata as Record<string, unknown>;
@@ -201,30 +187,11 @@ function isAcquiredContent(value: unknown): value is AcquiredContentArtifact {
 	);
 }
 
-function legacyPdfRepresentation(platformMetadata: PlatformMetadata): ResourceRepresentationMetadata | null {
-	const data = platformMetadata.data;
-	if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
-	const fileName = 'fileName' in data && typeof data.fileName === 'string' ? data.fileName.trim() : '';
-	const fileSize = 'fileSize' in data && typeof data.fileSize === 'number' ? data.fileSize : Number.NaN;
-	return fileName && Number.isFinite(fileSize) && fileSize >= 0 ? { fileName, fileSize } : null;
-}
-
 export async function readAcquiredContentArtifact(artifact: ReadableStream<Uint8Array>): Promise<AcquiredContent> {
 	const acquired: unknown = await new Response(artifact).json();
 	if (!isAcquiredContent(acquired)) throw new Error('Acquisition artifact did not contain valid content');
-	const resourcePlatform = acquired.resourcePlatform ?? legacyResourceIdentity(acquired.type).resourcePlatform;
-	const fileType = acquired.fileType !== undefined ? acquired.fileType : acquired.type === 'pdf' || acquired.extraction ? PDF_MIME : null;
-	const legacyRepresentation =
-		fileType === PDF_MIME && !acquired.platformMetadata.representation ? legacyPdfRepresentation(acquired.platformMetadata) : null;
-	if (fileType === PDF_MIME && resourcePlatform === 'hackernews' && !acquired.platformMetadata.representation) {
-		throw new Error('Hacker News PDF acquisition artifact has no representation metadata; rerun the revised acquisition step');
+	if (acquired.fileType === PDF_MIME && !acquired.platformMetadata.representation) {
+		throw new Error('PDF acquisition artifact has no representation metadata; rerun canonical acquisition');
 	}
-	return {
-		...acquired,
-		resourcePlatform,
-		fileType,
-		platformMetadata: legacyRepresentation
-			? { ...acquired.platformMetadata, data: null, representation: legacyRepresentation }
-			: acquired.platformMetadata,
-	};
+	return acquired;
 }
