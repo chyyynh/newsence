@@ -214,13 +214,19 @@ while no other operator has deployment authority for the dedicated one-shot
 Worker.
 
 If any preflight fence moves, do not deploy or trigger. Never retry an
-ambiguous trigger/approval request: inspect the fixed instance ID first. If
-`uploadAndPoll` does not return the exact completed item within four minutes,
-its Workflow errors without retrying the upsert; inspect the item before
-considering the separately designed delete/re-upload last resort.
+ambiguous trigger/approval request: inspect the fixed instance ID first. The
+production v3 call was aborted by the AI Search binding after 30 seconds even
+though its Workflow step allowed five minutes. The same-key backend operation
+then completed 14 seconds later: the pinned item became `completed`, chunks
+advanced from 7 to 13, and a newer successful reindex log appeared. The
+checkpoint records that exact split outcome, and `--verify-complete` accepts it
+only when the pinned errored instance, sole failed upsert step, completed item,
+canonical metadata, and post-timeout log all match. Never invoke this one-shot
+Workflow again.
 
-After recovery completes, let v2 observe the completed item and publish durable
-readiness. Then verify the exact repair graph and run the independent strict
+After the backend recovery outcome is validated, let v2 observe the completed
+item and publish durable readiness. Then verify the exact pinned repair graph
+using full, untruncated step outputs and run the independent strict
 current-state rollout check:
 
 ```sh

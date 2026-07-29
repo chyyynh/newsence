@@ -48,6 +48,13 @@ function repairInstanceUrl(accountId) {
 	);
 }
 
+function repairStepUrl(accountId, step) {
+	const url = new URL(`${repairInstanceUrl(accountId)}/step`);
+	url.searchParams.set('name', step.name);
+	url.searchParams.set('type', step.type);
+	return url;
+}
+
 async function assertRepairInstanceAbsent() {
 	const { accountId, workflowsToken } = credentials();
 	const response = await fetch(repairInstanceUrl(accountId), { headers: { Authorization: `Bearer ${workflowsToken}` } });
@@ -98,6 +105,7 @@ async function validateRepairConfig() {
 	assert.equal(searchBinding?.instance_name, checkpoint.aiSearchInstanceName, 'repair AI Search instance');
 	assert.equal(searchBinding?.remote, true, 'repair AI Search binding is remote');
 	assert.equal(config.hyperdrive?.length, 1, 'repair Hyperdrive binding count');
+	assert.match(checkpoint.repairWorkflowVersionId, /^[0-9a-f-]{36}$/, 'repair pinned Workflow version');
 }
 
 async function listStatusItems(status) {
@@ -171,15 +179,18 @@ function snapshot(targets) {
 	};
 }
 
-function parseStepOutput(step, label) {
-	assert.equal(typeof step?.output, 'string', `${label} output`);
-	return JSON.parse(step.output);
-}
-
 function exactStep(steps, pattern, label) {
 	const matches = steps.filter((step) => pattern.test(step.name));
 	assert.equal(matches.length, 1, `${label} step count`);
 	return matches[0];
+}
+
+async function loadFullStepOutput(accountId, workflowsToken, step, label) {
+	const result = await cloudflareApi(repairStepUrl(accountId, step), workflowsToken, `${label} full output`);
+	assert.equal(result.status, 'complete', `${label} full output status`);
+	assert.equal(result.error ?? null, null, `${label} full output error`);
+	assert.ok(result.output && typeof result.output === 'object', `${label} full output value`);
+	return result.output;
 }
 
 function assertReadyObservation(readiness) {
@@ -205,69 +216,98 @@ async function verifyCompletion() {
 	assert.equal(instance.status, 'complete', 'repair Workflow terminal status');
 	assert.equal(instance.success, true, 'repair Workflow success');
 	assert.equal(instance.error ?? null, null, 'repair Workflow error');
-	assert.equal(typeof instance.versionId, 'string', 'repair Workflow version');
-	assert.ok(instance.versionId, 'repair Workflow version');
+	assert.equal(instance.versionId, checkpoint.repairWorkflowVersionId, 'repair Workflow remained on pinned version');
 	assert.ok(Array.isArray(instance.steps), 'repair Workflow steps');
 	const failedSteps = instance.steps.filter((step) => step.type === 'step' && step.success !== true).map((step) => step.name);
 	assert.deepEqual(failedSteps, [], 'repair Workflow failed steps');
 
-	const initial = parseStepOutput(
-		exactStep(instance.steps, /^snapshot-terminal-search-repair-targets-\d+$/, 'repair initial snapshot'),
-		'repair initial snapshot',
-	);
+	const [
+		initial,
+		bindingBeforeClaim,
+		sourceBeforeClaim,
+		sourceAfterClaim,
+		sourceBeforeReady,
+		claim,
+		readiness,
+		bindingBeforeReady,
+		marked,
+	] = await Promise.all([
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^snapshot-terminal-search-repair-targets-\d+$/, 'repair initial snapshot'),
+			'repair initial snapshot',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^verify-terminal-repair-search-binding-\d+$/, 'repair initial search binding'),
+			'repair initial search binding',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^verify-phase1-search-rebuild-source-\d+$/, 'repair initial source fence'),
+			'repair initial source fence',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^reverify-phase1-search-rebuild-source-\d+$/, 'repair post-claim source fence'),
+			'repair post-claim source fence',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^final-reverify-phase1-search-rebuild-source-\d+$/, 'repair final source fence'),
+			'repair final source fence',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^claim-terminal-search-repair-lease-\d+$/, 'repair lease claim'),
+			'repair lease claim',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^final-load-terminal-repair-readiness-\d+$/, 'repair final readiness'),
+			'repair final readiness',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^final-reverify-terminal-repair-search-binding-\d+$/, 'repair final search binding'),
+			'repair final search binding',
+		),
+		loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^mark-terminal-repair-generation-ready-\d+$/, 'repair ready publication'),
+			'repair ready publication',
+		),
+	]);
 	assert.deepEqual(initial.counts, checkpoint.initialRepairCounts, 'repair initial counts');
 	assert.equal(initial.digest, checkpoint.initialRepairTargetDigest, 'repair initial digest');
 	assert.equal(initial.targets?.length, checkpoint.initialRepairCounts.total, 'repair initial target rows');
 
-	const bindingBeforeClaim = parseStepOutput(
-		exactStep(instance.steps, /^verify-terminal-repair-search-binding-\d+$/, 'repair initial search binding'),
-		'repair initial search binding',
-	);
 	assert.deepEqual(
 		bindingBeforeClaim,
 		{ configReady: true, id: checkpoint.aiSearchInstanceName, paused: false },
 		'repair initial search binding',
 	);
-	const sourceBeforeClaim = parseStepOutput(
-		exactStep(instance.steps, /^verify-phase1-search-rebuild-source-\d+$/, 'repair initial source fence'),
-		'repair initial source fence',
-	);
-	const sourceAfterClaim = parseStepOutput(
-		exactStep(instance.steps, /^reverify-phase1-search-rebuild-source-\d+$/, 'repair post-claim source fence'),
-		'repair post-claim source fence',
-	);
-	const sourceBeforeReady = parseStepOutput(
-		exactStep(instance.steps, /^final-reverify-phase1-search-rebuild-source-\d+$/, 'repair final source fence'),
-		'repair final source fence',
-	);
 	assertPinnedSource(sourceBeforeClaim, 'repair initial source');
 	assert.deepEqual(sourceAfterClaim, sourceBeforeClaim, 'repair source remained pinned after claim');
 	assert.deepEqual(sourceBeforeReady, sourceBeforeClaim, 'repair source remained pinned before ready');
 
-	const claim = parseStepOutput(
-		exactStep(instance.steps, /^claim-terminal-search-repair-lease-\d+$/, 'repair lease claim'),
-		'repair lease claim',
-	);
 	assert.equal(Number(claim.sourceRebuildEpoch), checkpoint.sourceRebuildEpoch, 'repair source epoch');
 	assert.equal(Number(claim.rebuildEpoch), checkpoint.sourceRebuildEpoch + 1, 'repair claimed epoch');
 	assert.equal(Number.isNaN(Date.parse(claim.startedAt)), false, 'repair claim timestamp');
 
-	const readiness = parseStepOutput(
-		exactStep(instance.steps, /^final-load-terminal-repair-readiness-\d+$/, 'repair final readiness'),
-		'repair final readiness',
-	);
 	assertReadyObservation(readiness);
 
-	const bindingBeforeReady = parseStepOutput(
-		exactStep(instance.steps, /^final-reverify-terminal-repair-search-binding-\d+$/, 'repair final search binding'),
-		'repair final search binding',
-	);
 	assert.deepEqual(bindingBeforeReady, bindingBeforeClaim, 'repair search binding remained pinned');
 
-	const marked = parseStepOutput(
-		exactStep(instance.steps, /^mark-terminal-repair-generation-ready-\d+$/, 'repair ready publication'),
-		'repair ready publication',
-	);
 	assert.equal(Number.isNaN(Date.parse(marked.readyAt)), false, 'repair ready timestamp');
 
 	const client = new pg.Client({ connectionString: databaseUrl() });

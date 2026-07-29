@@ -106,6 +106,10 @@ function aiSearchItemsUrl(accountId) {
 	return url;
 }
 
+function aiSearchItemLogsUrl(accountId) {
+	return `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/${checkpoint.aiSearchInstanceName}/items/${checkpoint.item.id}/logs`;
+}
+
 async function validateConfig() {
 	assert.equal(checkpoint.recovery.approvalEventType, 'approve-stuck-item-recovery-251-v3', 'recovery approval event type');
 	assert.match(checkpoint.recovery.approvalToken, /^[0-9a-f-]{36}$/, 'recovery approval token');
@@ -116,6 +120,20 @@ async function validateConfig() {
 	if (checkpoint.recovery.workerVersionId !== null) {
 		assert.match(checkpoint.recovery.workerVersionId, /^[0-9a-f-]{36}$/, 'recovery checkpoint Worker version id');
 	}
+	assert.deepEqual(checkpoint.recoveryResult.workflow.error, {
+		message: 'The operation was aborted due to timeout',
+		name: 'Error',
+	});
+	assert.equal(checkpoint.recoveryResult.workflow.status, 'errored', 'recovery observed Workflow status');
+	assert.equal(checkpoint.recoveryResult.workflow.stepCount, 3, 'recovery observed Workflow step count');
+	assert.equal(checkpoint.recoveryResult.item.status, 'completed', 'recovery observed item status');
+	assert.ok(checkpoint.recoveryResult.item.chunksCount > checkpoint.item.chunksCount, 'recovery observed chunks advanced');
+	assert.equal(checkpoint.recoveryResult.itemLog.fileKey, checkpoint.item.key, 'recovery observed log key');
+	assert.equal(checkpoint.recoveryResult.itemLog.chunkCount, checkpoint.recoveryResult.item.chunksCount, 'recovery observed log chunks');
+	assert.ok(
+		timestampMs(checkpoint.recoveryResult.itemLog.timestamp) > timestampMs(checkpoint.recoveryResult.workflow.upsertEndedAt),
+		'recovery backend completion followed the Workflow timeout',
+	);
 	const raw = await readFile(new URL('../wrangler.stuck-item-recovery-251.jsonc', import.meta.url), 'utf8');
 	const config = JSON.parse(raw);
 	assert.equal(config.name, checkpoint.recovery.workerName, 'recovery Worker name');
@@ -190,6 +208,12 @@ async function loadExactItem(accountId, aiSearchToken) {
 	return matches[0];
 }
 
+async function loadExactItemLogs(accountId, aiSearchToken) {
+	const logs = await cloudflareApi(aiSearchItemLogsUrl(accountId), aiSearchToken, 'exact recovery item logs');
+	assert.ok(Array.isArray(logs), 'exact recovery item logs result');
+	return logs;
+}
+
 function assertPinnedItem(item) {
 	assert.equal(item.id, checkpoint.item.id, 'pinned item id');
 	assert.equal(item.status, checkpoint.item.status, 'pinned item status');
@@ -204,13 +228,37 @@ function assertPinnedItem(item) {
 }
 
 function assertRecoveredItem(item, label) {
+	assert.equal(item.id, checkpoint.item.id, `${label} id`);
 	assert.equal(item.key, checkpoint.item.key, `${label} key`);
 	assert.equal(item.source_id, checkpoint.item.sourceId, `${label} source`);
-	assert.equal(item.status, 'completed', `${label} status`);
+	assert.equal(item.status, checkpoint.recoveryResult.item.status, `${label} status`);
 	assert.equal(item.error ?? null, null, `${label} error`);
-	assert.ok(Number.isSafeInteger(item.chunks_count) && item.chunks_count > 0, `${label} chunks`);
-	assert.ok(timestampMs(item.last_seen_at) > timestampMs(checkpoint.item.lastSeenAt), `${label} last seen advanced`);
+	assert.equal(item.chunks_count, checkpoint.recoveryResult.item.chunksCount, `${label} chunks`);
+	assert.equal(item.last_seen_at, checkpoint.recoveryResult.item.lastSeenAt, `${label} last seen`);
+	assert.equal(item.file_size, checkpoint.item.fileSize, `${label} file size`);
 	assert.deepEqual(normalizeCustomMetadata(item.metadata), checkpoint.item.customMetadata, `${label} metadata`);
+}
+
+function assertRecoveredItemLog(logs, item) {
+	const matches = logs.filter((log) => log.timestamp === checkpoint.recoveryResult.itemLog.timestamp);
+	assert.equal(matches.length, 1, 'recovery completion log count');
+	const log = matches[0];
+	assert.deepEqual(
+		{
+			action: log.action,
+			chunkCount: log.chunkCount,
+			errorMessage: log.errorMessage ?? null,
+			errorType: log.errorType ?? null,
+			fileKey: log.fileKey,
+			message: log.message,
+			timestamp: log.timestamp,
+		},
+		checkpoint.recoveryResult.itemLog,
+		'recovery completion log',
+	);
+	assert.equal(log.chunkCount, item.chunks_count, 'recovery completion log item chunks');
+	assert.ok(timestampMs(log.timestamp) > timestampMs(checkpoint.itemLog.timestamp), 'recovery completion log advanced');
+	return log;
 }
 
 async function loadDatabaseCheckpoint() {
@@ -482,15 +530,10 @@ async function triggerPinnedRecovery(accountId, workflowsToken, deployment) {
 	return { approval, created, gate: gate.instance };
 }
 
-async function verifyRecoveryComplete(accountId, workflowsToken, aiSearchToken) {
+async function verifyRecoveryOutcome(accountId, workflowsToken, aiSearchToken) {
 	const instance = await cloudflareApi(recoveryInstanceUrl(accountId), workflowsToken, 'recovery Workflow');
-	assert.equal(instance.status, 'complete', 'recovery Workflow status');
-	assert.equal(instance.success, true, 'recovery Workflow success');
-	assert.equal(instance.error ?? null, null, 'recovery Workflow error');
-	assert.equal(instance.step_count, 4, 'recovery Workflow step count');
 	assert.equal(instance.versionId, checkpoint.recovery.versionId, 'recovery Workflow ran the pinned version');
-	const failedSteps = instance.steps.filter((step) => step.type === 'step' && step.success !== true).map((step) => step.name);
-	assert.deepEqual(failedSteps, [], 'recovery Workflow failed steps');
+	assert.ok(Array.isArray(instance.steps), 'recovery Workflow steps');
 	const preflight = await loadFullStepOutput(
 		accountId,
 		workflowsToken,
@@ -503,18 +546,6 @@ async function verifyRecoveryComplete(accountId, workflowsToken, aiSearchToken) 
 		exactStep(instance.steps, /^wait-for-stuck-item-recovery-approval-\d+$/, 'recovery approval'),
 		'recovery approval',
 	);
-	const upsert = await loadFullStepOutput(
-		accountId,
-		workflowsToken,
-		exactStep(instance.steps, /^upsert-stuck-item-from-canonical-corpus-\d+$/, 'recovery upsert'),
-		'recovery upsert',
-	);
-	const postflight = await loadFullStepOutput(
-		accountId,
-		workflowsToken,
-		exactStep(instance.steps, /^verify-stuck-item-recovery-result-\d+$/, 'recovery postflight'),
-		'recovery postflight',
-	);
 	const approval = approvalOutput.payload ? approvalOutput : { payload: approvalOutput, type: checkpoint.recovery.approvalEventType };
 	assert.match(preflight.canonical?.contentSha256 ?? '', /^[0-9a-f]{64}$/, 'recovery canonical content digest');
 	assert.ok(preflight.canonical?.contentBytes > 0, 'recovery canonical content bytes');
@@ -526,12 +557,62 @@ async function verifyRecoveryComplete(accountId, workflowsToken, aiSearchToken) 
 	assert.equal(approval.payload?.selectedWorkerVersionId, checkpoint.recovery.workerVersionId, 'recovery approval Worker version');
 	assert.equal(approval.payload?.selectedWorkflowVersionId, checkpoint.recovery.versionId, 'recovery approval Workflow version');
 	assert.equal(approval.payload?.canonicalContentSha256, preflight.canonical.contentSha256, 'recovery approval content digest');
-	assert.equal(upsert.status, 'completed', 'recovery upsert output status');
-	assert.equal(postflight.item?.status, 'completed', 'recovery postflight output status');
-	assert.ok(postflight.newestLogAt, 'recovery postflight newest log');
 	const item = await loadExactItem(accountId, aiSearchToken);
 	assertRecoveredItem(item, 'recovered item');
-	return { approval, instance, item, postflight, preflight, upsert };
+	const logs = await loadExactItemLogs(accountId, aiSearchToken);
+	const itemLog = assertRecoveredItemLog(logs, item);
+
+	if (instance.status === 'complete') {
+		assert.equal(instance.success, true, 'recovery Workflow success');
+		assert.equal(instance.error ?? null, null, 'recovery Workflow error');
+		assert.equal(instance.step_count, 4, 'recovery Workflow step count');
+		const failedSteps = instance.steps.filter((step) => step.type === 'step' && step.success !== true).map((step) => step.name);
+		assert.deepEqual(failedSteps, [], 'recovery Workflow failed steps');
+		const upsert = await loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^upsert-stuck-item-from-canonical-corpus-\d+$/, 'recovery upsert'),
+			'recovery upsert',
+		);
+		const postflight = await loadFullStepOutput(
+			accountId,
+			workflowsToken,
+			exactStep(instance.steps, /^verify-stuck-item-recovery-result-\d+$/, 'recovery postflight'),
+			'recovery postflight',
+		);
+		assert.equal(upsert.status, 'completed', 'recovery upsert output status');
+		assert.equal(postflight.item?.status, 'completed', 'recovery postflight output status');
+		assert.ok(postflight.newestLogAt, 'recovery postflight newest log');
+		return { approval, instance, item, itemLog, outcome: 'workflow-completed', postflight, preflight, upsert };
+	}
+
+	assert.equal(instance.status, checkpoint.recoveryResult.workflow.status, 'recovery observed Workflow status');
+	assert.equal(instance.success, false, 'recovery observed Workflow success');
+	assert.deepEqual(instance.error, checkpoint.recoveryResult.workflow.error, 'recovery observed Workflow error');
+	assert.equal(instance.step_count, checkpoint.recoveryResult.workflow.stepCount, 'recovery observed Workflow step count');
+	const upsertStep = exactStep(instance.steps, /^upsert-stuck-item-from-canonical-corpus-\d+$/, 'recovery timed-out upsert');
+	assert.equal(upsertStep.type, 'step', 'recovery timed-out upsert type');
+	assert.equal(upsertStep.success, false, 'recovery timed-out upsert success');
+	assert.equal(upsertStep.start, checkpoint.recoveryResult.workflow.upsertStartedAt, 'recovery timed-out upsert start');
+	assert.equal(upsertStep.end, checkpoint.recoveryResult.workflow.upsertEndedAt, 'recovery timed-out upsert end');
+	assert.equal(
+		instance.steps.some((step) => /^verify-stuck-item-recovery-result-\d+$/.test(step.name)),
+		false,
+		'recovery postflight did not run after the client timeout',
+	);
+	assert.ok(timestampMs(itemLog.timestamp) > timestampMs(upsertStep.end), 'AI Search completed after the Workflow client timeout');
+	const failedSteps = instance.steps.filter((step) => step.type === 'step' && step.success !== true).map((step) => step.name);
+	assert.deepEqual(failedSteps, [upsertStep.name], 'recovery observed failed step');
+	return {
+		approval,
+		instance,
+		item,
+		itemLog,
+		outcome: 'backend-completed-after-client-timeout',
+		postflight: null,
+		preflight,
+		upsert: null,
+	};
 }
 
 await validateConfig();
@@ -544,14 +625,16 @@ assertDurableCheckpoint(database.durableState, VERIFY_COMPLETE);
 
 if (VERIFY_COMPLETE) {
 	const deployment = await assertPinnedRecoveryDeployment(accountId, workflowsToken);
-	const recovery = await verifyRecoveryComplete(accountId, workflowsToken, aiSearchToken);
+	const recovery = await verifyRecoveryOutcome(accountId, workflowsToken, aiSearchToken);
 	process.stdout.write(
 		`${JSON.stringify(
 			{
-				event: 'search_stuck_item_recovery_251_completion_validated',
+				event: 'search_stuck_item_recovery_251_outcome_validated',
 				recoveryWorkflow: {
 					deployedAt: deployment.version.created_on,
+					error: recovery.instance.error ?? null,
 					instanceId: checkpoint.recovery.instanceId,
+					outcome: recovery.outcome,
 					status: recovery.instance.status,
 					versionId: recovery.instance.versionId,
 					workerVersionId: deployment.workerVersion.version_id,
@@ -562,6 +645,7 @@ if (VERIFY_COMPLETE) {
 					id: recovery.item.id,
 					key: recovery.item.key,
 					lastSeenAt: recovery.item.last_seen_at,
+					reindexedAt: recovery.itemLog.timestamp,
 					status: recovery.item.status,
 				},
 				durableState: database.durableState,

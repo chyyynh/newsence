@@ -19,6 +19,7 @@
 	"repairInstanceId": "search-index-terminal-repair-251-v2",
 	"repairWorkerName": "newsence-search-repair-251",
 	"repairWorkflowName": "newsence-search-index-terminal-repair-251-v2",
+	"repairWorkflowVersionId": "933fd10f-dfb8-4081-8ecb-ce1d137f153e",
 	"sourceErrorName": "Error",
 	"sourceErrorPrefix": "AI Search index did not become ready:",
 	"sourceInstanceId": "search-index-rebuild-canonical-4-kind-platform-shadow-v2",
