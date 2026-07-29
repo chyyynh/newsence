@@ -20,15 +20,20 @@
 	},
 	"workflows": [
 		{
-			"binding": "SEARCH_INDEX_TERMINAL_REPAIR_251_WORKFLOW",
+			"binding": "SEARCH_INDEX_TERMINAL_REPAIR_251_FAILED_WORKFLOW",
 			"name": "newsence-search-index-terminal-repair-251",
 			"class_name": "SearchIndexTerminalRepair251Workflow"
 		},
 		{
-			"binding": "PHASE1_SEARCH_REBUILD_SOURCE",
-			"name": "newsence-search-index-shadow-rebuild",
-			"class_name": "SearchIndexShadowRebuildWorkflow",
-			"script_name": "newsence-core"
+			"binding": "SEARCH_INDEX_TERMINAL_REPAIR_251_WORKFLOW",
+			"name": "newsence-search-index-terminal-repair-251-v2",
+			"class_name": "SearchIndexTerminalRepair251Workflow"
+		}
+	],
+	"services": [
+		{
+			"binding": "PHASE1_SEARCH_REBUILD_SOURCE_CORE",
+			"service": "newsence-core"
 		}
 	],
 	"ai_search": [

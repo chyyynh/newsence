@@ -59,14 +59,21 @@ target snapshot; any drift fails closed before mutation.
 | Role | Identifier |
 | --- | --- |
 | Worker | `newsence-search-repair-251` |
-| Physical Workflow | `newsence-search-index-terminal-repair-251` |
-| Runner | `search-index-terminal-repair-251-v1` |
+| Physical Workflow | `newsence-search-index-terminal-repair-251-v2` |
+| Runner | `search-index-terminal-repair-251-v2` |
 | Config | `wrangler.repair-251.jsonc` |
 | Checkpoint | `search-terminal-repair-251.json` |
 
-The repair Worker has no route, `workers.dev` hostname, cron, R2 binding, or
-application service binding. It can reach only v6 AI Search, Hyperdrive, and the
-errored phase-1 Workflow used as a read-only source fence.
+The repair Worker has no route, `workers.dev` hostname, cron, or R2 binding. It
+can reach only v6 AI Search, Hyperdrive, and the production Core's read-only
+`getSearchIndexRebuildStatus()` RPC used to fence the errored phase-1 Workflow.
+
+The first isolated physical Workflow,
+`newsence-search-index-terminal-repair-251` /
+`search-index-terminal-repair-251-v1`, errored with `Worker not found.` before
+the Worker ran (`step_count = 0`). It did not claim an epoch or touch AI Search.
+It is retained as evidence and must never be restarted. The v2 physical resource
+exists so the corrected service-binding graph cannot replay through v1.
 
 From the repository root, validate the pinned source, durable epoch, database
 eligibility, target counts, and digest before deployment:
@@ -94,9 +101,9 @@ pnpm -C workers/core-worker exec node \
   scripts/check-search-terminal-repair-251.mjs
 
 pnpm -C workers/core-worker exec wrangler workflows trigger \
-  newsence-search-index-terminal-repair-251 \
+  newsence-search-index-terminal-repair-251-v2 \
   '{}' \
-  --id search-index-terminal-repair-251-v1
+  --id search-index-terminal-repair-251-v2
 ```
 
 Never use a different payload, instance ID, physical Workflow, generation,

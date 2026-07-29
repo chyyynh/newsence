@@ -382,6 +382,13 @@ type SearchIndexRebuildingRow = {
 
 type SearchIndexTerminalRepair251Checkpoint = {
 	aiSearchInstanceName: string;
+	failedRepairAttempt: {
+		errorMessage: string;
+		errorName: string;
+		instanceId: string;
+		stepCount: number;
+		workflowName: string;
+	};
 	generation: number;
 	generationKey: string;
 	initialRepairCounts: {
@@ -402,7 +409,12 @@ type SearchIndexTerminalRepair251Checkpoint = {
 };
 
 type SearchIndexTerminalRepair251Env = CoreEnv & {
-	PHASE1_SEARCH_REBUILD_SOURCE: Workflow<Record<string, unknown>>;
+	PHASE1_SEARCH_REBUILD_SOURCE_CORE: {
+		getSearchIndexRebuildStatus(instanceId: string): Promise<{
+			error?: { message?: string; name?: string };
+			status: string;
+		}>;
+	};
 };
 
 function searchIndexTerminalRepair251Checkpoint(): SearchIndexTerminalRepair251Checkpoint {
@@ -414,6 +426,10 @@ function searchIndexTerminalRepair251Checkpoint(): SearchIndexTerminalRepair251C
 	}
 	if (
 		!checkpoint.aiSearchInstanceName.trim() ||
+		!checkpoint.failedRepairAttempt.errorMessage.trim() ||
+		!checkpoint.failedRepairAttempt.errorName.trim() ||
+		!checkpoint.failedRepairAttempt.instanceId.trim() ||
+		!checkpoint.failedRepairAttempt.workflowName.trim() ||
 		!checkpoint.repairWorkerName.trim() ||
 		!checkpoint.repairWorkflowName.trim() ||
 		!checkpoint.repairInstanceId.trim() ||
@@ -421,6 +437,13 @@ function searchIndexTerminalRepair251Checkpoint(): SearchIndexTerminalRepair251C
 		!checkpoint.sourceInstanceId.trim()
 	) {
 		throw new Error('AI Search terminal repair checkpoint identity is empty');
+	}
+	if (
+		checkpoint.failedRepairAttempt.workflowName === checkpoint.repairWorkflowName ||
+		checkpoint.failedRepairAttempt.instanceId === checkpoint.repairInstanceId ||
+		checkpoint.failedRepairAttempt.stepCount !== 0
+	) {
+		throw new Error('AI Search terminal repair checkpoint failed-attempt fence is invalid');
 	}
 	if (!Number.isSafeInteger(checkpoint.sourceRebuildEpoch) || checkpoint.sourceRebuildEpoch < 0) {
 		throw new Error('AI Search terminal repair checkpoint source epoch must be a non-negative safe integer');
@@ -1162,8 +1185,7 @@ async function verifySearchIndexTerminalRepair251Source(
 	env: SearchIndexTerminalRepair251Env,
 	checkpoint: SearchIndexTerminalRepair251Checkpoint,
 ) {
-	const instance = await env.PHASE1_SEARCH_REBUILD_SOURCE.get(checkpoint.sourceInstanceId);
-	const status = await instance.status();
+	const status = await env.PHASE1_SEARCH_REBUILD_SOURCE_CORE.getSearchIndexRebuildStatus(checkpoint.sourceInstanceId);
 	if (status.status !== 'errored') {
 		throw new Error(`AI Search terminal repair source ${checkpoint.sourceInstanceId} is ${status.status}, not errored`);
 	}

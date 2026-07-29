@@ -56,6 +56,20 @@ async function assertRepairInstanceAbsent() {
 	assert.equal(payload.success, false, 'missing repair runner API response');
 }
 
+async function validateFailedRepairAttempt() {
+	const { accountId, workflowsToken } = credentials();
+	const failed = checkpoint.failedRepairAttempt;
+	const url =
+		`https://api.cloudflare.com/client/v4/accounts/${accountId}/workflows/` + `${failed.workflowName}/instances/${failed.instanceId}`;
+	const instance = await cloudflareApi(url, workflowsToken, 'failed repair Workflow instance');
+	assert.equal(instance.status, 'errored', 'failed repair status');
+	assert.equal(instance.success, false, 'failed repair success');
+	assert.equal(instance.error?.name, failed.errorName, 'failed repair error name');
+	assert.equal(instance.error?.message, failed.errorMessage, 'failed repair error message');
+	assert.equal(instance.step_count, failed.stepCount, 'failed repair step count');
+	assert.deepEqual(instance.steps ?? [], [], 'failed repair steps');
+}
+
 async function validateRepairConfig() {
 	const raw = await readFile(new URL('../wrangler.repair-251.jsonc', import.meta.url), 'utf8');
 	const config = JSON.parse(raw);
@@ -68,9 +82,17 @@ async function validateRepairConfig() {
 	assert.equal(repairBinding?.name, checkpoint.repairWorkflowName, 'repair physical Workflow name');
 	assert.equal(repairBinding?.class_name, 'SearchIndexTerminalRepair251Workflow', 'repair Workflow class');
 	assert.equal(repairBinding?.script_name, undefined, 'repair Workflow is owned by the isolated Worker');
-	const sourceBinding = config.workflows?.find((binding) => binding.binding === 'PHASE1_SEARCH_REBUILD_SOURCE');
-	assert.equal(sourceBinding?.name, checkpoint.sourceWorkflowName, 'source physical Workflow name');
-	assert.equal(sourceBinding?.script_name, 'newsence-core', 'source Workflow owner');
+	const failedBinding = config.workflows?.find((binding) => binding.binding === 'SEARCH_INDEX_TERMINAL_REPAIR_251_FAILED_WORKFLOW');
+	assert.equal(failedBinding?.name, checkpoint.failedRepairAttempt.workflowName, 'failed repair physical Workflow name');
+	assert.equal(failedBinding?.class_name, 'SearchIndexTerminalRepair251Workflow', 'failed repair Workflow class');
+	assert.equal(
+		config.workflows?.some((binding) => binding.script_name !== undefined),
+		false,
+		'repair has no external Workflow binding',
+	);
+	const sourceBinding = config.services?.find((binding) => binding.binding === 'PHASE1_SEARCH_REBUILD_SOURCE_CORE');
+	assert.equal(sourceBinding?.service, 'newsence-core', 'source Core service');
+	assert.equal(sourceBinding?.entrypoint, undefined, 'source Core default entrypoint');
 	const searchBinding = config.ai_search?.find((binding) => binding.binding === 'AI_SEARCH');
 	assert.equal(checkpoint.aiSearchInstanceName, INDEX_NAME, 'checkpoint AI Search instance');
 	assert.equal(searchBinding?.instance_name, checkpoint.aiSearchInstanceName, 'repair AI Search instance');
@@ -293,6 +315,7 @@ async function verifyCompletion() {
 }
 
 await validateRepairConfig();
+await validateFailedRepairAttempt();
 
 if (VERIFY_COMPLETE) {
 	await verifyCompletion();
