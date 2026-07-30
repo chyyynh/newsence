@@ -1,13 +1,15 @@
 import {
-	CONTENT_RESOURCE_TYPES,
-	type ContentResourceType,
-	isContentResourceType,
+	type ContentResourceKind,
+	isContentResourceKind,
+	isResourcePlatform,
+	parseResourceIdentity,
 	RESOURCE_CATEGORIES,
 	type ResourceCategory,
+	type ResourcePlatform,
 } from '@core-shared/resource-types';
 import { normalizeUrl } from '@core-shared/url';
-import { type CoreDb, withCoreDb } from '@db/client';
-import { isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql } from '@db/sql';
+import { type CoreDb, isValidUuid, queryRows, resourceContentAccessSql, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
+import { contentResourceIdentitySql, resourceDisplaySourceSql, resourceIdentityFilterSql } from '@db/resource-identity-sql';
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 
@@ -19,6 +21,8 @@ interface ResourceSummary {
 	source: string;
 	summary?: string;
 	tags?: string[];
+	kind: ContentResourceKind;
+	resourcePlatform: ResourcePlatform;
 }
 
 export type ResourceSearchInput = {
@@ -31,8 +35,9 @@ type ResourceSearchFilters = {
 	categories?: ResourceCategory[];
 	effectiveAfter?: string;
 	effectiveBefore?: string;
+	kinds?: ContentResourceKind[];
+	resourcePlatforms?: ResourcePlatform[];
 	sourceIds?: string[];
-	types?: ContentResourceType[];
 };
 
 export type RelatedResourceSearchInput = {
@@ -62,6 +67,8 @@ interface ResourceContentRow {
 	id: string;
 	url: string | null;
 	normalized_url: string | null;
+	kind: string;
+	resource_platform: string | null;
 	scope: string;
 	storage_key: string | null;
 	file_type: string | null;
@@ -80,6 +87,8 @@ interface ResourceSearchRow {
 	id: string;
 	title: string | null;
 	url: string | null;
+	kind: string;
+	resource_platform: string | null;
 	published_date: Date | string | null;
 	source: string | null;
 	summary: string | null;
@@ -101,9 +110,32 @@ type NormalizedSearchFilters = {
 	effectiveAfter: Date | null;
 	effectiveBefore: Date | null;
 	excludeAll: boolean;
+	kinds?: ContentResourceKind[];
+	resourcePlatforms?: ResourcePlatform[];
 	sourceIds?: string[];
-	types?: ContentResourceType[];
 };
+
+async function filterReadableCorpusRanks(
+	env: CoreEnv,
+	ranks: readonly { id: string; score: number }[],
+	filters: NormalizedSearchFilters,
+): Promise<Array<{ id: string; score: number }>> {
+	const ids = ranks.map((rank) => rank.id).filter(isValidUuid);
+	if (ids.length === 0) return [];
+	const readableIds = await withCoreDb(env, async (db) => {
+		const rows = await queryRows<{ id: string }>(
+			db,
+			sql`
+				SELECT r.id::text
+				FROM resources r
+				WHERE r.id = ANY(${uuidArraySql(ids)})
+				  AND ${corpusEnrichedSql()}${searchFiltersSql(filters)}
+			`,
+		);
+		return new Set(rows.map((row) => row.id));
+	});
+	return ranks.filter((rank) => readableIds.has(rank.id));
+}
 
 export async function searchCorpusResourceRanks(env: CoreEnv, input: ResourceSearchInput): Promise<Array<{ id: string; score: number }>> {
 	const query = input.query.trim();
@@ -111,7 +143,8 @@ export async function searchCorpusResourceRanks(env: CoreEnv, input: ResourceSea
 	const limit = clampInt(input.limit, 1, RESULT_LIMIT_MAX, RESULT_LIMIT_MAX);
 	const filters = normalizeSearchFilters(input);
 	if (filters.excludeAll) return [];
-	return (await searchCorpusRanks(env, query, filters)).slice(0, limit);
+	const ranks = await searchCorpusRanks(env, query, filters);
+	return (await filterReadableCorpusRanks(env, ranks, filters)).slice(0, limit);
 }
 
 export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResourceSearchInput): Promise<string[]> {
@@ -122,7 +155,8 @@ export async function relatedCorpusResourceIds(env: CoreEnv, input: RelatedResou
 	const seedText = await withCoreDb(env, (db) => relatedSeedText(db, seed.id));
 	if (!seedText) return [];
 	const ranks = await searchCorpusRanks(env, seedText, { profile: 'related' });
-	return ranks
+	const readableRanks = await filterReadableCorpusRanks(env, ranks, normalizeSearchFilters({ query: seedText }));
+	return readableRanks
 		.map((rank) => rank.id)
 		.filter((id) => id !== seed.id)
 		.slice(offset, offset + limit);
@@ -191,15 +225,17 @@ function normalizeSearchFilters(input: ResourceSearchInput): NormalizedSearchFil
 	if (effectiveAfter && effectiveBefore && effectiveAfter > effectiveBefore)
 		throw new Error('effectiveAfter must not exceed effectiveBefore');
 	const sourceIds = optionalSourceIds(filters.sourceIds);
-	const types = optionalResourceTypes(filters.types);
+	const kinds = optionalResourceKinds(filters.kinds);
+	const resourcePlatforms = optionalResourcePlatforms(filters.resourcePlatforms);
 	const categories = optionalResourceCategories(filters.categories);
 	return {
 		categories,
 		effectiveAfter,
 		effectiveBefore,
-		excludeAll: sourceIds?.length === 0 || types?.length === 0 || categories?.length === 0,
+		excludeAll: sourceIds?.length === 0 || kinds?.length === 0 || resourcePlatforms?.length === 0 || categories?.length === 0,
+		kinds,
+		resourcePlatforms,
 		sourceIds,
-		types,
 	};
 }
 
@@ -210,9 +246,15 @@ function optionalSourceIds(values: string[] | undefined): string[] | undefined {
 	return unique;
 }
 
-function optionalResourceTypes(values: ContentResourceType[] | undefined): ContentResourceType[] | undefined {
+function optionalResourceKinds(values: ContentResourceKind[] | undefined): ContentResourceKind[] | undefined {
 	if (values === undefined) return undefined;
-	if (values.some((value) => !isContentResourceType(value))) throw new Error('Invalid resource types');
+	if (values.some((value) => !isContentResourceKind(value))) throw new Error('Invalid resource kinds');
+	return [...new Set(values)];
+}
+
+function optionalResourcePlatforms(values: ResourcePlatform[] | undefined): ResourcePlatform[] | undefined {
+	if (values === undefined) return undefined;
+	if (values.some((value) => !isResourcePlatform(value))) throw new Error('Invalid resource platforms');
 	return [...new Set(values)];
 }
 
@@ -222,9 +264,24 @@ function optionalResourceCategories(values: ResourceCategory[] | undefined): Res
 	return [...new Set(values)];
 }
 
+function resourceIdentityForRow(resource: { id: string; kind: string; resource_platform: string | null }): {
+	kind: ContentResourceKind;
+	resourcePlatform: ResourcePlatform;
+} {
+	const identity = parseResourceIdentity(resource.kind, resource.resource_platform);
+	if (!identity) {
+		throw new Error(`Corpus resource ${resource.id} has invalid persisted identity ${resource.kind} / ${resource.resource_platform}`);
+	}
+	if (!isContentResourceKind(identity.kind)) {
+		throw new Error(`Corpus resource ${resource.id} has non-content kind ${identity.kind}`);
+	}
+	return { kind: identity.kind, resourcePlatform: identity.resourcePlatform };
+}
+
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const summary = resource.summary ?? undefined;
 	const publishedDate = optionalIsoDate(resource.published_date, resource.id);
+	const identity = resourceIdentityForRow(resource);
 	return {
 		id: resource.id,
 		title: requiredCorpusText(resource.title, 'title', resource.id),
@@ -233,6 +290,8 @@ function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 		source: requiredCorpusText(resource.source, 'source', resource.id),
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: resource.tags ?? undefined,
+		kind: identity.kind,
+		resourcePlatform: identity.resourcePlatform,
 	};
 }
 
@@ -277,15 +336,24 @@ function recencySql(): SQL {
 function corpusEnrichedSql(): SQL {
 	return sql`r.scope = 'corpus'
 		AND r.enrichment_status = 'enriched'
-		AND r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})`;
+		AND ${contentResourceIdentitySql({
+			kind: sql`r.kind`,
+			resourcePlatform: sql`r.resource_platform`,
+		})}`;
 }
 
 function searchFiltersSql(filters: NormalizedSearchFilters): SQL {
 	return sql`${filters.effectiveAfter ? sql` AND ${recencySql()} >= ${filters.effectiveAfter}` : sql``}
-		${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
-		${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
-		${filters.types ? sql` AND r.type = ANY(${textArraySql(filters.types)})` : sql``}
-		${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
+			${filters.effectiveBefore ? sql` AND ${recencySql()} <= ${filters.effectiveBefore}` : sql``}
+			${filters.sourceIds ? sql` AND r.source_id = ANY(${uuidArraySql(filters.sourceIds)})` : sql``}
+			AND ${resourceIdentityFilterSql(
+				{
+					kind: sql`r.kind`,
+					resourcePlatform: sql`r.resource_platform`,
+				},
+				{ kinds: filters.kinds, resourcePlatforms: filters.resourcePlatforms },
+			)}
+			${filters.categories ? sql` AND r.category = ANY(${textArraySql(filters.categories)})` : sql``}`;
 }
 
 function truncate(content: string | null | undefined, max: number): string {
@@ -354,12 +422,14 @@ function resourceReadSelect(userId: string): SQL {
 		r.id::text,
 		r.url,
 		r.normalized_url,
+		r.kind,
+		r.resource_platform,
 		r.scope,
 		r.storage_key,
 		r.file_type,
 		r.original_lang,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		${resourceDisplaySource()} AS source,
 		r.tags,
 		rt.title AS title,
 		rt.summary AS summary,
@@ -385,8 +455,10 @@ function resourceSearchSelect(): SQL {
 		r.id::text,
 		rt.title AS title,
 		r.url,
+		r.kind,
+		r.resource_platform,
 		${recencySql()} AS published_date,
-		COALESCE(NULLIF(monitored_source.name, ''), NULLIF(r.platform_metadata->>'sourceName', ''), r.type) AS source,
+		${resourceDisplaySource()} AS source,
 		rt.summary AS summary,
 		r.tags
 	`;
@@ -394,7 +466,10 @@ function resourceSearchSelect(): SQL {
 
 function resourceAccessPredicate(userId: string): SQL {
 	return sql`
-		r.type = ANY(${textArraySql(CONTENT_RESOURCE_TYPES)})
+		${contentResourceIdentitySql({
+			kind: sql`r.kind`,
+			resourcePlatform: sql`r.resource_platform`,
+		})}
 		AND (
 			(r.scope = 'corpus' AND r.enrichment_status = 'enriched')
 			OR (${viewerResourceOwnershipSql(userId)})
@@ -402,8 +477,18 @@ function resourceAccessPredicate(userId: string): SQL {
 	`;
 }
 
+function resourceDisplaySource(): SQL {
+	return resourceDisplaySourceSql({
+		kind: sql`r.kind`,
+		monitoredSourceName: sql`monitored_source.name`,
+		platformMetadata: sql`r.platform_metadata`,
+		resourcePlatform: sql`r.resource_platform`,
+	});
+}
+
 function formatResourceReadResult(resource: ResourceContentRow): ReadContextResult {
 	const publishedDate = optionalIsoDate(resource.published_date, resource.id);
+	const identity = resourceIdentityForRow(resource);
 	return {
 		type: 'resource',
 		id: resource.id,
@@ -420,6 +505,8 @@ function formatResourceReadResult(resource: ResourceContentRow): ReadContextResu
 			translationLang: resource.translation_lang,
 			storageKey: resource.storage_key,
 			fileType: resource.file_type,
+			kind: identity.kind,
+			resourcePlatform: identity.resourcePlatform,
 		},
 	};
 }

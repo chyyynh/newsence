@@ -2,8 +2,9 @@ import { type ZodType, z } from 'zod';
 
 // Prose generation runs on Workers AI, not the third-party catalog: it bills to
 // Workers AI instead of the prepaid Gateway credits (so translation volume can
-// no longer starve ingest), costs ~28x less per output token, and unlike
-// gemini-3.5-flash it does not spend the output budget on reasoning tokens.
+// no longer starve ingest) and costs ~28x less per output token. Note that it
+// does think, and the thinking bills as output tokens; the reasoning arrives in
+// message.reasoning, so only the cost is affected, never the returned text.
 const CORE_TEXT_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 

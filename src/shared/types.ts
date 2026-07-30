@@ -1,4 +1,12 @@
-import type { ContentResourceType, ResourceCategory, ResourceScope, ResourceTranslationSource } from '@core-shared/resource-types';
+import type {
+	ContentResourceKind,
+	ResourceCategory,
+	ResourceKind,
+	ResourcePlatform,
+	ResourceScope,
+	ResourceTranslationSource,
+	SourceAcquisitionMode,
+} from '@core-shared/resource-types';
 
 export type ResourceLocaleText = {
 	title?: string | null;
@@ -13,7 +21,9 @@ export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefin
 export interface ResourceForProcessing {
 	id: string;
 	source_id: string | null;
-	type: ContentResourceType;
+	source_acquisition_mode?: SourceAcquisitionMode | null;
+	kind: ResourceKind;
+	resource_platform: ResourcePlatform;
 	scope: ResourceScope;
 	original_lang: string;
 	title: string;
@@ -29,7 +39,7 @@ export interface ResourceForProcessing {
 	platform_metadata?: PlatformMetadata;
 	// Blob/private resource raw columns (undefined for source URL drafts).
 	storage_key?: string | null;
-	file_type?: string;
+	file_type?: string | null;
 	normalized_url?: string | null;
 }
 
@@ -37,18 +47,17 @@ export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 /**
- * One extracted entity as stored on `resources.entities`. Keys are short
- * because every resource carries roughly ten of these.
+ * One resource-local entity annotation stored on `resources.entities`. Keys
+ * are short because every enriched resource can carry several of these.
  *
- * `k` is the canonical key the Collection Wiki groups on to merge mentions
- * across a collection; `n`/`cn` are the display labels and `t` drives the
- * graph's type colouring.
+ * `k` is stable enough for a future consumer to group exact canonical matches;
+ * `n`/`cn` are display labels and `t` is the entity class.
  */
 export type StoredResourceEntity = {
 	k: string;
 	n: string;
 	cn: string | null;
-	t: string;
+	t: EntityType;
 };
 
 export interface TranscriptSegment {
@@ -71,8 +80,10 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent<T extends ContentResourceType = ContentResourceType> {
-	type: T;
+export interface NormalizedContent<T extends ResourcePlatform = ResourcePlatform> {
+	kind: ContentResourceKind;
+	resourcePlatform: T;
+	fileType: string | null;
 	title: string;
 	/** Platform APIs return markdown or plain text for resource drafts. */
 	markdown: string;
@@ -156,7 +167,7 @@ export interface HackerNewsMetadata {
 	storyUrl?: string | null;
 }
 
-interface PdfMetadata {
+export interface ResourceRepresentationMetadata {
 	fileName: string;
 	fileSize: number;
 }
@@ -206,13 +217,10 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-interface PlatformMetadataDataByResourceType {
-	web: null;
-	rss: null;
+export interface PlatformMetadataDataByResourcePlatform {
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;
-	pdf: PdfMetadata;
 }
 
 export interface PdfExtractionMetadata {
@@ -222,19 +230,34 @@ export interface PdfExtractionMetadata {
 	pages: number;
 }
 
-export type PlatformMetadata<T extends ContentResourceType = ContentResourceType> = {
+type PlatformMetadataData<T extends ResourcePlatform> = T extends keyof PlatformMetadataDataByResourcePlatform
+	? PlatformMetadataDataByResourcePlatform[T]
+	: null;
+
+export type PlatformMetadata<T extends ResourcePlatform = ResourcePlatform> = {
 	fetchedAt: string;
-	data: PlatformMetadataDataByResourceType[T];
+	data: PlatformMetadataData<T>;
 	/** Hash of normalized source fields used to skip unchanged resync runs. */
 	sourceSnapshotHash?: string;
 	enrichments?: PlatformEnrichments | null;
 	sourceName?: string;
+	/** Primary file representation facts; MIME and blob identity stay scalar. */
+	representation?: ResourceRepresentationMetadata;
 	extraction?: PdfExtractionMetadata;
 } & ClassificationEnvelope;
 
-export function platformMetadataFor<T extends ContentResourceType>(
-	resource: Pick<ResourceForProcessing, 'type' | 'platform_metadata'>,
-	type: T,
+export function withPdfExtractionMetadata<T extends ResourcePlatform>(
+	platformMetadata: PlatformMetadata<T>,
+	extraction: PdfExtractionMetadata | undefined,
+): PlatformMetadata<T> {
+	return extraction ? { ...platformMetadata, extraction } : platformMetadata;
+}
+
+export function platformMetadataFor<T extends Exclude<ResourcePlatform, null>>(
+	resource: Pick<ResourceForProcessing, 'resource_platform' | 'platform_metadata'>,
+	resourcePlatform: T,
 ): PlatformMetadata<T> | null {
-	return resource.type === type && resource.platform_metadata ? (resource.platform_metadata as PlatformMetadata<T>) : null;
+	return resource.resource_platform === resourcePlatform && resource.platform_metadata
+		? (resource.platform_metadata as PlatformMetadata<T>)
+		: null;
 }

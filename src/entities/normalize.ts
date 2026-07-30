@@ -4,8 +4,8 @@
 // storing and under WHAT canonical key. Consumed by the ingest
 // pipeline (persistence + prompt exclusion lists).
 
-import type { ContentResourceType } from '@core-shared/resource-types';
-import { ENTITY_TYPES, type EntityType } from '@core-shared/types';
+import type { ResourcePlatform } from '@core-shared/resource-types';
+import { ENTITY_TYPES, type EntityType, type StoredResourceEntity } from '@core-shared/types';
 
 export type ResourceEntityInput = { name: string; name_cn: string; type: string };
 type NormalizedResourceEntity = { name: string; name_cn: string; type: EntityType };
@@ -37,7 +37,7 @@ const MAX_EXCLUSION_NAMES = 10;
 
 // Trailing side strips quotes only: `.`/`)`/`}`/`!` can be part of legit
 // names (u.s., snap inc., model context protocol (mcp), safe{wallet}, yahoo!).
-export function canonicalizeEntityName(name: string): string {
+function canonicalizeEntityName(name: string): string {
 	return name
 		.toLowerCase()
 		.normalize('NFKC')
@@ -115,7 +115,7 @@ function hostFromSource(value: string): string | null {
 	}
 }
 
-function platformMetadataSourceAliases(resourceType: ContentResourceType, metadata: unknown): string[] {
+function platformMetadataSourceAliases(resourcePlatform: ResourcePlatform, metadata: unknown): string[] {
 	const envelope = recordValue(metadata);
 	const data = recordValue(envelope?.data);
 	if (!data) return [];
@@ -125,34 +125,34 @@ function platformMetadataSourceAliases(resourceType: ContentResourceType, metada
 		if (str) aliases.push(str);
 	};
 
-	if (resourceType === 'twitter') {
+	if (resourcePlatform === 'twitter') {
 		add(data.authorName);
 		const userName = stringValue(data.authorUserName);
 		if (userName) aliases.push(userName, `@${userName}`);
 		aliases.push('Twitter', 'X');
-	} else if (resourceType === 'youtube') {
+	} else if (resourcePlatform === 'youtube') {
 		add(data.channelName);
 		aliases.push('YouTube');
-	} else if (resourceType === 'hackernews') {
+	} else if (resourcePlatform === 'hackernews') {
 		add(data.author);
 		aliases.push('Hacker News');
 	}
 	return aliases;
 }
 
-function excludedEntityCanonicalNames(resourceType: ContentResourceType, source?: string | null, platformMetadata?: unknown): Set<string> {
-	const names = entityExtractionExclusionNames(resourceType, source, platformMetadata);
+function excludedEntityCanonicalNames(resourcePlatform: ResourcePlatform, source?: string | null, platformMetadata?: unknown): Set<string> {
+	const names = entityExtractionExclusionNames(resourcePlatform, source, platformMetadata);
 	return new Set(names.map(canonicalizeEntityName).filter(Boolean));
 }
 
 export function entityExtractionExclusionNames(
-	resourceType: ContentResourceType,
+	resourcePlatform: ResourcePlatform,
 	source?: string | null,
 	platformMetadata?: unknown,
 ): string[] {
 	const seen = new Set<string>();
 	const names: string[] = [];
-	for (const name of [...sourceNameAliases(source), ...platformMetadataSourceAliases(resourceType, platformMetadata)]) {
+	for (const name of [...sourceNameAliases(source), ...platformMetadataSourceAliases(resourcePlatform, platformMetadata)]) {
 		const canonical = canonicalizeEntityName(name);
 		if (!canonical || seen.has(canonical)) continue;
 		seen.add(canonical);
@@ -162,44 +162,26 @@ export function entityExtractionExclusionNames(
 	return names;
 }
 
-export function normalizeResourceEntitiesForStorage(
+export function toStoredResourceEntities(
 	entities: ResourceEntityInput[],
-	resourceType: ContentResourceType,
+	resourcePlatform: ResourcePlatform,
 	source?: string | null,
 	platformMetadata?: unknown,
-): NormalizedResourceEntity[] {
-	const byCanonical = new Map<string, NormalizedResourceEntity>();
-	const excludedCanonicals = excludedEntityCanonicalNames(resourceType, source, platformMetadata);
+): StoredResourceEntity[] {
+	const byCanonical = new Map<string, StoredResourceEntity>();
+	const excludedCanonicals = excludedEntityCanonicalNames(resourcePlatform, source, platformMetadata);
 	for (const entity of entities) {
 		const normalized = normalizeResourceEntity(entity);
 		if (!normalized) continue;
 		const canonical = canonicalizeEntityName(normalized.name);
 		if (!canonical || byCanonical.has(canonical) || !shouldStoreResourceEntity(normalized, excludedCanonicals)) continue;
-		byCanonical.set(canonical, normalized);
+		byCanonical.set(canonical, {
+			k: canonical,
+			n: normalized.name,
+			cn: normalized.name_cn || null,
+			t: normalized.type,
+		});
 		if (byCanonical.size >= MAX_ENTITIES_PER_RESOURCE) break;
 	}
-	return [...byCanonical.values()];
-}
-
-export function normalizeResourceEntityUpdatePayload(
-	updatePayload: { entities?: unknown },
-	resourceType: ContentResourceType,
-	source?: string | null,
-	platformMetadata?: unknown,
-): NormalizedResourceEntity[] | null {
-	if (!Array.isArray(updatePayload.entities)) return null;
-	const entities = normalizeResourceEntitiesForStorage(
-		updatePayload.entities.filter(isResourceEntityInput),
-		resourceType,
-		source,
-		platformMetadata,
-	);
-	updatePayload.entities = entities;
-	return entities;
-}
-
-function isResourceEntityInput(value: unknown): value is ResourceEntityInput {
-	if (!value || typeof value !== 'object') return false;
-	const record = value as Record<string, unknown>;
-	return typeof record.name === 'string' && typeof record.name_cn === 'string' && typeof record.type === 'string';
+	return [...byCanonical.values()].sort((a, b) => a.k.localeCompare(b.k));
 }

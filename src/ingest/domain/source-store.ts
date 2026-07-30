@@ -1,7 +1,7 @@
-import type { SourceAcquisitionMode, SourcePlatform } from '@core-shared/resource-types';
+import type { SourceAcquisitionMode } from '@core-shared/resource-types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { sources } from '@db/schema';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, not, sql } from 'drizzle-orm';
 
 export type MonitoredSource = {
 	id: string;
@@ -26,7 +26,20 @@ export function parseRssAcquisitionMode(value: unknown, source: string): RssAcqu
 	throw new Error(`RSS source ${source} has invalid acquisition mode: ${String(value)}`);
 }
 
-export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatform): Promise<MonitoredSource[]> {
+/**
+ * Enabled sources due to be polled, selected by how their entries are acquired
+ * rather than by platform. A feed source ('web' or 'feed') is polled by the RSS
+ * monitor whatever its platform says — a YouTube channel stays
+ * platform='youtube' for the plan quota and the source list, and its handle is
+ * still an Atom feed. Only Twitter needs its own monitor, and 'platform' is
+ * exactly what marks that. A new feed-discovered platform therefore needs no
+ * change here at all.
+ *
+ * A null pollIntervalMinutes means every firing, so sources that never set one
+ * behave exactly as before; setting it lets one monitor carry feeds whose
+ * publishers update at very different rates.
+ */
+export async function loadMonitoredSources(env: CoreEnv, monitor: 'feed' | 'platform'): Promise<MonitoredSource[]> {
 	return withCoreDb(env, async (db: CoreDb) =>
 		db
 			.select({
@@ -38,7 +51,17 @@ export async function loadMonitoredSources(env: CoreEnv, platform: SourcePlatfor
 				createdAt: sources.createdAt,
 			})
 			.from(sources)
-			.where(and(eq(sources.monitoringEnabled, true), eq(sources.platform, platform))),
+			.where(
+				and(
+					eq(sources.monitoringEnabled, true),
+					monitor === 'platform' ? eq(sources.acquisitionMode, 'platform') : not(eq(sources.acquisitionMode, 'platform')),
+					sql`(
+						${sources.pollIntervalMinutes} IS NULL
+						OR ${sources.scrapedAt} IS NULL
+						OR ${sources.scrapedAt} < NOW() - (INTERVAL '1 minute' * ${sources.pollIntervalMinutes})
+					)`,
+				),
+			),
 	);
 }
 
@@ -46,16 +69,17 @@ export async function markSourceScraped(env: CoreEnv, sourceId: string, scrapedA
 	await markSourcesScraped(env, [sourceId], scrapedAt);
 }
 
-export async function loadRssSourcePolicy(env: CoreEnv, sourceId: string): Promise<RssSourcePolicy> {
+/** Policy for a source the feed monitor owns; the mode, not the platform, decides how entries are acquired. */
+export async function loadFeedSourcePolicy(env: CoreEnv, sourceId: string): Promise<RssSourcePolicy> {
 	return withCoreDb(env, async (db) => {
 		const source = (
 			await db
 				.select({ id: sources.id, name: sources.name, handle: sources.handle, acquisitionMode: sources.acquisitionMode })
 				.from(sources)
-				.where(and(eq(sources.id, sourceId), eq(sources.platform, 'rss')))
+				.where(and(eq(sources.id, sourceId), not(eq(sources.acquisitionMode, 'platform'))))
 				.limit(1)
 		)[0];
-		if (!source) throw new Error(`RSS source ${sourceId} was not found`);
+		if (!source) throw new Error(`Feed source ${sourceId} was not found`);
 		return { ...source, acquisitionMode: parseRssAcquisitionMode(source.acquisitionMode, source.name) };
 	});
 }

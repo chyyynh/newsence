@@ -7,6 +7,7 @@ import type {
 	TwitterAuthorFields,
 	TwitterMedia,
 } from '@core-shared/types';
+import { extractTweetId } from '@core-shared/url';
 
 // twitterapi.io tweet response shape used inside the Twitter platform only.
 export interface Tweet {
@@ -56,11 +57,6 @@ function requiredTweetAuthor(tweet: Tweet): NonNullable<Tweet['author']> {
 	return tweet.author;
 }
 
-function isTwitterHost(hostname: string): boolean {
-	const lower = hostname.toLowerCase();
-	return lower === 'twitter.com' || lower.endsWith('.twitter.com') || lower === 'x.com' || lower.endsWith('.x.com');
-}
-
 const NON_RESOURCE_LINK_HOSTS = new Set(['twitter.com', 'x.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'threads.net']);
 
 function isNonResourceLinkUrl(url: string): boolean {
@@ -75,17 +71,6 @@ function isNonResourceLinkUrl(url: string): boolean {
 		if (hostname === host || hostname.endsWith(`.${host}`)) return true;
 	}
 	return false;
-}
-
-export function extractTweetId(url: string): string | null {
-	let parsed: URL;
-	try {
-		parsed = new URL(url);
-	} catch {
-		return null;
-	}
-	if (!isTwitterHost(parsed.hostname)) return null;
-	return parsed.pathname.match(/^\/[^/]+\/status\/(\d+)/)?.[1] ?? parsed.pathname.match(/^\/i\/article\/(\d+)/)?.[1] ?? null;
 }
 
 function extractTweetAuthor(tweet: Tweet): TwitterAuthorFields {
@@ -349,7 +334,9 @@ async function scrapeTwitterLongform(
 	console.info({ tag: 'TWITTER', msg: 'Longform fetched', title });
 
 	return {
-		type: 'twitter',
+		kind: 'post',
+		resourcePlatform: 'twitter',
+		fileType: null,
 		title,
 		markdown: contentText,
 		metadata: {
@@ -374,7 +361,9 @@ function buildExternalLinkTweet(
 	if (!tweetText) throw new Error(`Tweet ${tweet.id ?? tweet.url} has no text`);
 	const title = `@${author.userName}: ${stripTweetUrls(tweetText) || tweetText}`.slice(0, 120);
 	return {
-		type: 'twitter',
+		kind: 'post',
+		resourcePlatform: 'twitter',
+		fileType: null,
 		title,
 		markdown: expandTweetUrls(tweetText, tweet),
 		metadata: {
@@ -430,7 +419,9 @@ export async function resolveTweetContent(tweet: Tweet, apiKey: string) {
 	return {
 		kind: 'tweet' as const,
 		scraped: {
-			type: 'twitter' as const,
+			kind: 'post' as const,
+			resourcePlatform: 'twitter' as const,
+			fileType: null,
 			title,
 			markdown: expandTweetUrls(tweet.text, tweet),
 			metadata: {
@@ -481,7 +472,9 @@ export async function scrapeTweet(tweetId: string, apiKey: string): Promise<Norm
 
 	const parts = buildThreadResourceParts(thread);
 	return {
-		type: 'twitter',
+		kind: 'post',
+		resourcePlatform: 'twitter',
+		fileType: null,
 		title: buildTweetTitle(parts.first, 80),
 		markdown: parts.combinedText,
 		metadata: {

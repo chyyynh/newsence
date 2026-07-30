@@ -1,22 +1,51 @@
 import {
 	RESOURCE_CATEGORIES,
+	RESOURCE_KINDS,
+	RESOURCE_PLATFORMS,
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
-	RESOURCE_TYPES,
 	SOURCE_ACQUISITION_MODES,
 	SOURCE_KINDS,
 	SOURCE_PLATFORMS,
 	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
 import type { StoredResourceEntity, TranscriptSegment } from '@core-shared/types';
-import { bigint, boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+	bigint,
+	boolean,
+	index,
+	integer,
+	jsonb,
+	pgTable,
+	primaryKey,
+	text,
+	timestamp,
+	uniqueIndex,
+	uuid,
+	varchar,
+} from 'drizzle-orm/pg-core';
+
+// Durable rollout state for externally managed search indexes. The row is
+// intentionally keyed by the logical index rather than a Workflow instance:
+// Workflow history is execution state, not a stable reader cutover contract.
+export const searchIndexStates = pgTable('search_index_states', {
+	indexName: text('index_name').primaryKey(),
+	generation: integer('generation').notNull(),
+	generationKey: text('generation_key').notNull(),
+	status: text('status', { enum: ['rebuilding', 'ready'] }).notNull(),
+	rebuildEpoch: bigint('rebuild_epoch', { mode: 'bigint' }).default(0n).notNull(),
+	rebuildingAt: timestamp('rebuilding_at', { mode: 'date', withTimezone: true }).notNull(),
+	readyAt: timestamp('ready_at', { mode: 'date', withTimezone: true }),
+	updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+});
 
 export const resources = pgTable(
 	'resources',
 	{
 		id: uuid('id').defaultRandom().primaryKey(),
 		sourceId: uuid('source_id').references(() => sources.id, { onDelete: 'set null' }),
-		type: text('type', { enum: RESOURCE_TYPES }).default('web').notNull(),
+		kind: text('kind', { enum: RESOURCE_KINDS }).notNull(),
+		resourcePlatform: text('resource_platform', { enum: RESOURCE_PLATFORMS }),
 		scope: text('scope', { enum: RESOURCE_SCOPES }).default('private').notNull(),
 		url: text('url'),
 		normalizedUrl: text('normalized_url'),
@@ -34,6 +63,9 @@ export const resources = pgTable(
 		enrichmentStatus: text('enrichment_status', { enum: ['pending', 'enriched', 'failed'] })
 			.default('pending')
 			.notNull(),
+		// Consecutive failed enrichment runs; drives retry backoff and the give-up
+		// point in getExistingResourcesByUrl. Reset to 0 whenever enrichment lands.
+		enrichmentAttempts: integer('enrichment_attempts').default(0).notNull(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 	},
@@ -123,6 +155,10 @@ export const sources = pgTable(
 		createdBy: text('created_by'),
 		status: text('status', { enum: SOURCE_STATUSES }).default('active').notNull(),
 		scrapedAt: timestamp('scraped_at', { mode: 'date' }),
+		// Minimum minutes between polls. Null means every cron firing, which is what
+		// every source did before YouTube's channel feeds joined the RSS monitor and
+		// needed their own, slower cadence.
+		pollIntervalMinutes: integer('poll_interval_minutes'),
 		scrapeState: jsonb('scrape_state').$type<unknown>(),
 		createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),

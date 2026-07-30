@@ -1,37 +1,154 @@
-export const CONTENT_RESOURCE_TYPES = ['web', 'rss', 'twitter', 'youtube', 'hackernews', 'pdf'] as const;
+export const RESOURCE_KINDS = ['document', 'post', 'video', 'paper', 'image', 'file'] as const;
 
-export type ContentResourceType = (typeof CONTENT_RESOURCE_TYPES)[number];
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
-const MEDIA_RESOURCE_TYPES = ['image', 'file'] as const;
+export const CONTENT_RESOURCE_KINDS = ['document', 'post', 'video', 'paper'] as const satisfies readonly ResourceKind[];
 
-export const RESOURCE_TYPES = [...CONTENT_RESOURCE_TYPES, ...MEDIA_RESOURCE_TYPES] as const;
+export type ContentResourceKind = (typeof CONTENT_RESOURCE_KINDS)[number];
 
-export type ResourceType = (typeof RESOURCE_TYPES)[number];
+export const TRANSLATABLE_RESOURCE_KINDS = ['document', 'post', 'paper'] as const satisfies readonly ResourceKind[];
 
-export function isContentResourceType(value: unknown): value is ContentResourceType {
-	return typeof value === 'string' && (CONTENT_RESOURCE_TYPES as readonly string[]).includes(value);
+export const RESOURCE_PLATFORMS = ['hackernews', 'twitter', 'youtube'] as const;
+
+export type ResourcePlatform = (typeof RESOURCE_PLATFORMS)[number] | null;
+
+const VALID_KIND_PLATFORMS = {
+	document: [null, 'hackernews'],
+	post: ['twitter'],
+	video: ['youtube'],
+	paper: [null, 'hackernews'],
+	image: [null],
+	file: [null],
+} as const satisfies Readonly<Record<ResourceKind, readonly ResourcePlatform[]>>;
+
+export type ResourceIdentity = Readonly<{
+	kind: ResourceKind;
+	resourcePlatform: ResourcePlatform;
+}>;
+
+export type ResourceIdentityFilters = Readonly<{
+	kinds?: readonly ResourceKind[];
+	resourcePlatforms?: readonly ResourcePlatform[];
+}>;
+
+const DETECTED_PLATFORM_RESOURCE_IDENTITIES = {
+	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
+	twitter: { kind: 'post', resourcePlatform: 'twitter' },
+	youtube: { kind: 'video', resourcePlatform: 'youtube' },
+} as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, ResourceIdentity>>;
+
+export const RESOURCE_KIND_DISPLAY_LABELS = {
+	document: 'Document',
+	post: 'Post',
+	video: 'Video',
+	paper: 'Paper',
+	image: 'Image',
+	file: 'File',
+} as const satisfies Readonly<Record<ResourceKind, string>>;
+
+export const RESOURCE_PLATFORM_DISPLAY_LABELS = {
+	hackernews: 'Hacker News',
+	twitter: 'Twitter',
+	youtube: 'YouTube',
+} as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, string>>;
+
+function isResourceKind(value: unknown): value is ResourceKind {
+	return typeof value === 'string' && (RESOURCE_KINDS as readonly string[]).includes(value);
 }
 
-export function isResourceType(value: unknown): value is ResourceType {
-	return typeof value === 'string' && (RESOURCE_TYPES as readonly string[]).includes(value);
+export function isContentResourceKind(value: unknown): value is ContentResourceKind {
+	return typeof value === 'string' && (CONTENT_RESOURCE_KINDS as readonly string[]).includes(value);
 }
 
-export const RESOURCE_ORIGINAL_CONTENT_TYPES = ['web', 'rss', 'twitter', 'hackernews'] as const satisfies readonly ContentResourceType[];
+export function isResourcePlatform(value: unknown): value is ResourcePlatform {
+	return value === null || (typeof value === 'string' && (RESOURCE_PLATFORMS as readonly string[]).includes(value));
+}
 
-export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const satisfies readonly ContentResourceType[];
+export function isValidKindPlatform(kind: unknown, resourcePlatform: unknown): kind is ResourceKind {
+	if (!isResourceKind(kind) || !isResourcePlatform(resourcePlatform)) return false;
+	return (VALID_KIND_PLATFORMS[kind] as readonly ResourcePlatform[]).includes(resourcePlatform);
+}
+
+export function parseResourceIdentity(kind: unknown, resourcePlatform: unknown): ResourceIdentity | null {
+	if (!isValidKindPlatform(kind, resourcePlatform)) return null;
+	return { kind, resourcePlatform: resourcePlatform as ResourcePlatform };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function needsResourcePlatformAcquisition(input: { platformData: unknown; resourcePlatform: ResourcePlatform }): boolean {
+	return input.resourcePlatform !== null && !isRecord(input.platformData);
+}
+
+function resourceSourceSnapshotHash(platformMetadata: unknown): string | null {
+	if (!isRecord(platformMetadata) || typeof platformMetadata.sourceSnapshotHash !== 'string') return null;
+	return platformMetadata.sourceSnapshotHash.trim() || null;
+}
+
+function resourceSourceFetchedAt(platformMetadata: unknown): number | null {
+	if (!isRecord(platformMetadata) || typeof platformMetadata.fetchedAt !== 'string') return null;
+	const fetchedAt = Date.parse(platformMetadata.fetchedAt);
+	return Number.isNaN(fetchedAt) ? null : fetchedAt;
+}
+
+export function isIncomingResourceSnapshotSuperseded(incoming: unknown, stored: unknown): boolean {
+	const incomingHash = resourceSourceSnapshotHash(incoming);
+	const storedHash = resourceSourceSnapshotHash(stored);
+	if (!storedHash) return false;
+	if (!incomingHash) return true;
+	const incomingFetchedAt = resourceSourceFetchedAt(incoming);
+	const storedFetchedAt = resourceSourceFetchedAt(stored);
+	if (storedHash === incomingHash) {
+		return incomingFetchedAt !== null && storedFetchedAt !== null && storedFetchedAt > incomingFetchedAt;
+	}
+	if (incomingFetchedAt === null || storedFetchedAt === null) return true;
+	return storedFetchedAt >= incomingFetchedAt;
+}
+
+export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown): boolean {
+	if (!isRecord(platformMetadata) || !isRecord(platformMetadata.enrichments)) return false;
+	const academic = platformMetadata.enrichments.academic;
+	return isRecord(academic) && academic.source === 'semanticscholar';
+}
+
+export function resourceIdentityForDetectedPlatform(
+	resourcePlatform: Exclude<ResourcePlatform, null>,
+	hasAcademicEnrichment = false,
+): ResourceIdentity {
+	return resourceIdentityWithAcademic(DETECTED_PLATFORM_RESOURCE_IDENTITIES[resourcePlatform], hasAcademicEnrichment);
+}
+
+export function resourceIdentityWithAcademic(identity: ResourceIdentity, hasAcademicEnrichment: boolean): ResourceIdentity {
+	if (!hasAcademicEnrichment || identity.kind !== 'document') return identity;
+	return { kind: 'paper', resourcePlatform: identity.resourcePlatform };
+}
+
+export function isResourceTranslationIdentityEligible(input: {
+	kind: unknown;
+	resourcePlatform: unknown;
+	fileType: string | null | undefined;
+}): boolean {
+	if (!isValidKindPlatform(input.kind, input.resourcePlatform)) return false;
+	if (!(TRANSLATABLE_RESOURCE_KINDS as readonly ResourceKind[]).includes(input.kind)) return false;
+	return !(input.fileType === 'application/pdf' && input.resourcePlatform === null);
+}
+
+export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const;
 
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number];
 
+export function isSourcePlatform(value: unknown): value is SourcePlatform {
+	return typeof value === 'string' && (SOURCE_PLATFORMS as readonly string[]).includes(value);
+}
+
 // Editorial kind of an article-family source. Distinguishes reader-facing Blog
-// vs News, which resources.type (web/rss) can't express since both come from the
-// same ingest kinds. Only meaningful for rss/web sources.
+// vs News independently from the canonical resource identity. Only meaningful
+// for rss/web sources.
 export const SOURCE_KINDS = ['blog', 'news'] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
-
-export function isSourceKind(value: unknown): value is SourceKind {
-	return typeof value === 'string' && (SOURCE_KINDS as readonly string[]).includes(value);
-}
 
 export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
 
@@ -40,8 +157,6 @@ export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
 // Add-source validation lifecycle for user-added sources (#237); failure
 // details live in scrape_state.
 export const SOURCE_STATUSES = ['pending', 'active', 'failed'] as const;
-
-export type SourceStatus = (typeof SOURCE_STATUSES)[number];
 
 export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 

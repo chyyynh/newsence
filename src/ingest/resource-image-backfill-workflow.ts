@@ -16,7 +16,7 @@ function backfillDays(value: number | undefined): number {
 	return days;
 }
 
-export class RecentResourceImageBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceImageBackfillPayload> {
+export class RecentResourceImageBackfillV2Workflow extends WorkflowEntrypoint<CoreEnv, ResourceImageBackfillPayload> {
 	async run(event: WorkflowEvent<ResourceImageBackfillPayload>, step: WorkflowStep) {
 		const days = backfillDays(event.payload.days);
 		const window = await step.do(

@@ -105,9 +105,52 @@ function parseStringArray(source, name) {
 	return [...declaration[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
 }
 
+function parseStringOrNullArrayRecord(source, name) {
+	const body = source.match(new RegExp(`(?:export )?const ${name} = \\{([\\s\\S]*?)\\} as const`))?.[1];
+	if (!body) return null;
+	const entries = new Map();
+	for (const match of body.matchAll(/(\w+):\s*\[([^\]]*)\]/g)) {
+		const values = [...match[2].matchAll(/'([^']+)'|\b(null)\b/g)].map((value) => value[1] ?? null);
+		entries.set(match[1], values);
+	}
+	return entries.size > 0 ? entries : null;
+}
+
 function parseObjectStringProperty(source, objectName, propertyName) {
 	const objectBody = source.match(new RegExp(`export const ${objectName} = \\{([\\s\\S]*?)\\} as const`))?.[1];
 	return objectBody?.match(new RegExp(`${propertyName}:\\s*'([^']+)'`))?.[1] ?? null;
+}
+
+function sqlStringValues(source) {
+	return [...source.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+}
+
+function parseDomainConstraint(source, constraintName, columnName) {
+	const match = source.match(
+		new RegExp(`ADD CONSTRAINT ${constraintName}\\s+CHECK \\((?:${columnName} IS NULL OR )?${columnName} IN \\(([^)]+)\\)\\);`),
+	);
+	return match ? sqlStringValues(match[1]) : null;
+}
+
+function parseKindPlatformMatrixBody(body) {
+	if (!body) return null;
+	const pairs = [];
+	for (const match of body.matchAll(/\(kind = '([^']+)' AND resource_platform (IS NULL|= '([^']+)')\)/g)) {
+		pairs.push(`${match[1]}:${match[2] === 'IS NULL' ? 'null' : match[3]}`);
+	}
+	return {
+		allowsLegacyNullPair: /\(kind IS NULL AND resource_platform IS NULL\)/.test(body),
+		pairs,
+	};
+}
+
+function parseConstraintKindPlatformMatrix(source) {
+	const body = source.match(/ADD CONSTRAINT resources_kind_platform_check\s+CHECK\s*\(\s*\(([\s\S]*?)\)\s+IS TRUE\s*\);/)?.[1];
+	return parseKindPlatformMatrixBody(body);
+}
+
+function expectedKindPlatformPairs(matrix) {
+	return [...matrix.entries()].flatMap(([kind, platforms]) => platforms.map((platform) => `${kind}:${platform ?? 'null'}`));
 }
 
 function sameValues(actual, expected) {
@@ -172,23 +215,60 @@ for (const table of drizzleTables) {
 	}
 }
 
-const contentResourceTypes = parseStringArray(resourceTypesSource, 'CONTENT_RESOURCE_TYPES');
-const mediaResourceTypes = parseStringArray(resourceTypesSource, 'MEDIA_RESOURCE_TYPES');
-if (!contentResourceTypes || !mediaResourceTypes) {
-	errors.push(`Unable to parse canonical resource types from ${resourceTypesPath}`);
+if (/\bRESOURCE_TYPES\b|type:\s*text\('type'/.test(drizzleSource)) {
+	errors.push('Drizzle resources must not expose the retired type column/domain');
+}
+if (/resources_type_check/.test(manualIndexesSource)) {
+	errors.push('manual-indexes.sql must not recreate resources_type_check');
+}
+
+const resourceKinds = parseStringArray(resourceTypesSource, 'RESOURCE_KINDS');
+const resourcePlatforms = parseStringArray(resourceTypesSource, 'RESOURCE_PLATFORMS');
+const validKindPlatforms = parseStringOrNullArrayRecord(resourceTypesSource, 'VALID_KIND_PLATFORMS');
+if (!resourceKinds || !resourcePlatforms || !validKindPlatforms) {
+	errors.push(`Unable to parse canonical resource identity domains from ${resourceTypesPath}`);
 } else {
-	const expectedResourceTypes = [...contentResourceTypes, ...mediaResourceTypes];
-	if (!/type:\s*text\('type',\s*\{\s*enum:\s*RESOURCE_TYPES\s*\}\)/.test(drizzleSource)) {
-		errors.push('Drizzle resources.type must use the complete canonical RESOURCE_TYPES domain');
+	const matrixKinds = [...validKindPlatforms.keys()];
+	if (!sameMembers(matrixKinds, resourceKinds)) {
+		errors.push('VALID_KIND_PLATFORMS keys differ from canonical RESOURCE_KINDS');
 	}
-	const constraint = manualIndexesSource.match(/ADD CONSTRAINT resources_type_check\s+CHECK \(type IN \(([^)]+)\)\);/);
-	const constrainedTypes = constraint ? [...constraint[1].matchAll(/'([^']+)'/g)].map((match) => match[1]) : null;
-	if (!constrainedTypes) {
-		errors.push(`Unable to parse resources_type_check from ${manualIndexesPath}`);
-	} else if (!sameValues(constrainedTypes, expectedResourceTypes)) {
-		errors.push(
-			`resources_type_check domain [${constrainedTypes.join(', ')}] differs from canonical RESOURCE_TYPES [${expectedResourceTypes.join(', ')}]`,
-		);
+	const unknownMatrixPlatforms = [...validKindPlatforms.values()]
+		.flat()
+		.filter((platform) => platform !== null && !resourcePlatforms.includes(platform));
+	if (unknownMatrixPlatforms.length > 0) {
+		errors.push(`VALID_KIND_PLATFORMS contains unknown platforms: ${[...new Set(unknownMatrixPlatforms)].join(', ')}`);
+	}
+
+	if (!/kind:\s*text\('kind',\s*\{\s*enum:\s*RESOURCE_KINDS\s*\}\)\.notNull\(\),/.test(drizzleSource)) {
+		errors.push('Drizzle resources.kind must be required and use the canonical RESOURCE_KINDS domain');
+	}
+	if (!/resourcePlatform:\s*text\('resource_platform',\s*\{\s*enum:\s*RESOURCE_PLATFORMS\s*\}\),/.test(drizzleSource)) {
+		errors.push('Drizzle resources.resourcePlatform must be nullable and use the canonical RESOURCE_PLATFORMS domain');
+	}
+
+	const resourceModelBody = prismaSource.match(/model Resource \{([\s\S]*?)\n\}/)?.[1] ?? '';
+	if (!/^\s*kind\s+String\s*$/m.test(resourceModelBody)) {
+		errors.push('Prisma Resource.kind must be required and have no default');
+	}
+	if (!/^\s*resourcePlatform\s+String\?\s+@map\("resource_platform"\)\s*$/m.test(resourceModelBody)) {
+		errors.push('Prisma Resource.resourcePlatform must be nullable, mapped to resource_platform, and have no default');
+	}
+
+	const expectedPairs = expectedKindPlatformPairs(validKindPlatforms);
+	const constrainedKinds = parseDomainConstraint(manualIndexesSource, 'resources_kind_check', 'kind');
+	if (!constrainedKinds || !sameValues(constrainedKinds, resourceKinds)) {
+		errors.push('manual-indexes.sql resources_kind_check differs from canonical RESOURCE_KINDS');
+	}
+	const constrainedPlatforms = parseDomainConstraint(manualIndexesSource, 'resources_resource_platform_check', 'resource_platform');
+	if (!constrainedPlatforms || !sameValues(constrainedPlatforms, resourcePlatforms)) {
+		errors.push('manual-indexes.sql resources_resource_platform_check differs from canonical RESOURCE_PLATFORMS');
+	}
+	const matrix = parseConstraintKindPlatformMatrix(manualIndexesSource);
+	if (!matrix || matrix.allowsLegacyNullPair || !sameMembers(matrix.pairs, expectedPairs)) {
+		errors.push('manual-indexes.sql resources_kind_platform_check differs from canonical VALID_KIND_PLATFORMS');
+	}
+	if (!/r\.source_id,\s*r\.kind,\s*r\.resource_platform\s+FROM resources/.test(manualIndexesSource)) {
+		errors.push('manual-indexes.sql resources_localized must append kind and resource_platform after source_id');
 	}
 }
 
@@ -233,5 +313,5 @@ if (errors.length > 0) {
 }
 
 process.stdout.write(
-	`Drizzle/Prisma drift check passed for ${drizzleTables.length} complete table definitions and canonical resource/source domains.\n`,
+	`Drizzle/Prisma drift check passed for ${drizzleTables.length} complete table definitions and canonical resource/source domains and identity matrix.\n`,
 );

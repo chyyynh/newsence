@@ -20,7 +20,7 @@
 
 ## What is newsence?
 
-Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, stores them as searchable resources and an entity graph. Each enriched corpus resource is synchronized to Cloudflare AI Search for retrieval.
+Ingestion engine for [**newsence.app**](https://www.newsence.app). Pulls contents from RSS / Twitter/X / YouTube / Hacker News / web URLs / uploaded files, runs bilingual AI analysis on each, and stores searchable resources with resource-local entity annotations. Each enriched corpus resource is synchronized to Cloudflare AI Search for retrieval.
 
 ## Supported Platforms
 
@@ -50,7 +50,7 @@ Content arrives (source monitor / saved URL / uploaded blob / resync)
   ├─ 1. Load Resource ──────── Canonical resources row; acquire URL content or extract uploaded PDF text
   ├─ 2. AI Analysis ────────── AI Gateway text/JSON calls → bilingual title, summary, tags, keywords, entities
   ├─ 3. Save to DB ─────────── Update resources + resource_translations
-  ├─    Sync Entities ──────── Upsert entities, link through resource_entities
+  ├─    Store Entities ─────── Replace the resource-local resources.entities JSON
   ├─ 4. YouTube Highlights ─── (YouTube only) Transcript → AI highlight segments
   └─ 5. Sync AI Search ─────── Upload the enriched corpus document to Cloudflare AI Search
 ```
@@ -73,7 +73,9 @@ The core worker keeps entity storage deterministic and conservative. It normaliz
 
 It intentionally does not perform semantic alias merging in the database. Model families, company/product containment, and alias groups are presentation-layer concerns until they have a reviewed alias source. For example, `google`, `google deepmind`, and `gemini` can be related without being the same canonical database entity.
 
-Change the DB schema only when the product needs a query shape that the current `entities` plus `resource_entities` graph cannot represent cleanly. The two likely future additions are an `entity_aliases` table for reviewed aliases and an `entity_extraction_runs` table for audit/debug history; neither should be used to paper over prompt or source-quality bugs.
+Entity extraction remains enabled even though the Collection Wiki product surface is retired. The derived annotations live only in `resources.entities` and are retained for future retrieval or presentation work; there is no normalized global entity graph or reverse index.
+
+Add normalized entity tables only when a real product consumer needs cross-resource queries that the resource-local JSON cannot answer cleanly. Potential future additions such as reviewed aliases or extraction-run history should follow that consumer rather than precede it.
 
 ## Stack
 
@@ -146,7 +148,7 @@ package is not part of this Worker.
 src/
 ├── index.ts              # Cloudflare WorkerEntrypoint class only
 ├── ai/                   # Workers AI / AI Gateway helpers
-├── entities/             # entity normalization + graph sync
+├── entities/             # resource-local entity normalization
 ├── shared/               # small cross-subsystem primitives
 │   ├── types.ts          # ResourceForProcessing, NormalizedContent, YoutubeTranscript
 │   └── web.ts            # fetch, URL normalization, stream limits
@@ -170,14 +172,14 @@ Bindings (in `wrangler.jsonc`):
 | Binding            | Purpose                                      |
 | ------------------ | -------------------------------------------- |
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
-| `RESOURCE_PROCESSING_WORKFLOW` | Fetch, parse, classify, and persist a resource |
-| `RESOURCE_TRANSLATION_WORKFLOW` | Translate a persisted resource into zh-Hant |
-| `SEARCH_INDEX_REBUILD_WORKFLOW` | Rebuild the complete search index from Postgres |
-| `RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW` | Warm recent public resource images into app-owned R2 |
-| `ACADEMIC_METADATA_BACKFILL_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
+| `RESOURCE_PROCESSING_V2_WORKFLOW` | Fetch, parse, classify, and persist a canonical resource |
+| `RESOURCE_TRANSLATION_V2_WORKFLOW` | Translate a persisted resource into zh-Hant |
+| `SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW` | Rebuild and verify the generation-4 canonical search index |
+| `RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW` | Warm recent public resource images into app-owned R2 |
+| `ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
-| `AI_SEARCH`        | Cloudflare AI Search corpus namespace        |
+| `AI_SEARCH`        | `newsence-corpus-v6` canonical public corpus |
 
 Secrets (via `wrangler secret put`):
 
@@ -187,6 +189,55 @@ Secrets (via `wrangler secret put`):
 | `YOUTUBE_API_KEY`              | Yes      | Enables YouTube channel monitoring       |
 | `S2_API_KEY`                   | Yes      | Increases Semantic Scholar quota for paper enrichment |
 
+### Canonical AI Search v6
+
+`AI_SEARCH` serves `newsence-corpus-v6`. Its five custom metadata fields are
+`effective_at`, `source_id`, `category`, `kind`, and `resource_platform`; null
+platforms use the reserved `none` sentinel. Durable readiness lives in
+`search_index_states` as `public-corpus-v6`, generation
+`4 / canonical-4-kind-platform`.
+
+The canonical rebuild verifies every searchable identity pair, not only totals:
+`document / none`, `document / hackernews`, `post / twitter`,
+`video / youtube`, `paper / none`, and `paper / hackernews`. It waits for all
+owned items to leave queued, running, outdated, error, and skipped states, then
+compares AI Search with PostgreSQL before marking the generation ready.
+
+Run the static gates, start the generation-specific Workflow through
+`startSearchIndexRebuild()`, and poll
+`getSearchIndexRebuildStatus(instanceId)`. The equivalent operator trigger is:
+
+```sh
+pnpm exec wrangler workflows trigger \
+  newsence-search-index-canonical-v6-rebuild \
+  '{}' \
+  --id search-index-rebuild-canonical-4-kind-platform-canonical-v1
+
+pnpm check:search-rebuild
+pnpm check:search-rollout
+```
+
+`check:search-rollout` talks directly to the AI Search REST API and deliberately
+does not reuse Wrangler OAuth credentials. Set `CLOUDFLARE_ACCOUNT_ID` and a
+dedicated `CLOUDFLARE_AISEARCH_API_TOKEN` with `AI Search:Edit` and
+`AI Search:Run` permissions in the operator environment before running it.
+
+Immediately before a reader or schema cutover, call
+`probeSearchIndexCutover()` for an independent six-pair DB/index comparison.
+Cloudflare Workflow executions replay the graph attached to their physical
+Workflow resource, so incompatible graph revisions require a new binding,
+resource name, class, and runner ID; changing only a runner ID is not isolation.
+See `AI_SEARCH_V6_RUNBOOK.md` for the active rebuild and verification
+procedure.
+
+#### Historical generation-3 evidence
+
+`newsence-corpus-v5`, durable state `public-corpus`, generation
+`3 / canonical-3-kind`, and `newsence-search-index-rebuild` belong to the
+completed #245 rollout. Historical scripts and logs retain those exact names as
+evidence. They are not active bindings and must not be triggered or adopted for
+the generation-4 contract.
+
 ### Recent resource image warmup
 
 New ingest eagerly rehosts every trusted resource image through the app Worker's
@@ -194,7 +245,7 @@ New ingest eagerly rehosts every trusted resource image through the app Worker's
 with a bounded Workflow run:
 
 ```sh
-pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill '{"days":7}'
+pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill-v2 '{"days":7}'
 ```
 
 The Workflow accepts only 1–7 days, pages through enriched public corpus rows by
@@ -209,7 +260,7 @@ Workflow through the core service-binding RPC `startAcademicMetadataBackfill()`,
 or directly with Wrangler:
 
 ```sh
-pnpm exec wrangler workflows trigger newsence-academic-metadata-backfill '{}'
+pnpm exec wrangler workflows trigger newsence-academic-metadata-backfill-v3 '{}'
 ```
 
 The Workflow keyset-pages only through explicit `doi.org` and arXiv
@@ -220,20 +271,33 @@ provider responses atomically replace only `enrichments.academic` and fill a
 missing exact publication date. Provider failures preserve legacy metadata;
 reruns automatically skip already-upgraded rows.
 
-## Adding a Platform
+## Adding an Ingest Adapter
 
-Platforms are source adapters. Each platform lives in one `ingest/platforms/*.ts` file with the discovery/scrape/process pieces it actually needs. App-owned saved URLs and uploads are persisted as `resources`/`library` rows by the app; the workflow receives a `resourceId`. SQL writes stay in `ingest/domain/resource-store.ts`.
+Ingest adapters live in `ingest/platforms/*.ts` with the
+discovery/scrape/process pieces they actually need. App-owned saved URLs create
+`resources` plus `resource_saves`; uploads create `resources` plus `user_files`.
+The workflow receives a `resourceId`. SQL writes stay in
+`ingest/domain/resource-store.ts`.
 
-Keep the axes separate: platform (`rss`, `web`, `youtube`, `twitter`, `hackernews`) is not content shape (`pdf`, academic paper) and not origin (`upload`, `saved_url`, `generated`). PDF extraction and Semantic Scholar paper enrichment are workflow stages keyed from row content/metadata, not platform adapters.
+Keep the axes separate: acquisition (`rss`, `web`, or a specialized adapter) is
+not canonical `ResourcePlatform` (`youtube`, `twitter`, `hackernews`, or null),
+`ResourceKind` (`document`, `post`, `video`, `paper`, `image`, `file`), blob
+representation (MIME/filename/size/pages), or lifecycle origin (`source`,
+`saved_url`, `upload`, `generated`). PDF extraction and Semantic Scholar paper
+enrichment are workflow stages keyed from row content/metadata, not additional
+identity values.
 
-Minimum to add a new source:
+Minimum to add a new ingest source:
 
-1. **Platform file** (`ingest/platforms/foo.ts`) — discovery/scrape helpers and optional custom processor.
+1. **Adapter file** (`ingest/platforms/foo.ts`) — discovery/scrape helpers and optional custom processor.
 2. **Metadata shape** — add only the platform-specific JSON payload needed by `platform_metadata`.
 3. **Monitor** (optional) — if the source is pollable, wire its cron handler from `src/index.ts`.
 4. **Workflow hook** (optional) — only if the source needs behavior beyond the default AI merge.
 
-The new resource goes through the same Workflow pipeline as every other platform — you don't touch the AI steps.
+The new resource goes through the same Workflow pipeline as every other ingest
+source. Add a new canonical platform value only when the product needs durable
+platform-specific behavior or presentation; an RSS feed or ordinary web page
+does not qualify.
 
 ## License
 

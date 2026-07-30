@@ -1,9 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { RESOURCE_ORIGINAL_CONTENT_TYPES, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
+import { ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { withCoreDb } from '@db/client';
-import { textArraySql } from '@db/sql';
-import { loadResourceForProcessing, upsertResourceTranslation } from '@ingest/domain/resource-store';
+import { resources, resourceTranslations } from '@db/schema';
+import { loadResourceForProcessing, resourceTranslationIdentityPredicate, upsertResourceTranslation } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
 import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
@@ -17,28 +17,28 @@ import {
 } from './domain/ai-utils';
 import { sanitizeExtractedMarkdown } from './domain/content-sanitization';
 
-export async function getPersistedResourceTranslationHash(env: CoreEnv, resourceId: string): Promise<string | null> {
+export async function isResourceTranslationEligible(env: CoreEnv, resourceId: string): Promise<boolean> {
 	return withCoreDb(env, async (db) => {
-		const result = await db.execute<{ source_translation_hash: string }>(sql`
-			SELECT md5(jsonb_build_array(original.title, original.summary, original.content)::text) AS source_translation_hash
-			FROM resources resource
-			JOIN resource_translations original
-			  ON original.resource_id = resource.id
-			 AND original.lang = resource.original_lang
-			WHERE resource.id = ${resourceId}::uuid
-			  AND resource.scope = 'corpus'
-			  AND resource.type = ANY(${textArraySql(RESOURCE_ORIGINAL_CONTENT_TYPES)})
-			  AND resource.url IS NOT NULL
-			  AND resource.original_lang <> 'zh-Hant'
+		const result = await db.execute(sql`
+			SELECT 1
+			FROM ${resources}
+			JOIN ${resourceTranslations} original
+			  ON original.resource_id = ${resources.id}
+			 AND original.lang = ${resources.originalLang}
+			WHERE ${resources.id} = ${resourceId}::uuid
+			  AND ${resources.scope} = 'corpus'
+			  AND ${resourceTranslationIdentityPredicate()}
+			  AND ${resources.url} IS NOT NULL
+			  AND ${resources.originalLang} <> 'zh-Hant'
 			  AND NULLIF(BTRIM(original.title), '') IS NOT NULL
 			  AND NULLIF(BTRIM(original.content), '') IS NOT NULL
-			  -- Gate here rather than inside the workflow: loading a multi-megabyte
-			  -- body blows the 1MiB step-output limit before any length check can
-			  -- run. No hash means the translation is never enqueued at all.
+			  -- Length gate lives here as well as in needsZhHantContentTranslation:
+			  -- loading a multi-megabyte body blows the 1MiB step-output limit
+			  -- before any in-workflow check can run.
 			  AND length(original.content) <= ${CONTENT_TRANSLATION_MAX_LENGTH}
 			LIMIT 1
 		`);
-		return result.rows[0]?.source_translation_hash ?? null;
+		return result.rows.length > 0;
 	});
 }
 
@@ -48,18 +48,7 @@ type MachineTranslationPatch = {
 	content?: string;
 };
 
-class ResourceTranslationSourceChangedError extends NonRetryableError {
-	constructor(resourceId: string) {
-		super(`Original translation source changed while translating resource ${resourceId}`, 'ResourceTranslationSourceChangedError');
-	}
-}
-
-async function persistMachineZhHantTranslation(
-	env: CoreEnv,
-	resourceId: string,
-	sourceTranslationHash: string,
-	patch: MachineTranslationPatch,
-): Promise<void> {
+async function persistMachineZhHantTranslation(env: CoreEnv, resourceId: string, patch: MachineTranslationPatch): Promise<void> {
 	const persisted = await withCoreDb(env, (db) =>
 		upsertResourceTranslation(db, {
 			resourceId,
@@ -67,74 +56,60 @@ async function persistMachineZhHantTranslation(
 			...patch,
 			keywords: [],
 			source: 'machine',
-			expectedOriginalTranslationHash: sourceTranslationHash,
 		}),
 	);
-	if (!persisted) throw new ResourceTranslationSourceChangedError(resourceId);
+	// The only way the upsert matches no resource is a row deleted mid-translation.
+	if (!persisted) throw new NonRetryableError(`Resource ${resourceId} disappeared while translating`, 'ResourceGoneError');
 }
 
-function persistMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTranslationHash: string, content: string): Promise<void> {
-	return persistMachineZhHantTranslation(env, resourceId, sourceTranslationHash, { content });
+function persistMachineZhHantContent(env: CoreEnv, resourceId: string, content: string): Promise<void> {
+	return persistMachineZhHantTranslation(env, resourceId, { content });
 }
 
-async function clearMachineZhHantContent(env: CoreEnv, resourceId: string, sourceTranslationHash: string): Promise<void> {
-	const sourceIsCurrent = await withCoreDb(env, async (db) => {
-		const result = await db.execute<{ source_is_current: boolean }>(sql`
-			WITH target_resource AS (
-				SELECT resource.id
-				FROM resources resource
-				JOIN resource_translations original
-				  ON original.resource_id = resource.id
-				 AND original.lang = resource.original_lang
-				WHERE resource.id = ${resourceId}::uuid
-				  AND md5(jsonb_build_array(original.title, original.summary, original.content)::text) = ${sourceTranslationHash}
-				FOR SHARE OF original
-			), cleared AS (
-				UPDATE resource_translations translation
-				SET content = NULL, updated_at = NOW()
-				FROM target_resource
-				WHERE translation.resource_id = target_resource.id
-				  AND translation.lang = ${ZH_HANT_RESOURCE_LANG}
-				  AND translation.source = 'machine'
-				RETURNING translation.resource_id
-			)
-			SELECT EXISTS (SELECT 1 FROM target_resource) AS source_is_current
-		`);
-		return result.rows[0]?.source_is_current ?? false;
-	});
-	if (!sourceIsCurrent) throw new ResourceTranslationSourceChangedError(resourceId);
+async function clearMachineZhHantContent(env: CoreEnv, resourceId: string): Promise<void> {
+	await withCoreDb(env, (db) =>
+		db.execute(sql`
+			UPDATE resource_translations
+			SET content = NULL, updated_at = NOW()
+			WHERE resource_id = ${resourceId}::uuid
+			  AND lang = ${ZH_HANT_RESOURCE_LANG}
+			  AND source = 'machine'
+		`),
+	);
 }
 
-type ResourceTranslationPayload = { resourceId: string; sourceTranslationHash: string };
+type ResourceTranslationPayload = { resourceId: string };
 
-const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'v14';
+const RESOURCE_TRANSLATION_WORKFLOW_REVISION = 'canonical-v2';
 
-function workflowId(resourceId: string, sourceTranslationHash: string): string {
-	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${sourceTranslationHash.slice(0, 12)}-${resourceId}`;
+function workflowId(resourceId: string): string {
+	return `resource-translation-${RESOURCE_TRANSLATION_WORKFLOW_REVISION}-${resourceId}`;
 }
 
-export function enqueueResourceTranslation(env: CoreEnv, resourceId: string, sourceTranslationHash: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_WORKFLOW, workflowId(resourceId, sourceTranslationHash), {
-		resourceId,
-		sourceTranslationHash,
-	});
+// One stable instance per resource: enqueueOrRestartWorkflow leaves a running
+// instance alone and restarts a finished one, which is what re-processing wants.
+export async function enqueueResourceTranslation(env: CoreEnv, resourceId: string): Promise<string> {
+	return enqueueOrRestartWorkflow(env.RESOURCE_TRANSLATION_V2_WORKFLOW, workflowId(resourceId), { resourceId });
 }
 
-export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
+export class ResourceTranslationV2Workflow extends WorkflowEntrypoint<CoreEnv, ResourceTranslationPayload> {
 	async run(event: WorkflowEvent<ResourceTranslationPayload>, step: WorkflowStep) {
-		return this.translateResource(event.payload.resourceId, event.payload.sourceTranslationHash, step);
+		return this.translateResource(event.payload.resourceId, step);
 	}
 
-	private async translateResource(resourceId: string, sourceTranslationHash: string, step: WorkflowStep) {
-		const [initial, currentSourceTranslationHash] = await step.do(
-			'load-resource-translation-input',
+	private async translateResource(resourceId: string, step: WorkflowStep) {
+		const [initial, eligible] = await step.do(
+			'load-resource-translation-input-kind-platform-v1',
 			{
 				retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' },
 				timeout: '30 seconds',
 			},
-			() => Promise.all([loadResourceForProcessing(this.env, resourceId), getPersistedResourceTranslationHash(this.env, resourceId)]),
+			() => Promise.all([loadResourceForProcessing(this.env, resourceId), isResourceTranslationEligible(this.env, resourceId)]),
 		);
-		if (currentSourceTranslationHash !== sourceTranslationHash) throw new ResourceTranslationSourceChangedError(resourceId);
+		if (!eligible) {
+			console.info({ tag: 'RESOURCE_TRANSLATION', msg: 'No longer eligible; skipping', resource_id: resourceId });
+			return { success: true, resource_id: resourceId, skipped: true };
+		}
 
 		let resource = initial;
 		const initialContent = initial.content?.trim();
@@ -153,7 +128,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 			await step.do(
 				'clear-nontext-zh-hant-content',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => clearMachineZhHantContent(this.env, resourceId, sourceTranslationHash),
+				() => clearMachineZhHantContent(this.env, resourceId),
 			);
 		} else if (zhHantContent) {
 			const sanitizedContent = sanitizeExtractedMarkdown(zhHantContent);
@@ -168,7 +143,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 				await step.do(
 					'persist-sanitized-zh-hant-content',
 					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => persistMachineZhHantContent(this.env, resourceId, sourceTranslationHash, sanitizedContent),
+					() => persistMachineZhHantContent(this.env, resourceId, sanitizedContent),
 				);
 			}
 		}
@@ -185,7 +160,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 			await step.do(
 				'persist-zh-hant-title-summary',
 				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => persistMachineZhHantTranslation(this.env, resourceId, sourceTranslationHash, translatedMetadata),
+				() => persistMachineZhHantTranslation(this.env, resourceId, translatedMetadata),
 			);
 			resource = {
 				...resource,
@@ -219,7 +194,7 @@ export class ResourceTranslationWorkflow extends WorkflowEntrypoint<CoreEnv, Res
 					},
 					timeout: '30 seconds',
 				},
-				() => persistMachineZhHantContent(this.env, resourceId, sourceTranslationHash, translated),
+				() => persistMachineZhHantContent(this.env, resourceId, translated),
 			);
 		}
 		await step.do(

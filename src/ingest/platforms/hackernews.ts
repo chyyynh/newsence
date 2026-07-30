@@ -1,6 +1,7 @@
 import { generateText } from '@core-ai/generation';
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import { type HackerNewsMetadata, type NormalizedContent, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
+import { extractHackerNewsId } from '@core-shared/url';
 import { decode } from 'html-entities';
 import { z } from 'zod';
 import { type AcquiredWebContent, acquireWebResource } from '../web-acquisition';
@@ -68,17 +69,6 @@ const HackerNewsItemSchema: z.ZodType<HackerNewsItem> = z.object({
 		.nullish()
 		.transform((value) => value ?? undefined),
 });
-
-export function extractHackerNewsId(url: string): string | null {
-	try {
-		const parsed = new URL(url);
-		const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
-		if (host !== 'news.ycombinator.com' && host !== 'ycombinator.com' && !host.endsWith('.ycombinator.com')) return null;
-		return parsed.searchParams.get('id')?.match(/^\d+$/)?.[0] ?? null;
-	} catch {
-		return null;
-	}
-}
 
 export function hackerNewsDiscussionUrl(value: string): string | null {
 	const itemId = extractHackerNewsId(value);
@@ -184,7 +174,9 @@ export async function scrapeHackerNews(
 		targetStatus: target?.markdown.trim() ? 'fetched' : 'unavailable',
 	});
 	return {
-		type: 'hackernews',
+		kind: 'document',
+		resourcePlatform: 'hackernews',
+		fileType: target?.fileType ?? null,
 		title,
 		markdown,
 		metadata: {
@@ -194,7 +186,11 @@ export async function scrapeHackerNews(
 			siteName: 'Hacker News',
 			description,
 		},
-		platformMetadata: { fetchedAt: new Date().toISOString(), data: buildHnMetadata(item) },
+		platformMetadata: {
+			fetchedAt: new Date().toISOString(),
+			data: buildHnMetadata(item),
+			...(target?.platformMetadata.representation ? { representation: target.platformMetadata.representation } : {}),
+		},
 		...(target?.extraction ? { extraction: target.extraction } : {}),
 		...(target?.previewImageUrl ? { previewImageUrl: target.previewImageUrl } : {}),
 		hackerNewsItem: item,

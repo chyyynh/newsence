@@ -1,43 +1,19 @@
 import { generateObject, generateText } from '@core-ai/generation';
 import { RESOURCE_CATEGORIES, type ResourceCategory, ZH_HANT_RESOURCE_LANG } from '@core-shared/resource-types';
 import { ENTITY_TYPES, type ResourceForProcessing } from '@core-shared/types';
-import { entityExtractionExclusionNames } from '@entities/normalize';
+import { entityExtractionExclusionNames, type ResourceEntityInput } from '@entities/normalize';
 import { z } from 'zod';
 
 export interface ProcessorResult {
-	updateData: {
-		tags?: string[];
-		keywords?: string[];
-		content?: string;
-		entities?: Array<{ name: string; name_cn: string; type: string }>;
-	};
-	classificationCategory?: ResourceCategory;
+	tags?: string[];
+	keywords?: string[];
+	content?: string;
+	entities: ResourceEntityInput[];
+	category: ResourceCategory;
 }
 
 function isEmpty(value: string | null | undefined): boolean {
 	return !value?.trim();
-}
-
-type ResourceClassification = {
-	tags: string[];
-	keywords: string[];
-	category: ResourceCategory;
-	entities: Array<{ name: string; name_cn: string; type: string }>;
-};
-
-export function mergeResourceClassification(
-	resource: ResourceForProcessing,
-	classification: ResourceClassification,
-	extraTags: string[] = [],
-): { updateData: ProcessorResult['updateData']; classificationCategory?: ResourceCategory } {
-	const updateData: ProcessorResult['updateData'] = {};
-	const allTags = [...new Set([...classification.tags, classification.category, ...extraTags])];
-
-	if (!resource.tags?.length) updateData.tags = allTags;
-	if (!resource.keywords?.length && classification.keywords.length) updateData.keywords = classification.keywords;
-	if (classification.entities.length) updateData.entities = classification.entities;
-
-	return { updateData, classificationCategory: classification.category };
 }
 
 const MAX_CONTENT_LENGTH = 10000;
@@ -82,11 +58,11 @@ const INLINE_TWITTER_CONTENT_TRANSLATION_MAX_LENGTH = 1000;
 
 function usesInlineTwitterContentTranslation(resource: ResourceForProcessing): boolean {
 	const content = resource.content?.trim();
-	return resource.type === 'twitter' && !!content && content.length <= INLINE_TWITTER_CONTENT_TRANSLATION_MAX_LENGTH;
+	return resource.resource_platform === 'twitter' && !!content && content.length <= INLINE_TWITTER_CONTENT_TRANSLATION_MAX_LENGTH;
 }
 
 function zhHantMetadataTranslationSystemPrompt(resource: ResourceForProcessing, includeContent = false): string {
-	if (resource.type === 'twitter') {
+	if (resource.resource_platform === 'twitter') {
 		return `你是專業的新聞翻譯編輯。請只輸出符合 schema 的繁體中文結果。
 
 任務：
@@ -146,13 +122,14 @@ const RESOURCE_CLASSIFICATION_SYSTEM_PROMPT = `你是專業的新聞分類和實
 function buildResourceContextPrompt(resource: ResourceForProcessing): string {
 	const content = requiredResourceContent(resource);
 	const source = requiredResourceSource(resource);
-	const excludedEntities = entityExtractionExclusionNames(resource.type, resource.source, resource.platform_metadata);
+	const excludedEntities = entityExtractionExclusionNames(resource.resource_platform, resource.source, resource.platform_metadata);
 	const excludedLine = excludedEntities.length ? `\n實體排除名單: ${excludedEntities.join(', ')}` : '';
 	const summaryLine = resource.summary?.trim() ? `\n摘要: ${resource.summary.trim()}` : '';
 	return `文章資訊:
 標題: ${resource.title}
 來源: ${source}
-資源類型: ${resource.type}${excludedLine}${summaryLine}
+資源種類: ${resource.kind}
+資源平台: ${resource.resource_platform ?? 'none'}${excludedLine}${summaryLine}
 內容:
 ${content.substring(0, MAX_CONTENT_LENGTH)}`;
 }
@@ -192,7 +169,7 @@ export function needsZhHantMetadataTranslation(resource: ResourceForProcessing):
 	if (resource.original_lang === ZH_HANT_RESOURCE_LANG) return false;
 	const translation = resource.translations[ZH_HANT_RESOURCE_LANG];
 	if (translation?.source === 'human') return false;
-	if (resource.type === 'twitter') {
+	if (resource.resource_platform === 'twitter') {
 		return isEmpty(translation?.title) || (usesInlineTwitterContentTranslation(resource) && isEmpty(translation?.content));
 	}
 	return isEmpty(translation?.title) || isEmpty(translation?.summary);
@@ -209,11 +186,12 @@ export async function generateZhHantMetadataTranslation(
 	const content = requiredResourceContent(resource);
 	const summaryLine = resource.summary?.trim() ? `\n摘要：${resource.summary.trim()}` : '';
 	const prompt = `原文資訊：
-	資源類型：${resource.type}
+	資源種類：${resource.kind}
+	資源平台：${resource.resource_platform ?? 'none'}
 	標題：${resource.title}${summaryLine}
 內容：
 ${content.slice(0, MAX_CONTENT_LENGTH)}`;
-	if (resource.type === 'twitter') {
+	if (resource.resource_platform === 'twitter') {
 		if (usesInlineTwitterContentTranslation(resource)) {
 			return generateObject(env.AI, prompt, {
 				schema: ZhHantTwitterTranslationSchema,
@@ -273,7 +251,7 @@ export async function translateZhHantContent(content: string, env: CoreEnv): Pro
 	});
 }
 
-export async function generateResourceClassification(resource: ResourceForProcessing, env: CoreEnv): Promise<ResourceClassification> {
+export async function classifyResource(resource: ResourceForProcessing, env: CoreEnv, extraTags: string[] = []): Promise<ProcessorResult> {
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
 	const resourcePrompt = buildResourceContextPrompt(resource);
@@ -284,10 +262,12 @@ export async function generateResourceClassification(resource: ResourceForProces
 		maxTokens: 500,
 		systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
 	});
+	const tags = classification.tags.slice(0, 5);
+	const keywords = classification.keywords.slice(0, 8);
 	return {
-		tags: classification.tags.slice(0, 5),
-		keywords: classification.keywords.slice(0, 8),
 		category: classification.category,
 		entities: classification.entities.slice(0, 10),
+		...(!resource.tags.length ? { tags: [...new Set([...tags, classification.category, ...extraTags])] } : {}),
+		...(!resource.keywords.length && keywords.length ? { keywords } : {}),
 	};
 }

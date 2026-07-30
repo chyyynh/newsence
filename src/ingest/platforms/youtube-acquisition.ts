@@ -1,10 +1,17 @@
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { NormalizedContent, PlatformMetadata, TranscriptSegment, YouTubeChapter } from '@core-shared/types';
 import { z } from 'zod';
+import type { AcquisitionOrigin } from '../acquisition';
 
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 8_000;
 const YOUTUBE_API_TIMEOUT_MS = 15_000;
 const YOUTUBE_API_MAX_BYTES = 1024 * 1024;
+// Shorts and clips this brief carry no transcript worth reading, so a monitored
+// channel does not contribute them. The channel Atom feed exposes no duration and
+// links Shorts as /watch?v= like everything else, so this is the first point in
+// the pipeline that can tell them apart at all — hence a policy check this deep,
+// gated on whether the URL came from a feed or from a person.
+const MIN_VIDEO_DURATION_SECONDS = 180;
 
 const YouTubeThumbnailSchema = z.object({ url: z.string().min(1) });
 const YouTubeThumbnailsSchema = z.object({
@@ -88,6 +95,19 @@ const transcriptFetch: typeof fetch = (input, init) => {
 	const url = typeof input === 'string' || input instanceof URL ? input.toString() : input.url;
 	return fetchWithTimeout(url, init, TRANSCRIPT_FETCH_TIMEOUT_MS);
 };
+
+/**
+ * ISO-8601 duration as the videos endpoint returns it: PT1H2M3S, PT58S, PT3M.
+ * Null when there is no real length yet — a live stream or an unstarted premiere
+ * reports `P0D`.
+ */
+function isoDurationSeconds(duration: string): number | null {
+	const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(duration.trim());
+	if (!match) throw new Error(`Unparseable YouTube duration: ${duration}`);
+	const [, days, hours, minutes, seconds] = match;
+	const total = Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes ?? 0) * 60 + Number(seconds ?? 0);
+	return total > 0 ? total : null;
+}
 
 function toSeconds(value: string | number | undefined, field: string, videoId: string): number {
 	const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number.parseFloat(value) : Number.NaN;
@@ -182,17 +202,26 @@ async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
 export async function scrapeYouTube(
 	videoId: string,
 	youtubeApiKey: string,
+	origin: AcquisitionOrigin,
 ): Promise<NormalizedContent<'youtube'> & { platformMetadata: PlatformMetadata<'youtube'> }> {
 	console.info({ tag: 'YOUTUBE', msg: 'Fetching video', videoId });
 
 	const videoData = await fetchYouTubeVideoData(videoId, youtubeApiKey);
 
 	if (videoData.error) throw new Error(`YouTube API: ${videoData.error.message}`);
-	if (!videoData.items?.length) throw new Error('Video not found');
+	if (!videoData.items?.length) throw new Error(`YouTube video ${videoId} was not found`);
 
 	const video = videoData.items[0];
 	const snippet = video.snippet;
 	const stats = video.statistics;
+
+	// Checked before the transcript and avatar calls, so a video we do not want
+	// costs one request instead of three.
+	const durationSeconds = isoDurationSeconds(video.contentDetails.duration);
+	if (origin.monitored && (durationSeconds === null || durationSeconds <= MIN_VIDEO_DURATION_SECONDS)) {
+		const reason = durationSeconds === null ? 'is a live stream or unstarted premiere' : `runs ${durationSeconds}s`;
+		throw new Error(`YouTube video ${videoId} ${reason}; wanted over ${MIN_VIDEO_DURATION_SECONDS}s`);
+	}
 
 	const thumbnailUrl = bestThumbnailUrl(snippet.thumbnails);
 	const chapters = parseChaptersFromDescription(snippet.description);
@@ -211,14 +240,21 @@ export async function scrapeYouTube(
 	console.info({ tag: 'YOUTUBE', msg: 'Video fetched', title: snippet.title });
 
 	return {
-		type: 'youtube',
+		kind: 'video',
+		resourcePlatform: 'youtube',
+		fileType: null,
 		title: snippet.title,
 		markdown: content,
 		metadata: {
 			author: snippet.channelTitle,
 			language: snippet.defaultAudioLanguage ?? null,
 			publishedDate: snippet.publishedAt,
-			siteName: 'YouTube',
+			// The channel, not the platform. This becomes platform_metadata.sourceName,
+			// the display fallback when a row has no source relation — a literal
+			// 'YouTube' collapses every channel into one byline. Saved YouTube URLs
+			// have always landed that way; the cron only avoided it by pre-filling the
+			// row so acquisition never ran.
+			siteName: snippet.channelTitle.trim() || 'YouTube',
 			description: snippet.description.substring(0, 500) || null,
 		},
 		previewImageUrl: thumbnailUrl,

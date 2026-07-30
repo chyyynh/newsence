@@ -16,9 +16,13 @@ export type ResolvedSourceCandidate = {
 	siteUrl: string | null;
 	avatarUrl: string | null;
 	acquisitionMode: SourceAcquisitionMode;
+	/** Minimum minutes between polls; omitted means every cron firing. */
+	pollIntervalMinutes?: number;
 };
 
 const MAX_DISCOVERY_BYTES = 1024 * 1024;
+/** Channels publish on the order of once a day; the RSS default of every 5 minutes is waste. */
+const YOUTUBE_POLL_INTERVAL_MINUTES = 30;
 const TWITTER_HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
 const YOUTUBE_CHANNEL_ID_RE = /^UC[A-Za-z0-9_-]{22}$/;
 const YOUTUBE_HANDLE_RE = /^@?[A-Za-z0-9._-]{3,30}$/;
@@ -224,7 +228,11 @@ async function resolveYouTubeCandidate(env: CoreEnv, input: string): Promise<Res
 		name: channel.title ?? channel.id,
 		siteUrl: `https://www.youtube.com/channel/${channel.id}`,
 		avatarUrl: channel.avatarUrl,
-		acquisitionMode: 'platform',
+		// The handle is an Atom feed, so the RSS monitor polls it and each entry is
+		// acquired from its own URL — 'web', not 'platform'. Channels publish far
+		// less often than a news feed, so they opt out of the 5-minute cadence.
+		acquisitionMode: 'web',
+		pollIntervalMinutes: YOUTUBE_POLL_INTERVAL_MINUTES,
 	};
 }
 

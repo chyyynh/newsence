@@ -3,12 +3,13 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { withCoreDb } from '@db/client';
 import { isExplicitPaperUrl, stagePaperEnrichmentAttempt } from '@ingest/platforms/paper';
 import { persistAcademicMetadataBackfill } from '@ingest/resource-persistence';
+import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 
 const PAGE_SIZE = 10;
 const MAX_PAGES = 2500;
 const ACADEMIC_SCHEMA_VERSION = 2;
-const WORKFLOW_ID = `academic-metadata-backfill-v${ACADEMIC_SCHEMA_VERSION}`;
+const WORKFLOW_ID = `academic-metadata-backfill-v${ACADEMIC_SCHEMA_VERSION}-canonical-v3`;
 const PROVIDER_REQUEST_INTERVAL = '3 seconds';
 
 type AcademicMetadataBackfillPayload = Record<string, never>;
@@ -24,7 +25,7 @@ type AcademicMetadataBackfillPage = {
 	nextCursor: string | null;
 };
 
-export type AcademicMetadataBackfillSummary = {
+type AcademicMetadataBackfillSummary = {
 	pages: number;
 	scanned: number;
 	resolved: number;
@@ -56,7 +57,7 @@ async function loadAcademicMetadataBackfillPage(env: CoreEnv, cursor: string | n
 						lower(COALESCE(url, '')) ~ '^https?://([a-z0-9-]+\\.)*arxiv\\.org/(abs|html|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?(\\.pdf)?/?([?#].*)?$'
 						OR lower(COALESCE(url, '')) ~ '^https?://(dx\\.)?doi\\.org/10\\.[0-9]{4,9}/'
 						OR (
-							type = 'pdf'
+							file_type = 'application/pdf'
 							AND COALESCE(platform_metadata #>> '{enrichments,academic,doi}', '') ~* '^10\\.[0-9]{4,9}/'
 						)
 					)
@@ -105,11 +106,11 @@ async function recordSummary(step: WorkflowStep, summary: AcademicMetadataBackfi
 	);
 }
 
-export function startAcademicMetadataBackfill(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.ACADEMIC_METADATA_BACKFILL_WORKFLOW, WORKFLOW_ID, {});
+export async function startAcademicMetadataBackfill(env: CoreEnv): Promise<string> {
+	return enqueueOrRestartWorkflow(env.ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW, WORKFLOW_ID, {});
 }
 
-export class AcademicMetadataBackfillWorkflow extends WorkflowEntrypoint<CoreEnv, AcademicMetadataBackfillPayload> {
+export class AcademicMetadataBackfillV3Workflow extends WorkflowEntrypoint<CoreEnv, AcademicMetadataBackfillPayload> {
 	async run(_event: WorkflowEvent<AcademicMetadataBackfillPayload>, step: WorkflowStep) {
 		let cursor: string | null = null;
 		const summary = emptySummary();
@@ -135,12 +136,24 @@ export class AcademicMetadataBackfillWorkflow extends WorkflowEntrypoint<CoreEnv
 				if (attempt.outcome === 'resolved' && attempt.metadata) {
 					const metadata = attempt.metadata;
 					summary.resolved++;
-					await step.do(
-						`persist-academic-metadata-page-${page}-item-${itemNumber}`,
+					const persistence = await step.do(
+						`persist-academic-metadata-index-relevance-page-${page}-item-${itemNumber}-v2`,
 						{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 						() => persistAcademicMetadataBackfill(this.env, candidate.id, metadata),
 					);
-					summary.upgraded++;
+					if (persistence.indexRelevantChanged) {
+						// The transaction's locked before/after comparison is a
+						// durable step result, so this conditional remains stable on
+						// replay. A failed sync must fail the backfill item rather than
+						// leave an acknowledged index drift.
+						await step.do(
+							`sync-ai-search-academic-metadata-page-${page}-item-${itemNumber}-v1`,
+							{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
+							() => syncCorpusItem(this.env, candidate.id),
+						);
+					}
+					if (persistence.changed) summary.upgraded++;
+					else summary.preserved++;
 				} else if (attempt.outcome === 'preserved') {
 					summary.preserved++;
 				} else if (attempt.outcome === 'not_found') {
