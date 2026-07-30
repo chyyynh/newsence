@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { link, readFile, unlink, writeFile } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import pg from 'pg';
 
 const NAMESPACE = 'default';
@@ -19,7 +20,6 @@ const LOG_PAGE_SIZE = 100;
 const SNAPSHOT_STABILIZATION_MS = 2_000;
 const ITEM_POLL_INTERVAL_MS = 2_000;
 const ITEM_POLL_ATTEMPTS = 90;
-const GET_BATCH_SIZE = 4;
 const PATCH_TIMEOUT_MS = 60_000;
 const MAX_CONTENT_BYTES = 4 * 1024 * 1024;
 const LOG_CLOCK_SKEW_MS = 5_000;
@@ -40,14 +40,20 @@ const apply = argumentsList.includes('--apply');
 assert.notEqual(capture, apply, 'Select exactly one mode: --capture or --apply');
 const checkpointArguments = argumentsList.filter((argument) => argument.startsWith('--checkpoint='));
 const approvalArguments = argumentsList.filter((argument) => argument.startsWith('--approval-digest='));
+const outputArguments = argumentsList.filter((argument) => argument.startsWith('--output='));
 assert.ok(checkpointArguments.length <= 1, 'checkpoint argument is unique');
 assert.ok(approvalArguments.length <= 1, 'approval digest argument is unique');
+assert.ok(outputArguments.length <= 1, 'output argument is unique');
 const checkpointPath = checkpointArguments[0]?.slice('--checkpoint='.length) ?? null;
 const approvalDigest = approvalArguments[0]?.slice('--approval-digest='.length) ?? null;
+const outputPath = outputArguments[0]?.slice('--output='.length) ?? null;
 assert.deepEqual(
 	argumentsList.filter(
 		(argument) =>
-			!['--capture', '--apply'].includes(argument) && !argument.startsWith('--checkpoint=') && !argument.startsWith('--approval-digest='),
+			!['--capture', '--apply'].includes(argument) &&
+			!argument.startsWith('--checkpoint=') &&
+			!argument.startsWith('--approval-digest=') &&
+			!argument.startsWith('--output='),
 	),
 	[],
 	'unknown operator arguments',
@@ -55,8 +61,13 @@ assert.deepEqual(
 if (capture) {
 	assert.equal(checkpointPath, null, 'capture does not accept a checkpoint');
 	assert.equal(approvalDigest, null, 'capture does not accept an approval digest');
+	if (outputArguments.length === 1) {
+		assert.ok(outputPath, 'capture output path is non-empty');
+		assert.equal(isAbsolute(outputPath), true, 'capture output path is absolute');
+	}
 } else {
 	assert.ok(checkpointPath, 'apply requires --checkpoint=<path>');
+	assert.equal(outputPath, null, 'apply does not accept an output path');
 	assert.match(approvalDigest ?? '', /^[0-9a-f]{64}$/, 'apply requires --approval-digest=<sha256>');
 }
 
@@ -632,11 +643,9 @@ function compareAscii(left, right) {
 	return 0;
 }
 
-async function mapBatches(values, batchSize, operation) {
+async function mapSequentially(values, operation) {
 	const results = [];
-	for (let offset = 0; offset < values.length; offset += batchSize) {
-		results.push(...(await Promise.all(values.slice(offset, offset + batchSize).map(operation))));
-	}
+	for (const value of values) results.push(await operation(value));
 	return results;
 }
 
@@ -674,8 +683,8 @@ async function captureSnapshot(accountId, apiToken, db) {
 	const terminalItems = [];
 	for (const status of TERMINAL_STATUSES) terminalItems.push(...(await listStatusItems(accountId, apiToken, status)));
 	assert.ok(terminalItems.length > 0, 'terminal retry snapshot is non-empty');
-	const targets = (await mapBatches(terminalItems, GET_BATCH_SIZE, (item) => captureTarget(accountId, apiToken, db, item))).sort(
-		(left, right) => compareAscii(left.item.resourceId, right.item.resourceId),
+	const targets = (await mapSequentially(terminalItems, (item) => captureTarget(accountId, apiToken, db, item))).sort((left, right) =>
+		compareAscii(left.item.resourceId, right.item.resourceId),
 	);
 	assert.equal(new Set(targets.map((target) => target.item.itemId)).size, targets.length, 'checkpoint item IDs are unique');
 	assert.equal(new Set(targets.map((target) => target.item.resourceId)).size, targets.length, 'checkpoint resource IDs are unique');
@@ -729,6 +738,19 @@ async function loadCheckpoint(path) {
 	assert.ok(Array.isArray(checkpoint.targets) && checkpoint.targets.length > 0, 'checkpoint targets');
 	assert.equal(checkpointDigest(checkpoint), checkpoint.digest, 'checkpoint digest');
 	return checkpoint;
+}
+
+async function writeCheckpointArtifact(path, snapshot) {
+	const temporaryPath = `${path}.${randomUUID()}.tmp`;
+	const serialized = `${JSON.stringify(snapshot, null, 2)}\n`;
+	try {
+		await writeFile(temporaryPath, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+		await link(temporaryPath, path);
+	} finally {
+		await unlink(temporaryPath).catch((error) => {
+			if (error?.code !== 'ENOENT') throw error;
+		});
+	}
 }
 
 async function acquireOperatorLock(db) {
@@ -1222,7 +1244,7 @@ async function captureFinalState(accountId, apiToken, db, checkpoint) {
 	const global = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
 	for (const status of NON_COMPLETED_STATUSES) assert.equal(global.stats[status], 0, `final ${status} items`);
 	assert.equal(global.stats.completed, checkpoint.dbFences.eligibleCount, 'completed items match frozen eligible corpus');
-	const targets = await mapBatches(checkpoint.targets, GET_BATCH_SIZE, (target) =>
+	const targets = await mapSequentially(checkpoint.targets, (target) =>
 		captureFinalTarget(accountId, apiToken, db, target, intents.get(target.item.itemId)),
 	);
 	return {
@@ -1256,7 +1278,21 @@ try {
 	operatorLockHeld = true;
 	if (capture) {
 		const snapshot = await captureStableSnapshot(accountId, apiToken, db);
-		process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+		if (outputPath) {
+			await writeCheckpointArtifact(outputPath, snapshot);
+			process.stdout.write(
+				`${JSON.stringify({
+					event: 'search_outdated_retry_251_checkpoint_captured',
+					outputPath,
+					checkpointRunId: snapshot.checkpointRunId,
+					capturedAt: snapshot.capturedAt,
+					digest: snapshot.digest,
+					targetCount: snapshot.targets.length,
+				})}\n`,
+			);
+		} else {
+			process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+		}
 	} else {
 		const checkpoint = await loadCheckpoint(checkpointPath);
 		assert.equal(checkpoint.accountId, accountId, 'checkpoint Cloudflare account');
