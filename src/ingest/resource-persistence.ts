@@ -185,7 +185,11 @@ function mergeLockedResourceState(
 	}
 	const paperEnrichment = newestAcademicEnrichment(incomingPaperEnrichment, academicEnrichmentFrom(lockedResource.platform_metadata));
 	let merged = mergeLockedPlatformMetadata(resource, lockedResource.platform_metadata);
-	if (lockedIdentity?.kind === 'paper' && merged.kind === 'document' && lockedIdentity.resourcePlatform === merged.resource_platform) {
+	if (
+		lockedIdentity.kind === 'paper' &&
+		(merged.kind === 'blog' || merged.kind === 'forum') &&
+		lockedIdentity.resourcePlatform === merged.resource_platform
+	) {
 		merged = { ...merged, kind: 'paper' };
 	}
 	if (!merged.published_date && lockedResource.published_date) {

@@ -24,8 +24,8 @@ const CANONICAL_CUSTOM_METADATA = [
 	{ field_name: 'resource_platform', data_type: 'text' },
 ] as const satisfies NonNullable<AiSearchConfig['custom_metadata']>;
 const CANONICAL_CONTENT_IDENTITIES = [
-	{ kind: 'document', resourcePlatform: null },
-	{ kind: 'document', resourcePlatform: 'hackernews' },
+	{ kind: 'blog', resourcePlatform: null },
+	{ kind: 'forum', resourcePlatform: 'hackernews' },
 	{ kind: 'post', resourcePlatform: 'twitter' },
 	{ kind: 'video', resourcePlatform: 'youtube' },
 	{ kind: 'paper', resourcePlatform: null },
@@ -345,7 +345,7 @@ export async function searchCorpusRanks(env: CoreEnv, query: string, options: Co
 type SearchIndexRebuildPayload = Record<string, never>;
 
 const SEARCH_INDEX_NAME = 'public-corpus-v6';
-const SEARCH_INDEX_GENERATION = { key: 'canonical-4-kind-platform', ordinal: 4 } as const;
+const SEARCH_INDEX_GENERATION = { key: 'canonical-5-blog-forum-kind', ordinal: 5 } as const;
 // The physical Workflow resource is generation-specific. This runner id is
 // stable only inside that isolated resource; it is not itself a replay boundary.
 const SEARCH_INDEX_REBUILD_INSTANCE_ID = `search-index-rebuild-${SEARCH_INDEX_GENERATION.key}-canonical-v1`;
@@ -1347,7 +1347,7 @@ async function reconcileSearchItems(env: CoreEnv, step: WorkflowStep, lease: Sea
 }
 
 export async function startSearchIndexRebuild(env: CoreEnv): Promise<string> {
-	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, {});
+	return enqueueOrRestartWorkflow(env.SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW, SEARCH_INDEX_REBUILD_INSTANCE_ID, {});
 }
 
 export async function probeSearchIndexCutover(env: CoreEnv) {
@@ -1365,15 +1365,15 @@ export async function probeSearchIndexCutover(env: CoreEnv) {
 // This class must remain attached to its own physical Workflow resource. Durable
 // executions replay the graph bound when they started; a new class or step name
 // on an existing resource is not a contract boundary.
-export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
+export class SearchIndexGeneration5RebuildWorkflow extends WorkflowEntrypoint<CoreEnv, SearchIndexRebuildPayload> {
 	async run(event: WorkflowEvent<SearchIndexRebuildPayload>, step: WorkflowStep) {
-		const startedAt = await step.do('capture-canonical-v6-rebuild-started-at', async () => event.timestamp.toISOString());
-		const lease = await step.do('begin-canonical-v6-search-index-generation', SHORT_STEP_OPTIONS, () => beginSearchIndexRebuild(this.env));
+		const startedAt = await step.do('capture-generation-5-rebuild-started-at', async () => event.timestamp.toISOString());
+		const lease = await step.do('begin-generation-5-search-index', SHORT_STEP_OPTIONS, () => beginSearchIndexRebuild(this.env));
 
-		const identityPreflight = await step.do('validate-canonical-v6-resource-identities', SHORT_STEP_OPTIONS, () =>
+		const identityPreflight = await step.do('validate-generation-5-resource-identities', SHORT_STEP_OPTIONS, () =>
 			withSearchIndexRebuildLease(this.env, lease, () => loadSearchIdentityCounts(this.env)),
 		);
-		const instanceConfig = await step.do('ensure-canonical-v6-search-instance-config', SHORT_STEP_OPTIONS, () =>
+		const instanceConfig = await step.do('ensure-generation-5-search-instance-config', SHORT_STEP_OPTIONS, () =>
 			withSearchIndexRebuildLease(this.env, lease, () => ensureCanonicalSearchInstanceConfig(this.env)),
 		);
 		let cursor: string | null = null;
@@ -1381,7 +1381,7 @@ export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<Co
 		let page = 0;
 
 		while (true) {
-			const result = await step.do(`sync-canonical-v6-corpus-page-${page}`, BATCH_STEP_OPTIONS, () =>
+			const result = await step.do(`sync-generation-5-corpus-page-${page}`, BATCH_STEP_OPTIONS, () =>
 				withSearchIndexRebuildLease(this.env, lease, () => syncCorpusPageAfter(this.env, cursor)),
 			);
 			if (result.done) break;
@@ -1403,7 +1403,7 @@ export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<Co
 		let deltaPage = 0;
 		let deltaUploaded = 0;
 		while (true) {
-			const result = await step.do(`sync-canonical-v6-corpus-delta-page-${deltaPage}`, BATCH_STEP_OPTIONS, () =>
+			const result = await step.do(`sync-generation-5-corpus-delta-page-${deltaPage}`, BATCH_STEP_OPTIONS, () =>
 				withSearchIndexRebuildLease(this.env, lease, () => syncCorpusDeltaAfter(this.env, startedAt, deltaCursor)),
 			);
 			if (result.done) break;
@@ -1419,7 +1419,7 @@ export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<Co
 			if (readiness.ownedStatuses.skipped > 0) {
 				throw new Error(`AI Search indexing produced skipped items: ${JSON.stringify(readiness.ownedStatuses)}`);
 			}
-			const targets = await step.do('inspect-canonical-v6-search-index-repair-targets', SHORT_STEP_OPTIONS, () =>
+			const targets = await step.do('inspect-generation-5-search-index-repair-targets', SHORT_STEP_OPTIONS, () =>
 				withSearchIndexRebuildLease(this.env, lease, () => loadSearchIndexRepairTargets(this.env)),
 			);
 			if (targets.targets.length === 0) {
@@ -1430,9 +1430,9 @@ export class SearchIndexCanonicalV6RebuildWorkflow extends WorkflowEntrypoint<Co
 			repair = { roundsUsed: repaired.repairRoundsUsed, targets };
 		}
 		if (!searchIndexReady(readiness)) {
-			throw new Error(`AI Search canonical v6 readiness contract failed: ${JSON.stringify(readiness)}`);
+			throw new Error(`AI Search generation 5 readiness contract failed: ${JSON.stringify(readiness)}`);
 		}
-		const generationReadiness = await step.do('mark-canonical-v6-search-index-generation-ready', SHORT_STEP_OPTIONS, () =>
+		const generationReadiness = await step.do('mark-generation-5-search-index-ready', SHORT_STEP_OPTIONS, () =>
 			markSearchIndexGenerationReady(this.env, lease),
 		);
 

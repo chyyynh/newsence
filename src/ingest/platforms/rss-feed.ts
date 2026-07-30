@@ -237,7 +237,7 @@ export async function acquireRssFeedItem(env: CoreEnv, input: RssFeedAcquisition
 	if (!title) throw new Error(`RSS article has no title: ${articleUrl}`);
 	console.info({ tag: 'RSS', msg: 'Acquired feed item', source: input.sourceName, url: articleUrl });
 	return {
-		kind: 'document',
+		kind: 'blog',
 		resourcePlatform: null,
 		fileType: null,
 		title,

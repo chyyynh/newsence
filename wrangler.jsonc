@@ -68,9 +68,9 @@
 			"class_name": "ResourceTranslationV2Workflow"
 		},
 		{
-			"binding": "SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW",
-			"name": "newsence-search-index-canonical-v6-rebuild",
-			"class_name": "SearchIndexCanonicalV6RebuildWorkflow"
+			"binding": "SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW",
+			"name": "newsence-search-index-generation-5-rebuild",
+			"class_name": "SearchIndexGeneration5RebuildWorkflow"
 		},
 		{
 			"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW",

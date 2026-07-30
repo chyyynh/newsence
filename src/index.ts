@@ -6,7 +6,7 @@ import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { RecentResourceImageBackfillV2Workflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow } from '@ingest/workflow';
-import { probeSearchIndexCutover, SearchIndexCanonicalV6RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
+import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -16,7 +16,7 @@ export {
 	RecentResourceImageBackfillV2Workflow,
 	ResourceProcessingV2Workflow,
 	ResourceTranslationV2Workflow,
-	SearchIndexCanonicalV6RebuildWorkflow,
+	SearchIndexGeneration5RebuildWorkflow,
 };
 
 type MonitorHandler = (env: CoreEnv) => Promise<void>;
@@ -89,7 +89,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read search-index rebuild status for operator polling. */
 	async getSearchIndexRebuildStatus(instanceId: string) {
-		const instance = await this.env.SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW.get(instanceId);
+		const instance = await this.env.SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 

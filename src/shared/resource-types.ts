@@ -1,19 +1,20 @@
-export const RESOURCE_KINDS = ['document', 'post', 'video', 'paper', 'image', 'file'] as const;
+export const RESOURCE_KINDS = ['blog', 'forum', 'post', 'video', 'paper', 'image', 'file'] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
-export const CONTENT_RESOURCE_KINDS = ['document', 'post', 'video', 'paper'] as const satisfies readonly ResourceKind[];
+export const CONTENT_RESOURCE_KINDS = ['blog', 'forum', 'post', 'video', 'paper'] as const satisfies readonly ResourceKind[];
 
 export type ContentResourceKind = (typeof CONTENT_RESOURCE_KINDS)[number];
 
-export const TRANSLATABLE_RESOURCE_KINDS = ['document', 'post', 'paper'] as const satisfies readonly ResourceKind[];
+export const TRANSLATABLE_RESOURCE_KINDS = ['blog', 'forum', 'post', 'paper'] as const satisfies readonly ResourceKind[];
 
 export const RESOURCE_PLATFORMS = ['hackernews', 'twitter', 'youtube'] as const;
 
 export type ResourcePlatform = (typeof RESOURCE_PLATFORMS)[number] | null;
 
 const VALID_KIND_PLATFORMS = {
-	document: [null, 'hackernews'],
+	blog: [null],
+	forum: ['hackernews'],
 	post: ['twitter'],
 	video: ['youtube'],
 	paper: [null, 'hackernews'],
@@ -32,13 +33,14 @@ export type ResourceIdentityFilters = Readonly<{
 }>;
 
 const DETECTED_PLATFORM_RESOURCE_IDENTITIES = {
-	hackernews: { kind: 'document', resourcePlatform: 'hackernews' },
+	hackernews: { kind: 'forum', resourcePlatform: 'hackernews' },
 	twitter: { kind: 'post', resourcePlatform: 'twitter' },
 	youtube: { kind: 'video', resourcePlatform: 'youtube' },
 } as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, ResourceIdentity>>;
 
 export const RESOURCE_KIND_DISPLAY_LABELS = {
-	document: 'Document',
+	blog: 'Blog',
+	forum: 'Forum',
 	post: 'Post',
 	video: 'Video',
 	paper: 'Paper',
@@ -121,7 +123,7 @@ export function resourceIdentityForDetectedPlatform(
 }
 
 export function resourceIdentityWithAcademic(identity: ResourceIdentity, hasAcademicEnrichment: boolean): ResourceIdentity {
-	if (!hasAcademicEnrichment || identity.kind !== 'document') return identity;
+	if (!hasAcademicEnrichment || (identity.kind !== 'blog' && identity.kind !== 'forum')) return identity;
 	return { kind: 'paper', resourcePlatform: identity.resourcePlatform };
 }
 

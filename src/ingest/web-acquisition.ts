@@ -124,7 +124,7 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 	const parsed = await parsePdfBytes(bytes);
 	const title = titleFromFileName(fileName);
 	return {
-		kind: 'document',
+		kind: 'blog',
 		resourcePlatform: null,
 		fileType: PDF_MIME,
 		title,
@@ -159,7 +159,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Prom
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
 	return {
-		kind: 'document',
+		kind: 'blog',
 		resourcePlatform: null,
 		fileType: null,
 		title: article.title,
