@@ -167,6 +167,10 @@ export const SOURCE_KINDS = ['blog', 'news'] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
+export function isSourceKind(value: unknown): value is SourceKind {
+	return typeof value === 'string' && (SOURCE_KINDS as readonly string[]).includes(value);
+}
+
 export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
 
 export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
