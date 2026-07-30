@@ -61,10 +61,9 @@ assert.deepEqual(
 if (capture) {
 	assert.equal(checkpointPath, null, 'capture does not accept a checkpoint');
 	assert.equal(approvalDigest, null, 'capture does not accept an approval digest');
-	if (outputArguments.length === 1) {
-		assert.ok(outputPath, 'capture output path is non-empty');
-		assert.equal(isAbsolute(outputPath), true, 'capture output path is absolute');
-	}
+	assert.equal(outputArguments.length, 1, 'capture requires exactly one --output=<absolute-path>');
+	assert.ok(outputPath, 'capture output path is non-empty');
+	assert.equal(isAbsolute(outputPath), true, 'capture output path is absolute');
 } else {
 	assert.ok(checkpointPath, 'apply requires --checkpoint=<path>');
 	assert.equal(outputPath, null, 'apply does not accept an output path');
@@ -520,52 +519,50 @@ async function loadCanonicalResource(db, resourceId) {
 }
 
 async function loadDbFences(db) {
-	const [guardResult, triggerResult, stateResult, eligibleResult, retryLedgerResult, contractPhaseResult] = await Promise.all([
-		db.query(
-			`SELECT frozen_at, resources_frozen_count::text
-			   FROM migration_guards.resource_writes_251
-			  WHERE guard_key = 'resource-writes-251'`,
-		),
-		db.query(
-			`SELECT trigger.tgenabled
-			   FROM pg_trigger trigger
-			  WHERE trigger.tgrelid = 'public.resources'::regclass
-			    AND trigger.tgname = 'resource_writes_251_guard'
-			    AND NOT trigger.tgisinternal`,
-		),
-		db.query(
-			`SELECT index_name, generation, generation_key, status, rebuild_epoch::text, ready_at, updated_at
-			   FROM search_index_states
-			  WHERE index_name = $1`,
-			[STATE_INDEX_NAME],
-		),
-		db.query(
-			`SELECT count(*)::text AS count
-			   FROM resources
-			  WHERE scope = 'corpus'
-			    AND enrichment_status = 'enriched'
-			    AND (
-			      (kind = 'document' AND (resource_platform IS NULL OR resource_platform = 'hackernews'))
-			      OR (kind = 'post' AND resource_platform = 'twitter')
-			      OR (kind = 'video' AND resource_platform = 'youtube')
-			      OR (kind = 'paper' AND (resource_platform IS NULL OR resource_platform = 'hackernews'))
-			    )`,
-		),
-		db.query(`SELECT to_regclass('migration_guards.ai_search_retry_intents_251')::text AS table_name`),
-		db.query(
-			`SELECT
-			   EXISTS (
-			     SELECT 1
-			     FROM pg_attribute
-			     WHERE attrelid = 'public.resources'::regclass
-			       AND attname = 'type'
-			       AND atttypid = 'text'::regtype
-			       AND attnotnull
-			       AND NOT attisdropped
-			   ) AS compatibility_type_live,
-			   to_regclass('migration_backups.resource_type_251')::text AS contraction_backup`,
-		),
-	]);
+	const guardResult = await db.query(
+		`SELECT frozen_at, resources_frozen_count::text
+		   FROM migration_guards.resource_writes_251
+		  WHERE guard_key = 'resource-writes-251'`,
+	);
+	const triggerResult = await db.query(
+		`SELECT trigger.tgenabled
+		   FROM pg_trigger trigger
+		  WHERE trigger.tgrelid = 'public.resources'::regclass
+		    AND trigger.tgname = 'resource_writes_251_guard'
+		    AND NOT trigger.tgisinternal`,
+	);
+	const stateResult = await db.query(
+		`SELECT index_name, generation, generation_key, status, rebuild_epoch::text, ready_at, updated_at
+		   FROM search_index_states
+		  WHERE index_name = $1`,
+		[STATE_INDEX_NAME],
+	);
+	const eligibleResult = await db.query(
+		`SELECT count(*)::text AS count
+		   FROM resources
+		  WHERE scope = 'corpus'
+		    AND enrichment_status = 'enriched'
+		    AND (
+		      (kind = 'document' AND (resource_platform IS NULL OR resource_platform = 'hackernews'))
+		      OR (kind = 'post' AND resource_platform = 'twitter')
+		      OR (kind = 'video' AND resource_platform = 'youtube')
+		      OR (kind = 'paper' AND (resource_platform IS NULL OR resource_platform = 'hackernews'))
+		    )`,
+	);
+	const retryLedgerResult = await db.query(`SELECT to_regclass('migration_guards.ai_search_retry_intents_251')::text AS table_name`);
+	const contractPhaseResult = await db.query(
+		`SELECT
+		   EXISTS (
+		     SELECT 1
+		     FROM pg_attribute
+		     WHERE attrelid = 'public.resources'::regclass
+		       AND attname = 'type'
+		       AND atttypid = 'text'::regtype
+		       AND attnotnull
+		       AND NOT attisdropped
+		   ) AS compatibility_type_live,
+		   to_regclass('migration_backups.resource_type_251')::text AS contraction_backup`,
+	);
 	assert.equal(guardResult.rowCount, 1, '#251 writer freeze marker');
 	assert.equal(triggerResult.rowCount, 1, '#251 writer freeze trigger');
 	assert.equal(triggerResult.rows[0].tgenabled, 'A', '#251 writer freeze trigger is always enabled');
@@ -1278,21 +1275,17 @@ try {
 	operatorLockHeld = true;
 	if (capture) {
 		const snapshot = await captureStableSnapshot(accountId, apiToken, db);
-		if (outputPath) {
-			await writeCheckpointArtifact(outputPath, snapshot);
-			process.stdout.write(
-				`${JSON.stringify({
-					event: 'search_outdated_retry_251_checkpoint_captured',
-					outputPath,
-					checkpointRunId: snapshot.checkpointRunId,
-					capturedAt: snapshot.capturedAt,
-					digest: snapshot.digest,
-					targetCount: snapshot.targets.length,
-				})}\n`,
-			);
-		} else {
-			process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
-		}
+		await writeCheckpointArtifact(outputPath, snapshot);
+		process.stdout.write(
+			`${JSON.stringify({
+				event: 'search_outdated_retry_251_checkpoint_captured',
+				outputPath,
+				checkpointRunId: snapshot.checkpointRunId,
+				capturedAt: snapshot.capturedAt,
+				digest: snapshot.digest,
+				targetCount: snapshot.targets.length,
+			})}\n`,
+		);
 	} else {
 		const checkpoint = await loadCheckpoint(checkpointPath);
 		assert.equal(checkpoint.accountId, accountId, 'checkpoint Cloudflare account');
