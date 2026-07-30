@@ -3,6 +3,7 @@ import {
 	isIncomingResourceSnapshotSuperseded,
 	parseResourceIdentity,
 	resourceIdentityWithAcademic,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import {
 	type PaperMetadata,
@@ -235,7 +236,7 @@ function withAcademicIdentity(resource: ResourceForProcessing, paperEnrichment?:
 	}
 	const identity = resourceIdentityWithAcademic(persistedIdentity, !!paperEnrichment);
 	if (identity.kind === resource.kind && identity.resourcePlatform === resource.resource_platform) return resource;
-	return { ...resource, kind: identity.kind, resource_platform: identity.resourcePlatform };
+	return { ...resource, ...toResourceIdentityColumns(identity) };
 }
 
 function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput) {

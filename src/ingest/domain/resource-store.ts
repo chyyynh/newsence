@@ -17,6 +17,7 @@ import {
 	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
 	type SourceAcquisitionMode,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type {
 	PlatformMetadata,
@@ -276,11 +277,10 @@ async function loadStoredResourceRow(db: CoreDb, resourceId: string, shell: bool
 function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForProcessing {
 	const identity = storedResourceIdentity(row);
 	const resource: StoredResourceForProcessing = {
+		...toResourceIdentityColumns(identity),
 		id: row.id,
 		source_id: row.source_id,
 		source_acquisition_mode: parseSourceAcquisitionMode(row.source_acquisition_mode),
-		kind: identity.kind,
-		resource_platform: identity.resourcePlatform,
 		original_lang: canonicalizeResourceLang(row.original_lang),
 		title: requiredString(row.title, 'title'),
 		summary: row.summary,
@@ -486,10 +486,9 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		? resourceIdentityForDetectedPlatform(detectedPlatform, hasAcademicEnrichment)
 		: resourceIdentityWithAcademic(explicitIdentity, hasAcademicEnrichment);
 	return {
+		...toResourceIdentityColumns(identity),
 		id: base.url,
 		source_id: base.sourceId,
-		kind: identity.kind,
-		resource_platform: identity.resourcePlatform,
 		original_lang: canonicalizeOptionalResourceLang(base.originalLang) ?? DEFAULT_RESOURCE_LANG,
 		title: base.title,
 		scope: 'corpus',
@@ -503,7 +502,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		published_date: dateValue(base.publishedDate, 'published_date').toISOString(),
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
-		platform_metadata: (base.platformMetadata ?? undefined) as ResourceForProcessing['platform_metadata'],
+		platform_metadata: base.platformMetadata ?? undefined,
 	};
 }
 

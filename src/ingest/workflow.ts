@@ -5,6 +5,7 @@ import {
 	needsResourcePlatformAcquisition,
 	parseResourceIdentity,
 	resourceIdentityWithAcademic,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
@@ -301,8 +302,7 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 		);
 		const resource: ResourceForProcessing = {
 			...acquiredResource,
-			kind: identity.kind,
-			resource_platform: identity.resourcePlatform,
+			...toResourceIdentityColumns(identity),
 		};
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;

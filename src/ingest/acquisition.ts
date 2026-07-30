@@ -6,6 +6,7 @@ import {
 	parseResourceIdentity,
 	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { withPdfExtractionMetadata } from '@core-shared/types';
@@ -54,8 +55,7 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		: resourceIdentityWithAcademic(explicitIdentity, hasAcademicEnrichment);
 	return {
 		...resource,
-		kind: identity.kind,
-		resource_platform: identity.resourcePlatform,
+		...toResourceIdentityColumns(identity),
 		title: acquired.title.trim(),
 		summary: acquired.metadata.description,
 		content: acquired.markdown,

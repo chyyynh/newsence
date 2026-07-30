@@ -1,7 +1,7 @@
 import type {
 	ContentResourceIdentity,
 	ResourceCategory,
-	ResourceKind,
+	ResourceIdentityColumns,
 	ResourcePlatform,
 	ResourceScope,
 	ResourceTranslationSource,
@@ -18,12 +18,10 @@ export type ResourceLocaleText = {
 
 export type ResourceTranslationMap = Record<string, ResourceLocaleText | undefined>;
 
-export interface ResourceForProcessing {
+type ResourceForProcessingBase = {
 	id: string;
 	source_id: string | null;
 	source_acquisition_mode?: SourceAcquisitionMode | null;
-	kind: ResourceKind;
-	resource_platform: ResourcePlatform;
 	scope: ResourceScope;
 	original_lang: string;
 	title: string;
@@ -41,7 +39,9 @@ export interface ResourceForProcessing {
 	storage_key?: string | null;
 	file_type?: string | null;
 	normalized_url?: string | null;
-}
+};
+
+export type ResourceForProcessing = ResourceForProcessingBase & ResourceIdentityColumns;
 
 export const ENTITY_TYPES = ['person', 'organization', 'product', 'technology', 'event', 'location'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
