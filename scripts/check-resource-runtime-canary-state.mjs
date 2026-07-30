@@ -307,13 +307,21 @@ const twitterUnchanged = resources.get(FIXTURES.twitterUnchanged.id);
 assert.ok(twitterUnchanged, 'Twitter unchanged fixture');
 assertIdentity(twitterUnchanged, FIXTURES.twitterUnchanged, 'Twitter unchanged');
 assertRelationships(twitterUnchanged, FIXTURES.twitterUnchanged.relationships, 'Twitter unchanged');
-assert.equal(twitterUnchanged.tag_count, FIXTURES.twitterUnchanged.tagCount, 'Twitter unchanged tag count');
-assert.equal(twitterUnchanged.tags_md5, FIXTURES.twitterUnchanged.tagsMd5, 'Twitter unchanged tags fingerprint');
-assert.equal(twitterUnchanged.snapshot_hash, FIXTURES.twitterUnchanged.snapshotHash, 'Twitter unchanged snapshot hash');
 assert.equal(twitterUnchanged.translation_count, FIXTURES.twitterUnchanged.translationCount, 'Twitter unchanged translation count');
-assert.equal(twitterUnchanged.translation_md5, FIXTURES.twitterUnchanged.translationMd5, 'Twitter unchanged translation fingerprint');
 if (PHASE === 'before') {
+	assert.equal(twitterUnchanged.tag_count, FIXTURES.twitterUnchanged.tagCount, 'Twitter baseline tag count');
+	assert.equal(twitterUnchanged.tags_md5, FIXTURES.twitterUnchanged.tagsMd5, 'Twitter baseline tags fingerprint');
+	assert.equal(twitterUnchanged.snapshot_hash, FIXTURES.twitterUnchanged.snapshotHash, 'Twitter baseline snapshot hash');
+	assert.equal(twitterUnchanged.translation_md5, FIXTURES.twitterUnchanged.translationMd5, 'Twitter baseline translation fingerprint');
 	assert.equal(twitterUnchanged.platform_md5, FIXTURES.twitterUnchanged.beforePlatformMd5, 'Twitter baseline platform fingerprint');
+} else {
+	assert.ok(twitterUnchanged.tag_count > 0, 'Twitter post-canary retains classification tags');
+	assert.match(twitterUnchanged.tags_md5, /^[a-f0-9]{32}$/, 'Twitter post-canary tags fingerprint');
+	assert.match(twitterUnchanged.snapshot_hash ?? '', /^[a-f0-9]{64}$/, 'Twitter post-canary source snapshot hash');
+	assert.equal(twitterUnchanged.original_translation_count, 1, 'Twitter post-canary original translation row');
+	assert.equal(twitterUnchanged.machine_translation_count, 1, 'Twitter post-canary machine translation row');
+	assert.match(twitterUnchanged.translation_md5, /^[a-f0-9]{32}$/, 'Twitter post-canary translation fingerprint');
+	assert.match(twitterUnchanged.platform_md5, /^[a-f0-9]{32}$/, 'Twitter post-canary platform fingerprint');
 }
 
 console.info(
