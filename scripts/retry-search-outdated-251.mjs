@@ -14,6 +14,22 @@ const EXPECTED_DATABASE_QUERY = [
 	['sslmode', 'verify-full'],
 	['sslrootcert', 'system'],
 ];
+const ITEM_EVIDENCE_FIELDS = [
+	'itemId',
+	'resourceId',
+	'key',
+	'sourceId',
+	'status',
+	'error',
+	'nextAction',
+	'checksum',
+	'chunksCount',
+	'fileSize',
+	'createdAt',
+	'lastSeenAt',
+	'metadata',
+];
+const LOG_EVIDENCE_FIELDS = ['timestamp', 'action', 'message', 'fileKey', 'chunkCount', 'processingTimeMs', 'errorType', 'errorMessage'];
 const GENERATION = 4;
 const GENERATION_KEY = 'canonical-4-kind-platform';
 const ITEM_PREFIX = 'resources/';
@@ -160,7 +176,12 @@ function databaseUrl() {
 	);
 	const value = process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 	assert.ok(value, 'Set the canonical production Hyperdrive local PostgreSQL connection string');
-	const url = new URL(value);
+	let url;
+	try {
+		url = new URL(value);
+	} catch {
+		assert.fail('Canonical production PostgreSQL connection string is not a valid URL');
+	}
 	assert.ok(['postgres:', 'postgresql:'].includes(url.protocol), 'PostgreSQL connection string protocol');
 	assert.equal(url.hostname, EXPECTED_DATABASE_HOST, 'Operator script only accepts the reviewed PlanetScale production host');
 	const username = decodeURIComponent(url.username);
@@ -214,6 +235,24 @@ async function cloudflareGet(url, apiToken, label, attempt = 0) {
 
 function sha256(value) {
 	return createHash('sha256').update(value).digest('hex');
+}
+
+function orderedEvidenceObject(value, fields, label) {
+	assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} object`);
+	assert.deepEqual(Object.keys(value).sort(compareAscii), [...fields].sort(compareAscii), `${label} exact fields`);
+	return Object.fromEntries(fields.map((field) => [field, value[field]]));
+}
+
+function itemEvidenceDigest(item) {
+	const ordered = orderedEvidenceObject(item, ITEM_EVIDENCE_FIELDS, 'item evidence digest');
+	assert.ok(ordered.metadata && typeof ordered.metadata === 'object' && !Array.isArray(ordered.metadata), 'item evidence metadata');
+	ordered.metadata = Object.fromEntries(Object.entries(ordered.metadata).sort(([left], [right]) => compareAscii(left, right)));
+	return sha256(JSON.stringify(ordered));
+}
+
+function logsEvidenceDigest(logs) {
+	assert.ok(Array.isArray(logs), 'logs evidence digest');
+	return sha256(JSON.stringify(logs.map((log, index) => orderedEvidenceObject(log, LOG_EVIDENCE_FIELDS, `log evidence digest ${index}`))));
 }
 
 function mutationResultError(result, target) {
@@ -1377,10 +1416,10 @@ function assertNoAdvancementObservation(observation, checkpointTarget, intent, l
 		`${label} observed canonical metadata`,
 	);
 	assert.deepEqual(observation.terminalListingItem, item, `${label} by-key and terminal-listing item agree`);
-	assert.equal(observation.itemDigest, sha256(JSON.stringify(item)), `${label} observed item digest`);
+	assert.equal(observation.itemDigest, itemEvidenceDigest(item), `${label} observed item digest`);
 	assert.ok(Array.isArray(observation.logs), `${label} observed logs`);
 	assert.equal(observation.logCount, observation.logs.length, `${label} observed log count`);
-	assert.equal(observation.logsDigest, sha256(JSON.stringify(observation.logs)), `${label} observed logs digest`);
+	assert.equal(observation.logsDigest, logsEvidenceDigest(observation.logs), `${label} observed logs digest`);
 	assert.ok(observation.stats && typeof observation.stats === 'object' && !Array.isArray(observation.stats), `${label} observed stats`);
 	assert.equal(observation.stats.queued, 0, `${label} observed no queued item`);
 	assert.equal(observation.stats.running, 0, `${label} observed no running item`);
@@ -1878,10 +1917,10 @@ async function captureNoEffectObservation(accountId, apiToken, db, checkpoint, c
 		observedAt,
 		instanceLastActivity,
 		item,
-		itemDigest: sha256(JSON.stringify(item)),
+		itemDigest: itemEvidenceDigest(item),
 		logs,
 		logCount: logs.length,
-		logsDigest: sha256(JSON.stringify(logs)),
+		logsDigest: logsEvidenceDigest(logs),
 		stats: global.stats,
 		terminalListingItem,
 	};
