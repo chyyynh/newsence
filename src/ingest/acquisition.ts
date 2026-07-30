@@ -82,7 +82,7 @@ function mergeAcquiredPlatformMetadata(
 	};
 }
 
-export function validateAcquisitionUrl(url: string): string {
+function validateAcquisitionUrl(url: string): string {
 	const parsed = new URL(url);
 	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http(s) URLs are allowed');
 	if (parsed.username || parsed.password) throw new Error('URL must not include credentials');
@@ -123,7 +123,7 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
  */
 export type AcquisitionOrigin = { monitored: boolean };
 
-export async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<AcquiredContent> {
+async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 	const detected = detectResourceUrl(validatedUrl);
 	if (detected) {

@@ -12,7 +12,7 @@ export const RESOURCE_PLATFORMS = ['hackernews', 'twitter', 'youtube'] as const;
 
 export type ResourcePlatform = (typeof RESOURCE_PLATFORMS)[number] | null;
 
-export const VALID_KIND_PLATFORMS = {
+const VALID_KIND_PLATFORMS = {
 	document: [null, 'hackernews'],
 	post: ['twitter'],
 	video: ['youtube'],
@@ -52,13 +52,7 @@ export const RESOURCE_PLATFORM_DISPLAY_LABELS = {
 	youtube: 'YouTube',
 } as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, string>>;
 
-export function resourceIdentityDisplayLabel(identity: ResourceIdentity): string {
-	return identity.resourcePlatform
-		? RESOURCE_PLATFORM_DISPLAY_LABELS[identity.resourcePlatform]
-		: RESOURCE_KIND_DISPLAY_LABELS[identity.kind];
-}
-
-export function isResourceKind(value: unknown): value is ResourceKind {
+function isResourceKind(value: unknown): value is ResourceKind {
 	return typeof value === 'string' && (RESOURCE_KINDS as readonly string[]).includes(value);
 }
 
@@ -80,12 +74,6 @@ export function parseResourceIdentity(kind: unknown, resourcePlatform: unknown):
 	return { kind, resourcePlatform: resourcePlatform as ResourcePlatform };
 }
 
-export function assertValidKindPlatform(kind: unknown, resourcePlatform: unknown): asserts kind is ResourceKind {
-	if (!isValidKindPlatform(kind, resourcePlatform)) {
-		throw new Error(`Invalid resource kind/platform pair: ${String(kind)} / ${String(resourcePlatform)}`);
-	}
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -94,7 +82,7 @@ export function needsResourcePlatformAcquisition(input: { platformData: unknown;
 	return input.resourcePlatform !== null && !isRecord(input.platformData);
 }
 
-export function resourceSourceSnapshotHash(platformMetadata: unknown): string | null {
+function resourceSourceSnapshotHash(platformMetadata: unknown): string | null {
 	if (!isRecord(platformMetadata) || typeof platformMetadata.sourceSnapshotHash !== 'string') return null;
 	return platformMetadata.sourceSnapshotHash.trim() || null;
 }
@@ -162,10 +150,6 @@ export const SOURCE_KINDS = ['blog', 'news'] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
-export function isSourceKind(value: unknown): value is SourceKind {
-	return typeof value === 'string' && (SOURCE_KINDS as readonly string[]).includes(value);
-}
-
 export const SOURCE_ACQUISITION_MODES = ['platform', 'web', 'feed'] as const;
 
 export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
@@ -173,8 +157,6 @@ export type SourceAcquisitionMode = (typeof SOURCE_ACQUISITION_MODES)[number];
 // Add-source validation lifecycle for user-added sources (#237); failure
 // details live in scrape_state.
 export const SOURCE_STATUSES = ['pending', 'active', 'failed'] as const;
-
-export type SourceStatus = (typeof SOURCE_STATUSES)[number];
 
 export const RESOURCE_SCOPES = ['corpus', 'private'] as const;
 

@@ -25,7 +25,7 @@ type AcademicMetadataBackfillPage = {
 	nextCursor: string | null;
 };
 
-export type AcademicMetadataBackfillSummary = {
+type AcademicMetadataBackfillSummary = {
 	pages: number;
 	scanned: number;
 	resolved: number;

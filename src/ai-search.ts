@@ -52,7 +52,7 @@ type CorpusTranslationRow = {
 	keywords: string[] | null;
 };
 
-export type CorpusDocument = {
+type CorpusDocument = {
 	id: string;
 	source_id: string | null;
 	kind: string;
@@ -79,7 +79,7 @@ type CorpusSearchOptions = {
 	sourceIds?: readonly string[];
 };
 
-export function itemKey(id: string): string {
+function itemKey(id: string): string {
 	return `${ITEM_PREFIX}${id}${ITEM_SUFFIX}`;
 }
 
@@ -135,7 +135,7 @@ function serializeTranslation(translation: CorpusTranslationRow, originalLang: s
 		.join('\n\n');
 }
 
-export function serializeDocument(row: CorpusDocument): string {
+function serializeDocument(row: CorpusDocument): string {
 	const original = row.translations.find((translation) => translation.lang === row.original_lang);
 	if (!original) throw new Error(`AI Search document ${row.id} is missing its ${row.original_lang} translation`);
 	const title = requiredDocumentText(original.title, 'title', row.id);
@@ -198,11 +198,11 @@ async function loadCorpusDocuments(db: CoreDb, resourceIds: readonly string[]): 
 	);
 }
 
-export async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocument | null> {
+async function loadCorpusDocument(db: CoreDb, resourceId: string): Promise<CorpusDocument | null> {
 	return (await loadCorpusDocuments(db, [resourceId]))[0] ?? null;
 }
 
-export function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
+function corpusItemMetadata(document: CorpusDocument): Record<string, unknown> {
 	const effectiveAt = documentEffectiveAt(document);
 	const identity = corpusDocumentIdentity(document);
 	return {
@@ -269,7 +269,7 @@ async function deleteCorpusItemFrom(index: AiSearchInstance, resourceId: string)
 	return matches.length > 0;
 }
 
-export async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
+async function deleteCorpusItem(env: CoreEnv, resourceId: string): Promise<boolean> {
 	return deleteCorpusItemFrom(env.AI_SEARCH, resourceId);
 }
 
@@ -784,7 +784,7 @@ function normalizedCustomMetadata(
 		.sort((left, right) => left.field_name.localeCompare(right.field_name));
 }
 
-export function canonicalSearchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
+function canonicalSearchInstanceConfigMatches(info: AiSearchInstanceInfo): boolean {
 	return (
 		info.index_method?.vector === true &&
 		info.index_method.keyword === true &&

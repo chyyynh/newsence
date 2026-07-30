@@ -4,7 +4,6 @@ import {
 	isResourceTranslationIdentityEligible,
 	isValidKindPlatform,
 	needsResourcePlatformAcquisition,
-	resourceIdentityDisplayLabel,
 	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
 } from '../src/shared/resource-types.ts';
@@ -39,11 +38,6 @@ assert.deepEqual(resourceIdentityWithAcademic({ kind: 'post', resourcePlatform: 
 	kind: 'post',
 	resourcePlatform: 'twitter',
 });
-assert.equal(resourceIdentityDisplayLabel({ kind: 'document', resourcePlatform: 'hackernews' }), 'Hacker News');
-assert.equal(resourceIdentityDisplayLabel({ kind: 'post', resourcePlatform: 'twitter' }), 'Twitter');
-assert.equal(resourceIdentityDisplayLabel({ kind: 'document', resourcePlatform: null }), 'Document');
-assert.equal(resourceIdentityDisplayLabel({ kind: 'paper', resourcePlatform: null }), 'Paper');
-
 const translationCases = [
 	['generic document', { kind: 'document', resourcePlatform: null, fileType: null }, true],
 	['Hacker News document with PDF representation', { kind: 'document', resourcePlatform: 'hackernews', fileType: 'application/pdf' }, true],
@@ -117,7 +111,6 @@ assert.equal(withPdfExtractionMetadata(pdfPlatformMetadata, undefined), pdfPlatf
 console.info({
 	event: 'resource_identity_smoke_passed',
 	canonicalIdentityCases: canonicalIdentities.length,
-	displayLabelCases: 4,
 	detectedPlatformIdentityCases: 4,
 	invalidIdentityCases: 2,
 	platformAcquisitionCases: platformAcquisitionCases.length,

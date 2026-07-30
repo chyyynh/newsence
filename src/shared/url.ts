@@ -105,7 +105,7 @@ export function normalizePreviewImageUrl(value: string, baseUrl?: string): strin
 	return parsed.toString();
 }
 
-export function extractYouTubeId(url: string): string | null {
+function extractYouTubeId(url: string): string | null {
 	const parsed = parseUrl(url);
 	if (!parsed) return null;
 	const hostname = canonicalHost(parsed.hostname);

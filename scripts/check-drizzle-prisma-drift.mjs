@@ -106,7 +106,7 @@ function parseStringArray(source, name) {
 }
 
 function parseStringOrNullArrayRecord(source, name) {
-	const body = source.match(new RegExp(`export const ${name} = \\{([\\s\\S]*?)\\} as const`))?.[1];
+	const body = source.match(new RegExp(`(?:export )?const ${name} = \\{([\\s\\S]*?)\\} as const`))?.[1];
 	if (!body) return null;
 	const entries = new Map();
 	for (const match of body.matchAll(/(\w+):\s*\[([^\]]*)\]/g)) {

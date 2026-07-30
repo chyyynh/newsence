@@ -32,7 +32,7 @@ import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema'
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 
 /** Failed enrichments to retry before a URL is treated as permanently dead. */
-export const MAX_ENRICHMENT_ATTEMPTS = 5;
+const MAX_ENRICHMENT_ATTEMPTS = 5;
 
 type StoredResourceForProcessing = ResourceForProcessing & {
 	has_content?: boolean;
