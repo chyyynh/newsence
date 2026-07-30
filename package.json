@@ -19,6 +19,7 @@
 		"check:search-terminal-repair-251": "node scripts/check-search-terminal-repair-251.mjs",
 		"check:cron-cutover-251": "node scripts/check-cron-cutover-251.mjs",
 		"check:workflow-drain-251": "node scripts/check-workflow-drain-251.mjs",
+		"retry:search-outdated-251": "node scripts/retry-search-outdated-251.mjs",
 		"check:startup": "wrangler check startup",
 		"dev": "wrangler dev --test-scheduled",
 		"deploy:search-stuck-item-recovery-251": "wrangler deploy --config wrangler.stuck-item-recovery-251.jsonc",
