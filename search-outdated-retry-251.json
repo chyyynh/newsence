@@ -1,0 +1,2585 @@
+{
+  "schemaVersion": 3,
+  "checkpointRunId": "b20c5d5f-05b5-4eb9-a4cd-045a4d75ee21",
+  "accountId": "f62c923a073e06d7b88040b743b2ee0a",
+  "namespace": "default",
+  "aiSearchInstanceName": "newsence-corpus-v6",
+  "capturedAt": "2026-07-30T06:34:50.088Z",
+  "dbFences": {
+    "frozenAt": "2026-07-30T06:20:16.191Z",
+    "resourcesFrozenCount": 33170,
+    "eligibleCount": 32410,
+    "searchState": {
+      "indexName": "public-corpus-v6",
+      "generation": 4,
+      "generationKey": "canonical-4-kind-platform",
+      "status": "ready",
+      "rebuildEpoch": 2,
+      "readyAt": "2026-07-29T17:45:16.269Z",
+      "updatedAt": "2026-07-29T17:45:16.269Z"
+    },
+    "contractPhase": {
+      "compatibilityTypeLive": true,
+      "contractionBackup": null
+    }
+  },
+  "instanceFence": {
+    "id": "newsence-corpus-v6",
+    "enabled": true,
+    "paused": false,
+    "engineVersion": 3,
+    "indexMethod": {
+      "vector": true,
+      "keyword": true
+    },
+    "fusionMethod": "rrf",
+    "keywordTokenizer": "trigram",
+    "customMetadata": [
+      {
+        "field_name": "effective_at",
+        "data_type": "datetime"
+      },
+      {
+        "field_name": "source_id",
+        "data_type": "text"
+      },
+      {
+        "field_name": "category",
+        "data_type": "text"
+      },
+      {
+        "field_name": "kind",
+        "data_type": "text"
+      },
+      {
+        "field_name": "resource_platform",
+        "data_type": "text"
+      }
+    ]
+  },
+  "stats": {
+    "completed": 32376,
+    "queued": 0,
+    "running": 0,
+    "error": 0,
+    "outdated": 34,
+    "skipped": 0
+  },
+  "targets": [
+    {
+      "item": {
+        "itemId": "041c9ea7acca4bf98f3c541e58adccff",
+        "resourceId": "a69a6287-6e29-4737-bd7d-05a44df3387a",
+        "key": "resources/a69a6287-6e29-4737-bd7d-05a44df3387a.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_timeout_error",
+        "nextAction": null,
+        "checksum": "66d141e5bb74a66f39227c7f5be17664",
+        "chunksCount": 7,
+        "fileSize": 7185,
+        "createdAt": "2026-07-29 06:39:24",
+        "lastSeenAt": "2026-07-29 19:14:39",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1772215586000,
+          "filename": "a69a6287-6e29-4737-bd7d-05a44df3387a.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785307140000
+        }
+      },
+      "resource": {
+        "resourceId": "a69a6287-6e29-4737-bd7d-05a44df3387a",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-02-27T18:06:26.000Z",
+        "category": "AI",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7185,
+        "canonicalContentSha256": "8f69873014225c29cfc2b4225bafa60f8cb1dae8a4b92f7657299d0059401a5a",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-02-27T18:06:26.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7185,
+        "sha256": "8f69873014225c29cfc2b4225bafa60f8cb1dae8a4b92f7657299d0059401a5a"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T06:40:34.140Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/a69a6287-6e29-4737-bd7d-05a44df3387a.md",
+          "chunkCount": 7,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T20:07:26.928Z",
+          "action": "outdated",
+          "message": "Workers AI request timed out",
+          "fileKey": "resources/a69a6287-6e29-4737-bd7d-05a44df3387a.md",
+          "chunkCount": null,
+          "processingTimeMs": 20565,
+          "errorType": "workers_ai_timeout_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "c796642684164382a912c19314cfdcc2",
+        "resourceId": "b3e2f21e-39cb-49df-b142-3af72557e4d8",
+        "key": "resources/b3e2f21e-39cb-49df-b142-3af72557e4d8.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "eaae26eb87a11a84f8161f369f057539",
+        "chunksCount": 33,
+        "fileSize": 48185,
+        "createdAt": "2026-07-29 06:54:58",
+        "lastSeenAt": "2026-07-29 19:14:45",
+        "metadata": {
+          "category": "Research",
+          "effective_at": 1783532226000,
+          "filename": "b3e2f21e-39cb-49df-b142-3af72557e4d8.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "e258166a-073d-4821-a323-3be55c40ef31",
+          "timestamp": 1785308040000
+        }
+      },
+      "resource": {
+        "resourceId": "b3e2f21e-39cb-49df-b142-3af72557e4d8",
+        "sourceId": "e258166a-073d-4821-a323-3be55c40ef31",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-07-08T17:37:06.000Z",
+        "category": "Research",
+        "source": "Lesswrong",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 48185,
+        "canonicalContentSha256": "d8ca2f4d64cc81a156f9dd2146669d6e3009dbf2d6146cfc28d0f075bf725355",
+        "canonicalMetadata": {
+          "category": "Research",
+          "effective_at": "2026-07-08T17:37:06.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "e258166a-073d-4821-a323-3be55c40ef31"
+        }
+      },
+      "storedContent": {
+        "byteLength": 48185,
+        "sha256": "d8ca2f4d64cc81a156f9dd2146669d6e3009dbf2d6146cfc28d0f075bf725355"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T06:56:54.559Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/b3e2f21e-39cb-49df-b142-3af72557e4d8.md",
+          "chunkCount": 33,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T20:47:25.450Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/b3e2f21e-39cb-49df-b142-3af72557e4d8.md",
+          "chunkCount": null,
+          "processingTimeMs": 9740,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "2d88b52510c24b9998c969ccd5d797ab",
+        "resourceId": "b5ac49ab-6b67-4932-8c1d-d3ec9ddd0361",
+        "key": "resources/b5ac49ab-6b67-4932-8c1d-d3ec9ddd0361.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "06f51c6389446275ddb0951862beb245",
+        "chunksCount": 14,
+        "fileSize": 15994,
+        "createdAt": "2026-07-29 06:56:44",
+        "lastSeenAt": "2026-07-29 19:14:45",
+        "metadata": {
+          "category": "Research",
+          "effective_at": 1783688400000,
+          "filename": "b5ac49ab-6b67-4932-8c1d-d3ec9ddd0361.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "890c1a66-787d-4791-97d3-849fba4f6686",
+          "timestamp": 1785308160000
+        }
+      },
+      "resource": {
+        "resourceId": "b5ac49ab-6b67-4932-8c1d-d3ec9ddd0361",
+        "sourceId": "890c1a66-787d-4791-97d3-849fba4f6686",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en-US",
+        "effectiveAt": "2026-07-10T13:00:00.000Z",
+        "category": "Research",
+        "source": "Nvidia Dev Blog",
+        "resourceUpdatedEpochMicros": 1783690877195092,
+        "latestTranslationUpdatedEpochMicros": 1783690897789491,
+        "indexedTranslationCount": 3,
+        "canonicalContentBytes": 15994,
+        "canonicalContentSha256": "473d59b31b365fc9dc2b0d40746f38bdf9ca31be6a5dcf9f49b0567cd832bd66",
+        "canonicalMetadata": {
+          "category": "Research",
+          "effective_at": "2026-07-10T13:00:00.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "890c1a66-787d-4791-97d3-849fba4f6686"
+        }
+      },
+      "storedContent": {
+        "byteLength": 15994,
+        "sha256": "473d59b31b365fc9dc2b0d40746f38bdf9ca31be6a5dcf9f49b0567cd832bd66"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T06:57:55.631Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/b5ac49ab-6b67-4932-8c1d-d3ec9ddd0361.md",
+          "chunkCount": 14,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T20:51:37.086Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/b5ac49ab-6b67-4932-8c1d-d3ec9ddd0361.md",
+          "chunkCount": null,
+          "processingTimeMs": 5560,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "8b2bf503d448498899d7c8e553752d10",
+        "resourceId": "b5d8c910-f27d-4c84-857f-74c2da394a0a",
+        "key": "resources/b5d8c910-f27d-4c84-857f-74c2da394a0a.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "561bfaae1eb7209ea66763f74ab12fae",
+        "chunksCount": 5,
+        "fileSize": 6846,
+        "createdAt": "2026-07-29 06:56:58",
+        "lastSeenAt": "2026-07-29 19:14:45",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1784731328000,
+          "filename": "b5d8c910-f27d-4c84-857f-74c2da394a0a.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785308160000
+        }
+      },
+      "resource": {
+        "resourceId": "b5d8c910-f27d-4c84-857f-74c2da394a0a",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-07-22T14:42:08.000Z",
+        "category": "AI",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1784741510614452,
+        "latestTranslationUpdatedEpochMicros": 1784741533184464,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 6846,
+        "canonicalContentSha256": "5cba1d39d41317e1810f38b00bd2131cc0bb31829b5d1c598ff40aac1999f16f",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-07-22T14:42:08.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 6846,
+        "sha256": "5cba1d39d41317e1810f38b00bd2131cc0bb31829b5d1c598ff40aac1999f16f"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T06:58:04.211Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/b5d8c910-f27d-4c84-857f-74c2da394a0a.md",
+          "chunkCount": 5,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T20:52:10.266Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/b5d8c910-f27d-4c84-857f-74c2da394a0a.md",
+          "chunkCount": null,
+          "processingTimeMs": 7682,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "cc52750a289e4b15a1bb726bedfdf1a4",
+        "resourceId": "ba30fa15-8d73-4df5-8748-f62efa076d3c",
+        "key": "resources/ba30fa15-8d73-4df5-8748-f62efa076d3c.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "12752685c706d93cb051b177dada0add",
+        "chunksCount": 13,
+        "fileSize": 16909,
+        "createdAt": "2026-07-29 07:01:39",
+        "lastSeenAt": "2026-07-29 19:14:47",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1779383282000,
+          "filename": "ba30fa15-8d73-4df5-8748-f62efa076d3c.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "e258166a-073d-4821-a323-3be55c40ef31",
+          "timestamp": 1785308460000
+        }
+      },
+      "resource": {
+        "resourceId": "ba30fa15-8d73-4df5-8748-f62efa076d3c",
+        "sourceId": "e258166a-073d-4821-a323-3be55c40ef31",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-05-21T17:08:02.000Z",
+        "category": "AI",
+        "source": "Lesswrong",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 16909,
+        "canonicalContentSha256": "72de91fe97b6dde58215c1c185641efd2e98f41974e96c14ec4c8f97eb0b5203",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-05-21T17:08:02.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "e258166a-073d-4821-a323-3be55c40ef31"
+        }
+      },
+      "storedContent": {
+        "byteLength": 16909,
+        "sha256": "72de91fe97b6dde58215c1c185641efd2e98f41974e96c14ec4c8f97eb0b5203"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:03:18.144Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ba30fa15-8d73-4df5-8748-f62efa076d3c.md",
+          "chunkCount": 13,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:02:16.846Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/ba30fa15-8d73-4df5-8748-f62efa076d3c.md",
+          "chunkCount": null,
+          "processingTimeMs": 5419,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "569b74d51977467fb39171255cd72abc",
+        "resourceId": "ba32bcb8-04f4-437c-8d22-257678805a4b",
+        "key": "resources/ba32bcb8-04f4-437c-8d22-257678805a4b.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "6e7f533efa56fe21cd020032dbca3fa9",
+        "chunksCount": 1,
+        "fileSize": 1155,
+        "createdAt": "2026-07-29 07:01:40",
+        "lastSeenAt": "2026-07-29 19:14:47",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1778169007000,
+          "filename": "ba32bcb8-04f4-437c-8d22-257678805a4b.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "806dff9f-2414-49f2-b412-4122387e0d8c",
+          "timestamp": 1785308460000
+        }
+      },
+      "resource": {
+        "resourceId": "ba32bcb8-04f4-437c-8d22-257678805a4b",
+        "sourceId": "806dff9f-2414-49f2-b412-4122387e0d8c",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-05-07T15:50:07.000Z",
+        "category": "AI",
+        "source": "Rohan Paul",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 1155,
+        "canonicalContentSha256": "01392c3ac6d2f70b4c9d84c0500e0454cc09ee0dd105588f33d27e2b14ea7929",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-05-07T15:50:07.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "806dff9f-2414-49f2-b412-4122387e0d8c"
+        }
+      },
+      "storedContent": {
+        "byteLength": 1155,
+        "sha256": "01392c3ac6d2f70b4c9d84c0500e0454cc09ee0dd105588f33d27e2b14ea7929"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:03:47.061Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ba32bcb8-04f4-437c-8d22-257678805a4b.md",
+          "chunkCount": 1,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:02:16.846Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/ba32bcb8-04f4-437c-8d22-257678805a4b.md",
+          "chunkCount": null,
+          "processingTimeMs": 3077,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "ce0961e1483649b7951237b2616c68bd",
+        "resourceId": "ba330304-3ecf-4656-9dfe-5d369288ee16",
+        "key": "resources/ba330304-3ecf-4656-9dfe-5d369288ee16.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "6eb1962a15bc28ffc19531ba6662f92e",
+        "chunksCount": 11,
+        "fileSize": 16663,
+        "createdAt": "2026-07-29 07:01:43",
+        "lastSeenAt": "2026-07-29 19:14:47",
+        "metadata": {
+          "category": "Research",
+          "effective_at": 1778153850000,
+          "filename": "ba330304-3ecf-4656-9dfe-5d369288ee16.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "e258166a-073d-4821-a323-3be55c40ef31",
+          "timestamp": 1785308460000
+        }
+      },
+      "resource": {
+        "resourceId": "ba330304-3ecf-4656-9dfe-5d369288ee16",
+        "sourceId": "e258166a-073d-4821-a323-3be55c40ef31",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-05-07T11:37:30.000Z",
+        "category": "Research",
+        "source": "Lesswrong",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 16663,
+        "canonicalContentSha256": "fc4c772b70bde77052a34bf30c5f1e36a1576c5284f4856d3d32776eed768717",
+        "canonicalMetadata": {
+          "category": "Research",
+          "effective_at": "2026-05-07T11:37:30.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "e258166a-073d-4821-a323-3be55c40ef31"
+        }
+      },
+      "storedContent": {
+        "byteLength": 16663,
+        "sha256": "fc4c772b70bde77052a34bf30c5f1e36a1576c5284f4856d3d32776eed768717"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:03:22.885Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ba330304-3ecf-4656-9dfe-5d369288ee16.md",
+          "chunkCount": 11,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:02:16.846Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/ba330304-3ecf-4656-9dfe-5d369288ee16.md",
+          "chunkCount": null,
+          "processingTimeMs": 3505,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "2568b79b2e6d4cf1ab9ea6972a9436b5",
+        "resourceId": "bac587e6-b2d2-437b-b487-15a35750ef49",
+        "key": "resources/bac587e6-b2d2-437b-b487-15a35750ef49.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_timeout_error",
+        "nextAction": null,
+        "checksum": "6b29d0f4d983b1a00531273493a5c0c6",
+        "chunksCount": 1,
+        "fileSize": 858,
+        "createdAt": "2026-07-29 07:02:22",
+        "lastSeenAt": "2026-07-29 19:14:47",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1781286354000,
+          "filename": "bac587e6-b2d2-437b-b487-15a35750ef49.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "47a9c70c-d5c1-4a96-9c56-c97ea2b50129",
+          "timestamp": 1785308520000
+        }
+      },
+      "resource": {
+        "resourceId": "bac587e6-b2d2-437b-b487-15a35750ef49",
+        "sourceId": "47a9c70c-d5c1-4a96-9c56-c97ea2b50129",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-06-12T17:45:54.000Z",
+        "category": "Tech",
+        "source": "Andrej Karpathy",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 858,
+        "canonicalContentSha256": "892ceb9e22fc86fbcd7a0b7345b710ee8550d0135add636d4bc2eb59dde18a55",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-06-12T17:45:54.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "47a9c70c-d5c1-4a96-9c56-c97ea2b50129"
+        }
+      },
+      "storedContent": {
+        "byteLength": 858,
+        "sha256": "892ceb9e22fc86fbcd7a0b7345b710ee8550d0135add636d4bc2eb59dde18a55"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:04:27.320Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/bac587e6-b2d2-437b-b487-15a35750ef49.md",
+          "chunkCount": 1,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:03:46.911Z",
+          "action": "outdated",
+          "message": "Workers AI request timed out",
+          "fileKey": "resources/bac587e6-b2d2-437b-b487-15a35750ef49.md",
+          "chunkCount": null,
+          "processingTimeMs": 20583,
+          "errorType": "workers_ai_timeout_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "c069a573f4864fe18abea348198c6407",
+        "resourceId": "bc35243e-bf9d-4962-98a9-0339bcab4319",
+        "key": "resources/bc35243e-bf9d-4962-98a9-0339bcab4319.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_timeout_error",
+        "nextAction": null,
+        "checksum": "3d06ba2df721a2785a3c11118a407233",
+        "chunksCount": 6,
+        "fileSize": 7366,
+        "createdAt": "2026-07-29 07:04:55",
+        "lastSeenAt": "2026-07-29 19:14:48",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1782492011000,
+          "filename": "bc35243e-bf9d-4962-98a9-0339bcab4319.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785308640000
+        }
+      },
+      "resource": {
+        "resourceId": "bc35243e-bf9d-4962-98a9-0339bcab4319",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-06-26T16:40:11.000Z",
+        "category": "AI",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7366,
+        "canonicalContentSha256": "81fb64ba220afe34e8a66de4f0f4063d81276d5ea6ff2f3781bd18130dd8bf77",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-06-26T16:40:11.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7366,
+        "sha256": "81fb64ba220afe34e8a66de4f0f4063d81276d5ea6ff2f3781bd18130dd8bf77"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:07:04.396Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/bc35243e-bf9d-4962-98a9-0339bcab4319.md",
+          "chunkCount": 6,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:08:07.841Z",
+          "action": "outdated",
+          "message": "Workers AI request timed out",
+          "fileKey": "resources/bc35243e-bf9d-4962-98a9-0339bcab4319.md",
+          "chunkCount": null,
+          "processingTimeMs": 20566,
+          "errorType": "workers_ai_timeout_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "4489c6a0e07049e1947ea4d7a2204f3b",
+        "resourceId": "c1e4ed29-f8e0-4f3a-9bd3-0c7c4945dec8",
+        "key": "resources/c1e4ed29-f8e0-4f3a-9bd3-0c7c4945dec8.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_timeout_error",
+        "nextAction": null,
+        "checksum": "48599e65f1f9fd721bcd07323e3c5f5f",
+        "chunksCount": 14,
+        "fileSize": 18849,
+        "createdAt": "2026-07-29 07:12:16",
+        "lastSeenAt": "2026-07-29 19:14:50",
+        "metadata": {
+          "category": "Research",
+          "effective_at": 1767434085000,
+          "filename": "c1e4ed29-f8e0-4f3a-9bd3-0c7c4945dec8.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785309120000
+        }
+      },
+      "resource": {
+        "resourceId": "c1e4ed29-f8e0-4f3a-9bd3-0c7c4945dec8",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-01-03T09:54:45.000Z",
+        "category": "Research",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783663909264469,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 18849,
+        "canonicalContentSha256": "1052333c268b145ec335fb7f2930c14e3b8d47dcd7d7983a240193cb63198841",
+        "canonicalMetadata": {
+          "category": "Research",
+          "effective_at": "2026-01-03T09:54:45.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 18849,
+        "sha256": "1052333c268b145ec335fb7f2930c14e3b8d47dcd7d7983a240193cb63198841"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:13:53.209Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/c1e4ed29-f8e0-4f3a-9bd3-0c7c4945dec8.md",
+          "chunkCount": 14,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:22:14.612Z",
+          "action": "outdated",
+          "message": "Workers AI request timed out",
+          "fileKey": "resources/c1e4ed29-f8e0-4f3a-9bd3-0c7c4945dec8.md",
+          "chunkCount": null,
+          "processingTimeMs": 20568,
+          "errorType": "workers_ai_timeout_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "001427df628944f8833b38f85a130877",
+        "resourceId": "cf07659c-5b63-48da-b841-92c9967ef0c9",
+        "key": "resources/cf07659c-5b63-48da-b841-92c9967ef0c9.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "24a51210cb0530e3a659a266f0568234",
+        "chunksCount": 4,
+        "fileSize": 5940,
+        "createdAt": "2026-07-29 07:25:34",
+        "lastSeenAt": "2026-07-29 19:14:55",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1779391936000,
+          "filename": "cf07659c-5b63-48da-b841-92c9967ef0c9.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785309900000
+        }
+      },
+      "resource": {
+        "resourceId": "cf07659c-5b63-48da-b841-92c9967ef0c9",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-05-21T19:32:16.000Z",
+        "category": "Tech",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 5940,
+        "canonicalContentSha256": "d9673542723aaf439b7d34400cc5d2d435e77c5458dd7bfeb2d4251f841eed9d",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-05-21T19:32:16.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 5940,
+        "sha256": "d9673542723aaf439b7d34400cc5d2d435e77c5458dd7bfeb2d4251f841eed9d"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:26:39.285Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/cf07659c-5b63-48da-b841-92c9967ef0c9.md",
+          "chunkCount": 4,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T21:57:16.379Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/cf07659c-5b63-48da-b841-92c9967ef0c9.md",
+          "chunkCount": null,
+          "processingTimeMs": 2594,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "9d180bfd018447d587b7809b7768bc30",
+        "resourceId": "daa744b4-78ca-4794-a808-45d3eb5542f7",
+        "key": "resources/daa744b4-78ca-4794-a808-45d3eb5542f7.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "dab5c194414113391eb0ba4b77013292",
+        "chunksCount": 5,
+        "fileSize": 5377,
+        "createdAt": "2026-07-29 07:38:43",
+        "lastSeenAt": "2026-07-29 19:15:01",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1772806696000,
+          "filename": "daa744b4-78ca-4794-a808-45d3eb5542f7.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+          "timestamp": 1785310680000
+        }
+      },
+      "resource": {
+        "resourceId": "daa744b4-78ca-4794-a808-45d3eb5542f7",
+        "sourceId": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-03-06T14:18:16.000Z",
+        "category": "Tech",
+        "source": "Techcrunch",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 5377,
+        "canonicalContentSha256": "ee8720cefcbb94128adcbb9d0de50442c28ca939fe78dce31484f6d17ae2e145",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-03-06T14:18:16.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9"
+        }
+      },
+      "storedContent": {
+        "byteLength": 5377,
+        "sha256": "ee8720cefcbb94128adcbb9d0de50442c28ca939fe78dce31484f6d17ae2e145"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:40:18.008Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/daa744b4-78ca-4794-a808-45d3eb5542f7.md",
+          "chunkCount": 5,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T22:41:33.296Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/daa744b4-78ca-4794-a808-45d3eb5542f7.md",
+          "chunkCount": null,
+          "processingTimeMs": 2955,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "b1fab05d0e7a43b2b66366895adf744e",
+        "resourceId": "df5963a5-c395-432e-a82a-12e377e7a69e",
+        "key": "resources/df5963a5-c395-432e-a82a-12e377e7a69e.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "4220d27d5065b4850f3fbcaef2011b4f",
+        "chunksCount": 7,
+        "fileSize": 7216,
+        "createdAt": "2026-07-29 07:43:52",
+        "lastSeenAt": "2026-07-29 19:15:02",
+        "metadata": {
+          "category": "Business",
+          "effective_at": 1769629865000,
+          "filename": "df5963a5-c395-432e-a82a-12e377e7a69e.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785310980000
+        }
+      },
+      "resource": {
+        "resourceId": "df5963a5-c395-432e-a82a-12e377e7a69e",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-01-28T19:51:05.000Z",
+        "category": "Business",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791788815801,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7216,
+        "canonicalContentSha256": "4dcebb37e5ef5ea29cbab9d1e350afec938d16d426640f7bc702ce066563c113",
+        "canonicalMetadata": {
+          "category": "Business",
+          "effective_at": "2026-01-28T19:51:05.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7216,
+        "sha256": "4dcebb37e5ef5ea29cbab9d1e350afec938d16d426640f7bc702ce066563c113"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:44:59.043Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/df5963a5-c395-432e-a82a-12e377e7a69e.md",
+          "chunkCount": 7,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:02:08.463Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/df5963a5-c395-432e-a82a-12e377e7a69e.md",
+          "chunkCount": null,
+          "processingTimeMs": 2726,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "c84c1a1530b941c690947e303b3e82fd",
+        "resourceId": "dfbf3b19-95c6-4916-8922-8f9db71fde11",
+        "key": "resources/dfbf3b19-95c6-4916-8922-8f9db71fde11.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "fac0c9bd6ad4aa61691a7dd601f6c38f",
+        "chunksCount": 4,
+        "fileSize": 7921,
+        "createdAt": "2026-07-29 07:44:25",
+        "lastSeenAt": "2026-07-29 19:15:03",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1776091985000,
+          "filename": "dfbf3b19-95c6-4916-8922-8f9db71fde11.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785311040000
+        }
+      },
+      "resource": {
+        "resourceId": "dfbf3b19-95c6-4916-8922-8f9db71fde11",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-04-13T14:53:05.000Z",
+        "category": "Tech",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7921,
+        "canonicalContentSha256": "77c272553874d41428503b2e692f796e6058ab9238e0c3c4e0c27ed150e3ccdb",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-04-13T14:53:05.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7921,
+        "sha256": "77c272553874d41428503b2e692f796e6058ab9238e0c3c4e0c27ed150e3ccdb"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:46:03.512Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/dfbf3b19-95c6-4916-8922-8f9db71fde11.md",
+          "chunkCount": 4,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:04:22.072Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/dfbf3b19-95c6-4916-8922-8f9db71fde11.md",
+          "chunkCount": null,
+          "processingTimeMs": 2849,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "d6fdbe3a59ef47eea4ce0fe76a855256",
+        "resourceId": "e0406901-577b-4c5f-a614-dae723dc0127",
+        "key": "resources/e0406901-577b-4c5f-a614-dae723dc0127.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "85906ae69fec8ab5ebccd7eaad72e783",
+        "chunksCount": 6,
+        "fileSize": 8411,
+        "createdAt": "2026-07-29 07:45:13",
+        "lastSeenAt": "2026-07-29 19:15:04",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1773329400000,
+          "filename": "e0406901-577b-4c5f-a614-dae723dc0127.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+          "timestamp": 1785311100000
+        }
+      },
+      "resource": {
+        "resourceId": "e0406901-577b-4c5f-a614-dae723dc0127",
+        "sourceId": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-03-12T15:30:00.000Z",
+        "category": "AI",
+        "source": "Techcrunch",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 8411,
+        "canonicalContentSha256": "b4f3f7914007f65ae62db60b3af0d1601f5d81598b18d036ddb19894bb1284a7",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-03-12T15:30:00.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9"
+        }
+      },
+      "storedContent": {
+        "byteLength": 8411,
+        "sha256": "b4f3f7914007f65ae62db60b3af0d1601f5d81598b18d036ddb19894bb1284a7"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:46:20.142Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e0406901-577b-4c5f-a614-dae723dc0127.md",
+          "chunkCount": 6,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:07:58.809Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/e0406901-577b-4c5f-a614-dae723dc0127.md",
+          "chunkCount": null,
+          "processingTimeMs": 2646,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "795e8048217e4a9481dbba0317d65306",
+        "resourceId": "e0694222-80fe-4eb6-a314-9bcc67768fcc",
+        "key": "resources/e0694222-80fe-4eb6-a314-9bcc67768fcc.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "8ea2df07ddf77eab2daa5d5bb4adbf15",
+        "chunksCount": 4,
+        "fileSize": 7370,
+        "createdAt": "2026-07-29 07:45:23",
+        "lastSeenAt": "2026-07-29 19:15:04",
+        "metadata": {
+          "category": "Research",
+          "effective_at": 1773152301000,
+          "filename": "e0694222-80fe-4eb6-a314-9bcc67768fcc.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785311100000
+        }
+      },
+      "resource": {
+        "resourceId": "e0694222-80fe-4eb6-a314-9bcc67768fcc",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-03-10T14:18:21.000Z",
+        "category": "Research",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7370,
+        "canonicalContentSha256": "5fcad2652b90e4f9f58ee8712fdb1e839a4fd407442a2db665ed3a8d60d46ad9",
+        "canonicalMetadata": {
+          "category": "Research",
+          "effective_at": "2026-03-10T14:18:21.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7370,
+        "sha256": "5fcad2652b90e4f9f58ee8712fdb1e839a4fd407442a2db665ed3a8d60d46ad9"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:46:29.255Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e0694222-80fe-4eb6-a314-9bcc67768fcc.md",
+          "chunkCount": 4,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:08:35.255Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/e0694222-80fe-4eb6-a314-9bcc67768fcc.md",
+          "chunkCount": null,
+          "processingTimeMs": 2949,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "61039b8e19a2403ab6c473abe60a5d78",
+        "resourceId": "e19947a5-ba6e-419c-9d30-36f110c6b9f1",
+        "key": "resources/e19947a5-ba6e-419c-9d30-36f110c6b9f1.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "722df778f417fa5e687dfe4735df9629",
+        "chunksCount": 11,
+        "fileSize": 17692,
+        "createdAt": "2026-07-29 07:46:33",
+        "lastSeenAt": "2026-07-29 19:15:04",
+        "metadata": {
+          "category": "Other",
+          "effective_at": 1784662135000,
+          "filename": "e19947a5-ba6e-419c-9d30-36f110c6b9f1.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785311160000
+        }
+      },
+      "resource": {
+        "resourceId": "e19947a5-ba6e-419c-9d30-36f110c6b9f1",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-07-21T19:28:55.000Z",
+        "category": "Other",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1785092474499777,
+        "latestTranslationUpdatedEpochMicros": 1785092524180502,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 17692,
+        "canonicalContentSha256": "e15b1d98379d7f7708a47d2c640043923f42a3517227a0fd61f28d5a785a0953",
+        "canonicalMetadata": {
+          "category": "Other",
+          "effective_at": "2026-07-21T19:28:55.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 17692,
+        "sha256": "e15b1d98379d7f7708a47d2c640043923f42a3517227a0fd61f28d5a785a0953"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:47:43.096Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e19947a5-ba6e-419c-9d30-36f110c6b9f1.md",
+          "chunkCount": 11,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:15:40.476Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/e19947a5-ba6e-419c-9d30-36f110c6b9f1.md",
+          "chunkCount": null,
+          "processingTimeMs": 22488,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "954dd0ab05ba4e88b6208a86589a3189",
+        "resourceId": "e19a593c-5699-4b28-9dfc-d374f88807d6",
+        "key": "resources/e19a593c-5699-4b28-9dfc-d374f88807d6.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "e29f69ba87b6fbbdf005f7d08579ad39",
+        "chunksCount": 4,
+        "fileSize": 4194,
+        "createdAt": "2026-07-29 07:46:33",
+        "lastSeenAt": "2026-07-29 19:15:04",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1773683327000,
+          "filename": "e19a593c-5699-4b28-9dfc-d374f88807d6.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "9bbdbc15-7edc-45d6-9aab-cbc0cad80509",
+          "timestamp": 1785311160000
+        }
+      },
+      "resource": {
+        "resourceId": "e19a593c-5699-4b28-9dfc-d374f88807d6",
+        "sourceId": "9bbdbc15-7edc-45d6-9aab-cbc0cad80509",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-03-16T17:48:47.000Z",
+        "category": "Tech",
+        "source": "Wired - AI",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 4194,
+        "canonicalContentSha256": "b252a2e32cd9c1b7c502b55986f72b2ac2b2fe3fe8d8dd0df27b6ed2be567f1b",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-03-16T17:48:47.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "9bbdbc15-7edc-45d6-9aab-cbc0cad80509"
+        }
+      },
+      "storedContent": {
+        "byteLength": 4194,
+        "sha256": "b252a2e32cd9c1b7c502b55986f72b2ac2b2fe3fe8d8dd0df27b6ed2be567f1b"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:47:40.416Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e19a593c-5699-4b28-9dfc-d374f88807d6.md",
+          "chunkCount": 4,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:15:40.476Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/e19a593c-5699-4b28-9dfc-d374f88807d6.md",
+          "chunkCount": null,
+          "processingTimeMs": 20951,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "291b2193cfc54b78ab7595894e049101",
+        "resourceId": "e1aad8db-948c-42b7-b821-b6592903f79e",
+        "key": "resources/e1aad8db-948c-42b7-b821-b6592903f79e.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "215ac0e0317c85497ed353c951f8cbe3",
+        "chunksCount": 1,
+        "fileSize": 1324,
+        "createdAt": "2026-07-29 07:46:36",
+        "lastSeenAt": "2026-07-29 19:15:04",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1780237130000,
+          "filename": "e1aad8db-948c-42b7-b821-b6592903f79e.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "806dff9f-2414-49f2-b412-4122387e0d8c",
+          "timestamp": 1785311160000
+        }
+      },
+      "resource": {
+        "resourceId": "e1aad8db-948c-42b7-b821-b6592903f79e",
+        "sourceId": "806dff9f-2414-49f2-b412-4122387e0d8c",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-05-31T14:18:50.000Z",
+        "category": "AI",
+        "source": "Rohan Paul",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 1324,
+        "canonicalContentSha256": "9c44e1e16a9eda923ed19a19eec231fe6c5b2633b9808a4d05f59cc8b0eec3e6",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-05-31T14:18:50.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "806dff9f-2414-49f2-b412-4122387e0d8c"
+        }
+      },
+      "storedContent": {
+        "byteLength": 1324,
+        "sha256": "9c44e1e16a9eda923ed19a19eec231fe6c5b2633b9808a4d05f59cc8b0eec3e6"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:47:41.131Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e1aad8db-948c-42b7-b821-b6592903f79e.md",
+          "chunkCount": 1,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:15:40.476Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/e1aad8db-948c-42b7-b821-b6592903f79e.md",
+          "chunkCount": null,
+          "processingTimeMs": 52334,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "7cfa42480f5b41f3ab0c6e8958e4eed5",
+        "resourceId": "e1bb30b2-6b75-41e7-810f-4c0fbcdf5348",
+        "key": "resources/e1bb30b2-6b75-41e7-810f-4c0fbcdf5348.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "unknown_error",
+        "nextAction": null,
+        "checksum": "effcc4089920d706575bb06c5868e5ba",
+        "chunksCount": 2,
+        "fileSize": 2850,
+        "createdAt": "2026-07-29 07:46:39",
+        "lastSeenAt": "2026-07-29 19:15:04",
+        "metadata": {
+          "category": "Business",
+          "effective_at": 1783126811000,
+          "filename": "e1bb30b2-6b75-41e7-810f-4c0fbcdf5348.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "d1bce2d6-4b5c-4e24-ab01-24d11908f43e",
+          "timestamp": 1785311160000
+        }
+      },
+      "resource": {
+        "resourceId": "e1bb30b2-6b75-41e7-810f-4c0fbcdf5348",
+        "sourceId": "d1bce2d6-4b5c-4e24-ab01-24d11908f43e",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-07-04T01:00:11.000Z",
+        "category": "Business",
+        "source": "Jukan",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 2850,
+        "canonicalContentSha256": "3fad5cb39da50d8c0243abff5aebf9bce9a79a940a1bade11b2d3f2a885a71eb",
+        "canonicalMetadata": {
+          "category": "Business",
+          "effective_at": "2026-07-04T01:00:11.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "d1bce2d6-4b5c-4e24-ab01-24d11908f43e"
+        }
+      },
+      "storedContent": {
+        "byteLength": 2850,
+        "sha256": "3fad5cb39da50d8c0243abff5aebf9bce9a79a940a1bade11b2d3f2a885a71eb"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:47:46.324Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e1bb30b2-6b75-41e7-810f-4c0fbcdf5348.md",
+          "chunkCount": 2,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:15:40.476Z",
+          "action": "outdated",
+          "message": "An unexpected error occurred",
+          "fileKey": "resources/e1bb30b2-6b75-41e7-810f-4c0fbcdf5348.md",
+          "chunkCount": null,
+          "processingTimeMs": 39528,
+          "errorType": "unknown_error",
+          "errorMessage": "Durable Object reset because its code was updated."
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "4ed6afeffa9b4db8bc1125e228989eaa",
+        "resourceId": "e642fcff-a96d-4175-85c1-2c7740dc02d7",
+        "key": "resources/e642fcff-a96d-4175-85c1-2c7740dc02d7.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "9add3047b27a2803b24eccef8749a8e1",
+        "chunksCount": 1,
+        "fileSize": 1196,
+        "createdAt": "2026-07-29 07:51:38",
+        "lastSeenAt": "2026-07-29 19:15:05",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1781329683000,
+          "filename": "e642fcff-a96d-4175-85c1-2c7740dc02d7.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "359b9ddc-aa08-4141-b90e-d00cdd6f5013",
+          "timestamp": 1785311460000
+        }
+      },
+      "resource": {
+        "resourceId": "e642fcff-a96d-4175-85c1-2c7740dc02d7",
+        "sourceId": "359b9ddc-aa08-4141-b90e-d00cdd6f5013",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-06-13T05:48:03.000Z",
+        "category": "AI",
+        "source": "teortaxes",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 1196,
+        "canonicalContentSha256": "83322fa94659010b71fe1b1d864bc3c01f80075ab635c45311b3a17bc0542e10",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-06-13T05:48:03.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "359b9ddc-aa08-4141-b90e-d00cdd6f5013"
+        }
+      },
+      "storedContent": {
+        "byteLength": 1196,
+        "sha256": "83322fa94659010b71fe1b1d864bc3c01f80075ab635c45311b3a17bc0542e10"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:53:12.483Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e642fcff-a96d-4175-85c1-2c7740dc02d7.md",
+          "chunkCount": 1,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:52:07.568Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/e642fcff-a96d-4175-85c1-2c7740dc02d7.md",
+          "chunkCount": null,
+          "processingTimeMs": 2682,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "b30c21f1e4c64cc28891e7a8df716731",
+        "resourceId": "e6a8c9f6-ff8c-4093-b0af-49c230d60bfa",
+        "key": "resources/e6a8c9f6-ff8c-4093-b0af-49c230d60bfa.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "bf6184f58fe99103b3407f7f7a77b5de",
+        "chunksCount": 6,
+        "fileSize": 6886,
+        "createdAt": "2026-07-29 07:52:00",
+        "lastSeenAt": "2026-07-29 19:15:06",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1775613027000,
+          "filename": "e6a8c9f6-ff8c-4093-b0af-49c230d60bfa.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "d1bce2d6-4b5c-4e24-ab01-24d11908f43e",
+          "timestamp": 1785311520000
+        }
+      },
+      "resource": {
+        "resourceId": "e6a8c9f6-ff8c-4093-b0af-49c230d60bfa",
+        "sourceId": "d1bce2d6-4b5c-4e24-ab01-24d11908f43e",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-04-08T01:50:27.000Z",
+        "category": "AI",
+        "source": "Jukan",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 6886,
+        "canonicalContentSha256": "2f1b376224db532b442cd2d6a16ab808f032816372c44eb4242833c81c75f6e4",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-04-08T01:50:27.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "d1bce2d6-4b5c-4e24-ab01-24d11908f43e"
+        }
+      },
+      "storedContent": {
+        "byteLength": 6886,
+        "sha256": "2f1b376224db532b442cd2d6a16ab808f032816372c44eb4242833c81c75f6e4"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:53:06.984Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e6a8c9f6-ff8c-4093-b0af-49c230d60bfa.md",
+          "chunkCount": 6,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-29T23:53:42.392Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/e6a8c9f6-ff8c-4093-b0af-49c230d60bfa.md",
+          "chunkCount": null,
+          "processingTimeMs": 3103,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "0a163c0bdb224aa28f0063f690c64114",
+        "resourceId": "e9587b29-1eb6-4e95-9141-bbf6f4a6ee90",
+        "key": "resources/e9587b29-1eb6-4e95-9141-bbf6f4a6ee90.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "344f9e564a3995847e00eaabf5c3c483",
+        "chunksCount": 14,
+        "fileSize": 19708,
+        "createdAt": "2026-07-29 07:56:44",
+        "lastSeenAt": "2026-07-29 19:15:07",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1782210600000,
+          "filename": "e9587b29-1eb6-4e95-9141-bbf6f4a6ee90.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "9bbdbc15-7edc-45d6-9aab-cbc0cad80509",
+          "timestamp": 1785311760000
+        }
+      },
+      "resource": {
+        "resourceId": "e9587b29-1eb6-4e95-9141-bbf6f4a6ee90",
+        "sourceId": "9bbdbc15-7edc-45d6-9aab-cbc0cad80509",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-06-23T10:30:00.000Z",
+        "category": "Tech",
+        "source": "Wired - AI",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783656097124472,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 19708,
+        "canonicalContentSha256": "2e9857236845ba1b6bacfa9027c3355575276f3487a9dd01aa5d37dabe4deaf2",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-06-23T10:30:00.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "9bbdbc15-7edc-45d6-9aab-cbc0cad80509"
+        }
+      },
+      "storedContent": {
+        "byteLength": 19708,
+        "sha256": "2e9857236845ba1b6bacfa9027c3355575276f3487a9dd01aa5d37dabe4deaf2"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:58:27.740Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/e9587b29-1eb6-4e95-9141-bbf6f4a6ee90.md",
+          "chunkCount": 14,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:09:07.482Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/e9587b29-1eb6-4e95-9141-bbf6f4a6ee90.md",
+          "chunkCount": null,
+          "processingTimeMs": 3053,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "62230cbe108e409b88c6efbf74da22b5",
+        "resourceId": "ea27e29a-1e70-46d8-ab28-b7973819452d",
+        "key": "resources/ea27e29a-1e70-46d8-ab28-b7973819452d.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "17027dbb890a7734cd97b171f936bff3",
+        "chunksCount": 9,
+        "fileSize": 12034,
+        "createdAt": "2026-07-29 07:58:02",
+        "lastSeenAt": "2026-07-29 19:15:07",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1767211393000,
+          "filename": "ea27e29a-1e70-46d8-ab28-b7973819452d.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785311880000
+        }
+      },
+      "resource": {
+        "resourceId": "ea27e29a-1e70-46d8-ab28-b7973819452d",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2025-12-31T20:03:13.000Z",
+        "category": "AI",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783742238198544,
+        "latestTranslationUpdatedEpochMicros": 1783695259501570,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 12034,
+        "canonicalContentSha256": "5be51da5a6d6e9348ed08d09d929645252b314d26986d848a82a12b2f96fa00c",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2025-12-31T20:03:13.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 12034,
+        "sha256": "5be51da5a6d6e9348ed08d09d929645252b314d26986d848a82a12b2f96fa00c"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T07:59:08.401Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ea27e29a-1e70-46d8-ab28-b7973819452d.md",
+          "chunkCount": 9,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:11:51.203Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/ea27e29a-1e70-46d8-ab28-b7973819452d.md",
+          "chunkCount": null,
+          "processingTimeMs": 2590,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "d627293773b441c1a93b6e7a4d63a14f",
+        "resourceId": "eb62d4fd-95b7-4ac4-869f-5cf1aaae063a",
+        "key": "resources/eb62d4fd-95b7-4ac4-869f-5cf1aaae063a.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "8336390ffc3a730d49dfb9a160fc9cd9",
+        "chunksCount": 4,
+        "fileSize": 6639,
+        "createdAt": "2026-07-29 07:59:43",
+        "lastSeenAt": "2026-07-29 19:15:08",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1775066260000,
+          "filename": "eb62d4fd-95b7-4ac4-869f-5cf1aaae063a.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785311940000
+        }
+      },
+      "resource": {
+        "resourceId": "eb62d4fd-95b7-4ac4-869f-5cf1aaae063a",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-04-01T17:57:40.000Z",
+        "category": "Tech",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 6639,
+        "canonicalContentSha256": "99e22cb6dcdfc27f33fe3c4e2fba9661b1aa786c347a45412372009451cc94c2",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-04-01T17:57:40.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 6639,
+        "sha256": "99e22cb6dcdfc27f33fe3c4e2fba9661b1aa786c347a45412372009451cc94c2"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:01:21.369Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/eb62d4fd-95b7-4ac4-869f-5cf1aaae063a.md",
+          "chunkCount": 4,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:17:18.855Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/eb62d4fd-95b7-4ac4-869f-5cf1aaae063a.md",
+          "chunkCount": null,
+          "processingTimeMs": 2458,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "159042bbaf8640228ff2c674650fed1a",
+        "resourceId": "eb65de29-973b-4f53-9ff6-c13a498332d6",
+        "key": "resources/eb65de29-973b-4f53-9ff6-c13a498332d6.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "9f0fe2ebcf6f66c77249e577393da7ab",
+        "chunksCount": 1,
+        "fileSize": 1488,
+        "createdAt": "2026-07-29 07:59:47",
+        "lastSeenAt": "2026-07-29 19:15:08",
+        "metadata": {
+          "category": "Finance",
+          "effective_at": 1764682380000,
+          "filename": "eb65de29-973b-4f53-9ff6-c13a498332d6.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "timestamp": 1785311940000
+        }
+      },
+      "resource": {
+        "resourceId": "eb65de29-973b-4f53-9ff6-c13a498332d6",
+        "sourceId": null,
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2025-12-02T13:33:00.000Z",
+        "category": "Finance",
+        "source": "Twitter",
+        "resourceUpdatedEpochMicros": 1783696331069131,
+        "latestTranslationUpdatedEpochMicros": 1783864543997917,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 1488,
+        "canonicalContentSha256": "b5e6b0e8c3f56cccacc266a1683594f1f3de7ecc31b696c474f1da7089b46b54",
+        "canonicalMetadata": {
+          "category": "Finance",
+          "effective_at": "2025-12-02T13:33:00.000Z",
+          "kind": "post",
+          "resource_platform": "twitter"
+        }
+      },
+      "storedContent": {
+        "byteLength": 1488,
+        "sha256": "b5e6b0e8c3f56cccacc266a1683594f1f3de7ecc31b696c474f1da7089b46b54"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:01:22.378Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/eb65de29-973b-4f53-9ff6-c13a498332d6.md",
+          "chunkCount": 1,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:17:18.855Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/eb65de29-973b-4f53-9ff6-c13a498332d6.md",
+          "chunkCount": null,
+          "processingTimeMs": 2696,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "e380f6771561426a930255cd3c16a72b",
+        "resourceId": "ebe65743-6212-4890-a4b9-8db526c69f80",
+        "key": "resources/ebe65743-6212-4890-a4b9-8db526c69f80.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "30147ae008d377d6b39609d825c9a1df",
+        "chunksCount": 6,
+        "fileSize": 7565,
+        "createdAt": "2026-07-29 08:00:40",
+        "lastSeenAt": "2026-07-29 19:15:08",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1771184457000,
+          "filename": "ebe65743-6212-4890-a4b9-8db526c69f80.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785312000000
+        }
+      },
+      "resource": {
+        "resourceId": "ebe65743-6212-4890-a4b9-8db526c69f80",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-02-15T19:40:57.000Z",
+        "category": "Tech",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791788815801,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7565,
+        "canonicalContentSha256": "c76a714116c08d58291ba4de14a1a35b7d05fdd73092e4129d3d4bacd1cf58a8",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-02-15T19:40:57.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7565,
+        "sha256": "c76a714116c08d58291ba4de14a1a35b7d05fdd73092e4129d3d4bacd1cf58a8"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:02:19.158Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ebe65743-6212-4890-a4b9-8db526c69f80.md",
+          "chunkCount": 6,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:19:30.412Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/ebe65743-6212-4890-a4b9-8db526c69f80.md",
+          "chunkCount": null,
+          "processingTimeMs": 2819,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "9d93c6084bf44891ab47f015bcd3a0b4",
+        "resourceId": "ec50e24c-3d10-47f9-8520-aaa126522bb2",
+        "key": "resources/ec50e24c-3d10-47f9-8520-aaa126522bb2.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_timeout_error",
+        "nextAction": null,
+        "checksum": "58aa804cb9ee7881865b7685d91f7d13",
+        "chunksCount": 8,
+        "fileSize": 8802,
+        "createdAt": "2026-07-29 08:01:14",
+        "lastSeenAt": "2026-07-29 19:15:08",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1778868884000,
+          "filename": "ec50e24c-3d10-47f9-8520-aaa126522bb2.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+          "timestamp": 1785312060000
+        }
+      },
+      "resource": {
+        "resourceId": "ec50e24c-3d10-47f9-8520-aaa126522bb2",
+        "sourceId": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-05-15T18:14:44.000Z",
+        "category": "AI",
+        "source": "Techcrunch",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 8802,
+        "canonicalContentSha256": "5fd2962c9bf54ffefddd353287fa3884b721d267632637966568b97762b32945",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-05-15T18:14:44.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9"
+        }
+      },
+      "storedContent": {
+        "byteLength": 8802,
+        "sha256": "5fd2962c9bf54ffefddd353287fa3884b721d267632637966568b97762b32945"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:01:54.432Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ec50e24c-3d10-47f9-8520-aaa126522bb2.md",
+          "chunkCount": 8,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:21:50.823Z",
+          "action": "outdated",
+          "message": "Workers AI request timed out",
+          "fileKey": "resources/ec50e24c-3d10-47f9-8520-aaa126522bb2.md",
+          "chunkCount": null,
+          "processingTimeMs": 20568,
+          "errorType": "workers_ai_timeout_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "ed39eb98800745ebb65eeb0a85e51af9",
+        "resourceId": "ec63ec2f-73fb-4b54-96c7-7134ba11a919",
+        "key": "resources/ec63ec2f-73fb-4b54-96c7-7134ba11a919.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "1eafdb68d54f3af253060e1d8b6abc7a",
+        "chunksCount": 9,
+        "fileSize": 10367,
+        "createdAt": "2026-07-29 08:01:19",
+        "lastSeenAt": "2026-07-29 19:15:08",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1767013609000,
+          "filename": "ec63ec2f-73fb-4b54-96c7-7134ba11a919.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785312060000
+        }
+      },
+      "resource": {
+        "resourceId": "ec63ec2f-73fb-4b54-96c7-7134ba11a919",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2025-12-29T13:06:49.000Z",
+        "category": "AI",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783742238198544,
+        "latestTranslationUpdatedEpochMicros": 1783700770134016,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 10367,
+        "canonicalContentSha256": "8a4056ca5fe7685f3f6c3d96b07e7a98a254b425423fe4cacc3b30bfdfd91b66",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2025-12-29T13:06:49.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 10367,
+        "sha256": "8a4056ca5fe7685f3f6c3d96b07e7a98a254b425423fe4cacc3b30bfdfd91b66"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:02:31.400Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/ec63ec2f-73fb-4b54-96c7-7134ba11a919.md",
+          "chunkCount": 9,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:22:21.217Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/ec63ec2f-73fb-4b54-96c7-7134ba11a919.md",
+          "chunkCount": null,
+          "processingTimeMs": 3170,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "c24b17fba7a1429ea1bda90d8986c6f9",
+        "resourceId": "eff82cd4-2306-4f6e-b432-2c98678d8ca8",
+        "key": "resources/eff82cd4-2306-4f6e-b432-2c98678d8ca8.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "41ba2fcf862ac21ea86ee526f84ebd5b",
+        "chunksCount": 7,
+        "fileSize": 7208,
+        "createdAt": "2026-07-29 08:05:57",
+        "lastSeenAt": "2026-07-29 19:15:09",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1770137630000,
+          "filename": "eff82cd4-2306-4f6e-b432-2c98678d8ca8.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785312300000
+        }
+      },
+      "resource": {
+        "resourceId": "eff82cd4-2306-4f6e-b432-2c98678d8ca8",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-02-03T16:53:50.000Z",
+        "category": "Tech",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791788815801,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7208,
+        "canonicalContentSha256": "a82ddd22e34dc81b24ce4f6ccce9bd0122dece0fcb11a0f1546e2a07e451a1e2",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-02-03T16:53:50.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7208,
+        "sha256": "a82ddd22e34dc81b24ce4f6ccce9bd0122dece0fcb11a0f1546e2a07e451a1e2"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:07:32.901Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/eff82cd4-2306-4f6e-b432-2c98678d8ca8.md",
+          "chunkCount": 7,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:38:19.596Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/eff82cd4-2306-4f6e-b432-2c98678d8ca8.md",
+          "chunkCount": null,
+          "processingTimeMs": 2959,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "b032ff0d5a474db8bce57fc52afd13de",
+        "resourceId": "f0965d89-1b96-4f95-ba7f-4a7f2a2e49fd",
+        "key": "resources/f0965d89-1b96-4f95-ba7f-4a7f2a2e49fd.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "9bc51baa986b2720e07d019d689a0dfd",
+        "chunksCount": 7,
+        "fileSize": 8327,
+        "createdAt": "2026-07-29 08:07:06",
+        "lastSeenAt": "2026-07-29 19:15:10",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1771532942000,
+          "filename": "f0965d89-1b96-4f95-ba7f-4a7f2a2e49fd.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+          "timestamp": 1785312420000
+        }
+      },
+      "resource": {
+        "resourceId": "f0965d89-1b96-4f95-ba7f-4a7f2a2e49fd",
+        "sourceId": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9",
+        "kind": "document",
+        "resourcePlatform": null,
+        "originalLang": "en",
+        "effectiveAt": "2026-02-19T20:29:02.000Z",
+        "category": "Tech",
+        "source": "Techcrunch",
+        "resourceUpdatedEpochMicros": 1783626834587474,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 8327,
+        "canonicalContentSha256": "2b546fd609ebd5360751395c743d1268321bdbcdd243396051921ac0f8adc020",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-02-19T20:29:02.000Z",
+          "kind": "document",
+          "resource_platform": "none",
+          "source_id": "1e384c67-41b4-42bc-b8b9-0a3729f62ba9"
+        }
+      },
+      "storedContent": {
+        "byteLength": 8327,
+        "sha256": "2b546fd609ebd5360751395c743d1268321bdbcdd243396051921ac0f8adc020"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:08:14.829Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/f0965d89-1b96-4f95-ba7f-4a7f2a2e49fd.md",
+          "chunkCount": 7,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:42:26.793Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/f0965d89-1b96-4f95-ba7f-4a7f2a2e49fd.md",
+          "chunkCount": null,
+          "processingTimeMs": 2808,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "99351d514ece4f058c5661eb3bdc7e72",
+        "resourceId": "f38927aa-6a92-40dc-acf7-5b3e7f248574",
+        "key": "resources/f38927aa-6a92-40dc-acf7-5b3e7f248574.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "c5d90ae19572da494db5711fed99c502",
+        "chunksCount": 1,
+        "fileSize": 961,
+        "createdAt": "2026-07-29 08:11:06",
+        "lastSeenAt": "2026-07-29 19:15:10",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1785116428000,
+          "filename": "f38927aa-6a92-40dc-acf7-5b3e7f248574.md",
+          "folder": "resources/",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "e11131ea-c311-4c3b-8707-8e32ded1034a",
+          "timestamp": 1785312660000
+        }
+      },
+      "resource": {
+        "resourceId": "f38927aa-6a92-40dc-acf7-5b3e7f248574",
+        "sourceId": "e11131ea-c311-4c3b-8707-8e32ded1034a",
+        "kind": "post",
+        "resourcePlatform": "twitter",
+        "originalLang": "en",
+        "effectiveAt": "2026-07-27T01:40:28.000Z",
+        "category": "AI",
+        "source": "Peter Yang",
+        "resourceUpdatedEpochMicros": 1785132053587844,
+        "latestTranslationUpdatedEpochMicros": 1785132061412295,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 961,
+        "canonicalContentSha256": "f38dcdb430f0692f6f8082698a9b6b202c25965b62813b69195764219715ccf2",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-07-27T01:40:28.000Z",
+          "kind": "post",
+          "resource_platform": "twitter",
+          "source_id": "e11131ea-c311-4c3b-8707-8e32ded1034a"
+        }
+      },
+      "storedContent": {
+        "byteLength": 961,
+        "sha256": "f38dcdb430f0692f6f8082698a9b6b202c25965b62813b69195764219715ccf2"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:12:47.887Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/f38927aa-6a92-40dc-acf7-5b3e7f248574.md",
+          "chunkCount": 1,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:57:17.322Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/f38927aa-6a92-40dc-acf7-5b3e7f248574.md",
+          "chunkCount": null,
+          "processingTimeMs": 3021,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "a028d198f87d444aa937c01884318ebf",
+        "resourceId": "f3f884ce-12ea-4d38-be3e-2ca81d889017",
+        "key": "resources/f3f884ce-12ea-4d38-be3e-2ca81d889017.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "a43182895ded17f6a1e103c1f479c7f6",
+        "chunksCount": 6,
+        "fileSize": 7126,
+        "createdAt": "2026-07-29 08:11:33",
+        "lastSeenAt": "2026-07-29 19:15:11",
+        "metadata": {
+          "category": "AI",
+          "effective_at": 1778400195000,
+          "filename": "f3f884ce-12ea-4d38-be3e-2ca81d889017.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785312660000
+        }
+      },
+      "resource": {
+        "resourceId": "f3f884ce-12ea-4d38-be3e-2ca81d889017",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-05-10T08:03:15.000Z",
+        "category": "AI",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7126,
+        "canonicalContentSha256": "81cca07f38cdfc5480565964d8bff20d3355bfcc4867dba99fae20a293a77366",
+        "canonicalMetadata": {
+          "category": "AI",
+          "effective_at": "2026-05-10T08:03:15.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7126,
+        "sha256": "81cca07f38cdfc5480565964d8bff20d3355bfcc4867dba99fae20a293a77366"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:13:15.071Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/f3f884ce-12ea-4d38-be3e-2ca81d889017.md",
+          "chunkCount": 6,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:58:35.935Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/f3f884ce-12ea-4d38-be3e-2ca81d889017.md",
+          "chunkCount": null,
+          "processingTimeMs": 3271,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    },
+    {
+      "item": {
+        "itemId": "d062fe7ced03484596e721826084fa24",
+        "resourceId": "f3fcd083-f005-4c94-b564-30b951ea77fd",
+        "key": "resources/f3fcd083-f005-4c94-b564-30b951ea77fd.md",
+        "sourceId": "builtin",
+        "status": "outdated",
+        "error": "workers_ai_out_of_capacity_error",
+        "nextAction": null,
+        "checksum": "f830cbc693e4c38b4452380d397a32a0",
+        "chunksCount": 6,
+        "fileSize": 7116,
+        "createdAt": "2026-07-29 08:11:34",
+        "lastSeenAt": "2026-07-29 19:15:11",
+        "metadata": {
+          "category": "Tech",
+          "effective_at": 1782073146000,
+          "filename": "f3fcd083-f005-4c94-b564-30b951ea77fd.md",
+          "folder": "resources/",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff",
+          "timestamp": 1785312660000
+        }
+      },
+      "resource": {
+        "resourceId": "f3fcd083-f005-4c94-b564-30b951ea77fd",
+        "sourceId": "916a2876-d416-4af0-aec9-8395a356bcff",
+        "kind": "document",
+        "resourcePlatform": "hackernews",
+        "originalLang": "en",
+        "effectiveAt": "2026-06-21T20:19:06.000Z",
+        "category": "Tech",
+        "source": "Hacker News",
+        "resourceUpdatedEpochMicros": 1783791739555581,
+        "latestTranslationUpdatedEpochMicros": 1783626834587474,
+        "indexedTranslationCount": 2,
+        "canonicalContentBytes": 7116,
+        "canonicalContentSha256": "23c746dc0e23b5c54dc9c2fe1a721d5d4cd85ce06b0966975dcfeefade881106",
+        "canonicalMetadata": {
+          "category": "Tech",
+          "effective_at": "2026-06-21T20:19:06.000Z",
+          "kind": "document",
+          "resource_platform": "hackernews",
+          "source_id": "916a2876-d416-4af0-aec9-8395a356bcff"
+        }
+      },
+      "storedContent": {
+        "byteLength": 7116,
+        "sha256": "23c746dc0e23b5c54dc9c2fe1a721d5d4cd85ce06b0966975dcfeefade881106"
+      },
+      "baselineLogs": [
+        {
+          "timestamp": "2026-07-29T08:13:15.213Z",
+          "action": "reindexed",
+          "message": "File reindexed successfully",
+          "fileKey": "resources/f3fcd083-f005-4c94-b564-30b951ea77fd.md",
+          "chunkCount": 6,
+          "processingTimeMs": null,
+          "errorType": null,
+          "errorMessage": null
+        },
+        {
+          "timestamp": "2026-07-30T00:58:35.935Z",
+          "action": "outdated",
+          "message": "Workers AI is out of capacity",
+          "fileKey": "resources/f3fcd083-f005-4c94-b564-30b951ea77fd.md",
+          "chunkCount": null,
+          "processingTimeMs": 2751,
+          "errorType": "workers_ai_out_of_capacity_error",
+          "errorMessage": null
+        }
+      ]
+    }
+  ],
+  "digest": "a46345e03d4ea2da45fdd770966a8bfbd9ba7c15d5404a71d8027158c206407b"
+}
