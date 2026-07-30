@@ -8,6 +8,12 @@ const NAMESPACE = 'default';
 const INDEX_NAME = 'newsence-corpus-v6';
 const STATE_INDEX_NAME = 'public-corpus-v6';
 const EXPECTED_DATABASE_HOST = 'ap-southeast-2.pg.psdb.cloud';
+const EXPECTED_DATABASE_USERNAME_SHA256 = '69684bcea6431899cf8979f79065b86b58279062cc212f4755e34b9200313a54';
+const EXPECTED_DATABASE_QUERY = [
+	['connect_timeout', '10'],
+	['sslmode', 'verify-full'],
+	['sslrootcert', 'system'],
+];
 const GENERATION = 4;
 const GENERATION_KEY = 'canonical-4-kind-platform';
 const ITEM_PREFIX = 'resources/';
@@ -145,12 +151,29 @@ function credentials() {
 }
 
 function databaseUrl() {
+	assert.deepEqual(
+		Object.keys(process.env)
+			.filter((name) => name.startsWith('PG'))
+			.sort(compareAscii),
+		[],
+		'Operator script rejects ambient PG* connection configuration',
+	);
 	const value = process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 	assert.ok(value, 'Set the canonical production Hyperdrive local PostgreSQL connection string');
 	const url = new URL(value);
 	assert.ok(['postgres:', 'postgresql:'].includes(url.protocol), 'PostgreSQL connection string protocol');
 	assert.equal(url.hostname, EXPECTED_DATABASE_HOST, 'Operator script only accepts the reviewed PlanetScale production host');
-	assert.ok(!decodeURIComponent(url.username).includes('|'), 'Operator script rejects PlanetScale username routing suffixes');
+	const username = decodeURIComponent(url.username);
+	assert.ok(username, 'Operator script requires the canonical PlanetScale username');
+	assert.equal(sha256(username), EXPECTED_DATABASE_USERNAME_SHA256, 'Operator script requires the reviewed production branch identity');
+	assert.ok(url.password, 'Operator script requires the canonical PlanetScale password');
+	assert.equal(decodeURIComponent(url.pathname), '/postgres', 'Operator script requires the reviewed production database');
+	assert.ok(!username.includes('|'), 'Operator script rejects PlanetScale username routing suffixes');
+	assert.deepEqual(
+		[...url.searchParams.entries()].sort(([left], [right]) => compareAscii(left, right)),
+		EXPECTED_DATABASE_QUERY,
+		'Operator script only accepts the reviewed non-routing PostgreSQL query parameters',
+	);
 	if (url.port === '6432') url.port = '5432';
 	assert.equal(url.port, '5432', 'Operator script requires the reviewed PlanetScale direct port 5432; pooled connections are unsafe');
 	if (url.searchParams.get('sslrootcert') === 'system') url.searchParams.delete('sslrootcert');
