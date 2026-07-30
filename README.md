@@ -227,7 +227,7 @@ Immediately before a reader or schema cutover, call
 Cloudflare Workflow executions replay the graph attached to their physical
 Workflow resource, so incompatible graph revisions require a new binding,
 resource name, class, and runner ID; changing only a runner ID is not isolation.
-See `SEARCH_SHADOW_V6_RUNBOOK.md` for the complete operator and recovery
+See `AI_SEARCH_V6_RUNBOOK.md` for the active rebuild and verification
 procedure.
 
 #### Historical generation-3 evidence
