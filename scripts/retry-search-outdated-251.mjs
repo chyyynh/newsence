@@ -12,15 +12,22 @@ const GENERATION_KEY = 'canonical-4-kind-platform';
 const ITEM_PREFIX = 'resources/';
 const ITEM_SUFFIX = '.md';
 const NULL_RESOURCE_PLATFORM_METADATA = 'none';
-const TERMINAL_STATUSES = ['error', 'outdated'];
+const TERMINAL_STATUSES = ['error', 'outdated', 'skipped'];
 const IN_PROGRESS_STATUSES = ['queued', 'running'];
-const NON_COMPLETED_STATUSES = [...IN_PROGRESS_STATUSES, ...TERMINAL_STATUSES, 'skipped'];
+const NON_COMPLETED_STATUSES = [...IN_PROGRESS_STATUSES, ...TERMINAL_STATUSES];
+const ITEM_STATUSES = ['queued', 'running', 'completed', 'error', 'skipped', 'outdated'];
 const PER_PAGE = 50;
 const LOG_PAGE_SIZE = 100;
 const SNAPSHOT_STABILIZATION_MS = 2_000;
 const ITEM_POLL_INTERVAL_MS = 2_000;
 const ITEM_POLL_ATTEMPTS = 90;
-const PATCH_TIMEOUT_MS = 60_000;
+const MUTATION_TIMEOUT_MS = 60_000;
+const NO_EFFECT_MINIMUM_DISPATCH_AGE_MS = 15 * 60 * 1_000;
+const NO_EFFECT_STABILIZATION_MS = 60_000;
+const LEGACY_NO_EFFECT_APPROVAL = 'provider-sync-null-no-observable-effect-251';
+const KEY_REINDEX_NO_EFFECT_APPROVAL = 'provider-key-reindex-no-observable-effect-251';
+const RESPONSE_EVIDENCE_UNAVAILABLE = 'pre-response-evidence-unavailable-251';
+const MUTATION_METHOD = 'canonical-reindex-by-key-v1';
 const MAX_CONTENT_BYTES = 4 * 1024 * 1024;
 const LOG_CLOCK_SKEW_MS = 5_000;
 const APPLY_ADVISORY_LOCK = [251, 1];
@@ -37,23 +44,48 @@ const EXPECTED_CUSTOM_METADATA = [
 const argumentsList = process.argv.slice(2);
 const capture = argumentsList.includes('--capture');
 const apply = argumentsList.includes('--apply');
-assert.notEqual(capture, apply, 'Select exactly one mode: --capture or --apply');
+const reconcileNoEffect = argumentsList.includes('--reconcile-no-effect');
+assert.equal(
+	[capture, apply, reconcileNoEffect].filter(Boolean).length,
+	1,
+	'Select exactly one mode: --capture, --apply, or --reconcile-no-effect',
+);
 const checkpointArguments = argumentsList.filter((argument) => argument.startsWith('--checkpoint='));
 const approvalArguments = argumentsList.filter((argument) => argument.startsWith('--approval-digest='));
 const outputArguments = argumentsList.filter((argument) => argument.startsWith('--output='));
+const itemIdArguments = argumentsList.filter((argument) => argument.startsWith('--item-id='));
+const responseDigestArguments = argumentsList.filter((argument) => argument.startsWith('--mutation-response-digest='));
+const cfRayArguments = argumentsList.filter((argument) => argument.startsWith('--mutation-cf-ray='));
+const noEffectApprovalArguments = argumentsList.filter((argument) => argument.startsWith('--no-effect-approval='));
+const unavailableEvidenceArguments = argumentsList.filter((argument) => argument.startsWith('--response-evidence-unavailable='));
 assert.ok(checkpointArguments.length <= 1, 'checkpoint argument is unique');
 assert.ok(approvalArguments.length <= 1, 'approval digest argument is unique');
 assert.ok(outputArguments.length <= 1, 'output argument is unique');
+assert.ok(itemIdArguments.length <= 1, 'item ID argument is unique');
+assert.ok(responseDigestArguments.length <= 1, 'mutation response digest argument is unique');
+assert.ok(cfRayArguments.length <= 1, 'mutation CF-Ray argument is unique');
+assert.ok(noEffectApprovalArguments.length <= 1, 'no-effect approval argument is unique');
+assert.ok(unavailableEvidenceArguments.length <= 1, 'unavailable response-evidence argument is unique');
 const checkpointPath = checkpointArguments[0]?.slice('--checkpoint='.length) ?? null;
 const approvalDigest = approvalArguments[0]?.slice('--approval-digest='.length) ?? null;
 const outputPath = outputArguments[0]?.slice('--output='.length) ?? null;
+const reconciliationItemId = itemIdArguments[0]?.slice('--item-id='.length) ?? null;
+const mutationResponseDigest = responseDigestArguments[0]?.slice('--mutation-response-digest='.length) ?? null;
+const mutationCfRay = cfRayArguments[0]?.slice('--mutation-cf-ray='.length) ?? null;
+const noEffectApproval = noEffectApprovalArguments[0]?.slice('--no-effect-approval='.length) ?? null;
+const unavailableResponseEvidence = unavailableEvidenceArguments[0]?.slice('--response-evidence-unavailable='.length) ?? null;
 assert.deepEqual(
 	argumentsList.filter(
 		(argument) =>
-			!['--capture', '--apply'].includes(argument) &&
+			!['--capture', '--apply', '--reconcile-no-effect'].includes(argument) &&
 			!argument.startsWith('--checkpoint=') &&
 			!argument.startsWith('--approval-digest=') &&
-			!argument.startsWith('--output='),
+			!argument.startsWith('--output=') &&
+			!argument.startsWith('--item-id=') &&
+			!argument.startsWith('--mutation-response-digest=') &&
+			!argument.startsWith('--mutation-cf-ray=') &&
+			!argument.startsWith('--no-effect-approval=') &&
+			!argument.startsWith('--response-evidence-unavailable='),
 	),
 	[],
 	'unknown operator arguments',
@@ -64,10 +96,43 @@ if (capture) {
 	assert.equal(outputArguments.length, 1, 'capture requires exactly one --output=<absolute-path>');
 	assert.ok(outputPath, 'capture output path is non-empty');
 	assert.equal(isAbsolute(outputPath), true, 'capture output path is absolute');
-} else {
+	assert.equal(reconciliationItemId, null, 'capture does not accept an item ID');
+	assert.equal(mutationResponseDigest, null, 'capture does not accept mutation response evidence');
+	assert.equal(mutationCfRay, null, 'capture does not accept mutation CF-Ray evidence');
+	assert.equal(noEffectApproval, null, 'capture does not accept no-effect approval');
+	assert.equal(unavailableResponseEvidence, null, 'capture does not accept unavailable response evidence');
+} else if (apply) {
 	assert.ok(checkpointPath, 'apply requires --checkpoint=<path>');
 	assert.equal(outputPath, null, 'apply does not accept an output path');
 	assert.match(approvalDigest ?? '', /^[0-9a-f]{64}$/, 'apply requires --approval-digest=<sha256>');
+	assert.equal(reconciliationItemId, null, 'apply does not accept an item ID');
+	assert.equal(mutationResponseDigest, null, 'apply does not accept mutation response evidence');
+	assert.equal(mutationCfRay, null, 'apply does not accept mutation CF-Ray evidence');
+	assert.equal(noEffectApproval, null, 'apply does not accept no-effect approval');
+	assert.equal(unavailableResponseEvidence, null, 'apply does not accept unavailable response evidence');
+} else {
+	assert.ok(checkpointPath, 'reconciliation requires --checkpoint=<path>');
+	assert.equal(outputPath, null, 'reconciliation does not accept an output path');
+	assert.match(approvalDigest ?? '', /^[0-9a-f]{64}$/, 'reconciliation requires --approval-digest=<sha256>');
+	assert.match(reconciliationItemId ?? '', ITEM_ID, 'reconciliation requires --item-id=<item-id>');
+	if (mutationResponseDigest !== null) {
+		assert.match(mutationResponseDigest, /^[0-9a-f]{64}$/, 'mutation response digest is a SHA-256');
+	}
+	if (mutationCfRay !== null) assert.match(mutationCfRay, /^[0-9a-f]+-[A-Z]{3}$/, 'mutation CF-Ray is valid');
+	assert.equal(mutationResponseDigest === null, mutationCfRay === null, 'mutation response digest and CF-Ray must be supplied together');
+	if (mutationResponseDigest === null) {
+		assert.equal(
+			unavailableResponseEvidence,
+			RESPONSE_EVIDENCE_UNAVAILABLE,
+			`missing response evidence requires --response-evidence-unavailable=${RESPONSE_EVIDENCE_UNAVAILABLE}`,
+		);
+	} else {
+		assert.equal(unavailableResponseEvidence, null, 'available response evidence forbids unavailable-evidence acknowledgement');
+	}
+	assert.ok(
+		[LEGACY_NO_EFFECT_APPROVAL, KEY_REINDEX_NO_EFFECT_APPROVAL].includes(noEffectApproval),
+		'reconciliation requires an exact no-effect approval',
+	);
 }
 
 function credentials() {
@@ -121,17 +186,29 @@ function sha256(value) {
 	return createHash('sha256').update(value).digest('hex');
 }
 
-async function syncMutation(accountId, apiToken, target) {
-	const url = itemsUrl(accountId, `/${target.item.itemId}`);
+function mutationResultError(result, target) {
+	if (!result || typeof result !== 'object') return 'successful response contained no item result';
+	if (!ITEM_ID.test(result.id ?? '')) return 'response contained an invalid item ID';
+	if (result.key !== target.item.key) return 'response contained the wrong item key';
+	if (result.source_id !== 'builtin') return 'response contained the wrong item source';
+	if (!ITEM_STATUSES.includes(result.status)) return 'response contained an invalid item status';
+	return null;
+}
+
+async function reindexByKeyMutation(accountId, apiToken, target) {
 	try {
-		const response = await fetch(url, {
-			body: JSON.stringify({ next_action: 'INDEX', wait_for_completion: true }),
+		const response = await fetch(itemsUrl(accountId), {
+			body: JSON.stringify({
+				key: target.item.key,
+				next_action: 'INDEX',
+				wait_for_completion: false,
+			}),
 			headers: {
 				Authorization: `Bearer ${apiToken}`,
 				'Content-Type': 'application/json',
 			},
-			method: 'PATCH',
-			signal: AbortSignal.timeout(PATCH_TIMEOUT_MS),
+			method: 'PUT',
+			signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
 		});
 		const responseText = await response.text();
 		let payload = null;
@@ -140,29 +217,30 @@ async function syncMutation(accountId, apiToken, target) {
 		} catch {
 			// A delivered mutation with an unparseable response is ambiguous.
 		}
-		const resultIsObject = payload?.result && typeof payload.result === 'object';
+		const result = payload?.result;
+		const resultError = mutationResultError(result, target);
+		const acknowledged = response.ok && payload?.success === true && resultError === null;
 		return {
-			acknowledged: response.ok && payload?.success === true && resultIsObject,
-			ambiguous: !(response.ok && payload?.success === true && resultIsObject),
+			method: MUTATION_METHOD,
+			acknowledged,
+			ambiguous: !acknowledged,
 			cfRay: response.headers.get('cf-ray'),
-			error:
-				response.ok && payload?.success === true
-					? resultIsObject
-						? null
-						: 'successful response contained no item result'
-					: `HTTP ${response.status}: ${JSON.stringify(payload?.errors ?? [])}`,
+			error: response.ok && payload?.success === true ? resultError : `HTTP ${response.status}: ${JSON.stringify(payload?.errors ?? [])}`,
 			httpStatus: response.status,
 			responseDigest: sha256(responseText),
-			result: resultIsObject
-				? {
-						id: payload.result.id ?? null,
-						key: payload.result.key ?? null,
-						status: payload.result.status ?? null,
-					}
-				: null,
+			result:
+				result && typeof result === 'object'
+					? {
+							id: result.id ?? null,
+							key: result.key ?? null,
+							sourceId: result.source_id ?? null,
+							status: result.status ?? null,
+						}
+					: null,
 		};
 	} catch (error) {
 		return {
+			method: MUTATION_METHOD,
 			acknowledged: false,
 			ambiguous: true,
 			cfRay: null,
@@ -246,7 +324,7 @@ function normalizeItem(item, label) {
 	const resourceId = resourceIdFromKey(item.key);
 	assert.ok(resourceId, `${label} canonical resource key`);
 	assert.equal(item.source_id, 'builtin', `${label} source`);
-	assert.ok(['queued', 'running', 'completed', 'error', 'skipped', 'outdated'].includes(item.status), `${label} status`);
+	assert.ok(ITEM_STATUSES.includes(item.status), `${label} status`);
 	assert.equal(typeof item.checksum, 'string', `${label} checksum`);
 	assert.ok(Number.isSafeInteger(item.chunks_count) && item.chunks_count >= 0, `${label} chunks count`);
 	assert.ok(Number.isSafeInteger(item.file_size) && item.file_size >= 0, `${label} file size`);
@@ -293,6 +371,30 @@ async function loadItem(accountId, apiToken, itemId, label) {
 	const payload = await cloudflareGet(itemsUrl(accountId, `/${itemId}`), apiToken, `${label} item`);
 	assert.ok(payload.result, `${label} item result`);
 	return normalizeItem(payload.result, label);
+}
+
+async function listOwnedItemsByKey(accountId, apiToken, key, label) {
+	const url = new URL(itemsUrl(accountId));
+	url.searchParams.set('key', key);
+	url.searchParams.set('per_page', '2');
+	url.searchParams.set('source', 'builtin');
+	const payload = await cloudflareGet(url, apiToken, `${label} item by key`);
+	assert.ok(Array.isArray(payload.result), `${label} item-by-key result`);
+	assert.ok(
+		Number.isSafeInteger(payload.result_info?.total_count) && payload.result_info.total_count >= 0,
+		`${label} item-by-key total count`,
+	);
+	assert.equal(payload.result.length, payload.result_info.total_count, `${label} complete item-by-key result`);
+	const items = payload.result.map((item) => normalizeItem(item, label));
+	assert.ok(items.length <= 1, `${label} has at most one built-in item for ${key}`);
+	for (const item of items) assert.equal(item.key, key, `${label} item-by-key exact key`);
+	return items;
+}
+
+async function loadOwnedItemByKey(accountId, apiToken, key, label) {
+	const items = await listOwnedItemsByKey(accountId, apiToken, key, label);
+	assert.equal(items.length, 1, `${label} has exactly one built-in item for ${key}`);
+	return items[0];
 }
 
 async function loadLogs(accountId, apiToken, itemId, label) {
@@ -626,6 +728,21 @@ async function loadInstanceFence(accountId, apiToken) {
 	};
 }
 
+async function loadInstanceLastActivity(accountId, apiToken) {
+	const instance = (await cloudflareGet(instanceUrl(accountId), apiToken, 'AI Search instance activity')).result;
+	assert.equal(instance?.id, INDEX_NAME, 'AI Search instance activity ID');
+	assert.equal(typeof instance?.last_activity, 'string', 'AI Search instance last activity');
+	assert.ok(Number.isFinite(Date.parse(instance.last_activity)), 'AI Search instance last activity timestamp');
+	return instance.last_activity;
+}
+
+async function loadDatabaseClock(db, label) {
+	const result = await db.query(`SELECT clock_timestamp()::text AS observed_at`);
+	assert.equal(result.rowCount, 1, `${label} database clock row`);
+	assert.ok(Number.isFinite(Date.parse(result.rows[0].observed_at)), `${label} database clock timestamp`);
+	return result.rows[0].observed_at;
+}
+
 async function loadStats(accountId, apiToken) {
 	const stats = (await cloudflareGet(statsUrl(accountId), apiToken, 'AI Search stats')).result;
 	for (const status of ['completed', 'queued', 'running', 'error', 'skipped', 'outdated']) {
@@ -686,7 +803,8 @@ async function captureSnapshot(accountId, apiToken, db) {
 	assert.equal(new Set(targets.map((target) => target.item.itemId)).size, targets.length, 'checkpoint item IDs are unique');
 	assert.equal(new Set(targets.map((target) => target.item.resourceId)).size, targets.length, 'checkpoint resource IDs are unique');
 	const snapshot = {
-		schemaVersion: 3,
+		schemaVersion: 4,
+		mutationMethod: MUTATION_METHOD,
 		checkpointRunId: randomUUID(),
 		accountId,
 		namespace: NAMESPACE,
@@ -697,11 +815,11 @@ async function captureSnapshot(accountId, apiToken, db) {
 		stats: await loadStats(accountId, apiToken),
 		targets,
 	};
-	assert.equal(snapshot.stats.error, targets.filter((target) => target.item.status === 'error').length, 'captured error count');
-	assert.equal(snapshot.stats.outdated, targets.filter((target) => target.item.status === 'outdated').length, 'captured outdated count');
+	for (const status of TERMINAL_STATUSES) {
+		assert.equal(snapshot.stats[status], targets.filter((target) => target.item.status === status).length, `captured ${status} count`);
+	}
 	assert.equal(snapshot.stats.queued, 0, 'capture queue is empty');
 	assert.equal(snapshot.stats.running, 0, 'capture running set is empty');
-	assert.equal(snapshot.stats.skipped, 0, 'capture skipped set is empty');
 	assert.equal(
 		snapshot.stats.completed + targets.length,
 		snapshot.dbFences.eligibleCount,
@@ -725,7 +843,9 @@ async function captureStableSnapshot(accountId, apiToken, db) {
 
 async function loadCheckpoint(path) {
 	const checkpoint = JSON.parse(await readFile(path, 'utf8'));
-	assert.equal(checkpoint.schemaVersion, 3, 'checkpoint schema version');
+	assert.ok([3, 4].includes(checkpoint.schemaVersion), 'checkpoint schema version');
+	if (checkpoint.schemaVersion === 4) assert.equal(checkpoint.mutationMethod, MUTATION_METHOD, 'checkpoint mutation method');
+	else assert.equal(checkpoint.mutationMethod, undefined, 'legacy checkpoint has no mutation method');
 	assert.match(checkpoint.checkpointRunId ?? '', UUID, 'checkpoint run ID');
 	assert.match(checkpoint.accountId ?? '', /^[0-9a-f]{32}$/, 'checkpoint account ID');
 	assert.equal(checkpoint.namespace, NAMESPACE, 'checkpoint namespace');
@@ -733,6 +853,21 @@ async function loadCheckpoint(path) {
 	assert.ok(Number.isFinite(Date.parse(checkpoint.capturedAt)), 'checkpoint captured timestamp');
 	assert.match(checkpoint.digest ?? '', /^[0-9a-f]{64}$/, 'checkpoint digest');
 	assert.ok(Array.isArray(checkpoint.targets) && checkpoint.targets.length > 0, 'checkpoint targets');
+	assert.equal(
+		new Set(checkpoint.targets.map((target) => target.item?.itemId)).size,
+		checkpoint.targets.length,
+		'checkpoint target item IDs are unique',
+	);
+	assert.equal(
+		new Set(checkpoint.targets.map((target) => target.item?.resourceId)).size,
+		checkpoint.targets.length,
+		'checkpoint target resource IDs are unique',
+	);
+	assert.equal(
+		new Set(checkpoint.targets.map((target) => target.item?.key)).size,
+		checkpoint.targets.length,
+		'checkpoint target keys are unique',
+	);
 	assert.equal(checkpointDigest(checkpoint), checkpoint.digest, 'checkpoint digest');
 	return checkpoint;
 }
@@ -946,7 +1081,7 @@ async function abandonPreparedIntent(db, intent) {
 			intent.checkpointRunId,
 			intent.itemId,
 			JSON.stringify({
-				reason: 'prepared intent recovered before dispatch; no PATCH was authorized by the ledger state',
+				reason: 'prepared intent recovered before dispatch; no remote mutation was authorized by the ledger state',
 			}),
 		],
 	);
@@ -981,6 +1116,49 @@ async function resolveRetryIntent(db, intent, state, resolution) {
 	return normalizeIntent(result.rows[0]);
 }
 
+async function adoptLateCompletionIntent(db, intent, resolution) {
+	assert.equal(intent.state, 'failed', 'only a failed retry intent can adopt a late completion');
+	assert.ok(isObservedNoEffectFailure(intent), 'only an observed no-effect failure can adopt a late completion');
+	const result = await db.query(
+		`WITH adoption_clock AS (
+		   SELECT clock_timestamp() AS adopted_at
+		 )
+		 UPDATE migration_guards.ai_search_retry_intents_251 intent
+		    SET state = 'completed',
+		        resolved_at = adoption_clock.adopted_at,
+		        resolution = jsonb_set(
+		          $4::jsonb,
+		          '{lateCompletionAdoption,adoptedAt}',
+		          to_jsonb(adoption_clock.adopted_at::text),
+		          true
+		        )
+		   FROM adoption_clock
+		  WHERE intent.checkpoint_run_id = $1::uuid
+		    AND intent.item_id = $2
+		    AND intent.state = 'failed'
+		    AND intent.resolution = $3::jsonb
+		    AND NOT EXISTS (
+		      SELECT 1
+		      FROM migration_guards.ai_search_retry_intents_251 newer
+		      WHERE newer.resource_id = intent.resource_id
+		        AND newer.attempted_at > intent.resolved_at
+		    )
+		 RETURNING
+		   intent.checkpoint_run_id::text,
+		   intent.checkpoint_digest,
+		   intent.item_id,
+		   intent.resource_id::text,
+		   intent.state,
+		   round(extract(epoch FROM intent.attempted_at) * 1000)::bigint::text AS attempted_at_epoch_ms,
+		   round(extract(epoch FROM intent.dispatched_at) * 1000)::bigint::text AS dispatched_at_epoch_ms,
+		   round(extract(epoch FROM intent.resolved_at) * 1000)::bigint::text AS resolved_at_epoch_ms,
+		   intent.resolution`,
+		[intent.checkpointRunId, intent.itemId, JSON.stringify(intent.resolution), JSON.stringify(resolution)],
+	);
+	assert.equal(result.rowCount, 1, `${intent.resourceId} late completion adopted with compare-and-swap`);
+	return normalizeIntent(result.rows[0]);
+}
+
 function assertItemIdentity(current, checkpointTarget, label) {
 	const expected = checkpointTarget.item;
 	assert.equal(current.itemId, expected.itemId, `${label} item ID`);
@@ -993,7 +1171,8 @@ function assertItemIdentity(current, checkpointTarget, label) {
 	assert.deepEqual(current.metadata, expected.metadata, `${label} metadata`);
 }
 
-function newLogs(currentLogs, checkpointTarget) {
+function newLogs(currentLogs, checkpointTarget, currentItemId) {
+	if (currentItemId !== checkpointTarget.item.itemId) return currentLogs;
 	const baseline = new Set(checkpointTarget.baselineLogs.map(logSignature));
 	return currentLogs.filter((log) => !baseline.has(logSignature(log)));
 }
@@ -1010,6 +1189,415 @@ function successfulReindexLog(logs, checkpointTarget, intent, item) {
 	);
 }
 
+function failedReindexLog(logs, checkpointTarget, intent, item) {
+	return logs.find(
+		(log) =>
+			log.fileKey === checkpointTarget.item.key &&
+			(log.errorType !== null || ['error', 'outdated', 'skipped'].includes(log.action)) &&
+			timestampMs(log.timestamp, `${item.resourceId} failure log`) >= intent.dispatchedAtEpochMs - LOG_CLOCK_SKEW_MS,
+	);
+}
+
+function completedResolution(checkpoint, checkpointTarget, intent, item, successLog, mutationResult, lateCompletionAdoption = null) {
+	const resolution = {
+		kind: 'canonical_key_reindex_completed',
+		checkpointSchemaVersion: checkpoint.schemaVersion,
+		mutationMethod: MUTATION_METHOD,
+		resourceId: item.resourceId,
+		resourceKey: item.key,
+		sourceId: item.sourceId,
+		previousItemId: checkpointTarget.item.itemId,
+		completedItemId: item.itemId,
+		canonicalContentSha256: checkpointTarget.resource.canonicalContentSha256,
+		canonicalContentBytes: checkpointTarget.resource.canonicalContentBytes,
+		chunksCount: item.chunksCount,
+		itemLastSeenAt: item.lastSeenAt,
+		intentDispatchedAtEpochMs: intent.dispatchedAtEpochMs,
+		successLog,
+		mutationResult,
+	};
+	if (lateCompletionAdoption !== null) resolution.lateCompletionAdoption = lateCompletionAdoption;
+	return resolution;
+}
+
+function legacyPatchLateCompletionResolution(checkpoint, checkpointTarget, intent, item, successLog) {
+	return {
+		kind: 'legacy_item_patch_late_completion_adopted',
+		checkpointSchemaVersion: checkpoint.schemaVersion,
+		mutationMethod: 'legacy-item-patch-sync-v1',
+		resourceId: item.resourceId,
+		resourceKey: item.key,
+		sourceId: item.sourceId,
+		itemId: item.itemId,
+		canonicalContentSha256: checkpointTarget.resource.canonicalContentSha256,
+		canonicalContentBytes: checkpointTarget.resource.canonicalContentBytes,
+		chunksCount: item.chunksCount,
+		itemLastSeenAt: item.lastSeenAt,
+		intentDispatchedAtEpochMs: intent.dispatchedAtEpochMs,
+		successLog,
+		mutationResult: {
+			method: 'PATCH item sync with wait_for_completion=true',
+			recovery: 'legacy-late-completion-adopted-without-redispatch',
+			originalMutationEvidence: intent.resolution.mutationEvidence,
+			result: {
+				id: item.itemId,
+				key: item.key,
+				sourceId: item.sourceId,
+				status: item.status,
+			},
+		},
+		lateCompletionAdoption: {
+			previousResolvedAtEpochMs: intent.resolvedAtEpochMs,
+			previousResolution: intent.resolution,
+		},
+	};
+}
+
+function failedResolution(checkpoint, checkpointTarget, intent, item, failedLog, mutationResult) {
+	return {
+		kind: 'canonical_key_reindex_failed',
+		checkpointSchemaVersion: checkpoint.schemaVersion,
+		mutationMethod: MUTATION_METHOD,
+		resourceId: item.resourceId,
+		resourceKey: item.key,
+		sourceId: item.sourceId,
+		previousItemId: checkpointTarget.item.itemId,
+		failedItemId: item.itemId,
+		canonicalContentSha256: checkpointTarget.resource.canonicalContentSha256,
+		canonicalContentBytes: checkpointTarget.resource.canonicalContentBytes,
+		failedItem: {
+			error: item.error,
+			lastSeenAt: item.lastSeenAt,
+			status: item.status,
+		},
+		intentDispatchedAtEpochMs: intent.dispatchedAtEpochMs,
+		failedLog,
+		mutationResult,
+	};
+}
+
+function assertCompletedIntentEvidence(intent, checkpointTarget, item, successLog) {
+	const resolution = intent.resolution;
+	assert.equal(resolution?.kind, 'canonical_key_reindex_completed', `${item.resourceId} completed intent kind`);
+	assert.equal(resolution?.checkpointSchemaVersion, 4, `${item.resourceId} completed intent checkpoint schema`);
+	assert.equal(resolution?.mutationMethod, MUTATION_METHOD, `${item.resourceId} completed intent mutation method`);
+	assert.equal(resolution?.resourceId, item.resourceId, `${item.resourceId} completed intent resource`);
+	assert.equal(resolution?.resourceKey, item.key, `${item.resourceId} completed intent key`);
+	assert.equal(resolution?.sourceId, item.sourceId, `${item.resourceId} completed intent source`);
+	assert.equal(resolution?.previousItemId, checkpointTarget.item.itemId, `${item.resourceId} completed intent prior item`);
+	assert.equal(resolution?.completedItemId, item.itemId, `${item.resourceId} completed intent observed item`);
+	assert.equal(
+		resolution?.canonicalContentSha256,
+		checkpointTarget.resource.canonicalContentSha256,
+		`${item.resourceId} completed intent content SHA`,
+	);
+	assert.equal(
+		resolution?.canonicalContentBytes,
+		checkpointTarget.resource.canonicalContentBytes,
+		`${item.resourceId} completed intent content bytes`,
+	);
+	assert.equal(resolution?.chunksCount, item.chunksCount, `${item.resourceId} completed intent chunks`);
+	assert.equal(resolution?.itemLastSeenAt, item.lastSeenAt, `${item.resourceId} completed intent last-seen`);
+	assert.equal(resolution?.intentDispatchedAtEpochMs, intent.dispatchedAtEpochMs, `${item.resourceId} completed intent dispatch`);
+	assert.deepEqual(resolution?.successLog, successLog, `${item.resourceId} completed intent success log`);
+	if (resolution?.lateCompletionAdoption !== undefined) {
+		const adoption = resolution.lateCompletionAdoption;
+		assert.equal(
+			resolution.mutationResult?.recovery,
+			'late-completion-adopted-without-redispatch',
+			`${item.resourceId} late completion recovery method`,
+		);
+		assertNoAdvancementIntentEvidence(previousFailedIntentFromAdoption(intent, adoption, item.resourceId), checkpointTarget);
+	}
+}
+
+function assertNoAdvancementObservation(observation, checkpointTarget, intent, label) {
+	assert.ok(observation && typeof observation === 'object' && !Array.isArray(observation), `${label} observation`);
+	const observedAtEpochMs = timestampMs(observation.observedAt, `${label} observed timestamp`);
+	const item = observation.item;
+	assert.ok(item && typeof item === 'object' && !Array.isArray(item), `${label} observed item`);
+	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${label} observed resource`);
+	assert.equal(item.key, checkpointTarget.item.key, `${label} observed key`);
+	assert.equal(item.sourceId, 'builtin', `${label} observed source`);
+	assert.ok(TERMINAL_STATUSES.includes(item.status), `${label} observed terminal status`);
+	assert.deepEqual(
+		itemCustomMetadata(item.metadata, item.resourceId),
+		checkpointTarget.resource.canonicalMetadata,
+		`${label} observed canonical metadata`,
+	);
+	assert.deepEqual(observation.terminalListingItem, item, `${label} by-key and terminal-listing item agree`);
+	assert.equal(observation.itemDigest, sha256(JSON.stringify(item)), `${label} observed item digest`);
+	assert.ok(Array.isArray(observation.logs), `${label} observed logs`);
+	assert.equal(observation.logCount, observation.logs.length, `${label} observed log count`);
+	assert.equal(observation.logsDigest, sha256(JSON.stringify(observation.logs)), `${label} observed logs digest`);
+	assert.ok(observation.stats && typeof observation.stats === 'object' && !Array.isArray(observation.stats), `${label} observed stats`);
+	assert.equal(observation.stats.queued, 0, `${label} observed no queued item`);
+	assert.equal(observation.stats.running, 0, `${label} observed no running item`);
+	assert.ok(observation.stats[item.status] > 0, `${label} observed terminal status count`);
+	const addedLogs = newLogs(observation.logs, checkpointTarget, item.itemId);
+	assert.equal(successfulReindexLog(addedLogs, checkpointTarget, intent, item), undefined, `${label} has no post-dispatch success log`);
+	assert.equal(
+		failedReindexLog(addedLogs, checkpointTarget, intent, item),
+		undefined,
+		`${label} has no post-dispatch terminal-failure log`,
+	);
+	return observedAtEpochMs;
+}
+
+function assertLegacyNoEffectIntentEvidence(intent, checkpointTarget) {
+	const resolution = intent.resolution;
+	assert.equal(resolution?.kind, 'provider_patch_ack_no_observable_effect', `${intent.resourceId} legacy no-effect failed intent kind`);
+	assert.equal(resolution.operatorApproval, LEGACY_NO_EFFECT_APPROVAL, `${intent.resourceId} legacy no-effect operator approval`);
+	assert.equal(resolution.checkpointDigest, intent.checkpointDigest, `${intent.resourceId} legacy no-effect checkpoint digest`);
+	assert.equal(
+		resolution.mutationEvidence?.method,
+		'PATCH item sync with wait_for_completion=true',
+		`${intent.resourceId} legacy no-effect mutation method`,
+	);
+	assert.equal(resolution.mutationEvidence?.httpStatus, 200, `${intent.resourceId} legacy no-effect HTTP status`);
+	assert.match(resolution.mutationEvidence?.responseDigest ?? '', /^[0-9a-f]{64}$/, `${intent.resourceId} legacy response digest`);
+	assert.match(resolution.mutationEvidence?.cfRay ?? '', /^[0-9a-f]+-[A-Z]{3}$/, `${intent.resourceId} legacy CF-Ray`);
+	assert.equal(
+		resolution.mutationEvidence?.responseEvidenceUnavailable,
+		null,
+		`${intent.resourceId} legacy response evidence is available`,
+	);
+	assert.equal(resolution.mutationEvidence?.responseContract, 'success=true/result=null', `${intent.resourceId} legacy response contract`);
+	assert.ok(
+		Number.isSafeInteger(resolution.dispatchAgeMs) && resolution.dispatchAgeMs >= NO_EFFECT_MINIMUM_DISPATCH_AGE_MS,
+		`${intent.resourceId} legacy no-effect dispatch age`,
+	);
+	assert.equal(resolution.observations?.length, 2, `${intent.resourceId} legacy no-effect observations`);
+	const [first, second] = resolution.observations;
+	const firstObservedAtEpochMs = assertNoAdvancementObservation(first, checkpointTarget, intent, `${intent.resourceId} legacy first`);
+	const secondObservedAtEpochMs = assertNoAdvancementObservation(second, checkpointTarget, intent, `${intent.resourceId} legacy second`);
+	assert.deepEqual(first.item, checkpointTarget.item, `${intent.resourceId} legacy first item matches checkpoint`);
+	assert.deepEqual(second.item, checkpointTarget.item, `${intent.resourceId} legacy second item matches checkpoint`);
+	assert.deepEqual(first.logs, checkpointTarget.baselineLogs, `${intent.resourceId} legacy first logs match checkpoint`);
+	assert.deepEqual(second.logs, checkpointTarget.baselineLogs, `${intent.resourceId} legacy second logs match checkpoint`);
+	assert.ok(
+		firstObservedAtEpochMs - intent.dispatchedAtEpochMs >= NO_EFFECT_MINIMUM_DISPATCH_AGE_MS,
+		`${intent.resourceId} legacy first observation follows the minimum dispatch age`,
+	);
+	assert.ok(
+		secondObservedAtEpochMs - firstObservedAtEpochMs >= NO_EFFECT_STABILIZATION_MS,
+		`${intent.resourceId} legacy observations span the stabilization interval`,
+	);
+	assert.ok(intent.resolvedAtEpochMs >= secondObservedAtEpochMs, `${intent.resourceId} legacy resolution follows both observations`);
+	assert.deepEqual(noEffectComparable(second), noEffectComparable(first), `${intent.resourceId} legacy no-effect evidence is stable`);
+	return second.item;
+}
+
+function assertNoAdvancementIntentEvidence(intent, checkpointTarget) {
+	const resolution = intent.resolution;
+	assert.equal(resolution?.kind, 'provider_key_reindex_no_terminal_advancement', `${intent.resourceId} no-advancement failed intent kind`);
+	assert.equal(resolution.operatorApproval, KEY_REINDEX_NO_EFFECT_APPROVAL, `${intent.resourceId} no-advancement failed operator approval`);
+	assert.equal(resolution.checkpointDigest, intent.checkpointDigest, `${intent.resourceId} no-advancement failed checkpoint digest`);
+	assert.equal(resolution.mutationEvidence?.method, MUTATION_METHOD, `${intent.resourceId} no-advancement failed mutation method`);
+	const responseEvidenceUnavailable = resolution.mutationEvidence?.responseEvidenceUnavailable;
+	if (resolution.mutationEvidence?.responseDigest === null) {
+		assert.equal(resolution.mutationEvidence?.cfRay, null, `${intent.resourceId} no-advancement failed response evidence is paired`);
+		assert.equal(
+			responseEvidenceUnavailable,
+			RESPONSE_EVIDENCE_UNAVAILABLE,
+			`${intent.resourceId} no-advancement failed unavailable-response acknowledgement`,
+		);
+	} else {
+		assert.match(
+			resolution.mutationEvidence?.responseDigest ?? '',
+			/^[0-9a-f]{64}$/,
+			`${intent.resourceId} no-advancement failed response digest`,
+		);
+		assert.match(resolution.mutationEvidence?.cfRay ?? '', /^[0-9a-f]+-[A-Z]{3}$/, `${intent.resourceId} no-advancement failed CF-Ray`);
+		assert.equal(responseEvidenceUnavailable, null, `${intent.resourceId} no-advancement failed does not disclaim available evidence`);
+	}
+	assert.ok(
+		Number.isSafeInteger(resolution.dispatchAgeMs) && resolution.dispatchAgeMs >= NO_EFFECT_MINIMUM_DISPATCH_AGE_MS,
+		`${intent.resourceId} no-advancement failed dispatch age`,
+	);
+	assert.equal(resolution.observations?.length, 2, `${intent.resourceId} no-advancement failed observations`);
+	const [first, second] = resolution.observations;
+	const firstObservedAtEpochMs = assertNoAdvancementObservation(first, checkpointTarget, intent, `${intent.resourceId} first`);
+	const secondObservedAtEpochMs = assertNoAdvancementObservation(second, checkpointTarget, intent, `${intent.resourceId} second`);
+	assert.ok(
+		firstObservedAtEpochMs - intent.dispatchedAtEpochMs >= NO_EFFECT_MINIMUM_DISPATCH_AGE_MS,
+		`${intent.resourceId} first observation follows the minimum dispatch age`,
+	);
+	assert.ok(
+		secondObservedAtEpochMs - firstObservedAtEpochMs >= NO_EFFECT_STABILIZATION_MS,
+		`${intent.resourceId} observations span the stabilization interval`,
+	);
+	assert.ok(intent.resolvedAtEpochMs >= secondObservedAtEpochMs, `${intent.resourceId} resolution follows both observations`);
+	assert.deepEqual(noEffectComparable(second), noEffectComparable(first), `${intent.resourceId} no-advancement evidence is stable`);
+	return second.item;
+}
+
+function isObservedNoEffectFailure(intent) {
+	return (
+		intent?.state === 'failed' &&
+		['provider_patch_ack_no_observable_effect', 'provider_key_reindex_no_terminal_advancement'].includes(intent.resolution?.kind)
+	);
+}
+
+function assertObservedNoEffectIntentEvidence(intent, checkpointTarget) {
+	if (intent.resolution?.kind === 'provider_patch_ack_no_observable_effect') {
+		return assertLegacyNoEffectIntentEvidence(intent, checkpointTarget);
+	}
+	return assertNoAdvancementIntentEvidence(intent, checkpointTarget);
+}
+
+function previousFailedIntentFromAdoption(intent, adoption, label) {
+	assert.ok(
+		Number.isSafeInteger(adoption?.previousResolvedAtEpochMs) &&
+			adoption.previousResolvedAtEpochMs >= intent.dispatchedAtEpochMs &&
+			adoption.previousResolvedAtEpochMs < intent.resolvedAtEpochMs,
+		`${label} late completion previous resolution timestamp`,
+	);
+	const adoptedAtEpochMs = timestampMs(adoption?.adoptedAt, `${label} late completion adoption timestamp`);
+	assert.ok(
+		adoptedAtEpochMs >= adoption.previousResolvedAtEpochMs && Math.abs(adoptedAtEpochMs - intent.resolvedAtEpochMs) <= 1,
+		`${label} late completion adoption timestamp matches the ledger resolution`,
+	);
+	return {
+		...intent,
+		state: 'failed',
+		resolvedAtEpochMs: adoption.previousResolvedAtEpochMs,
+		resolution: adoption.previousResolution,
+	};
+}
+
+function assertLegacyPatchLateCompletionEvidence(intent, checkpointTarget, item, successLog) {
+	assert.equal(intent.state, 'completed', `${item.resourceId} legacy late completion intent state`);
+	const resolution = intent.resolution;
+	assert.equal(resolution?.kind, 'legacy_item_patch_late_completion_adopted', `${item.resourceId} legacy late completion kind`);
+	assert.equal(resolution?.checkpointSchemaVersion, 3, `${item.resourceId} legacy late completion checkpoint schema`);
+	assert.equal(resolution?.mutationMethod, 'legacy-item-patch-sync-v1', `${item.resourceId} legacy late completion mutation method`);
+	assert.equal(resolution?.resourceId, item.resourceId, `${item.resourceId} legacy late completion resource`);
+	assert.equal(resolution?.resourceKey, item.key, `${item.resourceId} legacy late completion key`);
+	assert.equal(resolution?.sourceId, item.sourceId, `${item.resourceId} legacy late completion source`);
+	assert.equal(resolution?.itemId, item.itemId, `${item.resourceId} legacy late completion item`);
+	assert.equal(
+		resolution?.canonicalContentSha256,
+		checkpointTarget.resource.canonicalContentSha256,
+		`${item.resourceId} legacy late completion content SHA`,
+	);
+	assert.equal(
+		resolution?.canonicalContentBytes,
+		checkpointTarget.resource.canonicalContentBytes,
+		`${item.resourceId} legacy late completion content bytes`,
+	);
+	assert.equal(resolution?.chunksCount, item.chunksCount, `${item.resourceId} legacy late completion chunks`);
+	assert.equal(resolution?.itemLastSeenAt, item.lastSeenAt, `${item.resourceId} legacy late completion last-seen`);
+	assert.equal(resolution?.intentDispatchedAtEpochMs, intent.dispatchedAtEpochMs, `${item.resourceId} legacy late completion dispatch`);
+	assert.deepEqual(resolution?.successLog, successLog, `${item.resourceId} legacy late completion success log`);
+	assert.equal(
+		resolution?.mutationResult?.recovery,
+		'legacy-late-completion-adopted-without-redispatch',
+		`${item.resourceId} legacy late completion recovery method`,
+	);
+	const previousIntent = previousFailedIntentFromAdoption(intent, resolution?.lateCompletionAdoption, item.resourceId);
+	assertLegacyNoEffectIntentEvidence(previousIntent, checkpointTarget);
+	assert.deepEqual(
+		resolution?.mutationResult?.originalMutationEvidence,
+		previousIntent.resolution.mutationEvidence,
+		`${item.resourceId} legacy late completion preserves response evidence`,
+	);
+}
+
+function assertFailedIntentEvidence(intent, checkpointTarget, item) {
+	const resolution = intent.resolution;
+	if (isObservedNoEffectFailure(intent)) {
+		const observedItem = assertObservedNoEffectIntentEvidence(intent, checkpointTarget);
+		assert.deepEqual(item, observedItem, `${item.resourceId} observed no-effect item remains terminal`);
+		return;
+	}
+	assert.equal(resolution?.kind, 'canonical_key_reindex_failed', `${item.resourceId} failed intent kind`);
+	assert.equal(resolution?.checkpointSchemaVersion, 4, `${item.resourceId} failed intent checkpoint schema`);
+	assert.equal(resolution?.mutationMethod, MUTATION_METHOD, `${item.resourceId} failed intent mutation method`);
+	assert.equal(resolution?.resourceId, item.resourceId, `${item.resourceId} failed intent resource`);
+	assert.equal(resolution?.resourceKey, item.key, `${item.resourceId} failed intent key`);
+	assert.equal(resolution?.sourceId, item.sourceId, `${item.resourceId} failed intent source`);
+	assert.equal(resolution?.previousItemId, checkpointTarget.item.itemId, `${item.resourceId} failed intent prior item`);
+	assert.equal(resolution?.failedItemId, item.itemId, `${item.resourceId} failed intent observed item`);
+	assert.equal(
+		resolution?.canonicalContentSha256,
+		checkpointTarget.resource.canonicalContentSha256,
+		`${item.resourceId} failed intent content SHA`,
+	);
+	assert.equal(
+		resolution?.canonicalContentBytes,
+		checkpointTarget.resource.canonicalContentBytes,
+		`${item.resourceId} failed intent content bytes`,
+	);
+	assert.deepEqual(
+		resolution?.failedItem,
+		{
+			error: item.error,
+			lastSeenAt: item.lastSeenAt,
+			status: item.status,
+		},
+		`${item.resourceId} failed intent item evidence`,
+	);
+	assert.equal(resolution?.failedLog?.fileKey, item.key, `${item.resourceId} failed intent log key`);
+	assert.ok(
+		typeof resolution?.failedLog?.errorType === 'string' || ['error', 'outdated', 'skipped'].includes(resolution?.failedLog?.action),
+		`${item.resourceId} failed intent log evidence`,
+	);
+	assert.ok(
+		timestampMs(resolution.failedLog.timestamp, `${item.resourceId} failed intent log`) >= intent.dispatchedAtEpochMs - LOG_CLOCK_SKEW_MS,
+		`${item.resourceId} failed intent log follows dispatch`,
+	);
+}
+
+function assertTargetApplyState(target, intent, terminalItem, inProgressItem) {
+	if (!intent) {
+		assert.ok(terminalItem, `${target.item.resourceId} unattempted target remains terminal`);
+		assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} unattempted target matches checkpoint`);
+		return;
+	}
+	if (intent.state === 'failed') {
+		if (isObservedNoEffectFailure(intent)) {
+			const observedTerminalItem = assertObservedNoEffectIntentEvidence(intent, target);
+			if (terminalItem) {
+				assert.equal(inProgressItem, undefined, `${target.item.resourceId} failed target is not in progress`);
+				assert.deepEqual(
+					terminalItem,
+					observedTerminalItem,
+					`${target.item.resourceId} failed target remains at the observed terminal state`,
+				);
+			} else if (inProgressItem) {
+				assert.equal(
+					inProgressItem.resourceId,
+					target.item.resourceId,
+					`${target.item.resourceId} late completion remains on the approved resource`,
+				);
+			}
+			return;
+		}
+		assert.ok(terminalItem, `${target.item.resourceId} failed target remains terminal`);
+		assert.equal(inProgressItem, undefined, `${target.item.resourceId} failed target is not in progress`);
+		assertFailedIntentEvidence(intent, target, terminalItem);
+		return;
+	}
+	if (intent.state === 'abandoned') {
+		assert.ok(terminalItem, `${target.item.resourceId} abandoned target remains terminal`);
+		assert.equal(inProgressItem, undefined, `${target.item.resourceId} abandoned target is not in progress`);
+		assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} abandoned target matches checkpoint`);
+		return;
+	}
+	if (intent.state === 'completed') {
+		assert.equal(terminalItem ?? inProgressItem ?? null, null, `${target.item.resourceId} completed intent is terminal-free`);
+		return;
+	}
+	if (intent.state === 'prepared') {
+		assert.ok(terminalItem, `${target.item.resourceId} prepared target remains terminal`);
+		assert.equal(inProgressItem, undefined, `${target.item.resourceId} prepared target is not in progress`);
+		assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} prepared target matches checkpoint`);
+		return;
+	}
+	assert.equal(intent.state, 'dispatched', `${target.item.resourceId} unresolved intent is dispatched`);
+}
+
 async function assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents) {
 	const [dbFences, instanceFence, stats] = await Promise.all([
 		loadDbFences(db),
@@ -1020,43 +1608,45 @@ async function assertGlobalApplyState(accountId, apiToken, db, checkpoint, inten
 	assert.deepEqual(instanceFence, checkpoint.instanceFence, 'global AI Search instance fence remains frozen');
 	const statusItems = {};
 	for (const status of NON_COMPLETED_STATUSES) {
-		statusItems[status] = (await listStatusItems(accountId, apiToken, status)).map((item) => normalizeItem(item, `${status} ${item.id}`));
+		statusItems[status] = (await listStatusItems(accountId, apiToken, status))
+			.map((item) => normalizeItem(item, `${status} ${item.id}`))
+			.sort((left, right) => compareAscii(left.resourceId, right.resourceId));
 		assert.equal(statusItems[status].length, stats[status], `${status} listing matches stats`);
 	}
-	assert.deepEqual(statusItems.skipped, [], 'no skipped items during retry');
 	const nonCompletedItems = NON_COMPLETED_STATUSES.flatMap((status) => statusItems[status]);
+	assert.equal(
+		new Set(nonCompletedItems.map((item) => item.resourceId)).size,
+		nonCompletedItems.length,
+		'non-completed resource IDs are unique',
+	);
 	assert.equal(
 		stats.completed + nonCompletedItems.length,
 		checkpoint.dbFences.eligibleCount,
 		'completed and non-completed items account for the frozen eligible corpus',
 	);
-	const targetsByItem = new Map(checkpoint.targets.map((target) => [target.item.itemId, target]));
+	const targetsByResource = new Map(checkpoint.targets.map((target) => [target.item.resourceId, target]));
 	for (const item of nonCompletedItems) {
-		assert.equal(targetsByItem.has(item.itemId), true, `unapproved ${item.status} item ${item.itemId}/${item.key}`);
+		const target = targetsByResource.get(item.resourceId);
+		assert.ok(target, `unapproved ${item.status} item ${item.itemId}/${item.key}`);
+		assert.equal(item.key, target.item.key, `${item.resourceId} non-completed item key`);
 	}
-	const terminalByItem = new Map(TERMINAL_STATUSES.flatMap((status) => statusItems[status]).map((item) => [item.itemId, item]));
+	const terminalByResource = new Map(TERMINAL_STATUSES.flatMap((status) => statusItems[status]).map((item) => [item.resourceId, item]));
 	const inProgressItems = IN_PROGRESS_STATUSES.flatMap((status) => statusItems[status]);
 	assert.ok(inProgressItems.length <= 1, 'at most one approved item is in progress');
 	for (const item of inProgressItems) {
-		assert.equal(intents.get(item.itemId)?.state, 'dispatched', `${item.resourceId} in-progress item has a dispatched intent`);
+		const target = targetsByResource.get(item.resourceId);
+		assert.ok(target, `${item.resourceId} in-progress item has an approved target`);
+		const intent = intents.get(target.item.itemId);
+		assert.ok(
+			intent?.state === 'dispatched' || isObservedNoEffectFailure(intent),
+			`${item.resourceId} in-progress item has a dispatched or late-completing intent`,
+		);
 	}
 	for (const target of checkpoint.targets) {
 		const intent = intents.get(target.item.itemId);
-		const terminalItem = terminalByItem.get(target.item.itemId);
-		const inProgressItem = inProgressItems.find((item) => item.itemId === target.item.itemId);
-		if (!intent) {
-			assert.ok(terminalItem, `${target.item.resourceId} unattempted target remains terminal`);
-			assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} unattempted target matches checkpoint`);
-			continue;
-		}
-		if (intent.state === 'failed' || intent.state === 'abandoned') {
-			assert.fail(`${target.item.resourceId} ${intent.state} under this checkpoint; capture and approve a new checkpoint`);
-		}
-		if (intent.state === 'completed') {
-			assert.equal(terminalItem ?? inProgressItem ?? null, null, `${target.item.resourceId} completed intent is terminal-free`);
-			continue;
-		}
-		assert.ok(['prepared', 'dispatched'].includes(intent.state), `${target.item.resourceId} unresolved intent`);
+		const terminalItem = terminalByResource.get(target.item.resourceId);
+		const inProgressItem = inProgressItems.find((item) => item.resourceId === target.item.resourceId);
+		assertTargetApplyState(target, intent, terminalItem, inProgressItem);
 	}
 	return { dbFences, instanceFence, stats, statusItems };
 }
@@ -1064,7 +1654,7 @@ async function assertGlobalApplyState(accountId, apiToken, db, checkpoint, inten
 async function assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item) {
 	const [resource, storedContent] = await Promise.all([
 		loadCanonicalResource(db, checkpointTarget.item.resourceId),
-		downloadItemContent(accountId, apiToken, checkpointTarget.item.itemId, checkpointTarget.item.resourceId),
+		downloadItemContent(accountId, apiToken, item.itemId, checkpointTarget.item.resourceId),
 	]);
 	assert.deepEqual(resource, checkpointTarget.resource, `${checkpointTarget.item.resourceId} canonical DB fence`);
 	assert.deepEqual(storedContent, checkpointTarget.storedContent, `${checkpointTarget.item.resourceId} stored content fence`);
@@ -1072,14 +1662,71 @@ async function assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget
 	return { resource, storedContent };
 }
 
+async function resolveCompletedRetryIntent(db, checkpoint, checkpointTarget, intent, item, successLog, mutationResult) {
+	if (intent.state === 'completed') return intent;
+	if (intent.state === 'dispatched') {
+		return resolveRetryIntent(
+			db,
+			intent,
+			'completed',
+			completedResolution(checkpoint, checkpointTarget, intent, item, successLog, mutationResult),
+		);
+	}
+	assert.equal(intent.state, 'failed', `${item.resourceId} late completion starts from a failed intent`);
+	assertObservedNoEffectIntentEvidence(intent, checkpointTarget);
+	const previousResolution = intent.resolution;
+	if (previousResolution.kind === 'provider_patch_ack_no_observable_effect') {
+		const adoptedIntent = await adoptLateCompletionIntent(
+			db,
+			intent,
+			legacyPatchLateCompletionResolution(checkpoint, checkpointTarget, intent, item, successLog),
+		);
+		assertLegacyPatchLateCompletionEvidence(adoptedIntent, checkpointTarget, item, successLog);
+		return adoptedIntent;
+	}
+	const lateCompletionMutationResult = {
+		method: MUTATION_METHOD,
+		recovery: 'late-completion-adopted-without-redispatch',
+		originalMutationEvidence: previousResolution.mutationEvidence,
+		result: {
+			id: item.itemId,
+			key: item.key,
+			sourceId: item.sourceId,
+			status: item.status,
+		},
+	};
+	const adoptedIntent = await adoptLateCompletionIntent(
+		db,
+		intent,
+		completedResolution(checkpoint, checkpointTarget, intent, item, successLog, lateCompletionMutationResult, {
+			previousResolvedAtEpochMs: intent.resolvedAtEpochMs,
+			previousResolution,
+		}),
+	);
+	assertCompletedIntentEvidence(adoptedIntent, checkpointTarget, item, successLog);
+	return adoptedIntent;
+}
+
 async function waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, mutationResult) {
 	for (let attempt = 0; attempt < ITEM_POLL_ATTEMPTS; attempt++) {
-		const [item, logs] = await Promise.all([
-			loadItem(accountId, apiToken, checkpointTarget.item.itemId, checkpointTarget.item.resourceId),
-			loadLogs(accountId, apiToken, checkpointTarget.item.itemId, checkpointTarget.item.resourceId),
-		]);
-		assertItemIdentity(item, checkpointTarget, checkpointTarget.item.resourceId);
-		const addedLogs = newLogs(logs, checkpointTarget);
+		const ownedItems = await listOwnedItemsByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
+		if (ownedItems.length === 0) {
+			if (attempt < ITEM_POLL_ATTEMPTS - 1) {
+				await sleep(ITEM_POLL_INTERVAL_MS);
+				continue;
+			}
+			break;
+		}
+		const item = ownedItems[0];
+		assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} current resource`);
+		assert.equal(item.sourceId, 'builtin', `${item.resourceId} current source`);
+		assert.deepEqual(
+			itemCustomMetadata(item.metadata, item.resourceId),
+			checkpointTarget.resource.canonicalMetadata,
+			`${item.resourceId} current canonical metadata`,
+		);
+		const logs = await loadLogs(accountId, apiToken, item.itemId, checkpointTarget.item.resourceId);
+		const addedLogs = newLogs(logs, checkpointTarget, item.itemId);
 		const successLog = successfulReindexLog(addedLogs, checkpointTarget, intent, item);
 		if (item.status === 'completed' && item.error === null && successLog) {
 			assert.ok(item.chunksCount > 0, `${item.resourceId} completed chunks`);
@@ -1095,15 +1742,7 @@ async function waitForTargetCompletion(accountId, apiToken, db, checkpoint, chec
 				checkpoint.instanceFence,
 				`${item.resourceId} final AI Search instance fence`,
 			);
-			const resolvedIntent =
-				intent.state === 'completed'
-					? intent
-					: await resolveRetryIntent(db, intent, 'completed', {
-							chunksCount: item.chunksCount,
-							itemLastSeenAt: item.lastSeenAt,
-							mutationResult,
-							successLog,
-						});
+			const resolvedIntent = await resolveCompletedRetryIntent(db, checkpoint, checkpointTarget, intent, item, successLog, mutationResult);
 			return {
 				itemId: item.itemId,
 				resourceId: item.resourceId,
@@ -1112,100 +1751,374 @@ async function waitForTargetCompletion(accountId, apiToken, db, checkpoint, chec
 				successLog,
 				mutationResult,
 				intent: resolvedIntent,
+				outcome: 'completed',
 			};
 		}
-		const failedLog = addedLogs.find((log) => log.errorType !== null || ['error', 'outdated', 'skipped'].includes(log.action));
-		if (failedLog) {
+		const failedLog = failedReindexLog(addedLogs, checkpointTarget, intent, item);
+		if (failedLog && ['error', 'outdated', 'skipped'].includes(item.status)) {
+			let resolvedIntent = intent;
 			if (intent.state === 'dispatched') {
-				await resolveRetryIntent(db, intent, 'failed', {
-					failedItem: {
-						error: item.error,
-						lastSeenAt: item.lastSeenAt,
-						status: item.status,
-					},
-					failedLog,
-					mutationResult,
-				});
+				resolvedIntent = await resolveRetryIntent(
+					db,
+					intent,
+					'failed',
+					failedResolution(checkpoint, checkpointTarget, intent, item, failedLog, mutationResult),
+				);
 			}
-			throw new Error(`${item.resourceId} retry produced a terminal log: ${JSON.stringify(failedLog)}`);
+			return {
+				itemId: item.itemId,
+				resourceId: item.resourceId,
+				status: item.status,
+				chunksCount: item.chunksCount,
+				failedLog,
+				mutationResult,
+				intent: resolvedIntent,
+				outcome: 'failed',
+			};
 		}
 		if (attempt < ITEM_POLL_ATTEMPTS - 1) await sleep(ITEM_POLL_INTERVAL_MS);
 	}
 	throw new Error(`${checkpointTarget.item.resourceId} retry acknowledgement remained ambiguous: ${JSON.stringify(mutationResult)}`);
 }
 
+async function captureNoEffectObservation(accountId, apiToken, db, checkpoint, checkpointTarget, intents, legacyPatch, intent) {
+	const [global, item, instanceLastActivity, observedAt] = await Promise.all([
+		assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents),
+		loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId),
+		loadInstanceLastActivity(accountId, apiToken),
+		loadDatabaseClock(db, 'no-effect observation'),
+	]);
+	const logs = await loadLogs(accountId, apiToken, item.itemId, checkpointTarget.item.resourceId);
+	assert.equal(global.stats.queued, 0, 'no-effect observation has no queued item');
+	assert.equal(global.stats.running, 0, 'no-effect observation has no running item');
+	assert.ok(TERMINAL_STATUSES.includes(item.status), 'no-effect observation item is terminal');
+	const terminalListingItem = global.statusItems[item.status]?.find(
+		(listedItem) => listedItem.resourceId === checkpointTarget.item.resourceId,
+	);
+	assert.deepEqual(terminalListingItem, item, 'no-effect by-key item matches the terminal status listing');
+	if (legacyPatch) {
+		assertItemIdentity(item, checkpointTarget, checkpointTarget.item.resourceId);
+		assert.deepEqual(item, checkpointTarget.item, 'legacy no-effect item matches the checkpoint');
+		assert.deepEqual(logs, checkpointTarget.baselineLogs, 'legacy no-effect logs match the checkpoint');
+	} else {
+		assert.equal(item.resourceId, checkpointTarget.item.resourceId, 'no-advancement resource matches the checkpoint');
+		assert.equal(item.key, checkpointTarget.item.key, 'no-advancement key matches the checkpoint');
+		assert.equal(item.sourceId, 'builtin', 'no-advancement item remains app-owned');
+		assert.ok(TERMINAL_STATUSES.includes(item.status), 'no-advancement item is terminal');
+		assert.deepEqual(
+			itemCustomMetadata(item.metadata, item.resourceId),
+			checkpointTarget.resource.canonicalMetadata,
+			'no-advancement item retains canonical metadata',
+		);
+		const addedLogs = newLogs(logs, checkpointTarget, item.itemId);
+		assert.equal(
+			successfulReindexLog(addedLogs, checkpointTarget, intent, item),
+			undefined,
+			'no-advancement item has no post-dispatch success log',
+		);
+		assert.equal(
+			failedReindexLog(addedLogs, checkpointTarget, intent, item),
+			undefined,
+			'no-advancement item has no post-dispatch terminal-failure log',
+		);
+	}
+	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
+	return {
+		observedAt,
+		instanceLastActivity,
+		item,
+		itemDigest: sha256(JSON.stringify(item)),
+		logs,
+		logCount: logs.length,
+		logsDigest: sha256(JSON.stringify(logs)),
+		stats: global.stats,
+		terminalListingItem,
+	};
+}
+
+function noEffectComparable(observation) {
+	const { observedAt: _observedAt, ...comparable } = observation;
+	return comparable;
+}
+
+async function verifyLegacyAdoptedCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents) {
+	assert.equal(intent?.state, 'completed', `${checkpointTarget.item.resourceId} legacy adopted intent is completed`);
+	const global = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
+	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} legacy adopted resource`);
+	assert.equal(item.status, 'completed', `${item.resourceId} legacy adopted item status`);
+	assert.equal(item.error, null, `${item.resourceId} legacy adopted item error`);
+	assert.ok(item.chunksCount > 0, `${item.resourceId} legacy adopted item chunks`);
+	assert.deepEqual(
+		itemCustomMetadata(item.metadata, item.resourceId),
+		checkpointTarget.resource.canonicalMetadata,
+		`${item.resourceId} legacy adopted canonical metadata`,
+	);
+	assert.ok(
+		timestampMs(item.lastSeenAt, `${item.resourceId} legacy adopted last-seen`) >
+			timestampMs(checkpointTarget.item.lastSeenAt, `${item.resourceId} legacy checkpoint last-seen`),
+		`${item.resourceId} legacy adopted item advanced last-seen`,
+	);
+	const logs = await loadLogs(accountId, apiToken, item.itemId, checkpointTarget.item.resourceId);
+	const successLog = successfulReindexLog(newLogs(logs, checkpointTarget, item.itemId), checkpointTarget, intent, item);
+	assert.ok(successLog, `${item.resourceId} legacy adopted successful retry log`);
+	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
+	assertLegacyPatchLateCompletionEvidence(intent, checkpointTarget, item, successLog);
+	return { global, intent, item, successLog };
+}
+
+async function reconcileLegacyLateCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents) {
+	assertLegacyNoEffectIntentEvidence(intent, checkpointTarget);
+	await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
+	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} legacy late-completion resource`);
+	assert.deepEqual(
+		itemCustomMetadata(item.metadata, item.resourceId),
+		checkpointTarget.resource.canonicalMetadata,
+		`${item.resourceId} legacy late-completion canonical metadata`,
+	);
+	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
+	if (!['queued', 'running', 'completed'].includes(item.status)) {
+		assertFailedIntentEvidence(intent, checkpointTarget, item);
+		assert.fail(`${item.resourceId} legacy no-effect item remains terminal; capture and approve a schema-4 checkpoint`);
+	}
+	const result = await waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, {
+		method: 'PATCH item sync with wait_for_completion=true',
+		recovery: 'polling-legacy-late-completion-without-redispatch',
+		result: null,
+	});
+	assert.equal(result.intent.state, 'completed', `${item.resourceId} legacy late completion was adopted`);
+	const finalIntents = await loadCheckpointIntents(db, checkpoint);
+	const verified = await verifyLegacyAdoptedCompletion(
+		accountId,
+		apiToken,
+		db,
+		checkpoint,
+		checkpointTarget,
+		finalIntents.get(checkpointTarget.item.itemId),
+		finalIntents,
+	);
+	return {
+		event: 'search_outdated_retry_251_legacy_late_completion_adopted',
+		checkpointRunId: checkpoint.checkpointRunId,
+		itemId: checkpointTarget.item.itemId,
+		resourceId: checkpointTarget.item.resourceId,
+		result,
+		verified,
+	};
+}
+
+async function reconcileAlreadyAdoptedLegacyCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents) {
+	const verified = await verifyLegacyAdoptedCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents);
+	return {
+		event: 'search_outdated_retry_251_legacy_late_completion_already_adopted',
+		checkpointRunId: checkpoint.checkpointRunId,
+		itemId: checkpointTarget.item.itemId,
+		resourceId: checkpointTarget.item.resourceId,
+		verified,
+	};
+}
+
+async function reconcileNoEffectDispatch(accountId, apiToken, db, checkpoint) {
+	const legacyPatch = checkpoint.schemaVersion === 3;
+	if (legacyPatch) {
+		assert.equal(checkpoint.mutationMethod, undefined, 'legacy PATCH checkpoint has no mutation method');
+		assert.equal(noEffectApproval, LEGACY_NO_EFFECT_APPROVAL, 'legacy PATCH no-effect operator approval');
+		assert.match(mutationResponseDigest ?? '', /^[0-9a-f]{64}$/, 'legacy PATCH response digest');
+		assert.match(mutationCfRay ?? '', /^[0-9a-f]+-[A-Z]{3}$/, 'legacy PATCH CF-Ray');
+		assert.equal(unavailableResponseEvidence, null, 'legacy PATCH has response evidence');
+	} else {
+		assert.equal(checkpoint.schemaVersion, 4, 'key reindex no-effect checkpoint schema');
+		assert.equal(checkpoint.mutationMethod, MUTATION_METHOD, 'key reindex no-effect mutation method');
+		assert.equal(noEffectApproval, KEY_REINDEX_NO_EFFECT_APPROVAL, 'key reindex no-effect operator approval');
+	}
+	assert.equal(checkpoint.digest, approvalDigest, 'operator approval digest matches the checkpoint');
+	const checkpointTarget = checkpoint.targets.find((target) => target.item.itemId === reconciliationItemId);
+	assert.ok(checkpointTarget, 'reconciliation item belongs to the approved checkpoint');
+	const intents = await loadCheckpointIntents(db, checkpoint);
+	const intent = intents.get(reconciliationItemId);
+	assert.ok(intent, 'reconciliation retry intent exists');
+	if (legacyPatch && intent.state === 'failed' && intent.resolution?.kind === 'provider_patch_ack_no_observable_effect') {
+		return reconcileLegacyLateCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents);
+	}
+	if (legacyPatch && intent.state === 'completed' && intent.resolution?.kind === 'legacy_item_patch_late_completion_adopted') {
+		return reconcileAlreadyAdoptedLegacyCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents);
+	}
+	const unresolvedIntents = [...intents.values()].filter((intent) => ['prepared', 'dispatched'].includes(intent.state));
+	assert.equal(unresolvedIntents.length, 1, 'checkpoint has exactly one unresolved retry intent');
+	assert.equal(intent.state, 'dispatched', 'reconciliation retry intent remains dispatched');
+	const dispatchAgeMs =
+		timestampMs(await loadDatabaseClock(db, 'no-effect dispatch-age'), 'no-effect dispatch-age') - intent.dispatchedAtEpochMs;
+	assert.ok(
+		dispatchAgeMs >= NO_EFFECT_MINIMUM_DISPATCH_AGE_MS,
+		`reconciliation dispatch is at least ${NO_EFFECT_MINIMUM_DISPATCH_AGE_MS}ms old`,
+	);
+	const first = await captureNoEffectObservation(accountId, apiToken, db, checkpoint, checkpointTarget, intents, legacyPatch, intent);
+	process.stdout.write(
+		`${JSON.stringify({
+			event: 'search_outdated_retry_251_no_effect_observation',
+			sequence: 1,
+			checkpointRunId: checkpoint.checkpointRunId,
+			itemId: reconciliationItemId,
+			resourceId: checkpointTarget.item.resourceId,
+			observation: first,
+		})}\n`,
+	);
+	await sleep(NO_EFFECT_STABILIZATION_MS);
+	const second = await captureNoEffectObservation(accountId, apiToken, db, checkpoint, checkpointTarget, intents, legacyPatch, intent);
+	assert.deepEqual(noEffectComparable(second), noEffectComparable(first), 'no-effect observations remained stable');
+	const resolution = {
+		kind: legacyPatch ? 'provider_patch_ack_no_observable_effect' : 'provider_key_reindex_no_terminal_advancement',
+		operatorApproval: noEffectApproval,
+		checkpointDigest: checkpoint.digest,
+		dispatchAgeMs,
+		mutationEvidence: {
+			method: legacyPatch ? 'PATCH item sync with wait_for_completion=true' : MUTATION_METHOD,
+			httpStatus: legacyPatch ? 200 : null,
+			cfRay: mutationCfRay,
+			responseDigest: mutationResponseDigest,
+			responseEvidenceUnavailable: unavailableResponseEvidence,
+			responseContract: legacyPatch ? 'success=true/result=null' : 'unavailable-or-non-advancing',
+		},
+		observations: [first, second],
+	};
+	const resolvedIntent = await resolveRetryIntent(db, intent, 'failed', resolution);
+	assertObservedNoEffectIntentEvidence(resolvedIntent, checkpointTarget);
+	await assertGlobalUnresolvedIntents(db);
+	return {
+		event: 'search_outdated_retry_251_no_effect_reconciled',
+		checkpointRunId: checkpoint.checkpointRunId,
+		itemId: reconciliationItemId,
+		resourceId: checkpointTarget.item.resourceId,
+		resolvedIntent,
+		resolution,
+	};
+}
+
+async function reconcileExistingIntent(accountId, apiToken, db, checkpoint, checkpointTarget, existingIntent) {
+	let intent = existingIntent;
+	if (intent.state === 'prepared') intent = await abandonPreparedIntent(db, intent);
+	if (
+		intent.state === 'abandoned' ||
+		(intent.state === 'failed' && intent.resolution?.kind !== 'provider_key_reindex_no_terminal_advancement')
+	) {
+		const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
+		await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
+		return {
+			itemId: item.itemId,
+			resourceId: item.resourceId,
+			status: item.status,
+			chunksCount: item.chunksCount,
+			mutationResult: intent.resolution?.mutationResult ?? null,
+			intent,
+			outcome: intent.state,
+		};
+	}
+	if (intent.state === 'failed') assertNoAdvancementIntentEvidence(intent, checkpointTarget);
+	const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
+	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} current resource`);
+	assert.deepEqual(
+		itemCustomMetadata(item.metadata, item.resourceId),
+		checkpointTarget.resource.canonicalMetadata,
+		`${item.resourceId} current canonical metadata`,
+	);
+	const logs = await loadLogs(accountId, apiToken, item.itemId, checkpointTarget.item.resourceId);
+	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
+	const addedLogs = newLogs(logs, checkpointTarget, item.itemId);
+	const successLog = successfulReindexLog(addedLogs, checkpointTarget, intent, item);
+	if (item.status === 'completed' && item.error === null && successLog) {
+		return waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, {
+			method: MUTATION_METHOD,
+			acknowledged: true,
+			ambiguous: false,
+			cfRay: null,
+			error: null,
+			httpStatus: null,
+			responseDigest: null,
+			result: intent.state === 'completed' ? 'completed-before-resume' : 'completed-after-unresolved-intent',
+		});
+	}
+	if (intent.state === 'completed') {
+		assert.fail(`${item.resourceId} completed retry intent no longer has its successful item/log evidence`);
+	}
+	if (item.status === 'queued' || item.status === 'running') {
+		return waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, {
+			method: MUTATION_METHOD,
+			acknowledged: false,
+			ambiguous: true,
+			cfRay: null,
+			error: 'reconciling an in-progress durable intent',
+			httpStatus: null,
+			responseDigest: null,
+			result: null,
+		});
+	}
+	const failedLog = failedReindexLog(addedLogs, checkpointTarget, intent, item);
+	if (failedLog && ['error', 'outdated', 'skipped'].includes(item.status)) {
+		if (intent.state === 'dispatched') {
+			intent = await resolveRetryIntent(
+				db,
+				intent,
+				'failed',
+				failedResolution(checkpoint, checkpointTarget, intent, item, failedLog, null),
+			);
+		}
+		return {
+			itemId: item.itemId,
+			resourceId: item.resourceId,
+			status: item.status,
+			chunksCount: item.chunksCount,
+			failedLog,
+			mutationResult: null,
+			intent,
+			outcome: 'failed',
+		};
+	}
+	if (intent.state === 'failed') {
+		assertFailedIntentEvidence(intent, checkpointTarget, item);
+		return {
+			itemId: item.itemId,
+			resourceId: item.resourceId,
+			status: item.status,
+			chunksCount: item.chunksCount,
+			mutationResult: intent.resolution?.mutationResult ?? null,
+			intent,
+			outcome: 'failed',
+		};
+	}
+	return waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, {
+		method: MUTATION_METHOD,
+		acknowledged: false,
+		ambiguous: true,
+		cfRay: null,
+		error: 'reconciling a durable intent without terminal post-dispatch evidence',
+		httpStatus: null,
+		responseDigest: null,
+		result: null,
+	});
+}
+
 async function reconcileOrRetryTarget(accountId, apiToken, db, checkpoint, checkpointTarget) {
 	let intents = await loadCheckpointIntents(db, checkpoint);
-	await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	let intent = intents.get(checkpointTarget.item.itemId) ?? null;
+	const initialGlobal = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	if (intent) return reconcileExistingIntent(accountId, apiToken, db, checkpoint, checkpointTarget, intent);
+	assert.equal(initialGlobal.stats.queued, 0, 'no queued item exists before a new key reindex');
+	assert.equal(initialGlobal.stats.running, 0, 'no running item exists before a new key reindex');
 	const [item, logs] = await Promise.all([
 		loadItem(accountId, apiToken, checkpointTarget.item.itemId, checkpointTarget.item.resourceId),
 		loadLogs(accountId, apiToken, checkpointTarget.item.itemId, checkpointTarget.item.resourceId),
 	]);
 	assertItemIdentity(item, checkpointTarget, checkpointTarget.item.resourceId);
+	assert.deepEqual(item, checkpointTarget.item, `${item.resourceId} terminal item matches checkpoint immediately before key reindex`);
+	assert.deepEqual(logs, checkpointTarget.baselineLogs, `${item.resourceId} logs match checkpoint immediately before key reindex`);
 	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
-	let intent = intents.get(item.itemId) ?? null;
-	const addedLogs = newLogs(logs, checkpointTarget);
-	if (intent) {
-		if (intent.state === 'prepared') {
-			intent = await abandonPreparedIntent(db, intent);
-			assert.fail(
-				`${item.resourceId} recovered a pre-dispatch crash and abandoned the prepared intent; capture and approve a new checkpoint`,
-			);
-		}
-		if (intent.state === 'abandoned' || intent.state === 'failed') {
-			assert.fail(`${item.resourceId} ${intent.state} under this checkpoint; capture and approve a new checkpoint`);
-		}
-		const successLog = successfulReindexLog(addedLogs, checkpointTarget, intent, item);
-		if (item.status === 'completed' && item.error === null && successLog) {
-			return waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, {
-				acknowledged: true,
-				ambiguous: false,
-				cfRay: null,
-				error: null,
-				httpStatus: null,
-				responseDigest: null,
-				result: intent.state === 'completed' ? 'completed-before-resume' : 'completed-after-unresolved-intent',
-			});
-		}
-		if (intent.state === 'completed') {
-			assert.fail(`${item.resourceId} completed retry intent no longer has its successful item/log evidence`);
-		}
-		if (item.status === 'queued' || item.status === 'running') {
-			return waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, {
-				acknowledged: false,
-				ambiguous: true,
-				cfRay: null,
-				error: 'reconciling an in-progress durable intent',
-				httpStatus: null,
-				responseDigest: null,
-				result: null,
-			});
-		}
-		const failedLog = addedLogs.find((log) => log.errorType !== null || ['error', 'outdated', 'skipped'].includes(log.action));
-		if (failedLog) {
-			if (intent.state === 'dispatched') {
-				intent = await resolveRetryIntent(db, intent, 'failed', {
-					failedItem: {
-						error: item.error,
-						lastSeenAt: item.lastSeenAt,
-						status: item.status,
-					},
-					failedLog,
-					mutationResult: null,
-				});
-			}
-			assert.fail(`${item.resourceId} prior retry failed under this checkpoint: ${JSON.stringify(intent.resolution)}`);
-		}
-		assert.fail(
-			`${item.resourceId} has a durable mutation intent but no observable advancement; approve a new checkpoint only after reconciliation`,
-		);
-	}
-	assert.deepEqual(item, checkpointTarget.item, `${item.resourceId} terminal item matches checkpoint immediately before PATCH`);
-	assert.deepEqual(logs, checkpointTarget.baselineLogs, `${item.resourceId} logs match checkpoint immediately before PATCH`);
 	intent = await createRetryIntent(db, checkpoint, checkpointTarget);
 	intents = await loadCheckpointIntents(db, checkpoint);
-	assert.deepEqual(intents.get(item.itemId), intent, `${item.resourceId} durable intent read-after-write`);
-	await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	assert.deepEqual(intents.get(checkpointTarget.item.itemId), intent, `${item.resourceId} durable intent read-after-write`);
+	const preDispatchGlobal = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	assert.equal(preDispatchGlobal.stats.queued, 0, 'no queued item exists immediately before key-reindex dispatch');
+	assert.equal(preDispatchGlobal.stats.running, 0, 'no running item exists immediately before key-reindex dispatch');
 	const [mutationItem, mutationLogs] = await Promise.all([
 		loadItem(accountId, apiToken, checkpointTarget.item.itemId, `${checkpointTarget.item.resourceId} post-intent`),
 		loadLogs(accountId, apiToken, checkpointTarget.item.itemId, `${checkpointTarget.item.resourceId} post-intent`),
@@ -1214,23 +2127,36 @@ async function reconcileOrRetryTarget(accountId, apiToken, db, checkpoint, check
 	assert.deepEqual(mutationLogs, checkpointTarget.baselineLogs, `${item.resourceId} logs remain pinned after intent commit`);
 	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, mutationItem);
 	intent = await dispatchRetryIntent(db, intent);
-	const mutationResult = await syncMutation(accountId, apiToken, checkpointTarget);
+	const mutationResult = await reindexByKeyMutation(accountId, apiToken, checkpointTarget);
+	process.stdout.write(
+		`${JSON.stringify({
+			event: 'search_outdated_retry_251_mutation_dispatched',
+			checkpointRunId: checkpoint.checkpointRunId,
+			itemId: checkpointTarget.item.itemId,
+			resourceId: checkpointTarget.item.resourceId,
+			mutationResult,
+		})}\n`,
+	);
 	return waitForTargetCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, mutationResult);
 }
 
 async function captureFinalTarget(accountId, apiToken, db, checkpointTarget, intent) {
 	assert.equal(intent?.state, 'completed', `${checkpointTarget.item.resourceId} retry intent completed`);
-	const [item, logs] = await Promise.all([
-		loadItem(accountId, apiToken, checkpointTarget.item.itemId, `${checkpointTarget.item.resourceId} final`),
-		loadLogs(accountId, apiToken, checkpointTarget.item.itemId, `${checkpointTarget.item.resourceId} final`),
-	]);
-	assertItemIdentity(item, checkpointTarget, checkpointTarget.item.resourceId);
+	const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, `${checkpointTarget.item.resourceId} final`);
+	const logs = await loadLogs(accountId, apiToken, item.itemId, `${checkpointTarget.item.resourceId} final`);
+	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} final resource`);
+	assert.deepEqual(
+		itemCustomMetadata(item.metadata, item.resourceId),
+		checkpointTarget.resource.canonicalMetadata,
+		`${item.resourceId} final canonical metadata`,
+	);
 	assert.equal(item.status, 'completed', `${item.resourceId} final item status`);
 	assert.equal(item.error, null, `${item.resourceId} final item error`);
 	assert.ok(item.chunksCount > 0, `${item.resourceId} final chunks`);
-	const addedLogs = newLogs(logs, checkpointTarget);
+	const addedLogs = newLogs(logs, checkpointTarget, item.itemId);
 	const successLog = successfulReindexLog(addedLogs, checkpointTarget, intent, item);
 	assert.ok(successLog, `${item.resourceId} final successful retry log`);
+	assertCompletedIntentEvidence(intent, checkpointTarget, item, successLog);
 	await assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item);
 	return { intent, item, successLog };
 }
@@ -1260,6 +2186,14 @@ async function assertFinalState(accountId, apiToken, db, checkpoint) {
 	return second;
 }
 
+async function assertBatchStateStable(accountId, apiToken, db, checkpoint, intents) {
+	const first = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	await sleep(SNAPSHOT_STABILIZATION_MS);
+	const second = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	assert.deepEqual(second, first, 'incomplete retry batch state remained stable');
+	return second;
+}
+
 function sleep(durationMs) {
 	return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
@@ -1286,8 +2220,17 @@ try {
 				targetCount: snapshot.targets.length,
 			})}\n`,
 		);
+	} else if (reconcileNoEffect) {
+		const checkpoint = await loadCheckpoint(checkpointPath);
+		assert.equal(checkpoint.accountId, accountId, 'checkpoint Cloudflare account');
+		assert.deepEqual(await loadDbFences(db), checkpoint.dbFences, 'checkpoint database/search fences');
+		assert.deepEqual(await loadInstanceFence(accountId, apiToken), checkpoint.instanceFence, 'checkpoint instance fence');
+		const result = await reconcileNoEffectDispatch(accountId, apiToken, db, checkpoint);
+		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 	} else {
 		const checkpoint = await loadCheckpoint(checkpointPath);
+		assert.equal(checkpoint.schemaVersion, 4, 'apply accepts only a canonical-key-reindex checkpoint');
+		assert.equal(checkpoint.mutationMethod, MUTATION_METHOD, 'apply checkpoint mutation method');
 		assert.equal(checkpoint.accountId, accountId, 'checkpoint Cloudflare account');
 		assert.equal(approvalDigest, checkpoint.digest, 'operator approval digest matches checkpoint');
 		assert.deepEqual(await loadDbFences(db), checkpoint.dbFences, 'checkpoint database/search fences');
@@ -1298,14 +2241,39 @@ try {
 			results.push(result);
 			process.stdout.write(
 				`${JSON.stringify({
-					event: 'search_outdated_retry_251_item_completed',
-					completed: index + 1,
+					event: 'search_outdated_retry_251_item_resolved',
+					processed: index + 1,
 					total: checkpoint.targets.length,
 					resourceId: result.resourceId,
 					itemId: result.itemId,
 					status: result.status,
+					outcome: result.outcome,
 				})}\n`,
 			);
+		}
+		const finalIntents = await loadCheckpointIntents(db, checkpoint);
+		assert.equal(finalIntents.size, checkpoint.targets.length, 'every processed target has a retry intent');
+		const remaining = [...finalIntents.values()].filter((intent) => intent.state !== 'completed');
+		if (remaining.length > 0) {
+			const batchState = await assertBatchStateStable(accountId, apiToken, db, checkpoint, finalIntents);
+			process.stdout.write(
+				`${JSON.stringify(
+					{
+						event: 'search_outdated_retry_251_batch_requires_new_checkpoint',
+						checkpointRunId: checkpoint.checkpointRunId,
+						remaining: remaining.map((intent) => ({
+							itemId: intent.itemId,
+							resourceId: intent.resourceId,
+							state: intent.state,
+						})),
+						results,
+						batchState,
+					},
+					null,
+					2,
+				)}\n`,
+			);
+			throw new Error(`${remaining.length} retry target(s) remain failed or abandoned; capture and approve a new terminal checkpoint`);
 		}
 		const finalState = await assertFinalState(accountId, apiToken, db, checkpoint);
 		process.stdout.write(
