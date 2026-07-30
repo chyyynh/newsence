@@ -9,7 +9,6 @@ import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
 import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
 import { syncCorpusItem } from '../ai-search';
-import { assertResourceWritesEnabled } from '../db/resource-write-guard';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
@@ -40,7 +39,6 @@ type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	await assertResourceWritesEnabled(env, 'resource processing enqueue');
 	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId), {
 		resourceId,
 		operation: 'ingest',
@@ -48,7 +46,6 @@ export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promi
 }
 
 export async function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
-	await assertResourceWritesEnabled(env, 'resource resync enqueue');
 	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, `resource-resync-v2-${workflowIdPart(resourceId)}`, {
 		resourceId,
 		operation: 'resync',
@@ -64,7 +61,6 @@ function storedWorkflowId(resourceId: string): string {
 }
 
 async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resourceId: string): Promise<void> {
-	await assertResourceWritesEnabled(env, 'resource image rehost');
 	await step
 		.do(
 			'rehost-resource-images',
@@ -249,7 +245,6 @@ async function acquireResourceForOperation(
 export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId, operation } = event.payload;
-		await assertResourceWritesEnabled(this.env, `resource processing workflow ${resourceId}`);
 		try {
 			return await this.runResource(resourceId, step, operation);
 		} catch (error) {

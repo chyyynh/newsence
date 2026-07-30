@@ -4,7 +4,6 @@ import { withCoreDb } from '@db/client';
 import { isExplicitPaperUrl, stagePaperEnrichmentAttempt } from '@ingest/platforms/paper';
 import { persistAcademicMetadataBackfill } from '@ingest/resource-persistence';
 import { syncCorpusItem } from '../ai-search';
-import { assertResourceWritesEnabled } from '../db/resource-write-guard';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 
 const PAGE_SIZE = 10;
@@ -108,13 +107,11 @@ async function recordSummary(step: WorkflowStep, summary: AcademicMetadataBackfi
 }
 
 export async function startAcademicMetadataBackfill(env: CoreEnv): Promise<string> {
-	await assertResourceWritesEnabled(env, 'academic metadata backfill enqueue');
 	return enqueueOrRestartWorkflow(env.ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW, WORKFLOW_ID, {});
 }
 
 export class AcademicMetadataBackfillV3Workflow extends WorkflowEntrypoint<CoreEnv, AcademicMetadataBackfillPayload> {
 	async run(_event: WorkflowEvent<AcademicMetadataBackfillPayload>, step: WorkflowStep) {
-		await assertResourceWritesEnabled(this.env, 'academic metadata backfill workflow');
 		let cursor: string | null = null;
 		const summary = emptySummary();
 

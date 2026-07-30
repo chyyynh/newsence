@@ -42,29 +42,8 @@ for (const relativePath of sourceFiles('src')) {
 	);
 }
 
-const guard = read('src/db/resource-write-guard.ts');
-requireText(
-	'src/db/resource-write-guard.ts',
-	guard,
-	"to_regclass('migration_guards.resource_writes_251') IS NULL",
-	'write guard must fail closed against migration_guards.resource_writes_251',
-);
-requireText(
-	'src/db/resource-write-guard.ts',
-	guard,
-	'resource writes are frozen for #251',
-	'write guard error must match the database freeze trigger',
-);
-
 const index = read('src/index.ts');
-for (const required of [
-	'shouldDispatchResourceWriters',
-	"assertResourceWritesEnabled(this.env, 'enqueue resource processing RPC')",
-	"assertResourceWritesEnabled(this.env, 'resync resource RPC')",
-	'probeSearchIndexCutover',
-]) {
-	requireText('src/index.ts', index, required, `missing guarded/operator surface: ${required}`);
-}
+requireText('src/index.ts', index, 'probeSearchIndexCutover', 'missing AI Search cutover probe');
 
 const aiSearch = read('src/ai-search.ts');
 for (const required of [
@@ -78,15 +57,6 @@ for (const required of [
 		required,
 		`canonical rebuild must surface repairable outdated items after queue drain: ${required}`,
 	);
-}
-
-const resourceStore = read('src/ingest/domain/resource-store.ts');
-for (const required of [
-	"assertResourceWritesEnabledInDb(db, 'update processed resource')",
-	"assertResourceWritesEnabledInDb(db, 'upsert pending source resource')",
-	"assertResourceWritesEnabledInDb(db, 'attach monitored source to resources')",
-]) {
-	requireText('src/ingest/domain/resource-store.ts', resourceStore, required, `missing store write guard: ${required}`);
 }
 
 const wrangler = read('wrangler.jsonc');

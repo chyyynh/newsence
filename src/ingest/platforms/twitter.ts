@@ -2,7 +2,6 @@ import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PlatformMetadata } from '@core-shared/types';
 import { normalizeUrl } from '@core-shared/url';
 import { withCoreDb, withCoreTx } from '@db/client';
-import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import {
 	attachSourceToResources,
 	getExistingResourcesByUrl,
@@ -504,7 +503,6 @@ async function processTwitterBatches(
 }
 
 export async function handleTwitterCron(env: CoreEnv): Promise<void> {
-	await assertResourceWritesEnabled(env, 'Twitter monitor cycle');
 	if (!env.KAITO_API_KEY) throw new Error('KAITO_API_KEY is not configured');
 	console.info({ tag: 'TWITTER', msg: 'start' });
 	const runStartedAt = new Date();

@@ -28,7 +28,6 @@ import type {
 import { detectResourcePlatform } from '@core-shared/url';
 import { type CoreDb, textArraySql, uuidArraySql, withCoreDb, withCoreTx } from '@db/client';
 import { contentResourceIdentitySql, resourceDisplaySourceSql, translatableResourceIdentitySql } from '@db/resource-identity-sql';
-import { assertResourceWritesEnabled, assertResourceWritesEnabledInDb } from '@db/resource-write-guard';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
 import { and, eq, not, type SQL, sql } from 'drizzle-orm';
 
@@ -401,7 +400,6 @@ export async function updateResourceAfterProcessing(
 	resource: ResourceForProcessing,
 	updatePayload: ProcessedResourceUpdate,
 ): Promise<string> {
-	await assertResourceWritesEnabledInDb(db, 'update processed resource');
 	const record = resourceMirrorRecord(resourceId, resource, updatePayload);
 	await invalidateChangedMachineTranslationFields(db, resourceId, record);
 	const tags = textArraySql(record.tags);
@@ -514,7 +512,6 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 }
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
-	await assertResourceWritesEnabledInDb(db, 'upsert pending source resource');
 	const resource = preparedRecordToResource(base);
 	const record = resourceMirrorRecord(crypto.randomUUID(), resource, pendingResourceUpdate(resource, base.platformMetadata), 'pending');
 	const result = await db.execute<{ enrichment_status: string; id: string }>(resourceUpsertStatement(record));
@@ -875,7 +872,6 @@ export async function getExistingResourcesByUrl(db: CoreDb, urls: string[]): Pro
  *  only guard that can still exclude anything is the unowned check itself. */
 export async function attachSourceToResources(db: CoreDb, resourceIds: string[], sourceId: string): Promise<void> {
 	if (!resourceIds.length) return;
-	await assertResourceWritesEnabledInDb(db, 'attach monitored source to resources');
 	await db.execute(sql`
 		UPDATE resources
 		SET source_id = ${sourceId}::uuid
@@ -889,7 +885,6 @@ export async function reopenResourceForReprocessing(
 	resourceId: string,
 	update: { content: string; platformMetadata: PlatformMetadata },
 ): Promise<boolean> {
-	await assertResourceWritesEnabled(env, 'reopen resource for reprocessing');
 	if (!update.content.trim()) {
 		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
 	}

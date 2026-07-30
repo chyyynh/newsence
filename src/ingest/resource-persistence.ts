@@ -12,7 +12,6 @@ import {
 	type YoutubeTranscript,
 } from '@core-shared/types';
 import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
-import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import { resources } from '@db/schema';
 import { toStoredResourceEntities } from '@entities/normalize';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
@@ -259,7 +258,6 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 }
 
 export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<boolean> {
-	await assertResourceWritesEnabled(env, 'mark resource enrichment failed');
 	return withCoreDb(env, async (db) => {
 		const updated = await db
 			.update(resources)
@@ -290,7 +288,6 @@ export async function persistUnchangedResourceResync(
 	resource: ResourceForProcessing,
 	paperEnrichment?: PaperMetadata | null,
 ): Promise<ResourcePersistenceOutcome> {
-	await assertResourceWritesEnabled(env, 'persist unchanged resource resync');
 	if (!resource.platform_metadata) throw new Error(`Cannot resync resource ${resourceId} without platform metadata`);
 	return withCoreTx(env, async (db) => {
 		const lockedResource = await lockResourceState(db, resourceId);
@@ -356,7 +353,6 @@ export async function persistAcademicMetadataBackfill(
 	resourceId: string,
 	metadata: PaperMetadata,
 ): Promise<ResourcePersistenceOutcome> {
-	await assertResourceWritesEnabled(env, 'persist academic metadata backfill');
 	return withCoreTx(env, async (_db, client) => {
 		const locked = await client.query<{
 			created_at: Date | string;
@@ -464,7 +460,6 @@ export async function persistResourceImageSnapshot(
 	resource: ResourceForProcessing,
 	paperEnrichment: PaperMetadata | null,
 ): Promise<boolean> {
-	await assertResourceWritesEnabled(env, 'persist resource acquisition snapshot');
 	return withCoreTx(env, async (db) => {
 		const lockedResource = await lockResourceState(db, resourceId);
 		if (resourceWriteIsSuperseded(resource, lockedResource, 'acquisition_snapshot')) return false;
@@ -495,7 +490,6 @@ export async function persistPdfExtractionSnapshot(
 	resource: ResourceForProcessing,
 	extraction: PdfExtractionMetadata,
 ): Promise<boolean> {
-	await assertResourceWritesEnabled(env, 'persist PDF extraction snapshot');
 	return withCoreTx(env, async (db) => {
 		const lockedResource = await lockResourceState(db, resourceId);
 		if (resourceWriteIsSuperseded(resource, lockedResource, 'pdf_extraction_snapshot')) return false;
@@ -521,7 +515,6 @@ export async function persistProcessedResource(
 	env: CoreEnv,
 	input: PersistProcessedResourceInput,
 ): Promise<{ persisted: boolean; resourceId: string }> {
-	await assertResourceWritesEnabled(env, 'persist processed resource');
 	return withCoreTx(env, async (db) => {
 		const lockedResource = await lockResourceState(db, input.resourceId);
 		if (resourceWriteIsSuperseded(input.resource, lockedResource, 'processed_resource')) {

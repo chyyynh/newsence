@@ -1,6 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { type CoreDb, queryRows, withCoreDb } from '@db/client';
-import { assertResourceWritesEnabled } from '@db/resource-write-guard';
 import { sql } from 'drizzle-orm';
 import checkpoint from '../search-stuck-item-251.json';
 import {
@@ -346,7 +345,6 @@ function canonicalEvidence(snapshot: CanonicalSnapshot): CanonicalEvidence {
 }
 
 async function verifyRecoveryPreflight(env: RecoveryEnv): Promise<RecoveryPreflight> {
-	await assertResourceWritesEnabled(env, 'AI Search stuck item recovery #251');
 	const info = await env.AI_SEARCH.info();
 	assertEqual(info.id, checkpoint.aiSearchInstanceName, 'recovery binding id');
 	assertEqual(info.paused, false, 'recovery binding paused');
@@ -394,7 +392,6 @@ function recoveredItemEvidence(item: AiSearchItemInfo): ItemEvidence {
 }
 
 async function upsertPinnedItem(env: CoreEnv, expectedContentSha256: string): Promise<ItemEvidence> {
-	await assertResourceWritesEnabled(env, 'AI Search stuck item canonical upsert #251');
 	await assertPinnedItem(env);
 	const canonical = await loadCanonicalSnapshot(env);
 	assertEqual(canonical.contentSha256, expectedContentSha256, 'recovery canonical content remained stable');
