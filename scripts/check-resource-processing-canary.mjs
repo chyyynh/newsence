@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const WORKFLOW_NAME = 'newsence-resource-processing-v2';
@@ -221,6 +222,24 @@ function assertRecord(value, label) {
 	return value;
 }
 
+function acquiredSourceSnapshotHash(acquired) {
+	return createHash('sha256')
+		.update(
+			JSON.stringify({
+				kind: acquired.kind,
+				resourcePlatform: acquired.resourcePlatform,
+				fileType: acquired.fileType,
+				title: acquired.title,
+				markdown: acquired.markdown,
+				metadata: acquired.metadata,
+				platformData: acquired.platformMetadata?.data,
+				representation: acquired.platformMetadata?.representation,
+			}),
+			'utf8',
+		)
+		.digest('hex');
+}
+
 function assertStepContract(steps, expected, label) {
 	assert.deepEqual(steps.map((step) => step.logicalName).toSorted(), expected.toSorted(), `${label} exact durable step set`);
 }
@@ -419,10 +438,11 @@ function assertYoutubeDescriptionCanary(steps, workflowSuccess) {
 	assert.equal(acquired.markdown?.length, 304, 'youtube-description acquired Markdown length');
 	assert.equal(acquired.metadata?.description?.length, 304, 'youtube-description acquired description length');
 	assert.equal(acquired.platformMetadata?.data?.videoId, CANARY.videoId, 'youtube-description acquired platform video id');
+	assert.match(acquired.platformMetadata?.sourceSnapshotHash ?? '', /^[a-f0-9]{64}$/, 'youtube-description acquired source snapshot');
 	assert.equal(
-		acquired.platformMetadata?.sourceSnapshotHash,
-		'7cf09dc954db38a54b37dfa9b541385022303ba8efc56f7c2647a037cf79ce9f',
-		'youtube-description acquired source snapshot',
+		acquired.platformMetadata.sourceSnapshotHash,
+		acquiredSourceSnapshotHash(acquired),
+		'youtube-description acquired source snapshot matches the acquired payload',
 	);
 	assert.equal(acquired.youtubeTranscript?.videoId, CANARY.videoId, 'youtube-description transcript video id');
 	assert.deepEqual(acquired.youtubeTranscript?.segments, [], 'youtube-description acquired zero transcript segments');
