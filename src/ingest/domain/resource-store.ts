@@ -1,5 +1,5 @@
 import {
-	type ContentResourceKind,
+	type ContentResourceIdentity,
 	canonicalizeOptionalResourceLang,
 	canonicalizeResourceLang,
 	DEFAULT_RESOURCE_LANG,
@@ -10,7 +10,7 @@ import {
 	RESOURCE_SCOPES,
 	RESOURCE_TRANSLATION_SOURCES,
 	type ResourceCategory,
-	type ResourceKind,
+	type ResourceIdentity,
 	type ResourcePlatform,
 	type ResourceScope,
 	type ResourceTranslationSource,
@@ -331,30 +331,26 @@ function resourceStoreTranslations(row: ResourceStoreRow): ResourceTranslationMa
 	return map;
 }
 
-interface SourceResourceDraft {
+type SourceResourceDraft = {
 	sourceId: string;
 	url: string;
 	title: string;
 	source: string;
 	publishedDate: Date | string;
 	summary: string | null;
-	kind: ContentResourceKind;
-	resourcePlatform: ResourcePlatform;
 	originalLang?: string;
 	content: string | null;
 	platformMetadata: PlatformMetadata | null;
 	previewImageUrl?: string | null;
 	keywords?: string[];
 	tags?: string[];
-}
+} & ContentResourceIdentity;
 
 type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
-interface ResourceMirrorRecord {
+type ResourceMirrorRecord = {
 	id: string;
 	sourceId: string | null;
-	kind: ResourceKind;
-	resourcePlatform: ResourcePlatform;
 	scope: ResourceScope;
 	url: string | null;
 	normalizedUrl: string | null;
@@ -372,7 +368,7 @@ interface ResourceMirrorRecord {
 	ogImageUrl: string | null;
 	platformMetadataJson: string | null;
 	enrichmentStatus: ResourceEnrichmentStatus;
-}
+} & ResourceIdentity;
 
 function stringArrayValue(value: unknown, field: string): string[] {
 	if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
@@ -551,10 +547,9 @@ function resourceMirrorRecord(
 	const summary = cleanString(updatePayload.summary);
 	const content = cleanString(updatePayload.content);
 	return {
+		...identity,
 		id: resourceId,
 		sourceId: cleanString(resource.source_id),
-		kind: identity.kind,
-		resourcePlatform: identity.resourcePlatform,
 		scope: resource.scope,
 		url,
 		normalizedUrl: cleanString(resource.normalized_url),

@@ -6,20 +6,14 @@ import {
 	needsResourcePlatformAcquisition,
 	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
+	VALID_KIND_PLATFORMS,
 } from '../src/shared/resource-types.ts';
 import { withPdfExtractionMetadata } from '../src/shared/types.ts';
 import { detectResourcePlatform } from '../src/shared/url.ts';
 
-const canonicalIdentities = [
-	{ kind: 'blog', resourcePlatform: null },
-	{ kind: 'forum', resourcePlatform: 'hackernews' },
-	{ kind: 'post', resourcePlatform: 'twitter' },
-	{ kind: 'video', resourcePlatform: 'youtube' },
-	{ kind: 'paper', resourcePlatform: null },
-	{ kind: 'paper', resourcePlatform: 'hackernews' },
-	{ kind: 'image', resourcePlatform: null },
-	{ kind: 'file', resourcePlatform: null },
-];
+const canonicalIdentities = Object.entries(VALID_KIND_PLATFORMS).flatMap(([kind, resourcePlatforms]) =>
+	resourcePlatforms.map((resourcePlatform) => ({ kind, resourcePlatform })),
+);
 for (const identity of canonicalIdentities) {
 	assert.equal(isValidKindPlatform(identity.kind, identity.resourcePlatform), true, JSON.stringify(identity));
 }

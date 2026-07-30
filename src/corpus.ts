@@ -1,5 +1,7 @@
 import {
+	type ContentResourceIdentity,
 	type ContentResourceKind,
+	isContentResourceIdentity,
 	isContentResourceKind,
 	isResourcePlatform,
 	parseResourceIdentity,
@@ -13,7 +15,7 @@ import { contentResourceIdentitySql, resourceDisplaySourceSql, resourceIdentityF
 import { type SQL, sql } from 'drizzle-orm';
 import { searchCorpusRanks } from './ai-search';
 
-interface ResourceSummary {
+type ResourceSummary = {
 	id: string;
 	title: string;
 	url: string;
@@ -21,9 +23,7 @@ interface ResourceSummary {
 	source: string;
 	summary?: string;
 	tags?: string[];
-	kind: ContentResourceKind;
-	resourcePlatform: ResourcePlatform;
-}
+} & ContentResourceIdentity;
 
 export type ResourceSearchInput = {
 	query: string;
@@ -264,18 +264,15 @@ function optionalResourceCategories(values: ResourceCategory[] | undefined): Res
 	return [...new Set(values)];
 }
 
-function resourceIdentityForRow(resource: { id: string; kind: string; resource_platform: string | null }): {
-	kind: ContentResourceKind;
-	resourcePlatform: ResourcePlatform;
-} {
+function resourceIdentityForRow(resource: { id: string; kind: string; resource_platform: string | null }): ContentResourceIdentity {
 	const identity = parseResourceIdentity(resource.kind, resource.resource_platform);
 	if (!identity) {
 		throw new Error(`Corpus resource ${resource.id} has invalid persisted identity ${resource.kind} / ${resource.resource_platform}`);
 	}
-	if (!isContentResourceKind(identity.kind)) {
+	if (!isContentResourceIdentity(identity)) {
 		throw new Error(`Corpus resource ${resource.id} has non-content kind ${identity.kind}`);
 	}
-	return { kind: identity.kind, resourcePlatform: identity.resourcePlatform };
+	return identity;
 }
 
 function formatSummary(resource: ResourceSearchRow): ResourceSummary {
@@ -283,6 +280,7 @@ function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 	const publishedDate = optionalIsoDate(resource.published_date, resource.id);
 	const identity = resourceIdentityForRow(resource);
 	return {
+		...identity,
 		id: resource.id,
 		title: requiredCorpusText(resource.title, 'title', resource.id),
 		url: requiredCorpusText(resource.url, 'url', resource.id),
@@ -290,8 +288,6 @@ function formatSummary(resource: ResourceSearchRow): ResourceSummary {
 		source: requiredCorpusText(resource.source, 'source', resource.id),
 		summary: summary ? summary.slice(0, SUMMARY_MAX) : undefined,
 		tags: resource.tags ?? undefined,
-		kind: identity.kind,
-		resourcePlatform: identity.resourcePlatform,
 	};
 }
 

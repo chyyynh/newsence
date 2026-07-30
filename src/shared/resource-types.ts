@@ -12,7 +12,7 @@ export const RESOURCE_PLATFORMS = ['hackernews', 'twitter', 'youtube'] as const;
 
 export type ResourcePlatform = (typeof RESOURCE_PLATFORMS)[number] | null;
 
-const VALID_KIND_PLATFORMS = {
+export const VALID_KIND_PLATFORMS = {
 	blog: [null],
 	forum: ['hackernews'],
 	post: ['twitter'],
@@ -22,10 +22,14 @@ const VALID_KIND_PLATFORMS = {
 	file: [null],
 } as const satisfies Readonly<Record<ResourceKind, readonly ResourcePlatform[]>>;
 
-export type ResourceIdentity = Readonly<{
-	kind: ResourceKind;
-	resourcePlatform: ResourcePlatform;
-}>;
+export type ResourceIdentity = {
+	[K in ResourceKind]: Readonly<{
+		kind: K;
+		resourcePlatform: (typeof VALID_KIND_PLATFORMS)[K][number];
+	}>;
+}[ResourceKind];
+
+export type ContentResourceIdentity = Extract<ResourceIdentity, { kind: ContentResourceKind }>;
 
 export type ResourceIdentityFilters = Readonly<{
 	kinds?: readonly ResourceKind[];
@@ -36,7 +40,7 @@ const DETECTED_PLATFORM_RESOURCE_IDENTITIES = {
 	hackernews: { kind: 'forum', resourcePlatform: 'hackernews' },
 	twitter: { kind: 'post', resourcePlatform: 'twitter' },
 	youtube: { kind: 'video', resourcePlatform: 'youtube' },
-} as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, ResourceIdentity>>;
+} as const satisfies Readonly<Record<Exclude<ResourcePlatform, null>, ContentResourceIdentity>>;
 
 export const RESOURCE_KIND_DISPLAY_LABELS = {
 	blog: 'Blog',
@@ -66,14 +70,23 @@ export function isResourcePlatform(value: unknown): value is ResourcePlatform {
 	return value === null || (typeof value === 'string' && (RESOURCE_PLATFORMS as readonly string[]).includes(value));
 }
 
+export function isResourceIdentity(identity: { kind: unknown; resourcePlatform: unknown }): identity is ResourceIdentity {
+	if (!isResourceKind(identity.kind) || !isResourcePlatform(identity.resourcePlatform)) return false;
+	const validPlatforms: readonly ResourcePlatform[] = VALID_KIND_PLATFORMS[identity.kind];
+	return validPlatforms.includes(identity.resourcePlatform);
+}
+
 export function isValidKindPlatform(kind: unknown, resourcePlatform: unknown): kind is ResourceKind {
-	if (!isResourceKind(kind) || !isResourcePlatform(resourcePlatform)) return false;
-	return (VALID_KIND_PLATFORMS[kind] as readonly ResourcePlatform[]).includes(resourcePlatform);
+	return isResourceIdentity({ kind, resourcePlatform });
 }
 
 export function parseResourceIdentity(kind: unknown, resourcePlatform: unknown): ResourceIdentity | null {
-	if (!isValidKindPlatform(kind, resourcePlatform)) return null;
-	return { kind, resourcePlatform: resourcePlatform as ResourcePlatform };
+	const identity = { kind, resourcePlatform };
+	return isResourceIdentity(identity) ? identity : null;
+}
+
+export function isContentResourceIdentity(identity: ResourceIdentity): identity is ContentResourceIdentity {
+	return isContentResourceKind(identity.kind);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -118,10 +131,12 @@ export function hasSemanticScholarAcademicEnrichment(platformMetadata: unknown):
 export function resourceIdentityForDetectedPlatform(
 	resourcePlatform: Exclude<ResourcePlatform, null>,
 	hasAcademicEnrichment = false,
-): ResourceIdentity {
+): ContentResourceIdentity {
 	return resourceIdentityWithAcademic(DETECTED_PLATFORM_RESOURCE_IDENTITIES[resourcePlatform], hasAcademicEnrichment);
 }
 
+export function resourceIdentityWithAcademic(identity: ContentResourceIdentity, hasAcademicEnrichment: boolean): ContentResourceIdentity;
+export function resourceIdentityWithAcademic(identity: ResourceIdentity, hasAcademicEnrichment: boolean): ResourceIdentity;
 export function resourceIdentityWithAcademic(identity: ResourceIdentity, hasAcademicEnrichment: boolean): ResourceIdentity {
 	if (!hasAcademicEnrichment || (identity.kind !== 'blog' && identity.kind !== 'forum')) return identity;
 	return { kind: 'paper', resourcePlatform: identity.resourcePlatform };
@@ -132,9 +147,9 @@ export function isResourceTranslationIdentityEligible(input: {
 	resourcePlatform: unknown;
 	fileType: string | null | undefined;
 }): boolean {
-	if (!isValidKindPlatform(input.kind, input.resourcePlatform)) return false;
-	if (!(TRANSLATABLE_RESOURCE_KINDS as readonly ResourceKind[]).includes(input.kind)) return false;
-	return !(input.fileType === 'application/pdf' && input.resourcePlatform === null);
+	const identity = parseResourceIdentity(input.kind, input.resourcePlatform);
+	if (!identity || !(TRANSLATABLE_RESOURCE_KINDS as readonly ResourceKind[]).includes(identity.kind)) return false;
+	return !(input.fileType === 'application/pdf' && identity.resourcePlatform === null);
 }
 
 export const SOURCE_PLATFORMS = ['rss', 'twitter', 'youtube'] as const;

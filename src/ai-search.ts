@@ -1,10 +1,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import {
-	CONTENT_RESOURCE_KINDS,
+	type ContentResourceIdentity,
 	type ContentResourceKind,
+	isContentResourceIdentity,
 	parseResourceIdentity,
 	type ResourceCategory,
-	type ResourceKind,
 	type ResourcePlatform,
 } from '@core-shared/resource-types';
 import { type CoreDb, isValidUuid, queryRows, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
@@ -30,10 +30,7 @@ const CANONICAL_CONTENT_IDENTITIES = [
 	{ kind: 'video', resourcePlatform: 'youtube' },
 	{ kind: 'paper', resourcePlatform: null },
 	{ kind: 'paper', resourcePlatform: 'hackernews' },
-] as const satisfies readonly {
-	kind: ContentResourceKind;
-	resourcePlatform: ResourcePlatform;
-}[];
+] as const satisfies readonly ContentResourceIdentity[];
 if (CANONICAL_CUSTOM_METADATA.length > AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT) {
 	throw new Error(`AI Search metadata exceeds the ${AI_SEARCH_CUSTOM_METADATA_FIELD_LIMIT}-field limit`);
 }
@@ -106,20 +103,14 @@ function documentEffectiveAt(row: CorpusDocument): string | undefined {
 	return date.toISOString();
 }
 
-function corpusDocumentIdentity(document: CorpusDocument): {
-	kind: ContentResourceKind;
-	resourcePlatform: ResourcePlatform;
-} {
+function corpusDocumentIdentity(document: CorpusDocument): ContentResourceIdentity {
 	const identity = parseResourceIdentity(document.kind, document.resource_platform);
-	if (!identity || !(CONTENT_RESOURCE_KINDS as readonly ResourceKind[]).includes(identity.kind)) {
+	if (!identity || !isContentResourceIdentity(identity)) {
 		throw new Error(
 			`AI Search document ${document.id} has invalid persisted identity ${String(document.kind)} / ${String(document.resource_platform)}`,
 		);
 	}
-	return {
-		kind: identity.kind as ContentResourceKind,
-		resourcePlatform: identity.resourcePlatform,
-	};
+	return identity;
 }
 
 function serializeTranslation(translation: CorpusTranslationRow, originalLang: string): string {
@@ -502,14 +493,12 @@ function resourcePlatformMetadata(resourcePlatform: ResourcePlatform): string {
 	return resourcePlatform ?? NULL_RESOURCE_PLATFORM_METADATA;
 }
 
-function searchIdentityKey(kind: ContentResourceKind, resourcePlatform: ResourcePlatform): string {
-	return `${kind}/${resourcePlatformMetadata(resourcePlatform)}`;
+function searchIdentityKey(identity: ContentResourceIdentity): string {
+	return `${identity.kind}/${resourcePlatformMetadata(identity.resourcePlatform)}`;
 }
 
 function emptySearchIdentityCounts(): Record<string, number> {
-	return Object.fromEntries(
-		CANONICAL_CONTENT_IDENTITIES.map(({ kind, resourcePlatform }) => [searchIdentityKey(kind, resourcePlatform), 0]),
-	);
+	return Object.fromEntries(CANONICAL_CONTENT_IDENTITIES.map((identity) => [searchIdentityKey(identity), 0]));
 }
 
 function databaseCount(value: string, field: string): number {
@@ -544,11 +533,11 @@ async function loadSearchIdentityCounts(env: CoreEnv): Promise<SearchIdentityCou
 		const count = databaseCount(row.count, 'resource identity');
 		total += count;
 		const identity = parseResourceIdentity(row.kind, row.resource_platform);
-		if (!identity || !(CONTENT_RESOURCE_KINDS as readonly ResourceKind[]).includes(identity.kind)) {
+		if (!identity || !isContentResourceIdentity(identity)) {
 			invalid += count;
 			continue;
 		}
-		const key = searchIdentityKey(identity.kind as ContentResourceKind, identity.resourcePlatform);
+		const key = searchIdentityKey(identity);
 		if (!Object.hasOwn(byIdentity, key)) {
 			invalid += count;
 			continue;
@@ -1159,7 +1148,8 @@ async function loadIndexedIdentityCounts(env: CoreEnv): Promise<SearchIdentityCo
 	const byIdentity = emptySearchIdentityCounts();
 	// Keep pair probes serialized. Total plus all six valid identity listings in
 	// one fanout would exceed the Worker's six simultaneous connection ceiling.
-	for (const { kind, resourcePlatform } of CANONICAL_CONTENT_IDENTITIES) {
+	for (const identity of CANONICAL_CONTENT_IDENTITIES) {
+		const { kind, resourcePlatform } = identity;
 		const platform = resourcePlatformMetadata(resourcePlatform);
 		const listed = await env.AI_SEARCH.items.list({
 			metadata_filter: JSON.stringify({
@@ -1171,7 +1161,7 @@ async function loadIndexedIdentityCounts(env: CoreEnv): Promise<SearchIdentityCo
 			per_page: 1,
 			source: 'builtin',
 		});
-		byIdentity[searchIdentityKey(kind, resourcePlatform)] = listedItemCount(listed, `${kind}/${platform} metadata`);
+		byIdentity[searchIdentityKey(identity)] = listedItemCount(listed, `${kind}/${platform} metadata`);
 	}
 	return { total: listedItemCount(all, 'item'), byIdentity };
 }
@@ -1212,8 +1202,7 @@ function searchIdentityCountsEqual(left: SearchIdentityCounts, right: SearchIden
 	return (
 		left.total === right.total &&
 		CANONICAL_CONTENT_IDENTITIES.every(
-			({ kind, resourcePlatform }) =>
-				left.byIdentity[searchIdentityKey(kind, resourcePlatform)] === right.byIdentity[searchIdentityKey(kind, resourcePlatform)],
+			(identity) => left.byIdentity[searchIdentityKey(identity)] === right.byIdentity[searchIdentityKey(identity)],
 		)
 	);
 }

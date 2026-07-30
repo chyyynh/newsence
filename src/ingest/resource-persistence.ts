@@ -229,7 +229,11 @@ function withAcademicPublishedDate(resource: ResourceForProcessing, paperEnrichm
 }
 
 function withAcademicIdentity(resource: ResourceForProcessing, paperEnrichment?: PaperMetadata | null): ResourceForProcessing {
-	const identity = resourceIdentityWithAcademic({ kind: resource.kind, resourcePlatform: resource.resource_platform }, !!paperEnrichment);
+	const persistedIdentity = parseResourceIdentity(resource.kind, resource.resource_platform);
+	if (!persistedIdentity) {
+		throw new Error(`Resource ${resource.id} has invalid identity ${String(resource.kind)} / ${String(resource.resource_platform)}`);
+	}
+	const identity = resourceIdentityWithAcademic(persistedIdentity, !!paperEnrichment);
 	if (identity.kind === resource.kind && identity.resourcePlatform === resource.resource_platform) return resource;
 	return { ...resource, kind: identity.kind, resource_platform: identity.resourcePlatform };
 }

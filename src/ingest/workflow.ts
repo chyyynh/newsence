@@ -3,6 +3,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import {
 	hasSemanticScholarAcademicEnrichment,
 	needsResourcePlatformAcquisition,
+	parseResourceIdentity,
 	resourceIdentityWithAcademic,
 } from '@core-shared/resource-types';
 import type { ResourceForProcessing } from '@core-shared/types';
@@ -242,6 +243,15 @@ async function acquireResourceForOperation(
 	return stageSavedUrlAcquisition(env, step, resource);
 }
 
+function requireProcessingResourceIdentity(resource: ResourceForProcessing) {
+	const identity = parseResourceIdentity(resource.kind, resource.resource_platform);
+	if (identity) return identity;
+	throw new NonRetryableError(
+		`Resource ${resource.id} has invalid identity ${String(resource.kind)} / ${String(resource.resource_platform)}`,
+		'ResourceIdentityError',
+	);
+}
+
 export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId, operation } = event.payload;
@@ -284,8 +294,9 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
 		const acquiredResource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, acquiredResource);
+		const acquiredIdentity = requireProcessingResourceIdentity(acquiredResource);
 		const identity = resourceIdentityWithAcademic(
-			{ kind: acquiredResource.kind, resourcePlatform: acquiredResource.resource_platform },
+			acquiredIdentity,
 			!!paperEnrichment || hasSemanticScholarAcademicEnrichment(acquiredResource.platform_metadata),
 		);
 		const resource: ResourceForProcessing = {

@@ -1,5 +1,6 @@
 import {
 	hasSemanticScholarAcademicEnrichment,
+	isContentResourceIdentity,
 	isContentResourceKind,
 	isResourcePlatform,
 	parseResourceIdentity,
@@ -43,10 +44,14 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		);
 	}
 	const hasAcademicEnrichment = hasSemanticScholarAcademicEnrichment(platformMetadata);
+	const explicitIdentity = parseResourceIdentity(acquired.kind, acquired.resourcePlatform);
+	if (!explicitIdentity || !isContentResourceIdentity(explicitIdentity)) {
+		throw new Error(`Acquired content has invalid identity ${String(acquired.kind)} / ${String(acquired.resourcePlatform)}`);
+	}
 	const acquiredPlatform = acquired.resourcePlatform ?? detectedPlatform;
 	const identity = acquiredPlatform
 		? resourceIdentityForDetectedPlatform(acquiredPlatform, hasAcademicEnrichment)
-		: resourceIdentityWithAcademic({ kind: acquired.kind, resourcePlatform: null }, hasAcademicEnrichment);
+		: resourceIdentityWithAcademic(explicitIdentity, hasAcademicEnrichment);
 	return {
 		...resource,
 		kind: identity.kind,

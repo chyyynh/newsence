@@ -1,5 +1,5 @@
 import type {
-	ContentResourceKind,
+	ContentResourceIdentity,
 	ResourceCategory,
 	ResourceKind,
 	ResourcePlatform,
@@ -80,9 +80,7 @@ export interface YoutubeTranscript {
 	chaptersFromDescription: boolean;
 }
 
-export interface NormalizedContent<T extends ResourcePlatform = ResourcePlatform> {
-	kind: ContentResourceKind;
-	resourcePlatform: T;
+type NormalizedContentBase<T extends ResourcePlatform> = {
 	fileType: string | null;
 	title: string;
 	/** Platform APIs return markdown or plain text for resource drafts. */
@@ -98,7 +96,10 @@ export interface NormalizedContent<T extends ResourcePlatform = ResourcePlatform
 	};
 	platformMetadata: PlatformMetadata<T>;
 	youtubeTranscript?: YoutubeTranscript;
-}
+};
+
+export type NormalizedContent<T extends ResourcePlatform = ResourcePlatform> = NormalizedContentBase<T> &
+	Extract<ContentResourceIdentity, { resourcePlatform: T }>;
 
 export interface TwitterMedia {
 	url: string;
