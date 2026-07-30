@@ -1279,6 +1279,23 @@ function successfulReindexLog(logs, checkpointTarget, intent, item) {
 	);
 }
 
+function successfulExternalReindexLog(logs, checkpoint, checkpointTarget, item) {
+	const minimumTimestamp =
+		Math.max(
+			timestampMs(checkpoint.capturedAt, `${item.resourceId} checkpoint capture`),
+			timestampMs(checkpointTarget.item.lastSeenAt, `${item.resourceId} checkpoint last-seen`),
+		) - LOG_CLOCK_SKEW_MS;
+	return logs.find(
+		(log) =>
+			['indexed', 'reindexed'].includes(log.action) &&
+			log.fileKey === checkpointTarget.item.key &&
+			log.errorType === null &&
+			log.errorMessage === null &&
+			log.chunkCount === item.chunksCount &&
+			timestampMs(log.timestamp, `${item.resourceId} external success log`) >= minimumTimestamp,
+	);
+}
+
 function failedReindexLog(logs, checkpointTarget, intent, item) {
 	return logs.find(
 		(log) =>
@@ -1639,11 +1656,54 @@ function assertFailedIntentEvidence(intent, checkpointTarget, item) {
 	);
 }
 
-function assertTargetApplyState(target, intent, terminalItem, inProgressItem) {
+async function verifyUnattemptedExternalCompletion(accountId, apiToken, db, checkpoint, target) {
+	const item = await loadOwnedItemByKey(accountId, apiToken, target.item.key, `${target.item.resourceId} external completion`);
+	assertItemIdentity(item, target, `${target.item.resourceId} external completion`);
+	assert.equal(item.status, 'completed', `${item.resourceId} external completion status`);
+	assert.equal(item.error, null, `${item.resourceId} external completion error`);
+	assert.ok(item.chunksCount > 0, `${item.resourceId} external completion chunks`);
+	assert.ok(
+		timestampMs(item.lastSeenAt, `${item.resourceId} external completion last-seen`) >
+			timestampMs(target.item.lastSeenAt, `${item.resourceId} checkpoint last-seen`),
+		`${item.resourceId} external completion advanced last-seen`,
+	);
+	const logs = await loadLogs(accountId, apiToken, item.itemId, `${target.item.resourceId} external completion`);
+	const successLog = successfulExternalReindexLog(newLogs(logs, target, item.itemId), checkpoint, target, item);
+	assert.ok(successLog, `${item.resourceId} external completion has a post-checkpoint success log`);
+	await assertJitCanonicalFence(accountId, apiToken, db, target, item);
+	return {
+		kind: 'provider_reindex_completed_without_operator_intent',
+		resourceId: item.resourceId,
+		itemId: item.itemId,
+		itemLastSeenAt: item.lastSeenAt,
+		successLog,
+	};
+}
+
+async function assertTargetApplyState(
+	accountId,
+	apiToken,
+	db,
+	checkpoint,
+	target,
+	intent,
+	terminalItem,
+	inProgressItem,
+	allowUnattemptedExternalCompletions,
+) {
 	if (!intent) {
-		assert.ok(terminalItem, `${target.item.resourceId} unattempted target remains terminal`);
-		assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} unattempted target matches checkpoint`);
-		return;
+		if (terminalItem) {
+			assert.equal(inProgressItem, undefined, `${target.item.resourceId} unattempted target is not in progress`);
+			assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} unattempted target matches checkpoint`);
+			return null;
+		}
+		assert.equal(inProgressItem, undefined, `${target.item.resourceId} unattempted target is not in progress`);
+		assert.equal(
+			allowUnattemptedExternalCompletions,
+			true,
+			`${target.item.resourceId} unattempted target remains terminal unless external completion evidence is approved`,
+		);
+		return verifyUnattemptedExternalCompletion(accountId, apiToken, db, checkpoint, target);
 	}
 	if (intent.state === 'failed') {
 		if (isObservedNoEffectFailure(intent)) {
@@ -1662,33 +1722,34 @@ function assertTargetApplyState(target, intent, terminalItem, inProgressItem) {
 					`${target.item.resourceId} late completion remains on the approved resource`,
 				);
 			}
-			return;
+			return null;
 		}
 		assert.ok(terminalItem, `${target.item.resourceId} failed target remains terminal`);
 		assert.equal(inProgressItem, undefined, `${target.item.resourceId} failed target is not in progress`);
 		assertFailedIntentEvidence(intent, target, terminalItem);
-		return;
+		return null;
 	}
 	if (intent.state === 'abandoned') {
 		assert.ok(terminalItem, `${target.item.resourceId} abandoned target remains terminal`);
 		assert.equal(inProgressItem, undefined, `${target.item.resourceId} abandoned target is not in progress`);
 		assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} abandoned target matches checkpoint`);
-		return;
+		return null;
 	}
 	if (intent.state === 'completed') {
 		assert.equal(terminalItem ?? inProgressItem ?? null, null, `${target.item.resourceId} completed intent is terminal-free`);
-		return;
+		return null;
 	}
 	if (intent.state === 'prepared') {
 		assert.ok(terminalItem, `${target.item.resourceId} prepared target remains terminal`);
 		assert.equal(inProgressItem, undefined, `${target.item.resourceId} prepared target is not in progress`);
 		assert.deepEqual(terminalItem, target.item, `${target.item.resourceId} prepared target matches checkpoint`);
-		return;
+		return null;
 	}
 	assert.equal(intent.state, 'dispatched', `${target.item.resourceId} unresolved intent is dispatched`);
+	return null;
 }
 
-async function assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents) {
+async function assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents, { allowUnattemptedExternalCompletions = false } = {}) {
 	const [dbFences, instanceFence, stats] = await Promise.all([
 		loadDbFences(db),
 		loadInstanceFence(accountId, apiToken),
@@ -1732,13 +1793,25 @@ async function assertGlobalApplyState(accountId, apiToken, db, checkpoint, inten
 			`${item.resourceId} in-progress item has a dispatched or late-completing intent`,
 		);
 	}
+	const externallyCompletedTargets = [];
 	for (const target of checkpoint.targets) {
 		const intent = intents.get(target.item.itemId);
 		const terminalItem = terminalByResource.get(target.item.resourceId);
 		const inProgressItem = inProgressItems.find((item) => item.resourceId === target.item.resourceId);
-		assertTargetApplyState(target, intent, terminalItem, inProgressItem);
+		const externalCompletion = await assertTargetApplyState(
+			accountId,
+			apiToken,
+			db,
+			checkpoint,
+			target,
+			intent,
+			terminalItem,
+			inProgressItem,
+			allowUnattemptedExternalCompletions,
+		);
+		if (externalCompletion) externallyCompletedTargets.push(externalCompletion);
 	}
-	return { dbFences, instanceFence, stats, statusItems };
+	return { dbFences, instanceFence, stats, statusItems, externallyCompletedTargets };
 }
 
 async function assertJitCanonicalFence(accountId, apiToken, db, checkpointTarget, item) {
@@ -1933,7 +2006,9 @@ function noEffectComparable(observation) {
 
 async function verifyLegacyAdoptedCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents) {
 	assert.equal(intent?.state, 'completed', `${checkpointTarget.item.resourceId} legacy adopted intent is completed`);
-	const global = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	const global = await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents, {
+		allowUnattemptedExternalCompletions: true,
+	});
 	const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
 	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} legacy adopted resource`);
 	assert.equal(item.status, 'completed', `${item.resourceId} legacy adopted item status`);
@@ -1959,7 +2034,9 @@ async function verifyLegacyAdoptedCompletion(accountId, apiToken, db, checkpoint
 
 async function reconcileLegacyLateCompletion(accountId, apiToken, db, checkpoint, checkpointTarget, intent, intents) {
 	assertLegacyNoEffectIntentEvidence(intent, checkpointTarget);
-	await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents);
+	await assertGlobalApplyState(accountId, apiToken, db, checkpoint, intents, {
+		allowUnattemptedExternalCompletions: true,
+	});
 	const item = await loadOwnedItemByKey(accountId, apiToken, checkpointTarget.item.key, checkpointTarget.item.resourceId);
 	assert.equal(item.resourceId, checkpointTarget.item.resourceId, `${item.resourceId} legacy late-completion resource`);
 	assert.deepEqual(
