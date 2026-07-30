@@ -7,6 +7,7 @@ import pg from 'pg';
 const NAMESPACE = 'default';
 const INDEX_NAME = 'newsence-corpus-v6';
 const STATE_INDEX_NAME = 'public-corpus-v6';
+const EXPECTED_DATABASE_HOST = 'ap-southeast-2.pg.psdb.cloud';
 const GENERATION = 4;
 const GENERATION_KEY = 'canonical-4-kind-platform';
 const ITEM_PREFIX = 'resources/';
@@ -144,10 +145,16 @@ function credentials() {
 }
 
 function databaseUrl() {
-	const value = process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL;
-	assert.ok(value, 'Set the direct PostgreSQL connection string');
+	const value = process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+	assert.ok(value, 'Set the canonical production Hyperdrive local PostgreSQL connection string');
 	const url = new URL(value);
+	assert.ok(['postgres:', 'postgresql:'].includes(url.protocol), 'PostgreSQL connection string protocol');
+	assert.equal(url.hostname, EXPECTED_DATABASE_HOST, 'Operator script only accepts the reviewed PlanetScale production host');
+	assert.ok(!decodeURIComponent(url.username).includes('|'), 'Operator script rejects PlanetScale username routing suffixes');
+	if (url.port === '6432') url.port = '5432';
+	assert.equal(url.port, '5432', 'Operator script requires the reviewed PlanetScale direct port 5432; pooled connections are unsafe');
 	if (url.searchParams.get('sslrootcert') === 'system') url.searchParams.delete('sslrootcert');
+	url.searchParams.set('application_name', 'newsence-cutover-251-search-retry');
 	return url.toString();
 }
 
@@ -886,12 +893,33 @@ async function writeCheckpointArtifact(path, snapshot) {
 }
 
 async function acquireOperatorLock(db) {
-	const result = await db.query(`SELECT pg_try_advisory_lock($1, $2) AS acquired`, APPLY_ADVISORY_LOCK);
+	const result = await db.query(
+		`SELECT
+		   pg_backend_pid() AS backend_pid,
+		   pg_is_in_recovery() AS in_recovery,
+		   inet_server_port() AS server_port,
+		   CASE
+		     WHEN NOT pg_is_in_recovery() AND inet_server_port() = 5432
+		     THEN pg_try_advisory_lock($1, $2)
+		     ELSE false
+		   END AS acquired`,
+		APPLY_ADVISORY_LOCK,
+	);
+	assert.equal(result.rows[0]?.in_recovery, false, '#251 operator database is the primary');
+	assert.equal(result.rows[0]?.server_port, 5432, '#251 operator database is direct PostgreSQL port 5432');
 	assert.equal(result.rows[0]?.acquired, true, '#251 AI Search retry operator lock');
+	assert.ok(Number.isSafeInteger(result.rows[0]?.backend_pid) && result.rows[0].backend_pid > 0, '#251 operator-lock backend PID');
+	return result.rows[0].backend_pid;
 }
 
-async function releaseOperatorLock(db) {
-	const result = await db.query(`SELECT pg_advisory_unlock($1, $2) AS released`, APPLY_ADVISORY_LOCK);
+async function releaseOperatorLock(db, expectedBackendPid) {
+	const result = await db.query(
+		`SELECT
+		   pg_backend_pid() AS backend_pid,
+		   pg_advisory_unlock($1, $2) AS released`,
+		APPLY_ADVISORY_LOCK,
+	);
+	assert.equal(result.rows[0]?.backend_pid, expectedBackendPid, '#251 operator-lock backend remained pinned');
 	assert.equal(result.rows[0]?.released, true, '#251 AI Search retry operator lock release');
 }
 
@@ -2200,13 +2228,15 @@ function sleep(durationMs) {
 
 const { accountId, apiToken } = credentials();
 const db = new pg.Client({ connectionString: databaseUrl() });
-await db.connect();
-let operatorLockHeld = false;
+let databaseConnected = false;
+let operatorLockBackendPid = null;
+let operationError = null;
 try {
+	await db.connect();
+	databaseConnected = true;
 	await db.query(`SET TIME ZONE 'UTC'`);
 	await db.query(`SET search_path = pg_catalog, public`);
-	await acquireOperatorLock(db);
-	operatorLockHeld = true;
+	operatorLockBackendPid = await acquireOperatorLock(db);
 	if (capture) {
 		const snapshot = await captureStableSnapshot(accountId, apiToken, db);
 		await writeCheckpointArtifact(outputPath, snapshot);
@@ -2295,10 +2325,34 @@ try {
 			)}\n`,
 		);
 	}
-} finally {
+} catch (error) {
+	operationError = error;
+}
+const cleanupErrors = [];
+if (databaseConnected && operatorLockBackendPid !== null) {
 	try {
-		if (operatorLockHeld) await releaseOperatorLock(db);
-	} finally {
-		await db.end();
+		await releaseOperatorLock(db, operatorLockBackendPid);
+	} catch (error) {
+		cleanupErrors.push(error);
 	}
 }
+if (databaseConnected) {
+	try {
+		await db.end();
+	} catch (error) {
+		cleanupErrors.push(error);
+	}
+}
+if (operationError !== null) {
+	if (cleanupErrors.length > 0) {
+		process.stderr.write(
+			`${JSON.stringify({
+				event: 'search_outdated_retry_251_cleanup_failed_after_operation_error',
+				operationError: operationError instanceof Error ? operationError.message : String(operationError),
+				cleanupErrors: cleanupErrors.map((error) => (error instanceof Error ? error.message : String(error))),
+			})}\n`,
+		);
+	}
+	throw operationError;
+}
+if (cleanupErrors.length > 0) throw cleanupErrors[0];
