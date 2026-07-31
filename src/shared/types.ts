@@ -180,8 +180,6 @@ export interface PaperReference {
 	title?: string;
 	year?: number;
 	authors?: string[];
-	/** Legacy first-author snapshot retained for tolerant readers. */
-	author?: string;
 }
 
 export interface PaperMetadata {
