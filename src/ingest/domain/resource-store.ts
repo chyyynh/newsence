@@ -296,11 +296,7 @@ function resourceStoreRowToProcessing(row: ResourceStoreRow): StoredResourceForP
 		platform_metadata:
 			row.platform_metadata === null || row.platform_metadata === undefined
 				? undefined
-				: storedPlatformMetadataValue(
-						row.platform_metadata,
-						dateValue(row.scraped_date ?? row.updated_at ?? row.created_at, 'platform_metadata fallback date').toISOString(),
-						row.id,
-					),
+				: storedPlatformMetadataValue(row.platform_metadata, row.id),
 	};
 	if (typeof row.has_content === 'boolean') resource.has_content = row.has_content;
 	if (typeof row.has_youtube_transcript === 'boolean') resource.has_youtube_transcript = row.has_youtube_transcript;
@@ -782,26 +778,16 @@ function requiredString(value: unknown, field: string): string {
 	return text;
 }
 
-function storedPlatformMetadataValue(value: unknown, fallbackFetchedAt: string, resourceId: string): PlatformMetadata {
+// Rows without fetchedAt/data were backfilled 2026-08-01
+// (prisma/backfill-platform-metadata-fetched-at.sql); missing keys are a bug.
+function storedPlatformMetadataValue(value: unknown, resourceId: string): PlatformMetadata {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error('Invalid platform_metadata: expected object');
 	}
 	const metadata = value as Record<string, unknown>;
 	const fetchedAt = typeof metadata.fetchedAt === 'string' ? metadata.fetchedAt.trim() : '';
-	if (!fetchedAt) {
-		console.warn({
-			tag: 'RESOURCE',
-			msg: 'Normalizing legacy platform metadata without fetchedAt',
-			resource_id: resourceId,
-			fallback_fetched_at: fallbackFetchedAt,
-		});
-		return {
-			...metadata,
-			data: Object.hasOwn(metadata, 'data') ? metadata.data : null,
-			fetchedAt: fallbackFetchedAt,
-		} as PlatformMetadata;
-	}
-	if (!Object.hasOwn(metadata, 'data')) throw new Error('Invalid platform_metadata: missing data');
+	if (!fetchedAt) throw new Error(`Invalid platform_metadata for ${resourceId}: missing fetchedAt`);
+	if (!Object.hasOwn(metadata, 'data')) throw new Error(`Invalid platform_metadata for ${resourceId}: missing data`);
 	return value as PlatformMetadata;
 }
 
