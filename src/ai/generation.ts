@@ -8,9 +8,7 @@ const CORE_TEXT_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiMessage = { role: 'system' | 'user'; content: string };
-// Generated Worker types strongly type Workers AI catalog models, while AI
-// Gateway also accepts third-party `{provider}/{model}` names from docs.
-type GatewayAi = { run<Response>(model: string, inputs: object, options?: AiOptions): Promise<Response> };
+type WorkersAiRunner = { run<Result>(model: string, inputs: object, options?: AiOptions): Promise<Result> };
 type WorkersAiChatResponse = {
 	response?: string;
 	choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
@@ -31,6 +29,7 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 
 type CoreAiRequestContext = Pick<GenerateTextOptions, 'feature' | 'resourceId'>;
 type CoreAiErrorContext = CoreAiRequestContext & { model: string };
+type CoreAiRequestOptions = { extraHeaders: Record<string, string>; gateway: GatewayOptions };
 
 export class CoreAiTemporarilyLimitedError extends Error {
 	readonly code = 'AI_TEMPORARILY_LIMITED';
@@ -95,7 +94,7 @@ function rateLimitDetails(error: unknown, seen = new Set<unknown>()): RateLimitD
 	return nestedDetails;
 }
 
-export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext): Pick<AiOptions, 'extraHeaders' | 'gateway'> {
+export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext): CoreAiRequestOptions {
 	const gatewayId = env.AI_GATEWAY_NAME.trim();
 	const environment = env.AI_GATEWAY_ENVIRONMENT.trim();
 	const feature = context.feature.trim();
@@ -119,7 +118,10 @@ export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext
 export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiErrorContext): never {
 	const details = rateLimitDetails(error);
 	if (!details) throw error;
-	const gatewayLogId = details.gatewayLogId ?? env.AI.aiGatewayLogId ?? undefined;
+	// `aiGatewayLogId` belongs to the latest AI.run call. Universal Gateway and
+	// conversion calls must not inherit a stale ID from an earlier Workers AI run.
+	const bindingGatewayLogId = context.model.startsWith('@cf/') ? env.AI.aiGatewayLogId : undefined;
+	const gatewayLogId = details.gatewayLogId ?? bindingGatewayLogId ?? undefined;
 	console.error({
 		tag: 'AI_TEMPORARILY_LIMITED',
 		msg: 'Core inference hit an upstream AI limit',
@@ -134,9 +136,46 @@ export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiEr
 	throw new CoreAiTemporarilyLimitedError(details.retryAfter, gatewayLogId);
 }
 
-async function runModel<Response>(env: CoreEnv, model: string, inputs: object, context: CoreAiRequestContext): Promise<Response> {
+function isOpenAiModel(model: string): model is `openai/${string}` {
+	return model.startsWith('openai/');
+}
+
+function gatewayResponseError(response: Response): Error & { responseHeaders: Headers; status: number } {
+	return Object.assign(new Error(`AI Gateway request failed with status ${response.status}`), {
+		responseHeaders: response.headers,
+		status: response.status,
+	});
+}
+
+async function runOpenAiModel<Result>(
+	env: CoreEnv,
+	model: `openai/${string}`,
+	inputs: object,
+	context: CoreAiRequestContext,
+): Promise<Result> {
+	const options = coreAiRequestOptions(env, context);
+	const response = await env.AI.gateway(options.gateway.id).run(
+		[
+			{
+				provider: 'openai',
+				endpoint: 'chat/completions',
+				headers: { 'Content-Type': 'application/json', ...options.extraHeaders },
+				query: { ...inputs, model: model.slice('openai/'.length) },
+			},
+		],
+		{ extraHeaders: options.extraHeaders, gateway: options.gateway },
+	);
+	if (!response.ok) throw gatewayResponseError(response);
+	return (await response.json()) as Result;
+}
+
+async function runModel<Result>(env: CoreEnv, model: string, inputs: object, context: CoreAiRequestContext): Promise<Result> {
 	try {
-		return await (env.AI as GatewayAi).run<Response>(model, inputs, coreAiRequestOptions(env, context));
+		if (model.startsWith('@cf/')) {
+			return await (env.AI as WorkersAiRunner).run<Result>(model, inputs, coreAiRequestOptions(env, context));
+		}
+		if (isOpenAiModel(model)) return await runOpenAiModel<Result>(env, model, inputs, context);
+		throw new Error(`Unsupported core AI model: ${model}`);
 	} catch (error) {
 		throwCoreAiError(env, error, { ...context, model });
 	}
