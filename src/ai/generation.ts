@@ -31,19 +31,6 @@ type CoreAiRequestContext = Pick<GenerateTextOptions, 'feature' | 'resourceId'>;
 type CoreAiErrorContext = CoreAiRequestContext & { bindingGatewayLogId?: string | null; model: string };
 type CoreAiRequestOptions = { extraHeaders: Record<string, string>; gateway: GatewayOptions };
 
-export class CoreAiTemporarilyLimitedError extends Error {
-	readonly code = 'AI_TEMPORARILY_LIMITED';
-	readonly status = 429;
-
-	constructor(
-		readonly retryAfter: string | undefined,
-		readonly gatewayLogId: string | undefined,
-	) {
-		super('AI service is temporarily limited; retry later');
-		this.name = 'CoreAiTemporarilyLimitedError';
-	}
-}
-
 function headerValue(headers: unknown, name: string): string | undefined {
 	if (headers instanceof Headers) return headers.get(name) ?? undefined;
 	if (typeof headers !== 'object' || headers === null) return undefined;
@@ -133,7 +120,7 @@ export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiEr
 		resource_id: context.resourceId,
 		retry_after: details.retryAfter,
 	});
-	throw new CoreAiTemporarilyLimitedError(details.retryAfter, gatewayLogId);
+	throw error;
 }
 
 async function runModel<Result>(env: CoreEnv, model: CoreAiModel, inputs: object, context: CoreAiRequestContext): Promise<Result> {
