@@ -48,10 +48,14 @@ export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promi
 }
 
 export async function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, `resource-resync-v2-${workflowIdPart(resourceId)}`, {
-		resourceId,
-		operation: 'resync',
+	// A resync is a distinct run, not a retry of the original ingest. A unique
+	// instance ID also keeps clients from observing a cached terminal status
+	// from an earlier resync of the same resource.
+	const instance = await env.RESOURCE_PROCESSING_V2_WORKFLOW.create({
+		id: `resource-resync-v2-${workflowIdPart(resourceId)}-${crypto.randomUUID()}`,
+		params: { resourceId, operation: 'resync' },
 	});
+	return instance.id;
 }
 
 function workflowIdPart(value: string): string {
