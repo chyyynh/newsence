@@ -105,6 +105,9 @@ export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext
 		gateway: {
 			id: gatewayId,
 			collectLog: true,
+			// Workflow steps own durable retries. Keep each Gateway request to one
+			// provider attempt so dashboard policy cannot multiply paid inference.
+			retries: { maxAttempts: 1 },
 			metadata: {
 				feature,
 				environment,
