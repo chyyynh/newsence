@@ -143,6 +143,7 @@ function hackerNewsItemTitle(item: HackerNewsItem, itemId: string): string {
 export async function scrapeHackerNews(
 	itemId: string,
 	env: CoreEnv,
+	resourceId?: string,
 ): Promise<
 	NormalizedContent<'hackernews'> &
 		Pick<AcquiredWebContent, 'extraction' | 'previewImageUrl'> & {
@@ -158,7 +159,7 @@ export async function scrapeHackerNews(
 	let markdown: string;
 	let description: string | null;
 	if (item.url) {
-		target = await acquireWebResource(item.url, env);
+		target = await acquireWebResource(item.url, env, resourceId);
 		markdown = target.markdown.trim();
 		description = target.metadata.description;
 	} else {
@@ -245,6 +246,7 @@ Rules:
 
 async function generateHnDiscussionDigest(
 	env: CoreEnv,
+	resourceId: string,
 	title: string,
 	articleContent: string,
 	hnText: string | null,
@@ -257,10 +259,10 @@ async function generateHnDiscussionDigest(
 		.join('\n')
 		.slice(0, 30000);
 
-	return generateText(env.AI, buildDiscussionPrompt(title, articleContent, hnText, commentInput, comments.length), {
+	return generateText(env, buildDiscussionPrompt(title, articleContent, hnText, commentInput, comments.length), {
+		feature: 'hn-discussion-digest-en',
+		resourceId,
 		systemPrompt: HN_DISCUSSION_SYSTEM,
-		task: 'hn-discussion-digest-en',
-		gatewayId: env.AI_GATEWAY_NAME,
 	});
 }
 
@@ -285,7 +287,7 @@ export async function buildHackerNewsContent(
 	const articleContent = withoutPreviousDiscussion(resource.content);
 	if (!articleContent) throw new Error(`Hacker News resource ${resource.id} has no content to annotate`);
 	const comments = item.children?.length ? collectAllComments(item.children) : [];
-	const digest = await generateHnDiscussionDigest(env, resource.title, articleContent, item.text ?? null, comments);
+	const digest = await generateHnDiscussionDigest(env, resource.id, resource.title, articleContent, item.text ?? null, comments);
 	const discussionUrl = `https://news.ycombinator.com/item?id=${item.id}`;
 	// Count nodes, not text-bearing comments, so this matches platform_metadata.commentCount.
 	const commentCount = countHnComments(item.children);

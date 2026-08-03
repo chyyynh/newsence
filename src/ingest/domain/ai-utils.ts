@@ -191,28 +191,26 @@ export async function generateZhHantMetadataTranslation(
 	標題：${resource.title}${summaryLine}
 內容：
 ${content.slice(0, MAX_CONTENT_LENGTH)}`;
+	const context = { feature: 'resource-metadata-localization', resourceId: resource.id };
 	if (resource.resource_platform === 'twitter') {
 		if (usesInlineTwitterContentTranslation(resource)) {
-			return generateObject(env.AI, prompt, {
+			return generateObject(env, prompt, {
+				...context,
 				schema: ZhHantTwitterTranslationSchema,
-				task: 'resource-metadata-localization',
-				gatewayId: env.AI_GATEWAY_NAME,
 				maxTokens: 2400,
 				systemPrompt: zhHantMetadataTranslationSystemPrompt(resource, true),
 			});
 		}
-		return generateObject(env.AI, prompt, {
+		return generateObject(env, prompt, {
+			...context,
 			schema: ZhHantTitleTranslationSchema,
-			task: 'resource-metadata-localization',
-			gatewayId: env.AI_GATEWAY_NAME,
 			maxTokens: 400,
 			systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 		});
 	}
-	return generateObject(env.AI, prompt, {
+	return generateObject(env, prompt, {
+		...context,
 		schema: ZhHantMetadataTranslationSchema,
-		task: 'resource-metadata-localization',
-		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 700,
 		systemPrompt: zhHantMetadataTranslationSystemPrompt(resource),
 	});
@@ -237,10 +235,10 @@ function shouldWriteResourceContentTranslation(resource: ResourceForProcessing):
 	return translated.length / content.length < PARTIAL_CONTENT_TRANSLATION_RATIO;
 }
 
-export async function translateZhHantContent(content: string, env: CoreEnv): Promise<string> {
-	return generateText(env.AI, `原文 Markdown:\n${content.trim()}`, {
-		task: 'resource-content-translation',
-		gatewayId: env.AI_GATEWAY_NAME,
+export async function translateZhHantContent(content: string, env: CoreEnv, resourceId: string): Promise<string> {
+	return generateText(env, `原文 Markdown:\n${content.trim()}`, {
+		feature: 'resource-content-translation',
+		resourceId,
 		// Measured on real bodies: ~0.31 output tokens per source character, so a
 		// 36k-character body lands near 11.1k. Leave room above that — the
 		// finish_reason guard turns a clipped response into a failed translation,
@@ -255,10 +253,10 @@ export async function classifyResource(resource: ResourceForProcessing, env: Cor
 	console.info({ tag: 'AI', msg: 'Analyzing', title: resource.title.substring(0, 80) });
 
 	const resourcePrompt = buildResourceContextPrompt(resource);
-	const classification = await generateObject(env.AI, resourcePrompt, {
+	const classification = await generateObject(env, resourcePrompt, {
+		feature: 'resource-classification',
+		resourceId: resource.id,
 		schema: ResourceClassificationSchema,
-		task: 'resource-classification',
-		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 500,
 		systemPrompt: RESOURCE_CLASSIFICATION_SYSTEM_PROMPT,
 	});

@@ -134,8 +134,9 @@
 		"mode": "smart"
 	},
 	/**
-	 * `AI_GATEWAY_NAME` — AI Gateway name used by Workers AI text generation.
-	 *   `default` is auto-created by Cloudflare on first use.
+	 * `AI_GATEWAY_NAME` — dedicated AI Gateway for system ingest inference.
+	 *   Create non-default gateways in Cloudflare before deploying.
+	 * `AI_GATEWAY_ENVIRONMENT` — trusted deployment label attached to Gateway logs.
 	 *
 	 * Required secrets:
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
@@ -146,6 +147,8 @@
 		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
-		"AI_GATEWAY_NAME": "default"
+		"AI_GATEWAY_NAME": "core-ingest",
+		// Local scripts override this trusted label to `development`.
+		"AI_GATEWAY_ENVIRONMENT": "production"
 	}
 }

@@ -182,7 +182,7 @@ export class ResourceTranslationV2Workflow extends WorkflowEntrypoint<CoreEnv, R
 				// A body at the 36k-character ceiling emits ~11.1k tokens at a
 				// measured ~90 tokens/s, so 180s left almost no margin.
 				{ retries: { limit: 3, delay: '15 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
-				() => translateZhHantContent(source, this.env),
+				() => translateZhHantContent(source, this.env, resourceId),
 			);
 			await step.do(
 				'persist-zh-hant-content',

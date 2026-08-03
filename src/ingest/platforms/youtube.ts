@@ -90,7 +90,7 @@ export async function prepareYouTubeHighlights(
 	const videoId = metadata.data.videoId;
 	if (!videoId) return null;
 	if (transcript) {
-		return transcript.segments.length ? prepareYouTubeHighlightsFromTranscript(env, videoId, transcript.segments) : null;
+		return transcript.segments.length ? prepareYouTubeHighlightsFromTranscript(env, resource.id, videoId, transcript.segments) : null;
 	}
 
 	const row = await withCoreDb(
@@ -106,11 +106,12 @@ export async function prepareYouTubeHighlights(
 	);
 	if (!row || row.aiHighlights || !Array.isArray(row.transcript) || row.transcript.length === 0) return null;
 
-	return prepareYouTubeHighlightsFromTranscript(env, videoId, row.transcript);
+	return prepareYouTubeHighlightsFromTranscript(env, resource.id, videoId, row.transcript);
 }
 
 async function prepareYouTubeHighlightsFromTranscript(
 	env: CoreEnv,
+	resourceId: string,
 	videoId: string,
 	transcript: TranscriptSegment[],
 ): Promise<YouTubeHighlightsUpdate | null> {
@@ -120,10 +121,10 @@ async function prepareYouTubeHighlightsFromTranscript(
 	const last = transcript[transcript.length - 1];
 	const duration = Math.ceil(last.endTime);
 
-	const highlights = await generateObject(env.AI, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+	const highlights = await generateObject(env, `影片總長度：${duration} 秒\n\n逐字稿：\n${transcriptText}`, {
+		feature: 'youtube-highlights',
+		resourceId,
 		schema: YouTubeHighlightsSchema,
-		task: 'youtube-highlights',
-		gatewayId: env.AI_GATEWAY_NAME,
 		maxTokens: 2000,
 		temperature: 0.3,
 		systemPrompt: HIGHLIGHTS_SYSTEM_PROMPT,

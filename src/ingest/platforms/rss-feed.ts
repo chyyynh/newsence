@@ -45,6 +45,7 @@ export interface FeedItem {
 export interface RssFeedAcquisitionInput {
 	feedUrl: string;
 	articleUrl: string;
+	resourceId: string;
 	sourceName: string;
 }
 
@@ -221,9 +222,9 @@ export function feedSummary(value: string | undefined): string | null {
 	return summary ? summary.slice(0, FEED_SUMMARY_MAX_CHARS) : null;
 }
 
-export async function feedItemMarkdown(env: CoreEnv, item: FeedItem, url: string): Promise<string> {
+export async function feedItemMarkdown(env: CoreEnv, item: FeedItem, url: string, resourceId?: string): Promise<string> {
 	if (!item.content) throw new Error(`RSS feed item has no content: ${url}`);
-	const converted = item.content.format === 'html' ? await markdownFromHtml(env, item.content.value, url) : item.content.value;
+	const converted = item.content.format === 'html' ? await markdownFromHtml(env, item.content.value, url, resourceId) : item.content.value;
 	const markdown = sanitizeExtractedMarkdown(converted);
 	if (!markdown) throw new Error(`RSS feed item produced empty Markdown: ${url}`);
 	return markdown;
@@ -241,7 +242,7 @@ export async function acquireRssFeedItem(env: CoreEnv, input: RssFeedAcquisition
 		resourcePlatform: null,
 		fileType: null,
 		title,
-		markdown: await feedItemMarkdown(env, item, articleUrl),
+		markdown: await feedItemMarkdown(env, item, articleUrl, input.resourceId),
 		previewImageUrl: item.previewImageUrl,
 		metadata: {
 			author: null,

@@ -141,7 +141,7 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	// explicit save, which feed policies must not veto.
 	const origin = { monitored: !!resource.source_id };
 	return readAcquiredContentArtifact(
-		await step.do('acquire-content-kind-platform-v1', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin)),
+		await step.do('acquire-content-kind-platform-v1', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin, resource.id)),
 	);
 }
 
@@ -237,6 +237,7 @@ async function acquireResourceForOperation(
 			return stageRssFeedAcquisition(env, step, {
 				feedUrl: source.handle,
 				articleUrl: resource.url,
+				resourceId: resource.id,
 				sourceName: source.name,
 			});
 		}

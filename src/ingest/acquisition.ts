@@ -128,7 +128,7 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
  */
 export type AcquisitionOrigin = { monitored: boolean };
 
-async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<AcquiredContent> {
+async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin, resourceId: string): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 	const detected = detectResourceUrl(validatedUrl);
 	if (detected) {
@@ -138,17 +138,22 @@ async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrig
 			case 'twitter':
 				return sanitizeAcquiredContent(await scrapeTweet(detected.platformId, env.KAITO_API_KEY));
 			case 'hackernews':
-				return sanitizeAcquiredContent(await scrapeHackerNews(detected.platformId, env));
+				return sanitizeAcquiredContent(await scrapeHackerNews(detected.platformId, env, resourceId));
 			default:
 				detected.resourcePlatform satisfies never;
 		}
 	}
 
-	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env));
+	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env, resourceId));
 }
 
-export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(url, env, origin);
+export async function scrapeSavedUrlArtifact(
+	url: string,
+	env: CoreEnv,
+	origin: AcquisitionOrigin,
+	resourceId: string,
+): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(url, env, origin, resourceId);
 	return acquiredContentArtifact(acquired);
 }
 
