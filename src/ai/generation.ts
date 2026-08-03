@@ -8,12 +8,12 @@ const CORE_TEXT_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
 
 type AiMessage = { role: 'system' | 'user'; content: string };
+type CoreAiModel = typeof CORE_TEXT_MODEL | typeof CORE_JSON_MODEL;
 type WorkersAiRunner = { run<Result>(model: string, inputs: object, options?: AiOptions): Promise<Result> };
 type WorkersAiChatResponse = {
 	response?: string;
 	choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
 };
-type OpenAIChatResponse = { choices?: Array<{ message?: { content?: string } }> };
 
 interface GenerateTextOptions {
 	feature: string;
@@ -28,7 +28,7 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 }
 
 type CoreAiRequestContext = Pick<GenerateTextOptions, 'feature' | 'resourceId'>;
-type CoreAiErrorContext = CoreAiRequestContext & { model: string };
+type CoreAiErrorContext = CoreAiRequestContext & { bindingGatewayLogId?: string | null; model: string };
 type CoreAiRequestOptions = { extraHeaders: Record<string, string>; gateway: GatewayOptions };
 
 export class CoreAiTemporarilyLimitedError extends Error {
@@ -121,10 +121,7 @@ export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext
 export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiErrorContext): never {
 	const details = rateLimitDetails(error);
 	if (!details) throw error;
-	// `aiGatewayLogId` belongs to the latest AI.run call. Universal Gateway and
-	// conversion calls must not inherit a stale ID from an earlier Workers AI run.
-	const bindingGatewayLogId = context.model.startsWith('@cf/') ? env.AI.aiGatewayLogId : undefined;
-	const gatewayLogId = details.gatewayLogId ?? bindingGatewayLogId ?? undefined;
+	const gatewayLogId = details.gatewayLogId ?? context.bindingGatewayLogId ?? undefined;
 	console.error({
 		tag: 'AI_TEMPORARILY_LIMITED',
 		msg: 'Core inference hit an upstream AI limit',
@@ -139,48 +136,17 @@ export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiEr
 	throw new CoreAiTemporarilyLimitedError(details.retryAfter, gatewayLogId);
 }
 
-function isOpenAiModel(model: string): model is `openai/${string}` {
-	return model.startsWith('openai/');
-}
-
-function gatewayResponseError(response: Response): Error & { responseHeaders: Headers; status: number } {
-	return Object.assign(new Error(`AI Gateway request failed with status ${response.status}`), {
-		responseHeaders: response.headers,
-		status: response.status,
-	});
-}
-
-async function runOpenAiModel<Result>(
-	env: CoreEnv,
-	model: `openai/${string}`,
-	inputs: object,
-	context: CoreAiRequestContext,
-): Promise<Result> {
-	const options = coreAiRequestOptions(env, context);
-	const response = await env.AI.gateway(options.gateway.id).run(
-		[
-			{
-				provider: 'openai',
-				endpoint: 'chat/completions',
-				headers: { 'Content-Type': 'application/json', ...options.extraHeaders },
-				query: { ...inputs, model: model.slice('openai/'.length) },
-			},
-		],
-		{ extraHeaders: options.extraHeaders, gateway: options.gateway },
-	);
-	if (!response.ok) throw gatewayResponseError(response);
-	return (await response.json()) as Result;
-}
-
-async function runModel<Result>(env: CoreEnv, model: string, inputs: object, context: CoreAiRequestContext): Promise<Result> {
+async function runModel<Result>(env: CoreEnv, model: CoreAiModel, inputs: object, context: CoreAiRequestContext): Promise<Result> {
+	const previousGatewayLogId = env.AI.aiGatewayLogId;
 	try {
-		if (model.startsWith('@cf/')) {
-			return await (env.AI as WorkersAiRunner).run<Result>(model, inputs, coreAiRequestOptions(env, context));
-		}
-		if (isOpenAiModel(model)) return await runOpenAiModel<Result>(env, model, inputs, context);
-		throw new Error(`Unsupported core AI model: ${model}`);
+		return await (env.AI as WorkersAiRunner).run<Result>(model, inputs, coreAiRequestOptions(env, context));
 	} catch (error) {
-		throwCoreAiError(env, error, { ...context, model });
+		const bindingGatewayLogId = env.AI.aiGatewayLogId;
+		throwCoreAiError(env, error, {
+			...context,
+			model,
+			bindingGatewayLogId: bindingGatewayLogId !== previousGatewayLogId ? bindingGatewayLogId : undefined,
+		});
 	}
 }
 
@@ -220,7 +186,7 @@ export async function generateObject<T>(env: CoreEnv, prompt: string, options: G
 		{ role: 'user', content: prompt },
 	];
 
-	const response = await runModel<OpenAIChatResponse>(
+	const response = await runModel<WorkersAiChatResponse>(
 		env,
 		CORE_JSON_MODEL,
 		{
