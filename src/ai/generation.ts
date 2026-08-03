@@ -6,6 +6,7 @@ import { type ZodType, z } from 'zod';
 // generated prose.
 const CORE_TEXT_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
 export const CORE_JSON_MODEL = 'openai/gpt-4.1-mini';
+const CORE_AI_GATEWAY_ID = 'core-ingest';
 
 type AiMessage = { role: 'system' | 'user'; content: string };
 type CoreAiModel = typeof CORE_TEXT_MODEL | typeof CORE_JSON_MODEL;
@@ -29,7 +30,6 @@ interface GenerateObjectOptions<T> extends GenerateTextOptions {
 
 type CoreAiRequestContext = Pick<GenerateTextOptions, 'feature' | 'resourceId'>;
 type CoreAiErrorContext = CoreAiRequestContext & { bindingGatewayLogId?: string | null; model: string };
-type CoreAiRequestOptions = { extraHeaders: Record<string, string>; gateway: GatewayOptions };
 
 function headerValue(headers: unknown, name: string): string | undefined {
 	if (headers instanceof Headers) return headers.get(name) ?? undefined;
@@ -81,16 +81,14 @@ function rateLimitDetails(error: unknown, seen = new Set<unknown>()): RateLimitD
 	return nestedDetails;
 }
 
-export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext): CoreAiRequestOptions {
-	const gatewayId = env.AI_GATEWAY_NAME.trim();
+export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext) {
 	const environment = env.AI_GATEWAY_ENVIRONMENT.trim();
 	const feature = context.feature.trim();
-	if (!gatewayId) throw new Error('AI Gateway id is required');
 	if (!environment) throw new Error('AI Gateway environment is required');
 	if (!feature) throw new Error('AI Gateway feature is required');
 	return {
 		gateway: {
-			id: gatewayId,
+			id: CORE_AI_GATEWAY_ID,
 			collectLog: true,
 			// Workflow steps own durable retries. Keep each Gateway request to one
 			// provider attempt so dashboard policy cannot multiply paid inference.
@@ -102,7 +100,7 @@ export function coreAiRequestOptions(env: CoreEnv, context: CoreAiRequestContext
 			},
 		},
 		extraHeaders: { 'cf-aig-collect-log-payload': 'false' },
-	};
+	} satisfies AiOptions;
 }
 
 export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiErrorContext): never {
@@ -114,7 +112,7 @@ export function throwCoreAiError(env: CoreEnv, error: unknown, context: CoreAiEr
 		msg: 'Core inference hit an upstream AI limit',
 		environment: env.AI_GATEWAY_ENVIRONMENT,
 		feature: context.feature,
-		gateway: env.AI_GATEWAY_NAME,
+		gateway: CORE_AI_GATEWAY_ID,
 		gatewayLogId,
 		model: context.model,
 		resource_id: context.resourceId,

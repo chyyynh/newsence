@@ -134,9 +134,9 @@
 		"mode": "smart"
 	},
 	/**
-	 * `AI_GATEWAY_NAME` — dedicated AI Gateway for system ingest inference.
-	 *   Create non-default gateways in Cloudflare before deploying.
 	 * `AI_GATEWAY_ENVIRONMENT` — trusted deployment label attached to Gateway logs.
+	 * System inference is pinned to the pre-created `core-ingest` Gateway in
+	 * `src/ai/generation.ts`; local scripts override this label to `development`.
 	 *
 	 * Required secrets:
 	 * - KAITO_API_KEY enables Twitter ingestion enrichment.
@@ -147,8 +147,6 @@
 		"required": ["KAITO_API_KEY", "YOUTUBE_API_KEY", "S2_API_KEY"]
 	},
 	"vars": {
-		"AI_GATEWAY_NAME": "core-ingest",
-		// Local scripts override this trusted label to `development`.
 		"AI_GATEWAY_ENVIRONMENT": "production"
 	}
 }
