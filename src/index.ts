@@ -7,8 +7,8 @@ import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow } from '@ingest/workflow';
 import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
-import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
-import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
+import type { RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
+import { relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
 import type { ResolveCorpusFsResourceEntriesInput } from './corpus-fs';
 import { listCorpusFsCollection, readCorpusFsResource, resolveCorpusFsResourceEntries } from './corpus-fs';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
@@ -110,7 +110,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return instance.status();
 	}
 
-	/** Hybrid AI Search retrieval for the chat search-news tool. */
+	/** Hybrid AI Search retrieval for the canonical corpus search tool. */
 	searchResources(input: ResourceSearchInput) {
 		return searchCorpusResources(this.env, input);
 	}
@@ -129,11 +129,6 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	async getWorkflowStatus(instanceId: string) {
 		const instance = await this.env.RESOURCE_PROCESSING_V2_WORKFLOW.get(instanceId);
 		return instance.status();
-	}
-
-	/** Read collection/resource/url entries from the core corpus. */
-	readCorpusItems(items: ReadContextItem[], userId: string) {
-		return readCorpusItems(this.env, items, userId);
 	}
 
 	/** True keyset page for the corpus filesystem collection reader. */
