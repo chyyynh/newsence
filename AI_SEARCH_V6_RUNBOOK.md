@@ -135,7 +135,11 @@ source-compatible runner; a graph change requires the isolation sequence above.
 The Workflow configures the instance, validates the identity matrix, uploads
 the full corpus plus a start-time delta, prunes stale owned items, repairs
 retryable terminal items, and marks generation 5 ready only after PostgreSQL and
-AI Search converge.
+AI Search converge. Terminal-item repair is per item: a native
+`items.get(id).sync()` re-index when the stored document is current, or a
+re-upload when the DB row is newer than the stored document. The binding's
+`sync()` returns null at runtime despite its declared type — observed state
+comes from a follow-up `info()`.
 
 ## Verify
 
