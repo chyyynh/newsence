@@ -202,6 +202,6 @@ export const collectionResources = pgTable(
 	(table) => [
 		primaryKey({ columns: [table.collectionId, table.resourceId] }),
 		index('collection_resources_resource_id_idx').on(table.resourceId),
-		index('collection_resources_collection_id_added_at_idx').on(table.collectionId, table.addedAt),
+		index('collection_resources_collection_added_resource_idx').on(table.collectionId, table.addedAt.desc(), table.resourceId.desc()),
 	],
 );

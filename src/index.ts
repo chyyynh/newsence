@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import type { CorpusFsListRequest, CorpusFsResourceReadRequest } from '@chat/fs/contracts';
 import { AcademicMetadataBackfillV3Workflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
 import { ResourceTranslationV2Workflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
@@ -8,6 +9,8 @@ import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow 
 import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
+import type { ResolveCorpusFsResourceEntriesInput } from './corpus-fs';
+import { listCorpusFsCollection, readCorpusFsResource, resolveCorpusFsResourceEntries } from './corpus-fs';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 
 export {
@@ -131,6 +134,21 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	/** Read collection/resource/url entries from the core corpus. */
 	readCorpusItems(items: ReadContextItem[], userId: string) {
 		return readCorpusItems(this.env, items, userId);
+	}
+
+	/** True keyset page for the corpus filesystem collection reader. */
+	listCorpusFsCollection(input: CorpusFsListRequest) {
+		return listCorpusFsCollection(this.env, input);
+	}
+
+	/** Bounded, revision-pinned chunk for the corpus filesystem resource reader. */
+	readCorpusFsResource(input: CorpusFsResourceReadRequest) {
+		return readCorpusFsResource(this.env, input);
+	}
+
+	/** Authoritative resource titles for attached filesystem entries. */
+	resolveCorpusFsResourceEntries(input: ResolveCorpusFsResourceEntriesInput) {
+		return resolveCorpusFsResourceEntries(this.env, input);
 	}
 
 	/** Resolve user input (site/feed/channel URL or handle) into a monitorable source candidate (#237). */
