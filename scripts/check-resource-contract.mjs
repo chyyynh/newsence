@@ -71,9 +71,6 @@ for (const required of [
 	'"binding": "SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW"',
 	'"name": "newsence-search-index-generation-5-rebuild"',
 	'"class_name": "SearchIndexGeneration5RebuildWorkflow"',
-	'"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW"',
-	'"name": "newsence-recent-resource-image-backfill-v2"',
-	'"class_name": "RecentResourceImageBackfillV2Workflow"',
 	'"binding": "ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW"',
 	'"name": "newsence-academic-metadata-backfill-v3"',
 	'"class_name": "AcademicMetadataBackfillV3Workflow"',
@@ -90,7 +87,7 @@ reject(
 reject(
 	'wrangler.jsonc',
 	wrangler,
-	/"name": "newsence-recent-resource-image-backfill"|"class_name": "RecentResourceImageBackfillWorkflow"/,
+	/"name": "newsence-recent-resource-image-backfill(?:-v2)?"|"class_name": "RecentResourceImageBackfill(?:V2)?Workflow"/,
 	'retired recent-image Workflow physical resource remains',
 );
 reject(

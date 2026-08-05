@@ -188,15 +188,6 @@ export const collections = pgTable('collections', {
 	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
 });
 
-export const workspaces = pgTable('workspaces', {
-	id: uuid('id').defaultRandom().primaryKey(),
-	userId: text('user_id').notNull(),
-	title: varchar('title', { length: 120 }).notNull(),
-	description: varchar('description', { length: 500 }),
-	createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-	updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-});
-
 export const collectionResources = pgTable(
 	'collection_resources',
 	{
@@ -212,41 +203,5 @@ export const collectionResources = pgTable(
 		primaryKey({ columns: [table.collectionId, table.resourceId] }),
 		index('collection_resources_resource_id_idx').on(table.resourceId),
 		index('collection_resources_collection_id_added_at_idx').on(table.collectionId, table.addedAt),
-	],
-);
-
-export const workspaceResources = pgTable(
-	'workspace_resources',
-	{
-		workspaceId: uuid('workspace_id')
-			.notNull()
-			.references(() => workspaces.id, { onDelete: 'cascade' }),
-		resourceId: uuid('resource_id')
-			.notNull()
-			.references(() => resources.id, { onDelete: 'cascade' }),
-		addedAt: timestamp('added_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.workspaceId, table.resourceId] }),
-		index('workspace_resources_resource_id_idx').on(table.resourceId),
-		index('workspace_resources_workspace_id_added_at_idx').on(table.workspaceId, table.addedAt),
-	],
-);
-
-export const workspaceCollections = pgTable(
-	'workspace_collections',
-	{
-		workspaceId: uuid('workspace_id')
-			.notNull()
-			.references(() => workspaces.id, { onDelete: 'cascade' }),
-		collectionId: uuid('collection_id')
-			.notNull()
-			.references(() => collections.id, { onDelete: 'cascade' }),
-		pinnedAt: timestamp('pinned_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-	},
-	(table) => [
-		primaryKey({ columns: [table.workspaceId, table.collectionId] }),
-		index('workspace_collections_collection_id_idx').on(table.collectionId),
-		index('workspace_collections_workspace_id_pinned_at_idx').on(table.workspaceId, table.pinnedAt),
 	],
 );

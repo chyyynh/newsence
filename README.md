@@ -175,7 +175,6 @@ Bindings (in `wrangler.jsonc`):
 | `RESOURCE_PROCESSING_V2_WORKFLOW` | Fetch, parse, classify, and persist a canonical resource |
 | `RESOURCE_TRANSLATION_V2_WORKFLOW` | Translate a persisted resource into zh-Hant |
 | `SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW` | Rebuild and verify the generation-5 canonical search index |
-| `RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW` | Warm recent public resource images into app-owned R2 |
 | `ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
@@ -248,21 +247,6 @@ evidence. Generation 4 used `canonical-4-kind-platform` and
 `newsence-search-index-canonical-v6-rebuild`. These historical Workflow
 resources are not active bindings and must not be triggered or adopted for the
 generation-5 contract.
-
-### Recent resource image warmup
-
-New ingest eagerly rehosts every trusted resource image through the app Worker's
-`DomainRpc`. After deploying a change to this pipeline, warm the homepage window
-with a bounded Workflow run:
-
-```sh
-pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill-v2 '{"days":7}'
-```
-
-The Workflow accepts only 1–7 days, pages through enriched public corpus rows by
-effective date, and is safe to rerun because R2 keys are content-addressed. Older
-rows are intentionally not scanned; their first image request uses the resource
-row to validate and lazily rehost an R2 miss.
 
 ### Academic metadata backfill
 

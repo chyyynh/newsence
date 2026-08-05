@@ -3,7 +3,6 @@ import { AcademicMetadataBackfillV3Workflow, startAcademicMetadataBackfill } fro
 import { ResourceTranslationV2Workflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
-import { RecentResourceImageBackfillV2Workflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
 import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow } from '@ingest/workflow';
 import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
@@ -13,7 +12,6 @@ import { assertResourceProcessable, isResourceEnrichmentComplete } from './inges
 
 export {
 	AcademicMetadataBackfillV3Workflow,
-	RecentResourceImageBackfillV2Workflow,
 	ResourceProcessingV2Workflow,
 	ResourceTranslationV2Workflow,
 	SearchIndexGeneration5RebuildWorkflow,
