@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { CorpusFsListRequest, CorpusFsResourceReadRequest } from '@chat/fs/contracts';
+import type { KnowledgeResolveResourcesInput, KnowledgeResourceReadInput } from '@app-domain/knowledge-contracts';
 import { AcademicMetadataBackfillV3Workflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
 import { ResourceTranslationV2Workflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
@@ -9,8 +9,7 @@ import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow 
 import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
-import type { ResolveCorpusFsResourceEntriesInput } from './corpus-fs';
-import { listCorpusFsCollection, readCorpusFsResource, resolveCorpusFsResourceEntries } from './corpus-fs';
+import { readCorpusResource, resolveCorpusResources } from './corpus-retrieval';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 
 export {
@@ -131,19 +130,14 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return instance.status();
 	}
 
-	/** True keyset page for the corpus filesystem collection reader. */
-	listCorpusFsCollection(input: CorpusFsListRequest) {
-		return listCorpusFsCollection(this.env, input);
+	/** Bounded, revision-pinned product resource chunk. */
+	readCorpusResource(input: KnowledgeResourceReadInput) {
+		return readCorpusResource(this.env, input);
 	}
 
-	/** Bounded, revision-pinned chunk for the corpus filesystem resource reader. */
-	readCorpusFsResource(input: CorpusFsResourceReadRequest) {
-		return readCorpusFsResource(this.env, input);
-	}
-
-	/** Authoritative resource titles for attached filesystem entries. */
-	resolveCorpusFsResourceEntries(input: ResolveCorpusFsResourceEntriesInput) {
-		return resolveCorpusFsResourceEntries(this.env, input);
+	/** Authoritative resource references and titles for product context. */
+	resolveCorpusResources(input: KnowledgeResolveResourcesInput) {
+		return resolveCorpusResources(this.env, input);
 	}
 
 	/** Resolve user input (site/feed/channel URL or handle) into a monitorable source candidate (#237). */

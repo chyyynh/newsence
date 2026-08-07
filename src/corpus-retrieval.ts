@@ -1,24 +1,23 @@
-import type {
-	CorpusFsEntry,
-	CorpusFsListRequest,
-	CorpusFsReaderPage,
-	CorpusFsReaderRpcResult,
-	CorpusFsReadResult,
-	CorpusFsResourceReadRequest,
-} from '@chat/fs/contracts';
-import { CorpusFsReaderOutputBudgetError, fitCorpusFsReadChunk } from '@chat/fs/read-chunk';
 import {
-	decodeCorpusFsReaderCursor,
-	encodeCorpusFsReaderCursor,
-	InvalidCorpusFsReaderCursorError,
-	isCorpusFsCursorTimestamp,
-} from '@chat/fs/reader-cursor';
+	decodeKnowledgeContinuation,
+	encodeKnowledgeContinuation,
+	InvalidKnowledgeContinuationError,
+	isKnowledgeContinuationTimestamp,
+} from '@app-domain/knowledge-continuation';
+import type {
+	KnowledgeReaderRpcResult,
+	KnowledgeReadResult,
+	KnowledgeResolveResourcesInput,
+	KnowledgeResourceReadInput,
+	KnowledgeSourceEntry,
+} from '@app-domain/knowledge-contracts';
+import { fitKnowledgeReadChunk, KnowledgeOutputBudgetError } from '@app-domain/knowledge-read-chunk';
 import { parseResourceIdentity } from '@core-shared/resource-types';
 import { type CoreDb, isValidUuid, queryRows, uuidArraySql, withCoreDb } from '@db/client';
 import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
 import { type SQL, sql } from 'drizzle-orm';
 
-const MAX_FS_READ_BYTES = 65_536;
+const MAX_CORPUS_READ_BYTES = 65_536;
 const MAX_METADATA_ARRAY_ITEMS = 8;
 const MAX_METADATA_ITEM_CHARS = 64;
 const MAX_METADATA_SUMMARY_CHARS = 800;
@@ -28,32 +27,16 @@ const MAX_RESOURCE_RESOLVE_IDS = 50;
 // PostgreSQL's text SUBSTRING start argument is int4. Cast both bound numeric
 // arguments explicitly so Postgres cannot select the regex overload, and leave
 // room for the one-based offset conversion performed when the query is assembled.
-const MAX_RESOURCE_CURSOR_OFFSET = 2_147_483_646;
+const MAX_RESOURCE_CONTINUATION_OFFSET = 2_147_483_646;
 
 type ResourceAccess = { access: 'principal'; userId: string } | { access: 'public'; userId: null };
 
-export type ResolveCorpusFsResourceEntriesInput = ResourceAccess & {
-	ids: string[];
-	preferredLocale: string | null;
-};
-
-interface CollectionCursor {
-	resourceId: string;
-	sortAt: string;
-}
-
-interface ResourceCursor {
+interface ResourceContinuation {
 	contentOffset: number;
 	lang: string;
 	resourceId: string;
 	resourceUpdatedAt: string;
 	translationUpdatedAt: string;
-}
-
-interface CollectionRow {
-	id: string;
-	sort_at: string;
-	title: string | null;
 }
 
 interface ResourceEntryRow {
@@ -83,52 +66,36 @@ interface ResourceReadRow {
 	viewer_has_ownership: boolean;
 }
 
-function rpcOk<T>(value: T): CorpusFsReaderRpcResult<T> {
+function rpcOk<T>(value: T): KnowledgeReaderRpcResult<T> {
 	return { status: 'ok', value };
 }
 
-async function cursorRpc<T>(run: () => Promise<T>): Promise<CorpusFsReaderRpcResult<T>> {
+async function continuationRpc<T>(run: () => Promise<T>): Promise<KnowledgeReaderRpcResult<T>> {
 	try {
 		return rpcOk(await run());
 	} catch (error) {
-		if (error instanceof InvalidCorpusFsReaderCursorError) return { status: 'invalid-cursor' };
-		if (error instanceof CorpusFsReaderOutputBudgetError) return { status: 'output-budget-exceeded' };
+		if (error instanceof InvalidKnowledgeContinuationError) return { status: 'invalid-continuation' };
+		if (error instanceof KnowledgeOutputBudgetError) return { status: 'output-budget-exceeded' };
 		throw error;
 	}
 }
 
-function decodeCollectionCursor(cursor: string | undefined, collectionId: string): CollectionCursor | null {
-	if (!cursor) return null;
-	const value = decodeCorpusFsReaderCursor(cursor);
-	if (
-		value.length !== 4 ||
-		value[0] !== 'collection-fs-v1' ||
-		value[1] !== collectionId ||
-		!isCorpusFsCursorTimestamp(value[2]) ||
-		typeof value[3] !== 'string' ||
-		!isValidUuid(value[3])
-	) {
-		throw new InvalidCorpusFsReaderCursorError();
-	}
-	return { resourceId: value[3], sortAt: value[2] };
-}
-
-function decodeResourceCursor(cursor: string | undefined, resourceId: string): ResourceCursor | null {
-	if (!cursor) return null;
-	const value = decodeCorpusFsReaderCursor(cursor);
+function decodeResourceContinuation(continuation: string | undefined, resourceId: string): ResourceContinuation | null {
+	if (!continuation) return null;
+	const value = decodeKnowledgeContinuation(continuation);
 	if (
 		value.length !== 6 ||
-		value[0] !== 'resource-fs-v1' ||
+		value[0] !== 'resource-v2' ||
 		value[1] !== resourceId ||
 		typeof value[2] !== 'string' ||
 		!value[2] ||
-		!isCorpusFsCursorTimestamp(value[3]) ||
-		!isCorpusFsCursorTimestamp(value[4]) ||
+		!isKnowledgeContinuationTimestamp(value[3]) ||
+		!isKnowledgeContinuationTimestamp(value[4]) ||
 		!Number.isSafeInteger(value[5]) ||
 		(value[5] as number) < 0 ||
-		(value[5] as number) > MAX_RESOURCE_CURSOR_OFFSET
+		(value[5] as number) > MAX_RESOURCE_CONTINUATION_OFFSET
 	) {
-		throw new InvalidCorpusFsReaderCursorError();
+		throw new InvalidKnowledgeContinuationError();
 	}
 	return {
 		contentOffset: value[5] as number,
@@ -139,31 +106,18 @@ function decodeResourceCursor(cursor: string | undefined, resourceId: string): R
 	};
 }
 
-function assertListInput(input: CorpusFsListRequest): void {
+function assertResourceReadInput(input: KnowledgeResourceReadInput): void {
 	if (
-		!isValidUuid(input.id) ||
-		input.path !== `/corpus/collections/${input.id}` ||
-		!input.userId ||
-		input.limit < 1 ||
-		input.limit > 50 ||
-		!Number.isInteger(input.limit)
-	) {
-		throw new Error('Invalid corpus filesystem list request');
-	}
-}
-
-function assertResourceReadInput(input: CorpusFsResourceReadRequest): void {
-	if (
-		!isValidUuid(input.id) ||
-		input.path !== `/corpus/resources/${input.id}` ||
+		input.ref.type !== 'resource' ||
+		!isValidUuid(input.ref.id) ||
 		!Number.isInteger(input.maxBytes) ||
 		input.maxBytes < 256 ||
-		input.maxBytes > MAX_FS_READ_BYTES
+		input.maxBytes > MAX_CORPUS_READ_BYTES
 	) {
-		throw new Error('Invalid corpus filesystem resource read request');
+		throw new Error('Invalid corpus resource read request');
 	}
 	if (input.access === 'principal' ? !input.userId : input.userId !== null) {
-		throw new Error('Invalid corpus filesystem resource principal');
+		throw new Error('Invalid corpus resource principal');
 	}
 }
 
@@ -260,12 +214,10 @@ function titleForRow(title: string | null): string {
 	return title?.trim().slice(0, MAX_TITLE_CHARS) || 'Untitled resource';
 }
 
-function resourceEntry(row: ResourceEntryRow): CorpusFsEntry {
+function resourceEntry(row: ResourceEntryRow): KnowledgeSourceEntry {
 	return {
-		id: row.id,
-		path: `/corpus/resources/${row.id}`,
+		ref: { id: row.id, type: 'resource' },
 		title: titleForRow(row.title),
-		type: 'resource',
 	};
 }
 
@@ -290,16 +242,15 @@ function fitResourceResult(input: {
 	resourceId: string;
 	revision: { lang: string; resourceUpdatedAt: string; translationUpdatedAt: string };
 	title: string;
-}): CorpusFsReadResult {
-	return fitCorpusFsReadChunk({
-		build: (content, nextOffset): CorpusFsReadResult => ({
+}): KnowledgeReadResult {
+	return fitKnowledgeReadChunk({
+		build: (content, nextOffset): KnowledgeReadResult => ({
 			...(content === undefined ? {} : { content }),
-			id: input.resourceId,
-			metadata: input.metadata,
-			nextCursor:
+			contentAvailable: true,
+			continuation:
 				nextOffset < input.contentTotal
-					? encodeCorpusFsReaderCursor([
-							'resource-fs-v1',
+					? encodeKnowledgeContinuation([
+							'resource-v2',
 							input.resourceId,
 							input.revision.lang,
 							input.revision.resourceUpdatedAt,
@@ -307,9 +258,9 @@ function fitResourceResult(input: {
 							nextOffset,
 						])
 					: null,
-			path: `/corpus/resources/${input.resourceId}`,
+			metadata: input.metadata,
+			ref: { id: input.resourceId, type: 'resource' },
 			title: input.title,
-			type: 'resource',
 		}),
 		content: input.contentChunk,
 		contentOffset: input.contentOffset,
@@ -317,71 +268,7 @@ function fitResourceResult(input: {
 	});
 }
 
-function collectionCursorPredicate(cursor: CollectionCursor | null): SQL {
-	if (!cursor) return sql``;
-	return sql`
-		AND (
-			edge.added_at < ${cursor.sortAt}::timestamptz
-			OR (edge.added_at = ${cursor.sortAt}::timestamptz AND edge.resource_id < ${cursor.resourceId}::uuid)
-		)
-	`;
-}
-
-async function listCollection(db: CoreDb, input: CorpusFsListRequest): Promise<CorpusFsReaderPage | null> {
-	assertListInput(input);
-	const cursor = decodeCollectionCursor(input.cursor, input.id);
-	const collectionRows = await queryRows<{ description: string | null; id: string; title: string }>(
-		db,
-		sql`
-			SELECT collection.id::text, collection.name AS title, collection.description
-			FROM collections collection
-			WHERE collection.id = ${input.id}::uuid AND collection.user_id = ${input.userId}
-			LIMIT 1
-		`,
-	);
-	const collection = collectionRows[0];
-	if (!collection) return null;
-
-	const access = { access: 'principal' as const, userId: input.userId };
-	const rows = await queryRows<CollectionRow>(
-		db,
-		sql`
-			SELECT edge.resource_id::text AS id,
-			       TO_CHAR(edge.added_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
-			       COALESCE(NULLIF(BTRIM(localized.title), ''), NULLIF(BTRIM(r.url), ''), 'Untitled resource') AS title
-			FROM collection_resources edge
-			JOIN resources r ON r.id = edge.resource_id
-			LEFT JOIN sources monitored_source ON monitored_source.id = r.source_id
-			${localizedTranslationSql(input.preferredLocale)}
-			WHERE edge.collection_id = ${input.id}::uuid
-			  AND ${resourceMetadataAccessSql(access)}
-			  ${collectionCursorPredicate(cursor)}
-			ORDER BY edge.added_at DESC, edge.resource_id DESC
-			LIMIT ${input.limit + 1}
-		`,
-	);
-	const hasNext = rows.length > input.limit;
-	const pageRows = rows.slice(0, input.limit);
-	const last = pageRows.at(-1);
-	return {
-		entries: pageRows.map(resourceEntry),
-		metadata: {
-			description: collection.description?.slice(0, 2_000) ?? null,
-			id: collection.id,
-			title: collection.title.trim().slice(0, MAX_TITLE_CHARS) || 'Untitled collection',
-		},
-		nextCursor: hasNext && last ? encodeCorpusFsReaderCursor(['collection-fs-v1', collection.id, last.sort_at, last.id]) : null,
-	};
-}
-
-export async function listCorpusFsCollection(
-	env: CoreEnv,
-	input: CorpusFsListRequest,
-): Promise<CorpusFsReaderRpcResult<CorpusFsReaderPage | null>> {
-	return cursorRpc(() => withCoreDb(env, (db) => listCollection(db, input)));
-}
-
-async function resolveResourceEntries(db: CoreDb, input: ResolveCorpusFsResourceEntriesInput): Promise<CorpusFsEntry[]> {
+async function resolveResourceEntries(db: CoreDb, input: KnowledgeResolveResourcesInput): Promise<KnowledgeSourceEntry[]> {
 	const ids = [...new Set(input.ids)];
 	if (ids.length > MAX_RESOURCE_RESOLVE_IDS || ids.some((id) => !isValidUuid(id))) return [];
 	if (input.access === 'principal' ? !input.userId : input.userId !== null) return [];
@@ -400,7 +287,7 @@ async function resolveResourceEntries(db: CoreDb, input: ResolveCorpusFsResource
 	return rows.map(resourceEntry);
 }
 
-export async function resolveCorpusFsResourceEntries(env: CoreEnv, input: ResolveCorpusFsResourceEntriesInput): Promise<CorpusFsEntry[]> {
+export async function resolveCorpusResources(env: CoreEnv, input: KnowledgeResolveResourcesInput): Promise<KnowledgeSourceEntry[]> {
 	return withCoreDb(env, (db) => resolveResourceEntries(db, input));
 }
 
@@ -426,10 +313,11 @@ function resourceReadMetadata(row: ResourceReadRow) {
 	};
 }
 
-async function readResource(db: CoreDb, input: CorpusFsResourceReadRequest): Promise<CorpusFsReadResult | null> {
+async function readResource(db: CoreDb, input: KnowledgeResourceReadInput): Promise<KnowledgeReadResult | null> {
 	assertResourceReadInput(input);
-	const cursor = decodeResourceCursor(input.cursor, input.id);
-	const offset = cursor?.contentOffset ?? 0;
+	const resourceId = input.ref.id;
+	const continuation = decodeResourceContinuation(input.continuation, resourceId);
+	const offset = continuation?.contentOffset ?? 0;
 	const ownership = input.access === 'principal' ? viewerResourceOwnershipSql(input.userId) : sql`FALSE`;
 	const rows = await queryRows<ResourceReadRow>(
 		db,
@@ -462,8 +350,8 @@ async function readResource(db: CoreDb, input: CorpusFsResourceReadRequest): Pro
 			       END AS content_chunk
 			FROM resources r
 			LEFT JOIN sources monitored_source ON monitored_source.id = r.source_id
-			${localizedTranslationSql(input.preferredLocale, cursor?.lang)}
-			WHERE r.id = ${input.id}::uuid
+			${localizedTranslationSql(input.preferredLocale, continuation?.lang)}
+			WHERE r.id = ${resourceId}::uuid
 			  AND ${resourceMetadataAccessSql(input)}
 			LIMIT 1
 		`,
@@ -471,36 +359,34 @@ async function readResource(db: CoreDb, input: CorpusFsResourceReadRequest): Pro
 	const row = rows[0];
 	if (!row) return null;
 	if (!row.selected_lang || !row.translation_updated_at) {
-		if (cursor) throw new InvalidCorpusFsReaderCursorError();
+		if (continuation) throw new InvalidKnowledgeContinuationError();
 		return {
-			id: row.id,
+			contentAvailable: false,
+			continuation: null,
 			metadata: resourceReadMetadata(row),
-			nextCursor: null,
-			path: input.path,
+			ref: { id: row.id, type: 'resource' },
 			title: titleForRow(row.title),
-			type: 'resource',
 		};
 	}
 	if (
-		cursor &&
-		(cursor.lang !== row.selected_lang ||
-			cursor.resourceUpdatedAt !== row.resource_updated_at ||
-			cursor.translationUpdatedAt !== row.translation_updated_at)
+		continuation &&
+		(continuation.lang !== row.selected_lang ||
+			continuation.resourceUpdatedAt !== row.resource_updated_at ||
+			continuation.translationUpdatedAt !== row.translation_updated_at)
 	) {
-		throw new InvalidCorpusFsReaderCursorError();
+		throw new InvalidKnowledgeContinuationError();
 	}
 	const contentTotal = Number(row.content_chars ?? 0);
-	if (!Number.isSafeInteger(contentTotal) || contentTotal < 0 || (cursor && offset >= contentTotal)) {
-		throw new InvalidCorpusFsReaderCursorError();
+	if (!Number.isSafeInteger(contentTotal) || contentTotal < 0 || (continuation && offset >= contentTotal)) {
+		throw new InvalidKnowledgeContinuationError();
 	}
 	if (!row.viewer_has_ownership || !row.content_chunk || contentTotal === 0) {
 		return {
-			id: row.id,
+			contentAvailable: false,
+			continuation: null,
 			metadata: resourceReadMetadata(row),
-			nextCursor: null,
-			path: input.path,
+			ref: { id: row.id, type: 'resource' },
 			title: titleForRow(row.title),
-			type: 'resource',
 		};
 	}
 	return fitResourceResult({
@@ -519,9 +405,9 @@ async function readResource(db: CoreDb, input: CorpusFsResourceReadRequest): Pro
 	});
 }
 
-export async function readCorpusFsResource(
+export async function readCorpusResource(
 	env: CoreEnv,
-	input: CorpusFsResourceReadRequest,
-): Promise<CorpusFsReaderRpcResult<CorpusFsReadResult | null>> {
-	return cursorRpc(() => withCoreDb(env, (db) => readResource(db, input)));
+	input: KnowledgeResourceReadInput,
+): Promise<KnowledgeReaderRpcResult<KnowledgeReadResult | null>> {
+	return continuationRpc(() => withCoreDb(env, (db) => readResource(db, input)));
 }

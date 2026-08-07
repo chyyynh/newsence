@@ -17,7 +17,6 @@
 		   No baseUrl — since TS 5.0 paths resolve relative to this tsconfig's directory. */
 		"paths": {
 			"@app-domain/*": ["../../web-tanstack/src/server/domain/*"],
-			"@chat/*": ["../chat-worker/src/chat/*"],
 			"@core-ai/*": ["./src/ai/*"],
 			"@db/*": ["./src/db/*"],
 			"@core-shared/*": ["./src/shared/*"],
