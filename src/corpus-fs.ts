@@ -25,8 +25,9 @@ const MAX_METADATA_SUMMARY_CHARS = 800;
 const MAX_METADATA_URL_CHARS = 1_024;
 const MAX_TITLE_CHARS = 512;
 const MAX_RESOURCE_RESOLVE_IDS = 50;
-// PostgreSQL's text SUBSTRING start argument is int4. Leave room for the
-// one-based offset conversion performed when the query is assembled.
+// PostgreSQL's text SUBSTRING start argument is int4. Cast both bound numeric
+// arguments explicitly so Postgres cannot select the regex overload, and leave
+// room for the one-based offset conversion performed when the query is assembled.
 const MAX_RESOURCE_CURSOR_OFFSET = 2_147_483_646;
 
 type ResourceAccess = { access: 'principal'; userId: string } | { access: 'public'; userId: null };
@@ -452,7 +453,11 @@ async function readResource(db: CoreDb, input: CorpusFsResourceReadRequest): Pro
 			       ${ownership} AS viewer_has_ownership,
 			       CASE WHEN ${ownership} THEN CHAR_LENGTH(localized.content) ELSE NULL END AS content_chars,
 			       CASE WHEN ${ownership}
-			         THEN SUBSTRING(localized.content FROM ${offset + 1} FOR ${input.maxBytes})
+			         THEN SUBSTRING(
+			           localized.content
+			           FROM (${offset + 1})::integer
+			           FOR (${input.maxBytes})::integer
+			         )
 			         ELSE NULL
 			       END AS content_chunk
 			FROM resources r
