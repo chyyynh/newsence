@@ -1,17 +1,16 @@
 import {
 	decodeKnowledgeContinuation,
 	encodeKnowledgeContinuation,
+	fitKnowledgeReadChunk,
 	InvalidKnowledgeContinuationError,
 	isKnowledgeContinuationTimestamp,
-} from '@app-domain/knowledge-continuation';
-import type {
-	KnowledgeReaderRpcResult,
-	KnowledgeReadResult,
-	KnowledgeResolveResourcesInput,
-	KnowledgeResourceReadInput,
-	KnowledgeSourceEntry,
+	KnowledgeOutputBudgetError,
+	type KnowledgeReaderRpcResult,
+	type KnowledgeReadResult,
+	type KnowledgeResolveResourcesInput,
+	type KnowledgeResourceReadInput,
+	type KnowledgeSourceEntry,
 } from '@app-domain/knowledge-contracts';
-import { fitKnowledgeReadChunk, KnowledgeOutputBudgetError } from '@app-domain/knowledge-read-chunk';
 import { parseResourceIdentity } from '@core-shared/resource-types';
 import { type CoreDb, isValidUuid, queryRows, uuidArraySql, withCoreDb } from '@db/client';
 import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
