@@ -10,7 +10,7 @@ import {
 import { type CoreDb, isValidUuid, queryRows, textArraySql, uuidArraySql, withCoreDb } from '@db/client';
 import { contentResourceIdentitySql, resourceDisplaySourceSql } from '@db/resource-identity-sql';
 import { sql } from 'drizzle-orm';
-import { enqueueOrRestartWorkflow } from './workflow-control';
+import { DURABLE_WORKFLOW_RETRIES, enqueueOrRestartWorkflow } from './workflow-control';
 
 // Cloudflare AI Search allows at most five custom metadata fields per instance.
 // https://developers.cloudflare.com/ai-search/configuration/indexing/metadata/
@@ -47,10 +47,7 @@ const LIVE_INDEX_POLL_TIMEOUT_MS = 75_000;
 // completing after a best-effort queue admission. Dynamic native retries stay
 // responsive to short failures, then back off without a custom outbox/alarm.
 export const AI_SEARCH_SYNC_STEP_CONFIG = {
-	retries: {
-		limit: 10_000,
-		delay: ({ ctx }) => (ctx.attempt <= 5 ? '10 seconds' : ctx.attempt <= 60 ? '1 minute' : '15 minutes'),
-	},
+	retries: DURABLE_WORKFLOW_RETRIES,
 	timeout: '90 seconds',
 } as const satisfies WorkflowStepConfig;
 

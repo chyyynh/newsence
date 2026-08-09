@@ -1,4 +1,4 @@
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import {
 	hasSemanticScholarAcademicEnrichment,
@@ -14,7 +14,7 @@ import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing, loadStalePendingAppResourceIds } from '@ingest/domain/resource-store';
 import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
 import { AI_SEARCH_SYNC_STEP_CONFIG, syncCorpusItem } from '../ai-search';
-import { enqueueOrRestartWorkflow } from '../workflow-control';
+import { DURABLE_WORKFLOW_RETRIES, enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
 	applyAcquiredContent,
@@ -46,6 +46,10 @@ type WorkflowPayload = { resourceId: string; operation: WorkflowOperation; sourc
 const PENDING_RESOURCE_GRACE_MS = 10 * 60 * 1000;
 const PENDING_RESOURCE_RECONCILE_LIMIT = 50;
 const PENDING_RESOURCE_RECONCILE_CONCURRENCY = 5;
+const RESOURCE_TRANSLATION_ADMISSION_STEP_CONFIG = {
+	retries: DURABLE_WORKFLOW_RETRIES,
+	timeout: '30 seconds',
+} as const satisfies WorkflowStepConfig;
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string, sourceRevision?: string): Promise<string> {
 	if (sourceRevision && !isResourceSourceSnapshotHash(sourceRevision)) throw new Error('Invalid resource source revision');
@@ -547,36 +551,15 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 		}
 		const persistedResourceId = persistence.resourceId;
 		if (operation === 'resync') await stageResourceImageRehost(this.env, step, persistedResourceId);
-		const translationSourceRevision = await step
-			.do(
-				'load-resource-translation-revision-v1',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => loadEligibleResourceTranslationRevision(this.env, persistedResourceId),
-			)
-			.catch((error) => {
-				console.error({
-					tag: 'RESOURCE_TRANSLATION',
-					msg: 'Failed to inspect persisted resource for translation',
-					resource_id: persistedResourceId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-				return null;
-			});
+		const translationSourceRevision = await step.do(
+			'load-resource-translation-revision-v1',
+			RESOURCE_TRANSLATION_ADMISSION_STEP_CONFIG,
+			() => loadEligibleResourceTranslationRevision(this.env, persistedResourceId),
+		);
 		if (translationSourceRevision) {
-			await step
-				.do(
-					'enqueue-resource-translation',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueResourceTranslation(this.env, persistedResourceId, translationSourceRevision),
-				)
-				.catch((error) =>
-					console.error({
-						tag: 'RESOURCE_TRANSLATION',
-						msg: 'Failed to enqueue resource translation',
-						resource_id: persistedResourceId,
-						error: error instanceof Error ? error.message : String(error),
-					}),
-				);
+			await step.do('enqueue-resource-translation', RESOURCE_TRANSLATION_ADMISSION_STEP_CONFIG, () =>
+				enqueueResourceTranslation(this.env, persistedResourceId, translationSourceRevision),
+			);
 		}
 		await step.do('sync-ai-search', AI_SEARCH_SYNC_STEP_CONFIG, () => syncCorpusItem(this.env, persistedResourceId));
 
