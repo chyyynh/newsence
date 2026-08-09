@@ -87,6 +87,8 @@ assert.equal(isIncomingResourceSnapshotSuperseded(oldSnapshot, newSnapshot), tru
 assert.equal(isIncomingResourceSnapshotSuperseded(newSnapshot, oldSnapshot), false);
 assert.equal(isIncomingResourceSnapshotSuperseded(newSnapshot, newSnapshot), false);
 assert.equal(isIncomingResourceSnapshotSuperseded({}, newSnapshot), true);
+assert.equal(isIncomingResourceSnapshotSuperseded({ fetchedAt: oldSnapshot.fetchedAt }, { fetchedAt: newSnapshot.fetchedAt }), true);
+assert.equal(isIncomingResourceSnapshotSuperseded({ fetchedAt: newSnapshot.fetchedAt }, { fetchedAt: oldSnapshot.fetchedAt }), false);
 assert.equal(
 	isIncomingResourceSnapshotSuperseded({ ...oldSnapshot, sourceSnapshotHash: 'same' }, { ...newSnapshot, sourceSnapshotHash: 'same' }),
 	true,
@@ -111,7 +113,7 @@ console.info({
 	invalidIdentityCases: 4,
 	platformAcquisitionCases: platformAcquisitionCases.length,
 	pdfExtractionCases: 2,
-	snapshotCasCases: 5,
+	snapshotCasCases: 7,
 	translationCases: translationCases.length,
 	urlCases: 4,
 });

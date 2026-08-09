@@ -120,14 +120,16 @@ async function saveThread(tweets: Tweet[], env: CoreEnv, monitoredSource: Monito
 	if (existing) {
 		const existingId = existing.id;
 		await withCoreDb(env, (db) => attachSourceToResources(db, [existingId], monitoredSource.id));
-		const changed = await reopenResourceForReprocessing(env, existingId, {
+		const sourceRevision = await reopenResourceForReprocessing(env, existingId, {
 			content: combinedText,
 			platformMetadata,
 		});
-		if (changed || existing.shouldRetryEnrichment) await enqueueProcessing(env, existingId);
+		if (sourceRevision || existing.shouldRetryEnrichment) {
+			await enqueueProcessing(env, existingId, sourceRevision ?? undefined);
+		}
 		console.info({
 			tag: 'TWITTER',
-			msg: changed ? 'Updated thread' : 'Thread unchanged',
+			msg: sourceRevision ? 'Updated thread' : 'Thread unchanged',
 			author: first.author?.userName,
 			tweets: tweetCount,
 		});

@@ -350,6 +350,41 @@ type SourceResourceDraft = {
 	tags?: string[];
 } & ContentResourceIdentity;
 
+type ResourceSourceSnapshotInput = {
+	content: string | null;
+	fileType: string | null;
+	kind: string;
+	originalLang: string;
+	platformData: unknown;
+	publishedDate: string | null;
+	resourcePlatform: string | null;
+	summary: string | null;
+	title: string;
+	translationSource: ResourceTranslationSource;
+	url: string | null;
+};
+
+async function resourceSourceSnapshotHash(input: ResourceSourceSnapshotInput): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(input)));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function resourceSourceSnapshotInput(resource: ResourceForProcessing): ResourceSourceSnapshotInput {
+	return {
+		content: resource.content,
+		fileType: resource.file_type ?? null,
+		kind: resource.kind,
+		originalLang: resource.original_lang,
+		platformData: resource.platform_metadata?.data ?? null,
+		publishedDate: resource.published_date,
+		resourcePlatform: resource.resource_platform,
+		summary: resource.summary,
+		title: resource.title,
+		translationSource: 'original',
+		url: resource.url,
+	};
+}
+
 type ResourceEnrichmentStatus = 'pending' | 'enriched' | 'failed';
 
 type ResourceMirrorRecord = {
@@ -511,8 +546,22 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 }
 
 export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
-	const resource = preparedRecordToResource(base);
-	const record = resourceMirrorRecord(crypto.randomUUID(), resource, pendingResourceUpdate(resource, base.platformMetadata), 'pending');
+	const prepared = preparedRecordToResource(base);
+	const resource = base.platformMetadata
+		? {
+				...prepared,
+				platform_metadata: {
+					...base.platformMetadata,
+					sourceSnapshotHash: await resourceSourceSnapshotHash(resourceSourceSnapshotInput(prepared)),
+				},
+			}
+		: prepared;
+	const record = resourceMirrorRecord(
+		crypto.randomUUID(),
+		resource,
+		pendingResourceUpdate(resource, resource.platform_metadata ?? null),
+		'pending',
+	);
 	const result = await db.execute<{ enrichment_status: string; id: string }>(resourceUpsertStatement(record));
 	const row = result.rows[0];
 	const resourceId = row?.id;
@@ -900,17 +949,43 @@ export async function attachSourceToResources(db: CoreDb, resourceIds: string[],
 	`);
 }
 
+function reprocessingPlatformMetadata(
+	storedValue: unknown,
+	incoming: PlatformMetadata,
+	resourceId: string,
+	sourceSnapshotHash: string,
+): PlatformMetadata {
+	const stored = storedPlatformMetadataValue(storedValue, resourceId);
+	return {
+		...incoming,
+		sourceSnapshotHash,
+		...(stored.classification === undefined ? {} : { classification: stored.classification }),
+		...(stored.enrichments === undefined ? {} : { enrichments: stored.enrichments }),
+		...(stored.extraction === undefined ? {} : { extraction: stored.extraction }),
+		...(stored.representation === undefined ? {} : { representation: stored.representation }),
+		...(incoming.sourceName || !stored.sourceName ? {} : { sourceName: stored.sourceName }),
+	};
+}
+
 export async function reopenResourceForReprocessing(
 	env: CoreEnv,
 	resourceId: string,
 	update: { content: string; platformMetadata: PlatformMetadata },
-): Promise<boolean> {
+): Promise<string | null> {
 	if (!update.content.trim()) {
 		throw new Error(`Cannot reopen resource ${resourceId} with empty content`);
 	}
 	return withCoreTx(env, async (db) => {
-		const resourceResult = await db.execute<{ original_lang: string }>(sql`
-			SELECT original_lang
+		const resourceResult = await db.execute<{
+			file_type: string | null;
+			kind: string;
+			original_lang: string;
+			platform_metadata: unknown;
+			published_date: Date | string | null;
+			resource_platform: string | null;
+			url: string | null;
+		}>(sql`
+			SELECT file_type, kind, original_lang, platform_metadata, published_date, resource_platform, url
 			FROM resources
 			WHERE id = ${resourceId}::uuid
 			FOR UPDATE
@@ -919,11 +994,12 @@ export async function reopenResourceForReprocessing(
 		if (!resource) throw new Error(`Failed to reopen resource ${resourceId}: not found`);
 
 		const translationResult = await db.execute<{
-			summary: string | null;
 			content: string | null;
+			summary: string | null;
 			source: ResourceTranslationSource;
+			title: string | null;
 		}>(sql`
-			SELECT summary, content, source
+			SELECT content, summary, source, title
 			FROM resource_translations
 			WHERE resource_id = ${resourceId}::uuid
 			  AND lang = ${resource.original_lang}
@@ -936,12 +1012,32 @@ export async function reopenResourceForReprocessing(
 		const effectiveContent = preserveOwnedTranslation ? original.content : update.content;
 		const sourceSummaryChanged = !preserveOwnedTranslation && original.summary !== null;
 		const sourceContentChanged = original.content !== effectiveContent;
-		if (!sourceSummaryChanged && !sourceContentChanged) return false;
+		if (!sourceSummaryChanged && !sourceContentChanged) return null;
+
+		const sourceSnapshotHash = await resourceSourceSnapshotHash({
+			content: effectiveContent,
+			fileType: resource.file_type,
+			kind: resource.kind,
+			originalLang: resource.original_lang,
+			platformData: update.platformMetadata.data,
+			publishedDate: resource.published_date === null ? null : dateValue(resource.published_date, 'published_date').toISOString(),
+			resourcePlatform: resource.resource_platform,
+			summary: preserveOwnedTranslation ? original.summary : null,
+			title: requiredString(original.title, 'original translation title'),
+			translationSource: original.source,
+			url: resource.url,
+		});
+		const platformMetadata = reprocessingPlatformMetadata(
+			resource.platform_metadata,
+			update.platformMetadata,
+			resourceId,
+			sourceSnapshotHash,
+		);
 
 		await db
 			.update(resources)
 			.set({
-				platformMetadata: update.platformMetadata,
+				platformMetadata,
 				enrichmentStatus: 'pending',
 				updatedAt: sql`NOW()`,
 			})
@@ -969,6 +1065,6 @@ export async function reopenResourceForReprocessing(
 					),
 				);
 		}
-		return true;
+		return sourceSnapshotHash;
 	});
 }

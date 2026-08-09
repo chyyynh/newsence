@@ -4,7 +4,9 @@ import {
 	hasSemanticScholarAcademicEnrichment,
 	needsResourcePlatformAcquisition,
 	parseResourceIdentity,
+	type ResourceSourceSnapshot,
 	resourceIdentityWithAcademic,
+	resourceSourceSnapshot,
 	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type { ResourceForProcessing } from '@core-shared/types';
@@ -39,9 +41,11 @@ import {
 
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
+const SOURCE_SNAPSHOT_HASH_RE = /^[0-9a-f]{64}$/;
 
-export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId), {
+export async function enqueueProcessing(env: CoreEnv, resourceId: string, sourceRevision?: string): Promise<string> {
+	if (sourceRevision && !SOURCE_SNAPSHOT_HASH_RE.test(sourceRevision)) throw new Error('Invalid resource source revision');
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId, sourceRevision), {
 		resourceId,
 		operation: 'ingest',
 	});
@@ -62,8 +66,10 @@ function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedWorkflowId(resourceId: string): string {
-	return ['resource-v2', workflowIdPart(resourceId)].join('-');
+function storedWorkflowId(resourceId: string, sourceRevision?: string): string {
+	return sourceRevision
+		? ['resource-v3', workflowIdPart(resourceId), sourceRevision.slice(0, 32)].join('-')
+		: ['resource-v2', workflowIdPart(resourceId)].join('-');
 }
 
 async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resourceId: string): Promise<void> {
@@ -261,8 +267,11 @@ function requireProcessingResourceIdentity(resource: ResourceForProcessing) {
 export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
 		const { resourceId, operation } = event.payload;
+		let persistedSourceSnapshot: ResourceSourceSnapshot | null = null;
 		try {
-			return await this.runResource(resourceId, step, operation);
+			return await this.runResource(resourceId, step, operation, (snapshot) => {
+				persistedSourceSnapshot = snapshot;
+			});
 		} catch (error) {
 			if (operation === 'resync') throw error;
 			// Cleanup must not throw: whatever it raises would replace `error`
@@ -277,23 +286,32 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 					resource_id: resourceId,
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
-			await step
-				.do(
-					'mark-resource-failed-if-not-enriched-v1',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => markResourceEnrichmentFailed(this.env, resourceId),
-				)
-				.catch(logCleanupFailure('Failed to mark resource as failed'));
+			const failedSourceSnapshot = persistedSourceSnapshot;
+			if (failedSourceSnapshot) {
+				await step
+					.do(
+						'mark-resource-failed-for-source-snapshot-v2',
+						{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+						() => markResourceEnrichmentFailed(this.env, resourceId, failedSourceSnapshot),
+					)
+					.catch(logCleanupFailure('Failed to mark resource as failed'));
+			}
 			throw error;
 		}
 	}
 
-	private async runResource(resourceId: string, step: WorkflowStep, operation: WorkflowOperation) {
+	private async runResource(
+		resourceId: string,
+		step: WorkflowStep,
+		operation: WorkflowOperation,
+		recordPersistedSourceSnapshot: (snapshot: ResourceSourceSnapshot) => void,
+	) {
 		const initialResource = await step.do(
 			'fetch-resource-shell-kind-platform-v1',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceShellForProcessing(this.env, resourceId),
 		);
+		recordPersistedSourceSnapshot(resourceSourceSnapshot(initialResource.platform_metadata));
 		if (operation === 'resync' && !initialResource.url) {
 			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
 		}
@@ -356,6 +374,7 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 				() => persistResourceImageSnapshot(this.env, resourceId, resource, paperEnrichment),
 			);
 			if (!persisted) return { success: true, resource_id: resourceId, operation, superseded: true };
+			recordPersistedSourceSnapshot(resourceSourceSnapshot(resource.platform_metadata));
 			await stageResourceImageRehost(this.env, step, resourceId);
 		}
 

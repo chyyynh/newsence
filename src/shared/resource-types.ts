@@ -124,28 +124,32 @@ export function needsResourcePlatformAcquisition(input: { platformData: unknown;
 	return input.resourcePlatform !== null && !isRecord(input.platformData);
 }
 
-function resourceSourceSnapshotHash(platformMetadata: unknown): string | null {
-	if (!isRecord(platformMetadata) || typeof platformMetadata.sourceSnapshotHash !== 'string') return null;
-	return platformMetadata.sourceSnapshotHash.trim() || null;
-}
+export type ResourceSourceSnapshot = { fetchedAt: string | null; hash: string | null };
 
-function resourceSourceFetchedAt(platformMetadata: unknown): number | null {
-	if (!isRecord(platformMetadata) || typeof platformMetadata.fetchedAt !== 'string') return null;
-	const fetchedAt = Date.parse(platformMetadata.fetchedAt);
-	return Number.isNaN(fetchedAt) ? null : fetchedAt;
+export function resourceSourceSnapshot(platformMetadata: unknown): ResourceSourceSnapshot {
+	if (!isRecord(platformMetadata)) return { fetchedAt: null, hash: null };
+	const fetchedAt = typeof platformMetadata.fetchedAt === 'string' ? platformMetadata.fetchedAt.trim() || null : null;
+	const hash = typeof platformMetadata.sourceSnapshotHash === 'string' ? platformMetadata.sourceSnapshotHash.trim() || null : null;
+	return { fetchedAt, hash };
 }
 
 export function isIncomingResourceSnapshotSuperseded(incoming: unknown, stored: unknown): boolean {
-	const incomingHash = resourceSourceSnapshotHash(incoming);
-	const storedHash = resourceSourceSnapshotHash(stored);
-	if (!storedHash) return false;
-	if (!incomingHash) return true;
-	const incomingFetchedAt = resourceSourceFetchedAt(incoming);
-	const storedFetchedAt = resourceSourceFetchedAt(stored);
-	if (storedHash === incomingHash) {
-		return incomingFetchedAt !== null && storedFetchedAt !== null && storedFetchedAt > incomingFetchedAt;
+	const incomingSnapshot = resourceSourceSnapshot(incoming);
+	const storedSnapshot = resourceSourceSnapshot(stored);
+	const incomingHash = incomingSnapshot.hash;
+	const storedHash = storedSnapshot.hash;
+	const incomingFetchedAt = incomingSnapshot.fetchedAt ? Date.parse(incomingSnapshot.fetchedAt) : Number.NaN;
+	const storedFetchedAt = storedSnapshot.fetchedAt ? Date.parse(storedSnapshot.fetchedAt) : Number.NaN;
+	if (!storedHash) {
+		if (Number.isNaN(storedFetchedAt)) return false;
+		if (Number.isNaN(incomingFetchedAt)) return true;
+		return storedFetchedAt > incomingFetchedAt;
 	}
-	if (incomingFetchedAt === null || storedFetchedAt === null) return true;
+	if (!incomingHash) return true;
+	if (storedHash === incomingHash) {
+		return !Number.isNaN(incomingFetchedAt) && !Number.isNaN(storedFetchedAt) && storedFetchedAt > incomingFetchedAt;
+	}
+	if (Number.isNaN(incomingFetchedAt) || Number.isNaN(storedFetchedAt)) return true;
 	return storedFetchedAt >= incomingFetchedAt;
 }
 
