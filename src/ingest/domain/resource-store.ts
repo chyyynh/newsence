@@ -778,8 +778,8 @@ function requiredString(value: unknown, field: string): string {
 	return text;
 }
 
-// Rows without fetchedAt/data were backfilled 2026-08-01
-// (prisma/backfill-platform-metadata-fetched-at.sql); missing keys are a bug.
+// Production rows were backfilled before this became strict; missing keys are
+// now a persistence bug, not a read-time compatibility case.
 function storedPlatformMetadataValue(value: unknown, resourceId: string): PlatformMetadata {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error('Invalid platform_metadata: expected object');

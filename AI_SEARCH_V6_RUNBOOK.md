@@ -47,51 +47,12 @@ Never trigger historical generation-3/generation-4, shadow-rollout, or one-shot
 repair Workflow resources. Local source cleanup does not delete their remote
 execution history.
 
-## Coordinated `document` to `blog`/`forum` cutover
+## Database prerequisite
 
-Generation 5 changes the persisted database vocabulary and every reader/writer
-that consumes it. It is intentionally breaking: an old binary cannot safely
-write the migrated schema, and a new binary cannot safely consume legacy
-`document` rows. Use one maintenance window; do not attempt a rolling deploy.
-
-Before the window:
-
-1. run the Core and Web static gates and build the exact commits to deploy;
-2. rehearse `web-tanstack/prisma/migrate-resource-kinds-blog-forum.sql` against
-   a representative database and confirm its preflight passes;
-3. confirm the generation-5 binding, physical Workflow, class, runner, and
-   `generation-5` step names match the active contract above;
-4. confirm no generation-5 rebuild is already running.
-
-During the window:
-
-1. pause source cron acquisition plus app URL-save, upload, resync, and other
-   resource writes;
-2. drain resource-processing, translation, academic-backfill, and search-index
-   Workflows so no legacy writer remains;
-3. run the dedicated migration through the direct PostgreSQL connection:
-
-   ```sh
-   /opt/homebrew/opt/libpq/bin/psql \
-     "$CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE" \
-     -X -v ON_ERROR_STOP=1 \
-     -f web-tanstack/prisma/migrate-resource-kinds-blog-forum.sql
-   ```
-
-4. verify there are no `kind='document'` rows and that every row satisfies the
-   new identity matrix;
-5. while writes remain paused, deploy Core first and Web immediately after it;
-6. trigger the generation-5 full rebuild, then run both strict checks and
-   `probeSearchIndexCutover()`;
-7. smoke the production feed/detail/MCP paths for blog, forum, post, video, and
-   both paper identities;
-8. resume writes and cron only after the database, deployed readers/writers, AI
-   Search, and real API paths all agree.
-
-The migration maps `document / hackernews` to `forum / hackernews` and all
-other legacy `document` rows to `blog / null`; existing `paper` rows stay
-papers. A full AI Search rebuild is mandatory because the existing indexed item
-metadata still contains the legacy kind values.
+Generation 5 serves only the current canonical `blog`/`forum` identity matrix.
+The completed `document` cutover and its one-shot SQL live in git history. Do
+not run this rebuild against a database that fails the current schema and
+resource-contract gates.
 
 ## Bootstrap or rebuild
 
@@ -108,9 +69,8 @@ pnpm -C workers/core-worker exec wrangler ai-search create \
   --hybrid-search
 ```
 
-Run the Core gates before starting a rebuild. In production, deploy only at the
-coordinated point in the cutover above; in a fresh environment, deploy a
-schema-compatible Worker first:
+Run the Core gates before starting a rebuild. A fresh environment needs the
+current schema and a schema-compatible Worker first:
 
 ```sh
 pnpm -C workers/core-worker typecheck
@@ -178,8 +138,7 @@ durable ready row.
 If a rebuild fails:
 
 1. inspect only the active canonical runner and its failed step;
-2. leave the serving instance and migrated database schema intact, and keep
-   resource writes paused during a cutover;
+2. leave the serving instance and current database schema intact;
 3. restart the same runner only for a transient, source-compatible failure;
 4. deploy a newly isolated physical Workflow for any graph change;
 5. require both verification checks and the fresh cutover probe again.

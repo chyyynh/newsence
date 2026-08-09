@@ -201,13 +201,9 @@ generation `5 / canonical-5-blog-forum-kind`。Rebuild 使用實體 Workflow
 `SearchIndexGeneration5RebuildWorkflow`，runner 為
 `search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1`。
 
-這次 kind 變更是 breaking cutover，不能用一般 rolling deploy。正式環境
-必須先停止 cron、URL/upload/resync 等 resource 寫入並排空 processing、
-translation、academic 與 search Workflows；接著執行
-`web-tanstack/prisma/migrate-resource-kinds-blog-forum.sql`，在持續停寫時
-依序部署 Core 與 Web，完成 generation-5 全量 rebuild、DB/index
-驗證與實際 API smoke test 後才能恢復寫入。完整步驟見
-`AI_SEARCH_V6_RUNBOOK.md`。
+Generation 5 與 canonical `blog`/`forum` database cutover 已完成。一次性
+migration 保留在 git history；目前操作直接從 target schema 開始，依
+`AI_SEARCH_V6_RUNBOOK.md` 執行 active rebuild 與驗證流程。
 
 ## 新增擷取 adapter
 

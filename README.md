@@ -229,14 +229,9 @@ resource name, class, and runner ID; changing only a runner ID is not isolation.
 See `AI_SEARCH_V6_RUNBOOK.md` for the active rebuild and verification
 procedure.
 
-Generation 5 is a breaking database and reader contract, not a rolling
-compatible deploy. In production, pause ingest and app-owned resource writes,
-drain processing/translation/academic/search Workflows, run
-`web-tanstack/prisma/migrate-resource-kinds-blog-forum.sql`, deploy Core and Web
-while writes remain paused, then complete the full generation-5 rebuild and
-verification before resuming writes. Do not expose old binaries to the migrated
-schema, or new binaries to the legacy `document` rows, outside that coordinated
-maintenance window.
+Generation 5 and the canonical `blog`/`forum` database cutover are complete.
+The one-shot migration lives in git history; current operations start from the
+target schema and use the active rebuild/verification procedure above.
 
 #### Historical generation evidence
 
