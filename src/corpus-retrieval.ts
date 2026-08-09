@@ -215,7 +215,8 @@ function titleForRow(title: string | null): string {
 
 function resourceEntry(row: ResourceEntryRow): KnowledgeSourceEntry {
 	return {
-		ref: { id: row.id, type: 'resource' },
+		sourceId: row.id,
+		sourceType: 'resource',
 		title: titleForRow(row.title),
 	};
 }
@@ -258,7 +259,8 @@ function fitResourceResult(input: {
 						])
 					: null,
 			metadata: input.metadata,
-			ref: { id: input.resourceId, type: 'resource' },
+			sourceId: input.resourceId,
+			sourceType: 'resource',
 			title: input.title,
 		}),
 		content: input.contentChunk,
@@ -363,7 +365,8 @@ async function readResource(db: CoreDb, input: KnowledgeResourceReadInput): Prom
 			contentAvailable: false,
 			continuation: null,
 			metadata: resourceReadMetadata(row),
-			ref: { id: row.id, type: 'resource' },
+			sourceId: row.id,
+			sourceType: 'resource',
 			title: titleForRow(row.title),
 		};
 	}
@@ -384,7 +387,8 @@ async function readResource(db: CoreDb, input: KnowledgeResourceReadInput): Prom
 			contentAvailable: false,
 			continuation: null,
 			metadata: resourceReadMetadata(row),
-			ref: { id: row.id, type: 'resource' },
+			sourceId: row.id,
+			sourceType: 'resource',
 			title: titleForRow(row.title),
 		};
 	}
