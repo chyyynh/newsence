@@ -181,46 +181,60 @@ function parsedFeedTitle(body: string): { title: string | null } | null {
 	}
 }
 
-async function fetchTextForDiscovery(url: string): Promise<string> {
+type DiscoveryDocument = {
+	body: string;
+	url: URL;
+};
+
+async function fetchTextForDiscovery(url: string): Promise<DiscoveryDocument> {
 	const response = await fetchWithTimeout(url, { headers: DISCOVERY_HEADERS });
 	if (!response.ok) {
 		const status = response.status;
 		await response.body?.cancel();
 		throw new Error(`Fetch failed with HTTP ${status}: ${url}`);
 	}
-	return readTextWithLimit(response, MAX_DISCOVERY_BYTES);
+	const effectiveUrl = parseHttpUrl(response.url);
+	if (!effectiveUrl) {
+		await response.body?.cancel();
+		throw new Error('Fetch redirected to an invalid URL.');
+	}
+	return {
+		body: await readTextWithLimit(response, MAX_DISCOVERY_BYTES),
+		url: effectiveUrl,
+	};
 }
 
 async function resolveRssCandidate(input: string): Promise<ResolvedSourceCandidate> {
-	const url = parseHttpUrl(input);
-	if (!url) throw new Error('Enter a valid site or feed URL (http/https).');
-	const body = await fetchTextForDiscovery(url.toString());
-	const host = url.hostname.toLowerCase().replace(/^www\./, '');
+	const requestedUrl = parseHttpUrl(input);
+	if (!requestedUrl) throw new Error('Enter a valid site or feed URL (http/https).');
+	const document = await fetchTextForDiscovery(requestedUrl.toString());
+	const host = document.url.hostname.toLowerCase().replace(/^www\./, '');
 
-	const directFeed = parsedFeedTitle(body);
+	const directFeed = parsedFeedTitle(document.body);
 	if (directFeed) {
 		return {
 			platform: 'rss',
-			handle: canonicalFeedHandle(url),
+			handle: canonicalFeedHandle(document.url),
 			name: directFeed.title ?? host,
-			siteUrl: url.origin,
+			siteUrl: document.url.origin,
 			avatarUrl: null,
 			acquisitionMode: 'web',
 		};
 	}
 
-	const head = await parseHtmlHead(body, url);
+	const head = await parseHtmlHead(document.body, document.url);
 	const feedHref = head.feedHref;
 	if (!feedHref) throw new Error('No RSS/Atom feed found at this URL.');
-	const feedUrl = parseHttpUrl(feedHref);
-	if (!feedUrl) throw new Error('Discovered feed URL is invalid.');
-	const feedMeta = parsedFeedTitle(await fetchTextForDiscovery(feedUrl.toString()));
+	const requestedFeedUrl = parseHttpUrl(feedHref);
+	if (!requestedFeedUrl) throw new Error('Discovered feed URL is invalid.');
+	const feedDocument = await fetchTextForDiscovery(requestedFeedUrl.toString());
+	const feedMeta = parsedFeedTitle(feedDocument.body);
 	if (!feedMeta) throw new Error('Discovered feed could not be read.');
 	return {
 		platform: 'rss',
-		handle: canonicalFeedHandle(feedUrl),
+		handle: canonicalFeedHandle(feedDocument.url),
 		name: feedMeta.title ?? head.title?.slice(0, 120) ?? host,
-		siteUrl: url.origin,
+		siteUrl: document.url.origin,
 		avatarUrl: null,
 		acquisitionMode: 'web',
 	};
