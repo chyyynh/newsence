@@ -118,7 +118,7 @@ function effectiveResourcePlatformPredicate(platform: Exclude<ResourcePlatform, 
 }
 
 export async function loadResourceForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
-	return loadResource(env, resourceId, false);
+	return withCoreDb(env, (db) => loadResourceForProcessingFromDb(db, resourceId));
 }
 
 export async function loadResourceShellForProcessing(env: CoreEnv, resourceId: string): Promise<StoredResourceForProcessing> {
@@ -127,10 +127,18 @@ export async function loadResourceShellForProcessing(env: CoreEnv, resourceId: s
 
 async function loadResource(env: CoreEnv, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing> {
 	return withCoreDb(env, async (db) => {
-		const row = await loadStoredResourceRow(db, resourceId, shell);
-		if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
-		return row;
+		return requireStoredResourceRow(db, resourceId, shell);
 	});
+}
+
+export function loadResourceForProcessingFromDb(db: CoreDb, resourceId: string): Promise<StoredResourceForProcessing> {
+	return requireStoredResourceRow(db, resourceId, false);
+}
+
+async function requireStoredResourceRow(db: CoreDb, resourceId: string, shell: boolean): Promise<StoredResourceForProcessing> {
+	const row = await loadStoredResourceRow(db, resourceId, shell);
+	if (!row) throw new Error(`Failed to fetch resource ${resourceId}: not found`);
+	return row;
 }
 
 export async function isResourceEnrichmentComplete(env: CoreEnv, resourceId: string): Promise<boolean> {
@@ -701,14 +709,44 @@ type ResourceTranslationWrite = {
 	content?: string | null;
 	keywords?: string[];
 	source: ResourceTranslationSource;
+	expectedOriginalRevision?: string;
 };
+
+const RESOURCE_TRANSLATION_REVISION_RE = /^[0-9a-f]{32}$/;
+
+export function isResourceTranslationRevision(value: unknown): value is string {
+	return typeof value === 'string' && RESOURCE_TRANSLATION_REVISION_RE.test(value);
+}
+
+export function resourceTranslationRevisionSql(input: { content: SQL; lang: SQL; summary: SQL; title: SQL }): SQL {
+	return sql`MD5(jsonb_build_array(${input.lang}, ${input.title}, ${input.summary}, ${input.content})::text)`;
+}
 
 /**
  * Row ownership is human > original > machine. Within the winning owner,
  * explicitly supplied fields replace current values; omitted fields are patches.
  */
 export async function upsertResourceTranslation(db: CoreDb, input: ResourceTranslationWrite): Promise<boolean> {
+	if (input.expectedOriginalRevision && !isResourceTranslationRevision(input.expectedOriginalRevision)) {
+		throw new Error('Invalid original resource translation revision');
+	}
 	const keywords = textArraySql(input.keywords ?? []);
+	const sourceRevisionPredicate = input.expectedOriginalRevision
+		? sql`
+			  AND EXISTS (
+				SELECT 1
+				FROM resource_translations source_revision
+				WHERE source_revision.resource_id = resource.id
+				  AND source_revision.lang = resource.original_lang
+				  AND ${resourceTranslationRevisionSql({
+						content: sql`source_revision.content`,
+						lang: sql`source_revision.lang`,
+						summary: sql`source_revision.summary`,
+						title: sql`source_revision.title`,
+					})} = ${input.expectedOriginalRevision}
+			  )
+		`
+		: sql``;
 	const preserveCurrent = sql`
 		(current_translation.source = 'human' AND excluded.source <> 'human')
 		OR (current_translation.source = 'original' AND excluded.source = 'machine')
@@ -719,6 +757,8 @@ export async function upsertResourceTranslation(db: CoreDb, input: ResourceTrans
 			FROM resources resource
 			WHERE resource.id = ${input.resourceId}::uuid
 			  AND (${input.source} <> 'original' OR resource.original_lang = ${input.lang})
+			  ${sourceRevisionPredicate}
+			FOR UPDATE OF resource
 		), demoted_originals AS (
 			UPDATE resource_translations translation
 			SET source = 'machine', updated_at = NOW()
