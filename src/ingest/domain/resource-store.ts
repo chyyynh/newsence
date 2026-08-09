@@ -5,6 +5,7 @@ import {
 	DEFAULT_RESOURCE_LANG,
 	hasSemanticScholarAcademicEnrichment,
 	isContentResourceKind,
+	isResourceSourceSnapshotHash,
 	parseResourceIdentity,
 	RESOURCE_CATEGORIES,
 	RESOURCE_SCOPES,
@@ -545,7 +546,13 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 	};
 }
 
-export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<string> {
+type PendingSourceResource = {
+	needsProcessing: boolean;
+	resourceId: string;
+	sourceRevision: string | null;
+};
+
+export async function upsertPendingSourceResource(db: CoreDb, base: SourceResourceDraft): Promise<PendingSourceResource> {
 	const prepared = preparedRecordToResource(base);
 	const resource = base.platformMetadata
 		? {
@@ -562,12 +569,18 @@ export async function upsertPendingSourceResource(db: CoreDb, base: SourceResour
 		pendingResourceUpdate(resource, resource.platform_metadata ?? null),
 		'pending',
 	);
-	const result = await db.execute<{ enrichment_status: string; id: string }>(resourceUpsertStatement(record));
+	const result = await db.execute<{ enrichment_status: string; id: string; source_revision: string | null }>(
+		resourceUpsertStatement(record),
+	);
 	const row = result.rows[0];
 	const resourceId = row?.id;
 	if (!resourceId) throw new Error(`Failed to upsert pending resource for ${base.url}`);
 	if (row.enrichment_status !== 'enriched') await syncOriginalResourceTranslation(db, resourceId, record);
-	return resourceId;
+	return {
+		needsProcessing: row.enrichment_status !== 'enriched',
+		resourceId,
+		sourceRevision: isResourceSourceSnapshotHash(row.source_revision) ? row.source_revision : null,
+	};
 }
 
 function pendingResourceUpdate(resource: ResourceForProcessing, platformMetadata: PlatformMetadata | null): ResourceUpdate {
@@ -687,7 +700,10 @@ function resourceInsertStatement(record: ResourceMirrorRecord, conflictSql: SQL)
 			now()
 		)
 		${conflictSql}
-		RETURNING id::text AS id, enrichment_status
+		RETURNING
+			id::text AS id,
+			enrichment_status,
+			NULLIF(BTRIM(platform_metadata->>'sourceSnapshotHash'), '') AS source_revision
 	`;
 }
 

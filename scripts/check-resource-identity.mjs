@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
 	isIncomingResourceSnapshotSuperseded,
+	isResourceSourceSnapshotHash,
 	isResourceTranslationIdentityEligible,
 	isValidKindPlatform,
 	needsResourcePlatformAcquisition,
@@ -93,6 +94,10 @@ assert.equal(
 	isIncomingResourceSnapshotSuperseded({ ...oldSnapshot, sourceSnapshotHash: 'same' }, { ...newSnapshot, sourceSnapshotHash: 'same' }),
 	true,
 );
+assert.equal(isResourceSourceSnapshotHash('a'.repeat(64)), true);
+assert.equal(isResourceSourceSnapshotHash('A'.repeat(64)), false);
+assert.equal(isResourceSourceSnapshotHash('a'.repeat(63)), false);
+assert.equal(isResourceSourceSnapshotHash(null), false);
 
 const pdfPlatformMetadata = {
 	fetchedAt: '2026-07-28T00:00:00.000Z',
@@ -113,7 +118,7 @@ console.info({
 	invalidIdentityCases: 4,
 	platformAcquisitionCases: platformAcquisitionCases.length,
 	pdfExtractionCases: 2,
-	snapshotCasCases: 7,
+	snapshotCasCases: 11,
 	translationCases: translationCases.length,
 	urlCases: 4,
 });

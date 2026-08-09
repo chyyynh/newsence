@@ -2,6 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 import {
 	hasSemanticScholarAcademicEnrichment,
+	isResourceSourceSnapshotHash,
 	needsResourcePlatformAcquisition,
 	parseResourceIdentity,
 	type ResourceSourceSnapshot,
@@ -40,14 +41,14 @@ import {
 } from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
-type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
-const SOURCE_SNAPSHOT_HASH_RE = /^[0-9a-f]{64}$/;
+type WorkflowPayload = { resourceId: string; operation: WorkflowOperation; sourceRevision?: string };
 
 export async function enqueueProcessing(env: CoreEnv, resourceId: string, sourceRevision?: string): Promise<string> {
-	if (sourceRevision && !SOURCE_SNAPSHOT_HASH_RE.test(sourceRevision)) throw new Error('Invalid resource source revision');
+	if (sourceRevision && !isResourceSourceSnapshotHash(sourceRevision)) throw new Error('Invalid resource source revision');
 	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId, sourceRevision), {
 		resourceId,
 		operation: 'ingest',
+		...(sourceRevision ? { sourceRevision } : {}),
 	});
 }
 
@@ -264,12 +265,25 @@ function requireProcessingResourceIdentity(resource: ResourceForProcessing) {
 	);
 }
 
+function assertOperationCanProcessResource(resource: ResourceForProcessing, operation: WorkflowOperation): void {
+	if (operation === 'resync' && !resource.url) {
+		throw new NonRetryableError(`Resource ${resource.id} has no source URL`, 'ResourceResyncUnsupportedError');
+	}
+}
+
+function matchesExpectedSourceRevision(snapshot: ResourceSourceSnapshot, expectedRevision: string | undefined): boolean {
+	return expectedRevision === undefined || snapshot.hash === expectedRevision;
+}
+
 export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
-		const { resourceId, operation } = event.payload;
+		const { resourceId, operation, sourceRevision } = event.payload;
+		if (sourceRevision !== undefined && !isResourceSourceSnapshotHash(sourceRevision)) {
+			throw new NonRetryableError('Invalid resource source revision', 'ResourceSourceRevisionError');
+		}
 		let persistedSourceSnapshot: ResourceSourceSnapshot | null = null;
 		try {
-			return await this.runResource(resourceId, step, operation, (snapshot) => {
+			return await this.runResource(resourceId, step, operation, sourceRevision, (snapshot) => {
 				persistedSourceSnapshot = snapshot;
 			});
 		} catch (error) {
@@ -304,6 +318,7 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 		resourceId: string,
 		step: WorkflowStep,
 		operation: WorkflowOperation,
+		expectedSourceRevision: string | undefined,
 		recordPersistedSourceSnapshot: (snapshot: ResourceSourceSnapshot) => void,
 	) {
 		const initialResource = await step.do(
@@ -311,10 +326,12 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceShellForProcessing(this.env, resourceId),
 		);
-		recordPersistedSourceSnapshot(resourceSourceSnapshot(initialResource.platform_metadata));
-		if (operation === 'resync' && !initialResource.url) {
-			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
+		const initialSourceSnapshot = resourceSourceSnapshot(initialResource.platform_metadata);
+		recordPersistedSourceSnapshot(initialSourceSnapshot);
+		if (!matchesExpectedSourceRevision(initialSourceSnapshot, expectedSourceRevision)) {
+			return { success: true, resource_id: resourceId, operation, superseded: true };
 		}
+		assertOperationCanProcessResource(initialResource, operation);
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
 		const acquiredResource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, acquiredResource);

@@ -126,6 +126,12 @@ export function needsResourcePlatformAcquisition(input: { platformData: unknown;
 
 export type ResourceSourceSnapshot = { fetchedAt: string | null; hash: string | null };
 
+const RESOURCE_SOURCE_SNAPSHOT_HASH_RE = /^[0-9a-f]{64}$/;
+
+export function isResourceSourceSnapshotHash(value: unknown): value is string {
+	return typeof value === 'string' && RESOURCE_SOURCE_SNAPSHOT_HASH_RE.test(value);
+}
+
 export function resourceSourceSnapshot(platformMetadata: unknown): ResourceSourceSnapshot {
 	if (!isRecord(platformMetadata)) return { fetchedAt: null, hash: null };
 	const fetchedAt = typeof platformMetadata.fetchedAt === 'string' ? platformMetadata.fetchedAt.trim() || null : null;

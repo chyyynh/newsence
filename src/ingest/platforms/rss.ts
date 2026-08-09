@@ -26,7 +26,7 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 	if (!title) throw new Error(`RSS item from ${feed.name} has no title: ${url}`);
 	const mode = parseRssAcquisitionMode(feed.acquisitionMode, feed.name);
 	const content = mode === 'feed' ? await feedItemMarkdown(env, item, url) : null;
-	const resourceId = await withCoreTx(env, (db) =>
+	const pending = await withCoreTx(env, (db) =>
 		upsertPendingSourceResource(db, {
 			sourceId: feed.id,
 			url,
@@ -42,7 +42,9 @@ async function enqueueFeedItem(env: CoreEnv, feed: RssSource, item: FeedItem, ur
 			previewImageUrl: item.previewImageUrl,
 		}),
 	);
-	await enqueueProcessing(env, resourceId);
+	if (pending.needsProcessing) {
+		await enqueueProcessing(env, pending.resourceId, pending.sourceRevision ?? undefined);
+	}
 }
 
 function dedupedFeedItems(items: FeedItem[], feedName: string): Array<{ item: FeedItem; url: string }> {

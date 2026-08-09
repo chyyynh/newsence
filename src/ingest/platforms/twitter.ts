@@ -27,7 +27,7 @@ async function enqueueTwitterResource(
 		hashTags?: string[];
 	},
 ): Promise<void> {
-	const resourceId = await withCoreTx(env, (db) =>
+	const pending = await withCoreTx(env, (db) =>
 		upsertPendingSourceResource(db, {
 			sourceId: data.sourceId,
 			url: data.url,
@@ -44,7 +44,9 @@ async function enqueueTwitterResource(
 			keywords: data.hashTags,
 		}),
 	);
-	await enqueueProcessing(env, resourceId);
+	if (pending.needsProcessing) {
+		await enqueueProcessing(env, pending.resourceId, pending.sourceRevision ?? undefined);
+	}
 }
 
 const MIN_TWEET_LENGTH = 150;
