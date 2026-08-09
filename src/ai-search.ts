@@ -1,4 +1,4 @@
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from 'cloudflare:workers';
 import {
 	type ContentResourceIdentity,
 	type ContentResourceKind,
@@ -40,6 +40,19 @@ const ORIGINAL_CONTENT_MAX_CHARS = 8_000;
 const TRANSLATED_CONTENT_MAX_CHARS = 4_000;
 const MAX_RESULTS = 50;
 const INDEX_TRANSLATION_LANGS = ['en', 'zh-Hant'] as const;
+const LIVE_INDEX_POLL_TIMEOUT_MS = 75_000;
+
+// Canonical rows and AI Search cannot share a transaction. Keep the owning
+// Workflow waiting until the derived document is actually indexed instead of
+// completing after a best-effort queue admission. Dynamic native retries stay
+// responsive to short failures, then back off without a custom outbox/alarm.
+export const AI_SEARCH_SYNC_STEP_CONFIG = {
+	retries: {
+		limit: 10_000,
+		delay: ({ ctx }) => (ctx.attempt <= 5 ? '10 seconds' : ctx.attempt <= 60 ? '1 minute' : '15 minutes'),
+	},
+	timeout: '90 seconds',
+} as const satisfies WorkflowStepConfig;
 
 type CorpusTranslationRow = {
 	lang: string;
@@ -228,6 +241,26 @@ function uploadCorpusDocument(env: CoreEnv, document: CorpusDocument): Promise<A
 	return uploadCorpusDocumentTo(env.AI_SEARCH, document, corpusItemMetadata(document));
 }
 
+async function uploadCorpusDocumentAndWait(env: CoreEnv, document: CorpusDocument): Promise<AiSearchItemInfo> {
+	const startedAt = Date.now();
+	const result = await env.AI_SEARCH.items.uploadAndPoll(itemKey(document.id), serializeDocument(document), {
+		metadata: corpusItemMetadata(document),
+		pollIntervalMs: 1_000,
+		timeoutMs: LIVE_INDEX_POLL_TIMEOUT_MS,
+	});
+	if (result.status !== 'completed') {
+		throw new Error(`AI Search item ${result.id} for resource ${document.id} settled as ${result.status}`);
+	}
+	console.info({
+		tag: 'AI_SEARCH',
+		msg: 'Corpus item indexed',
+		resource_id: document.id,
+		item_id: result.id,
+		latency_ms: Date.now() - startedAt,
+	});
+	return result;
+}
+
 export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<'uploaded' | 'deleted' | 'skipped'> {
 	if (!isValidUuid(resourceId)) return 'skipped';
 	const document = await withCoreDb(env, (db) => loadCorpusDocument(db, resourceId));
@@ -235,7 +268,7 @@ export async function syncCorpusItem(env: CoreEnv, resourceId: string): Promise<
 		await deleteCorpusItem(env, resourceId);
 		return 'deleted';
 	}
-	await uploadCorpusDocument(env, document);
+	await uploadCorpusDocumentAndWait(env, document);
 	return 'uploaded';
 }
 

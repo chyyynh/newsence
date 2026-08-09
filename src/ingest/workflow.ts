@@ -13,7 +13,7 @@ import {
 import type { ResourceForProcessing } from '@core-shared/types';
 import { loadResourceForProcessing, loadResourceShellForProcessing, loadStalePendingAppResourceIds } from '@ingest/domain/resource-store';
 import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
-import { syncCorpusItem } from '../ai-search';
+import { AI_SEARCH_SYNC_STEP_CONFIG, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
@@ -401,10 +401,8 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 				// Branch only on the persisted step result so replay sees the same
 				// decision. Let exhausted sync retries fail the resync instead of
 				// reporting success with a known index drift.
-				await step.do(
-					'sync-ai-search-unchanged-resync-index-relevance-v1',
-					{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-					() => syncCorpusItem(this.env, resourceId),
+				await step.do('sync-ai-search-unchanged-resync-index-relevance-v1', AI_SEARCH_SYNC_STEP_CONFIG, () =>
+					syncCorpusItem(this.env, resourceId),
 				);
 			}
 			return {
@@ -580,18 +578,7 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 					}),
 				);
 		}
-		await step
-			.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-				syncCorpusItem(this.env, persistedResourceId),
-			)
-			.catch((error) =>
-				console.error({
-					tag: 'AI_SEARCH',
-					msg: 'Failed to sync enriched resource; reindex can repair it',
-					resource_id: persistedResourceId,
-					error: error instanceof Error ? error.message : String(error),
-				}),
-			);
+		await step.do('sync-ai-search', AI_SEARCH_SYNC_STEP_CONFIG, () => syncCorpusItem(this.env, persistedResourceId));
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return {

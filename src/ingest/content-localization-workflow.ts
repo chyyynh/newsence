@@ -10,7 +10,7 @@ import {
 	upsertResourceTranslation,
 } from '@ingest/domain/resource-store';
 import { sql } from 'drizzle-orm';
-import { syncCorpusItem } from '../ai-search';
+import { AI_SEARCH_SYNC_STEP_CONFIG, syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	CONTENT_TRANSLATION_MAX_LENGTH,
@@ -257,11 +257,7 @@ export class ResourceTranslationV2Workflow extends WorkflowEntrypoint<CoreEnv, R
 			);
 			if (!persisted) return { success: true, resource_id: resourceId, skipped: true, superseded: true };
 		}
-		await step.do(
-			'sync-translated-resource-to-ai-search',
-			{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-			() => syncCorpusItem(this.env, resourceId),
-		);
+		await step.do('sync-translated-resource-to-ai-search', AI_SEARCH_SYNC_STEP_CONFIG, () => syncCorpusItem(this.env, resourceId));
 		console.info({
 			tag: 'RESOURCE_TRANSLATION',
 			msg: 'Completed',
