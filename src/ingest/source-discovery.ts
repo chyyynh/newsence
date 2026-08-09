@@ -1,5 +1,5 @@
 import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
-import type { SourceAcquisitionMode, SourcePlatform } from '@core-shared/resource-types';
+import { isSourcePlatform, SOURCE_INPUT_MAX_LENGTH, type SourceAcquisitionMode, type SourcePlatform } from '@core-shared/resource-types';
 import { parseFeed } from 'feedsmith';
 import { decode } from 'html-entities';
 
@@ -339,8 +339,10 @@ async function resolveYouTubeCandidate(env: CoreEnv, input: string): Promise<Res
 }
 
 export async function resolveSourceCandidate(env: CoreEnv, input: ResolveSourceCandidateInput): Promise<ResolvedSourceCandidate> {
-	const raw = input.input?.trim();
+	if (!isSourcePlatform(input.platform)) throw new Error('Unsupported source platform.');
+	const raw = typeof input.input === 'string' ? input.input.trim() : '';
 	if (!raw) throw new Error('Source input is required.');
+	if (raw.length > SOURCE_INPUT_MAX_LENGTH) throw new Error('Source input is too long.');
 	switch (input.platform) {
 		case 'rss':
 			return resolveRssCandidate(raw);
@@ -348,7 +350,5 @@ export async function resolveSourceCandidate(env: CoreEnv, input: ResolveSourceC
 			return resolveTwitterCandidate(raw);
 		case 'youtube':
 			return resolveYouTubeCandidate(env, raw);
-		default:
-			throw new Error(`Unsupported platform: ${String(input.platform)}`);
 	}
 }
