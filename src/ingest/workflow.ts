@@ -11,7 +11,7 @@ import {
 	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type { ResourceForProcessing } from '@core-shared/types';
-import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
+import { loadResourceForProcessing, loadResourceShellForProcessing, loadStalePendingAppResourceIds } from '@ingest/domain/resource-store';
 import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
 import { syncCorpusItem } from '../ai-search';
 import { enqueueOrRestartWorkflow } from '../workflow-control';
@@ -43,12 +43,53 @@ import {
 type WorkflowOperation = 'ingest' | 'resync';
 type WorkflowPayload = { resourceId: string; operation: WorkflowOperation; sourceRevision?: string };
 
+const PENDING_RESOURCE_GRACE_MS = 10 * 60 * 1000;
+const PENDING_RESOURCE_RECONCILE_LIMIT = 50;
+const PENDING_RESOURCE_RECONCILE_CONCURRENCY = 5;
+
 export async function enqueueProcessing(env: CoreEnv, resourceId: string, sourceRevision?: string): Promise<string> {
 	if (sourceRevision && !isResourceSourceSnapshotHash(sourceRevision)) throw new Error('Invalid resource source revision');
 	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId, sourceRevision), {
 		resourceId,
 		operation: 'ingest',
 		...(sourceRevision ? { sourceRevision } : {}),
+	});
+}
+
+/** Re-admits app-owned pending rows whose initial DB -> Workflow handoff was interrupted. */
+export async function reconcilePendingResourceProcessing(env: CoreEnv): Promise<void> {
+	const resourceIds = await loadStalePendingAppResourceIds(
+		env,
+		new Date(Date.now() - PENDING_RESOURCE_GRACE_MS),
+		PENDING_RESOURCE_RECONCILE_LIMIT,
+	);
+	if (!resourceIds.length) return;
+
+	let reconciled = 0;
+	let failed = 0;
+	for (let offset = 0; offset < resourceIds.length; offset += PENDING_RESOURCE_RECONCILE_CONCURRENCY) {
+		const batch = resourceIds.slice(offset, offset + PENDING_RESOURCE_RECONCILE_CONCURRENCY);
+		const results = await Promise.allSettled(batch.map((resourceId) => enqueueProcessing(env, resourceId)));
+		for (const [index, result] of results.entries()) {
+			if (result.status === 'fulfilled') {
+				reconciled++;
+				continue;
+			}
+			failed++;
+			console.error({
+				tag: 'RESOURCE_WORKFLOW',
+				event: 'pending_resource_reconciliation_failed',
+				resource_id: batch[index],
+				error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+			});
+		}
+	}
+	console.info({
+		tag: 'RESOURCE_WORKFLOW',
+		event: 'pending_resource_reconciliation_completed',
+		attempted: resourceIds.length,
+		reconciled,
+		failed,
 	});
 }
 

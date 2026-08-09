@@ -5,7 +5,12 @@ import { ResourceTranslationV2Workflow } from '@ingest/content-localization-work
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
-import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow } from '@ingest/workflow';
+import {
+	enqueueProcessing,
+	enqueueResourceResync,
+	ResourceProcessingV2Workflow,
+	reconcilePendingResourceProcessing,
+} from '@ingest/workflow';
 import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
 import type { RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
 import { relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
@@ -48,6 +53,17 @@ async function runMonitorCycle(env: CoreEnv, handler: MonitorHandler): Promise<v
 	}
 }
 
+async function runFiveMinuteCycle(env: CoreEnv): Promise<void> {
+	const results = await Promise.allSettled([handleRSSCron(env), reconcilePendingResourceProcessing(env)]);
+	const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+	if (failures.length) {
+		throw new AggregateError(
+			failures.map(({ reason }) => reason),
+			'One or more five-minute core jobs failed',
+		);
+	}
+}
+
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {
 		const url = new URL(request.url);
@@ -61,7 +77,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		// YouTube channels ride the RSS monitor: their handles are Atom feed URLs,
 		// so they are ordinary rss sources with a 30-minute poll interval.
 		if (event.cron === '*/5 * * * *') {
-			this.ctx.waitUntil(runMonitorCycle(this.env, handleRSSCron));
+			this.ctx.waitUntil(runMonitorCycle(this.env, runFiveMinuteCycle));
 		} else if (event.cron === '0 */6 * * *') {
 			this.ctx.waitUntil(runMonitorCycle(this.env, handleTwitterCron));
 		}

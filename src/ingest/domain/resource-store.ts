@@ -31,7 +31,7 @@ import { detectResourcePlatform } from '@core-shared/url';
 import { type CoreDb, textArraySql, uuidArraySql, withCoreDb, withCoreTx } from '@db/client';
 import { contentResourceIdentitySql, resourceDisplaySourceSql, translatableResourceIdentitySql } from '@db/resource-identity-sql';
 import { resources, resourceTranslations, youtubeTranscripts } from '@db/schema';
-import { and, eq, not, type SQL, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lt, not, type SQL, sql } from 'drizzle-orm';
 
 /** Failed enrichments to retry before a URL is treated as permanently dead. */
 const MAX_ENRICHMENT_ATTEMPTS = 5;
@@ -210,6 +210,35 @@ export async function assertResourceProcessable(env: CoreEnv, resourceId: string
 		if (!isContentResourceKind(identity.kind)) {
 			throw new Error(`Resource kind is not processable by core: ${identity.kind}`);
 		}
+	});
+}
+
+/**
+ * App-owned URL and PDF rows are committed before Workflow admission. A
+ * transient binding or Workflows failure can therefore leave a durable pending
+ * row behind. The row is the outbox: return only stale, unmonitored content
+ * resources so the scheduled reconciler can safely retry their fixed workflow
+ * instance IDs without competing with revision-scoped source ingestion.
+ */
+export async function loadStalePendingAppResourceIds(env: CoreEnv, olderThan: Date, limit: number): Promise<string[]> {
+	return withCoreDb(env, async (db) => {
+		const rows = await db
+			.select({ id: resources.id })
+			.from(resources)
+			.where(
+				and(
+					eq(resources.enrichmentStatus, 'pending'),
+					isNull(resources.sourceId),
+					lt(resources.updatedAt, olderThan),
+					contentResourceIdentitySql({
+						kind: sql`${resources.kind}`,
+						resourcePlatform: sql`${resources.resourcePlatform}`,
+					}),
+				),
+			)
+			.orderBy(asc(resources.updatedAt), asc(resources.id))
+			.limit(limit);
+		return rows.map(({ id }) => id);
 	});
 }
 
