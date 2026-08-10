@@ -517,9 +517,15 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	}
 
 	const monitoredUsers = monitoredTwitterUsers(users);
+	const validSourceIds = new Set(monitoredUsers.map((source) => source.id));
+	const invalidSources = users.filter((source) => !validSourceIds.has(source.id));
+	for (const source of invalidSources) {
+		await recordSourceFailure(env, source.id, new Error('Twitter source has an invalid handle'));
+	}
 	const identities = monitoredTwitterIdentities(monitoredUsers);
 	if (identities.length === 0) {
-		throw new Error(`No valid Twitter usernames in ${users.length} configured sources`);
+		console.warn({ tag: 'TWITTER', msg: 'No valid Twitter sources configured', invalidSources: invalidSources.length });
+		return;
 	}
 	const batches = batchTwitterIdentities(identities);
 
