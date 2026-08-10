@@ -370,7 +370,7 @@ type SourceResourceDraft = {
 	url: string;
 	title: string;
 	source: string;
-	publishedDate: Date | string;
+	publishedDate: Date | string | null;
 	summary: string | null;
 	originalLang?: string;
 	content: string | null;
@@ -568,7 +568,7 @@ function preparedRecordToResource(base: SourceResourceDraft): ResourceForProcess
 		normalized_url: base.url,
 		og_image_url: base.previewImageUrl ?? null,
 		source: base.source,
-		published_date: dateValue(base.publishedDate, 'published_date').toISOString(),
+		published_date: base.publishedDate === null ? null : dateValue(base.publishedDate, 'published_date').toISOString(),
 		tags: base.tags ?? [],
 		keywords: base.keywords ?? [],
 		platform_metadata: base.platformMetadata ?? undefined,

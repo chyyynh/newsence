@@ -202,16 +202,14 @@ export function canonicalFeedItemUrl(item: FeedItem): string | null {
 	return normalizeFeedItemUrl(hackerNewsDiscussionUrl(item.id) ?? item.link);
 }
 
-export function feedPublishedDate(value: string | undefined): Date {
-	if (!value) return new Date();
+export function feedPublishedDate(value: string | undefined): Date | null {
+	if (!value) return null;
 	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? new Date() : date;
+	return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function stablePublishedDate(value: string | undefined): string | null {
-	if (!value) return null;
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? null : date.toISOString();
+	return feedPublishedDate(value)?.toISOString() ?? null;
 }
 
 export function feedSummary(value: string | undefined): string | null {
