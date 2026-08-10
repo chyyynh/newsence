@@ -9,7 +9,7 @@ import {
 	SOURCE_PLATFORMS,
 	SOURCE_STATUSES,
 } from '@core-shared/resource-types';
-import type { StoredResourceEntity, TranscriptSegment } from '@core-shared/types';
+import type { StoredResourceEntity, TranscriptSegment, YouTubeChapter, YouTubeHighlights } from '@core-shared/types';
 import {
 	bigint,
 	boolean,
@@ -171,10 +171,10 @@ export const youtubeTranscripts = pgTable('youtube_transcripts', {
 	videoId: text('video_id').notNull().unique(),
 	transcript: jsonb('transcript').$type<TranscriptSegment[]>().notNull(),
 	language: varchar('language', { length: 10 }),
-	chapters: jsonb('chapters').$type<unknown[]>().notNull(),
+	chapters: jsonb('chapters').$type<YouTubeChapter[]>().notNull(),
 	chaptersFromDescription: boolean('chapters_from_description').notNull(),
 	fetchedAt: timestamp('fetched_at', { mode: 'date' }).notNull(),
-	aiHighlights: jsonb('ai_highlights').$type<unknown>(),
+	aiHighlights: jsonb('ai_highlights').$type<YouTubeHighlights>(),
 	highlightsGeneratedAt: timestamp('highlights_generated_at', { mode: 'date' }),
 });
 

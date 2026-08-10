@@ -72,6 +72,20 @@ export interface YouTubeChapter {
 	endTime?: number;
 }
 
+export interface YouTubeHighlight {
+	title: string;
+	summary: string;
+	startTime: number;
+	endTime: number;
+}
+
+export interface YouTubeHighlights {
+	version: '1.0';
+	model: string;
+	highlights: YouTubeHighlight[];
+	generatedAt: string;
+}
+
 export interface YoutubeTranscript {
 	videoId: string;
 	segments: TranscriptSegment[];
