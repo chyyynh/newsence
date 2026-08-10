@@ -62,7 +62,7 @@ interface ResourceReadRow {
 	title: string | null;
 	translation_updated_at: string | null;
 	url: string | null;
-	viewer_has_ownership: boolean;
+	viewer_can_read_content: boolean;
 }
 
 function rpcOk<T>(value: T): KnowledgeReaderRpcResult<T> {
@@ -172,6 +172,11 @@ function resourceMetadataAccessSql(access: ResourceAccess): SQL {
 			OR ${viewerContainerMembershipSql(access.userId)}
 		)
 	)`;
+}
+
+function resourceContentAccessSql(access: ResourceAccess): SQL {
+	if (access.access === 'public') return publicCorpusSql();
+	return sql`(${publicCorpusSql()} OR ${viewerResourceOwnershipSql(access.userId)})`;
 }
 
 function localizedTranslationSql(preferredLocale: string | null, selectedLang?: string): SQL {
@@ -319,7 +324,7 @@ async function readResource(db: CoreDb, input: KnowledgeResourceReadInput): Prom
 	const resourceId = input.ref.id;
 	const continuation = decodeResourceContinuation(input.continuation, resourceId);
 	const offset = continuation?.contentOffset ?? 0;
-	const ownership = input.access === 'principal' ? viewerResourceOwnershipSql(input.userId) : sql`FALSE`;
+	const contentAccess = resourceContentAccessSql(input);
 	const rows = await queryRows<ResourceReadRow>(
 		db,
 		sql`
@@ -339,9 +344,9 @@ async function readResource(db: CoreDb, input: KnowledgeResourceReadInput): Prom
 			       localized.lang AS selected_lang,
 			       TO_CHAR(r.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS resource_updated_at,
 			       localized.updated_at AS translation_updated_at,
-			       ${ownership} AS viewer_has_ownership,
-			       CASE WHEN ${ownership} THEN CHAR_LENGTH(localized.content) ELSE NULL END AS content_chars,
-			       CASE WHEN ${ownership}
+			       ${contentAccess} AS viewer_can_read_content,
+			       CASE WHEN ${contentAccess} THEN CHAR_LENGTH(localized.content) ELSE NULL END AS content_chars,
+			       CASE WHEN ${contentAccess}
 			         THEN SUBSTRING(
 			           localized.content
 			           FROM (${offset + 1})::integer
@@ -382,7 +387,7 @@ async function readResource(db: CoreDb, input: KnowledgeResourceReadInput): Prom
 	if (!Number.isSafeInteger(contentTotal) || contentTotal < 0 || (continuation && offset >= contentTotal)) {
 		throw new InvalidKnowledgeContinuationError();
 	}
-	if (!row.viewer_has_ownership || !row.content_chunk || contentTotal === 0) {
+	if (!row.viewer_can_read_content || !row.content_chunk || contentTotal === 0) {
 		return {
 			contentAvailable: false,
 			continuation: null,
