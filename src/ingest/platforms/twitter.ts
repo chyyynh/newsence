@@ -27,7 +27,7 @@ async function enqueueTwitterResource(
 		hashTags?: string[];
 	},
 ): Promise<void> {
-	const resourceId = await withCoreTx(env, (db) =>
+	const pending = await withCoreTx(env, (db) =>
 		upsertPendingSourceResource(db, {
 			sourceId: data.sourceId,
 			url: data.url,
@@ -44,7 +44,9 @@ async function enqueueTwitterResource(
 			keywords: data.hashTags,
 		}),
 	);
-	await enqueueProcessing(env, resourceId);
+	if (pending.needsProcessing) {
+		await enqueueProcessing(env, pending.resourceId, pending.sourceRevision ?? undefined);
+	}
 }
 
 const MIN_TWEET_LENGTH = 150;
@@ -120,14 +122,16 @@ async function saveThread(tweets: Tweet[], env: CoreEnv, monitoredSource: Monito
 	if (existing) {
 		const existingId = existing.id;
 		await withCoreDb(env, (db) => attachSourceToResources(db, [existingId], monitoredSource.id));
-		const changed = await reopenResourceForReprocessing(env, existingId, {
+		const sourceRevision = await reopenResourceForReprocessing(env, existingId, {
 			content: combinedText,
 			platformMetadata,
 		});
-		if (changed || existing.shouldRetryEnrichment) await enqueueProcessing(env, existingId);
+		if (sourceRevision || existing.shouldRetryEnrichment) {
+			await enqueueProcessing(env, existingId, sourceRevision ?? undefined);
+		}
 		console.info({
 			tag: 'TWITTER',
-			msg: changed ? 'Updated thread' : 'Thread unchanged',
+			msg: sourceRevision ? 'Updated thread' : 'Thread unchanged',
 			author: first.author?.userName,
 			tweets: tweetCount,
 		});
@@ -513,9 +517,15 @@ export async function handleTwitterCron(env: CoreEnv): Promise<void> {
 	}
 
 	const monitoredUsers = monitoredTwitterUsers(users);
+	const validSourceIds = new Set(monitoredUsers.map((source) => source.id));
+	const invalidSources = users.filter((source) => !validSourceIds.has(source.id));
+	for (const source of invalidSources) {
+		await recordSourceFailure(env, source.id, new Error('Twitter source has an invalid handle'));
+	}
 	const identities = monitoredTwitterIdentities(monitoredUsers);
 	if (identities.length === 0) {
-		throw new Error(`No valid Twitter usernames in ${users.length} configured sources`);
+		console.warn({ tag: 'TWITTER', msg: 'No valid Twitter sources configured', invalidSources: invalidSources.length });
+		return;
 	}
 	const batches = batchTwitterIdentities(identities);
 

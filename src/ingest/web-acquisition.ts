@@ -1,3 +1,4 @@
+import { coreAiRequestOptions, throwCoreAiError } from '@core-ai/generation';
 import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { normalizePreviewImageUrl } from '@core-shared/url';
@@ -106,16 +107,24 @@ function stripLeadingFrontmatter(markdown: string): string {
 	return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
 }
 
-export async function markdownFromHtml(env: CoreEnv, html: string, url: string): Promise<string> {
-	const result = await env.AI.toMarkdown(
-		{
-			name: `${urlHost(url)}.html`,
-			blob: new Blob([html], { type: 'text/html' }),
-		},
-		{
-			conversionOptions: { html: { hostname: new URL(url).hostname } },
-		},
-	);
+export async function markdownFromHtml(env: CoreEnv, html: string, url: string, resourceId?: string): Promise<string> {
+	const context = { feature: 'html-to-markdown', resourceId };
+	let result: ConversionResponse;
+	try {
+		result = await env.AI.toMarkdown(
+			{
+				name: `${urlHost(url)}.html`,
+				blob: new Blob([html], { type: 'text/html' }),
+			},
+			{
+				...coreAiRequestOptions(env, context),
+				conversionOptions: { html: { hostname: new URL(url).hostname } },
+			},
+		);
+	} catch (error) {
+		throwCoreAiError(env, error, { ...context, model: 'workers-ai/to-markdown' });
+	}
+	// The error variant has no structured status, so its message cannot identify a rate limit.
 	if (result.format === 'error') throw new Error(`Workers AI toMarkdown failed: ${result.error}`);
 	return stripLeadingFrontmatter(result.data);
 }
@@ -124,7 +133,7 @@ async function acquirePdfBytes(bytes: Uint8Array, url: string, fileName: string)
 	const parsed = await parsePdfBytes(bytes);
 	const title = titleFromFileName(fileName);
 	return {
-		kind: 'document',
+		kind: 'blog',
 		resourcePlatform: null,
 		fileType: PDF_MIME,
 		title,
@@ -150,16 +159,16 @@ async function acquirePdfResponse(response: Response, finalUrl: string): Promise
 	return acquirePdfBytes(bytes, finalUrl, fileNameFromUrl(finalUrl));
 }
 
-async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Promise<AcquiredWebContent> {
+async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, resourceId?: string): Promise<AcquiredWebContent> {
 	const article = await extractHtmlArticle(html, url);
 	if (!article) throw new Error(`No readable article content found: ${url}`);
 
-	const content = await markdownFromHtml(env, article.html, url);
+	const content = await markdownFromHtml(env, article.html, url, resourceId);
 	if (content.length < MIN_ARTICLE_CONTENT_CHARS) {
 		throw new Error(`Extracted HTML content is too short (${content.length} chars): ${url}`);
 	}
 	return {
-		kind: 'document',
+		kind: 'blog',
 		resourcePlatform: null,
 		fileType: null,
 		title: article.title,
@@ -176,7 +185,7 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string): Prom
 	};
 }
 
-export async function acquireWebResource(url: string, env: CoreEnv): Promise<AcquiredWebContent> {
+export async function acquireWebResource(url: string, env: CoreEnv, resourceId?: string): Promise<AcquiredWebContent> {
 	const response = await fetchWithTimeout(
 		url,
 		{
@@ -214,5 +223,5 @@ export async function acquireWebResource(url: string, env: CoreEnv): Promise<Acq
 	}
 
 	const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-	return acquireHtmlArticle(env, html, finalUrl);
+	return acquireHtmlArticle(env, html, finalUrl, resourceId);
 }

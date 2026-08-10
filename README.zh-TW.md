@@ -168,12 +168,12 @@ Bindings（在 `wrangler.jsonc` 裡設定）：
 | Binding            | 用途                                        |
 | ------------------ | ------------------------------------------- |
 | `HYPERDRIVE`       | 連線到你的 Postgres                         |
-| `RESOURCE_PROCESSING_WORKFLOW` | 抓取、解析、分類並寫回 resource |
-| `RESOURCE_TRANSLATION_WORKFLOW` | 將已持久化的 resource 翻譯成繁體中文 |
-| `SEARCH_INDEX_REBUILD_WORKFLOW` | 從 Postgres 全量重建搜尋索引 |
+| `RESOURCE_PROCESSING_V2_WORKFLOW` | 抓取、解析、分類並寫回 canonical resource |
+| `RESOURCE_TRANSLATION_V2_WORKFLOW` | 將已持久化的 resource 翻譯成繁體中文 |
+| `SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW` | 全量重建並驗證 generation-5 搜尋索引 |
 | `R2`               | 讀取 app-owned uploaded blob，供 PDF extraction 使用 |
 | `AI`               | Workers AI binding（AI Gateway 文字呼叫）   |
-| `AI_SEARCH`        | Cloudflare AI Search corpus namespace       |
+| `AI_SEARCH`        | `newsence-corpus-v6` canonical public corpus |
 
 Secrets（透過 `wrangler secret put` 設定）：
 
@@ -182,6 +182,28 @@ Secrets（透過 `wrangler secret put` 設定）：
 | `KAITO_API_KEY`                | 是   | 啟用 Twitter 監控             |
 | `YOUTUBE_API_KEY`              | 是   | 啟用 YouTube 頻道監控         |
 | `S2_API_KEY`                   | 是   | 提高 Semantic Scholar paper enrichment quota |
+
+## Canonical resource identity
+
+`ResourceKind` 是產品呈現語意，合法的 `(kind, resource_platform)` 組合只有
+`blog / null`、`forum / hackernews`、`post / twitter`、
+`video / youtube`、`paper / null`、`paper / hackernews`、
+`image / null` 與 `file / null`。PDF 是 representation，不是另一個 kind；
+一般 PDF 是 `blog`，HN-linked PDF 是 `forum / hackernews`，經學術辨識後
+才可升級為對應的 `paper` identity。
+
+`Source.kind` 的 `blog | news` 是獨立的 feed/editorial 分類；兩者建立的
+resource 都使用 `blog` shell，來源分類只負責 feed 層級的文案與篩選。
+
+AI Search 沿用 `newsence-corpus-v6`，目前 durable contract 是
+generation `5 / canonical-5-blog-forum-kind`。Rebuild 使用實體 Workflow
+`newsence-search-index-generation-5-rebuild`、class
+`SearchIndexGeneration5RebuildWorkflow`，runner 為
+`search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1`。
+
+Generation 5 與 canonical `blog`/`forum` database cutover 已完成。一次性
+migration 保留在 git history；目前操作直接從 target schema 開始，依
+`AI_SEARCH_V6_RUNBOOK.md` 執行 active rebuild 與驗證流程。
 
 ## 新增擷取 adapter
 
@@ -192,7 +214,7 @@ discovery / scrape / process 邏輯。App-owned saved URL 先寫入 `resources`
 
 各軸要分開：acquisition（`rss`、`web` 或專用 adapter）不是 canonical
 `ResourcePlatform`（`youtube`、`twitter`、`hackernews` 或 null），也不是
-`ResourceKind`（`document`、`post`、`video`、`paper`、`image`、`file`）、
+`ResourceKind`（`blog`、`forum`、`post`、`video`、`paper`、`image`、`file`）、
 blob representation（MIME／檔名／大小／頁數）或 lifecycle origin
 （`source`、`saved_url`、`upload`、`generated`）。PDF 解析和 Semantic
 Scholar paper enrichment 是 workflow stage，依 row 內容或 metadata

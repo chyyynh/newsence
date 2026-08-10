@@ -1,7 +1,7 @@
 import { fetchWithTimeout, WEB_FETCH_USER_AGENT } from '@core-shared/http';
 import { type PlatformMetadata, platformMetadataFor, type ResourceForProcessing } from '@core-shared/types';
 import { normalizePreviewImageUrl } from '@core-shared/url';
-import { decode } from 'html-entities';
+import { firstHtmlMetaValue, parseHtmlHead, readHtmlHead } from '@ingest/source-discovery';
 
 // A share tweet carries only the linked URL — Kaito never returns the target
 // page's OG tags — and the link-preview card renders only when externalOgImage
@@ -15,8 +15,6 @@ const UNFURL_HEADERS = {
 	'User-Agent': WEB_FETCH_USER_AGENT,
 	Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
 };
-const META_TAG_RE = /<meta\b[^>]*>/gi;
-const ATTRIBUTE_RE = /([a-zA-Z:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 const OG_IMAGE_KEYS = ['og:image', 'og:image:secure_url', 'og:image:url', 'twitter:image', 'twitter:image:src'];
 const OG_TITLE_KEYS = ['og:title', 'twitter:title'];
 
@@ -33,69 +31,6 @@ export function pendingTweetExternalLink(resource: ResourceForProcessing): strin
 	return externalUrl && !data?.externalOgImage ? externalUrl : null;
 }
 
-function tagAttributes(tag: string): Map<string, string> {
-	const attributes = new Map<string, string>();
-	for (const [, name, quoted, singleQuoted, bare] of tag.matchAll(ATTRIBUTE_RE)) {
-		const value = quoted ?? singleQuoted ?? bare;
-		if (value !== undefined) attributes.set(name.toLowerCase(), decode(value).trim());
-	}
-	return attributes;
-}
-
-/** First value wins per key, matching how crawlers read duplicated OG tags. */
-function metaTags(html: string): Map<string, string> {
-	const values = new Map<string, string>();
-	for (const tag of html.match(META_TAG_RE) ?? []) {
-		const attributes = tagAttributes(tag);
-		const key = attributes.get('property') ?? attributes.get('name');
-		const content = attributes.get('content');
-		if (key && content && !values.has(key.toLowerCase())) values.set(key.toLowerCase(), content);
-	}
-	return values;
-}
-
-function firstTagValue(tags: Map<string, string>, keys: string[]): string | null {
-	for (const key of keys) {
-		const value = tags.get(key);
-		if (value) return value;
-	}
-	return null;
-}
-
-function documentTitle(html: string): string | null {
-	const raw = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1];
-	return raw ? decode(raw).trim() || null : null;
-}
-
-/**
- * Read until `</head>` or the byte cap, then drop the rest. Truncating instead
- * of throwing like `readTextWithLimit` is the point: OG tags live in the head,
- * while article pages routinely exceed any cap worth setting here.
- */
-async function readHtmlHead(response: Response, maxBytes: number): Promise<string> {
-	if (!response.body) return '';
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let html = '';
-	let totalBytes = 0;
-
-	try {
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) return html + decoder.decode();
-
-			totalBytes += value.byteLength;
-			html += decoder.decode(value, { stream: true });
-			if (totalBytes >= maxBytes || /<\/head\s*>/i.test(html)) {
-				await reader.cancel();
-				return html;
-			}
-		}
-	} finally {
-		reader.releaseLock();
-	}
-}
-
 export async function unfurlTweetExternalLink(url: string): Promise<TweetLinkUnfurl | null> {
 	const response = await fetchWithTimeout(url, { headers: UNFURL_HEADERS });
 	if (!response.ok) {
@@ -109,14 +44,14 @@ export async function unfurlTweetExternalLink(url: string): Promise<TweetLinkUnf
 	}
 
 	const html = await readHtmlHead(response, MAX_UNFURL_BYTES);
-	const tags = metaTags(html);
-	const image = firstTagValue(tags, OG_IMAGE_KEYS);
+	const head = await parseHtmlHead(html);
+	const image = firstHtmlMetaValue(head, OG_IMAGE_KEYS);
 	// No image means no card (#234), so a title alone would never be rendered.
 	if (!image) return null;
 	const externalOgImage = normalizePreviewImageUrl(image, response.url || url);
 	if (!externalOgImage) return null;
 
-	return { externalOgImage, externalTitle: firstTagValue(tags, OG_TITLE_KEYS) ?? documentTitle(html) };
+	return { externalOgImage, externalTitle: firstHtmlMetaValue(head, OG_TITLE_KEYS) ?? head.title };
 }
 
 export function applyTweetLinkUnfurl(resource: ResourceForProcessing, unfurl: TweetLinkUnfurl | null): ResourceForProcessing {

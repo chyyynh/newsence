@@ -33,11 +33,12 @@ for (const relativePath of sourceFiles('src')) {
 		/\b(?:ContentResourceType|ResourceType|legacyResourceIdentity|legacyResourceTypeAfterAcquisition|legacyResourceIdentityFilterCases)\b/,
 		'retired resource type vocabulary remains',
 	);
+	reject(relativePath, source, /\bkind\s*(?::|===?|!==?)\s*['"]document['"]/, 'retired document Resource.kind remains');
 	reject(relativePath, source, /\b(?:resources|r|rl)\.type\b|\btype\s+AS\s+legacy_type\b/i, 'runtime SQL still reads resources.type');
 	reject(
 		relativePath,
 		source,
-		/\b(?:AI_SEARCH_NEXT|RESOURCE_IDENTITY_BACKFILL_WORKFLOW|SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW)\b/,
+		/\b(?:AI_SEARCH_NEXT|RESOURCE_IDENTITY_BACKFILL_WORKFLOW|SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW|SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW)\b/,
 		'retired rollout binding remains',
 	);
 }
@@ -67,12 +68,9 @@ for (const required of [
 	'"binding": "RESOURCE_TRANSLATION_V2_WORKFLOW"',
 	'"name": "newsence-resource-translation-v2"',
 	'"class_name": "ResourceTranslationV2Workflow"',
-	'"binding": "SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW"',
-	'"name": "newsence-search-index-canonical-v6-rebuild"',
-	'"class_name": "SearchIndexCanonicalV6RebuildWorkflow"',
-	'"binding": "RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW"',
-	'"name": "newsence-recent-resource-image-backfill-v2"',
-	'"class_name": "RecentResourceImageBackfillV2Workflow"',
+	'"binding": "SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW"',
+	'"name": "newsence-search-index-generation-5-rebuild"',
+	'"class_name": "SearchIndexGeneration5RebuildWorkflow"',
 	'"binding": "ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW"',
 	'"name": "newsence-academic-metadata-backfill-v3"',
 	'"class_name": "AcademicMetadataBackfillV3Workflow"',
@@ -83,14 +81,20 @@ for (const required of [
 reject(
 	'wrangler.jsonc',
 	wrangler,
-	/\b(?:AI_SEARCH_NEXT|RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW|RESOURCE_IDENTITY_BACKFILL_WORKFLOW|SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW)\b/,
+	/\b(?:AI_SEARCH_NEXT|RECENT_RESOURCE_IMAGE_BACKFILL_WORKFLOW|RESOURCE_IDENTITY_BACKFILL_WORKFLOW|SEARCH_INDEX_SHADOW_REBUILD_WORKFLOW|SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW)\b/,
 	'retired rollout binding remains',
 );
 reject(
 	'wrangler.jsonc',
 	wrangler,
-	/"name": "newsence-recent-resource-image-backfill"|"class_name": "RecentResourceImageBackfillWorkflow"/,
+	/"name": "newsence-recent-resource-image-backfill(?:-v2)?"|"class_name": "RecentResourceImageBackfill(?:V2)?Workflow"/,
 	'retired recent-image Workflow physical resource remains',
+);
+reject(
+	'wrangler.jsonc',
+	wrangler,
+	/"name": "newsence-search-index-canonical-v6-rebuild"|"class_name": "SearchIndexCanonicalV6RebuildWorkflow"/,
+	'retired generation-4 search Workflow physical resource remains',
 );
 
 if (errors.length > 0) {

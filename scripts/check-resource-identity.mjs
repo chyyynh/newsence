@@ -1,36 +1,33 @@
 import assert from 'node:assert/strict';
 import {
 	isIncomingResourceSnapshotSuperseded,
+	isResourceSourceSnapshotHash,
 	isResourceTranslationIdentityEligible,
 	isValidKindPlatform,
 	needsResourcePlatformAcquisition,
 	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
+	VALID_KIND_PLATFORMS,
 } from '../src/shared/resource-types.ts';
 import { withPdfExtractionMetadata } from '../src/shared/types.ts';
 import { detectResourcePlatform } from '../src/shared/url.ts';
 
-const canonicalIdentities = [
-	{ kind: 'document', resourcePlatform: null },
-	{ kind: 'document', resourcePlatform: 'hackernews' },
-	{ kind: 'post', resourcePlatform: 'twitter' },
-	{ kind: 'video', resourcePlatform: 'youtube' },
-	{ kind: 'paper', resourcePlatform: null },
-	{ kind: 'paper', resourcePlatform: 'hackernews' },
-	{ kind: 'image', resourcePlatform: null },
-	{ kind: 'file', resourcePlatform: null },
-];
+const canonicalIdentities = Object.entries(VALID_KIND_PLATFORMS).flatMap(([kind, resourcePlatforms]) =>
+	resourcePlatforms.map((resourcePlatform) => ({ kind, resourcePlatform })),
+);
 for (const identity of canonicalIdentities) {
 	assert.equal(isValidKindPlatform(identity.kind, identity.resourcePlatform), true, JSON.stringify(identity));
 }
 assert.equal(isValidKindPlatform('post', null), false);
-assert.equal(isValidKindPlatform('document', 'twitter'), false);
+assert.equal(isValidKindPlatform('blog', 'hackernews'), false);
+assert.equal(isValidKindPlatform('forum', null), false);
+assert.equal(isValidKindPlatform('document', null), false);
 
-assert.deepEqual(resourceIdentityWithAcademic({ kind: 'document', resourcePlatform: null }, true), {
+assert.deepEqual(resourceIdentityWithAcademic({ kind: 'blog', resourcePlatform: null }, true), {
 	kind: 'paper',
 	resourcePlatform: null,
 });
-assert.deepEqual(resourceIdentityWithAcademic({ kind: 'document', resourcePlatform: 'hackernews' }, true), {
+assert.deepEqual(resourceIdentityWithAcademic({ kind: 'forum', resourcePlatform: 'hackernews' }, true), {
 	kind: 'paper',
 	resourcePlatform: 'hackernews',
 });
@@ -39,9 +36,9 @@ assert.deepEqual(resourceIdentityWithAcademic({ kind: 'post', resourcePlatform: 
 	resourcePlatform: 'twitter',
 });
 const translationCases = [
-	['generic document', { kind: 'document', resourcePlatform: null, fileType: null }, true],
-	['Hacker News document with PDF representation', { kind: 'document', resourcePlatform: 'hackernews', fileType: 'application/pdf' }, true],
-	['direct PDF', { kind: 'document', resourcePlatform: null, fileType: 'application/pdf' }, false],
+	['generic blog', { kind: 'blog', resourcePlatform: null, fileType: null }, true],
+	['Hacker News forum with PDF representation', { kind: 'forum', resourcePlatform: 'hackernews', fileType: 'application/pdf' }, true],
+	['direct PDF', { kind: 'blog', resourcePlatform: null, fileType: 'application/pdf' }, false],
 	['post', { kind: 'post', resourcePlatform: 'twitter', fileType: null }, true],
 	['video', { kind: 'video', resourcePlatform: 'youtube', fileType: null }, false],
 	['web paper', { kind: 'paper', resourcePlatform: null, fileType: null }, true],
@@ -61,7 +58,7 @@ assert.equal(detectResourcePlatform('https://example.com/article'), null);
 
 assert.deepEqual(resourceIdentityForDetectedPlatform('twitter'), { kind: 'post', resourcePlatform: 'twitter' });
 assert.deepEqual(resourceIdentityForDetectedPlatform('youtube'), { kind: 'video', resourcePlatform: 'youtube' });
-assert.deepEqual(resourceIdentityForDetectedPlatform('hackernews'), { kind: 'document', resourcePlatform: 'hackernews' });
+assert.deepEqual(resourceIdentityForDetectedPlatform('hackernews'), { kind: 'forum', resourcePlatform: 'hackernews' });
 assert.deepEqual(resourceIdentityForDetectedPlatform('hackernews', true), {
 	kind: 'paper',
 	resourcePlatform: 'hackernews',
@@ -72,7 +69,7 @@ const platformAcquisitionCases = [
 	['pending YouTube', { resourcePlatform: 'youtube', platformData: null }, true],
 	['pending Hacker News', { resourcePlatform: 'hackernews', platformData: null }, true],
 	['complete Twitter', { resourcePlatform: 'twitter', platformData: { tweetId: '123' } }, false],
-	['generic document', { resourcePlatform: null, platformData: null }, false],
+	['generic blog', { resourcePlatform: null, platformData: null }, false],
 ];
 
 for (const [label, resource, expected] of platformAcquisitionCases) {
@@ -91,10 +88,16 @@ assert.equal(isIncomingResourceSnapshotSuperseded(oldSnapshot, newSnapshot), tru
 assert.equal(isIncomingResourceSnapshotSuperseded(newSnapshot, oldSnapshot), false);
 assert.equal(isIncomingResourceSnapshotSuperseded(newSnapshot, newSnapshot), false);
 assert.equal(isIncomingResourceSnapshotSuperseded({}, newSnapshot), true);
+assert.equal(isIncomingResourceSnapshotSuperseded({ fetchedAt: oldSnapshot.fetchedAt }, { fetchedAt: newSnapshot.fetchedAt }), true);
+assert.equal(isIncomingResourceSnapshotSuperseded({ fetchedAt: newSnapshot.fetchedAt }, { fetchedAt: oldSnapshot.fetchedAt }), false);
 assert.equal(
 	isIncomingResourceSnapshotSuperseded({ ...oldSnapshot, sourceSnapshotHash: 'same' }, { ...newSnapshot, sourceSnapshotHash: 'same' }),
 	true,
 );
+assert.equal(isResourceSourceSnapshotHash('a'.repeat(64)), true);
+assert.equal(isResourceSourceSnapshotHash('A'.repeat(64)), false);
+assert.equal(isResourceSourceSnapshotHash('a'.repeat(63)), false);
+assert.equal(isResourceSourceSnapshotHash(null), false);
 
 const pdfPlatformMetadata = {
 	fetchedAt: '2026-07-28T00:00:00.000Z',
@@ -112,10 +115,10 @@ console.info({
 	event: 'resource_identity_smoke_passed',
 	canonicalIdentityCases: canonicalIdentities.length,
 	detectedPlatformIdentityCases: 4,
-	invalidIdentityCases: 2,
+	invalidIdentityCases: 4,
 	platformAcquisitionCases: platformAcquisitionCases.length,
 	pdfExtractionCases: 2,
-	snapshotCasCases: 5,
+	snapshotCasCases: 11,
 	translationCases: translationCases.length,
 	urlCases: 4,
 });

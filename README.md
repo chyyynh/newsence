@@ -174,8 +174,7 @@ Bindings (in `wrangler.jsonc`):
 | `HYPERDRIVE`       | Hyperdrive connection to your Postgres       |
 | `RESOURCE_PROCESSING_V2_WORKFLOW` | Fetch, parse, classify, and persist a canonical resource |
 | `RESOURCE_TRANSLATION_V2_WORKFLOW` | Translate a persisted resource into zh-Hant |
-| `SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW` | Rebuild and verify the generation-4 canonical search index |
-| `RECENT_RESOURCE_IMAGE_BACKFILL_V2_WORKFLOW` | Warm recent public resource images into app-owned R2 |
+| `SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW` | Rebuild and verify the generation-5 canonical search index |
 | `ACADEMIC_METADATA_BACKFILL_V3_WORKFLOW` | Upgrade explicit DOI/arXiv resources to the current academic metadata schema |
 | `R2`               | App-owned uploaded blob reads for PDF extraction |
 | `AI`               | Workers AI binding for AI Gateway text calls |
@@ -195,10 +194,10 @@ Secrets (via `wrangler secret put`):
 `effective_at`, `source_id`, `category`, `kind`, and `resource_platform`; null
 platforms use the reserved `none` sentinel. Durable readiness lives in
 `search_index_states` as `public-corpus-v6`, generation
-`4 / canonical-4-kind-platform`.
+`5 / canonical-5-blog-forum-kind`.
 
 The canonical rebuild verifies every searchable identity pair, not only totals:
-`document / none`, `document / hackernews`, `post / twitter`,
+`blog / none`, `forum / hackernews`, `post / twitter`,
 `video / youtube`, `paper / none`, and `paper / hackernews`. It waits for all
 owned items to leave queued, running, outdated, error, and skipped states, then
 compares AI Search with PostgreSQL before marking the generation ready.
@@ -209,9 +208,9 @@ Run the static gates, start the generation-specific Workflow through
 
 ```sh
 pnpm exec wrangler workflows trigger \
-  newsence-search-index-canonical-v6-rebuild \
+  newsence-search-index-generation-5-rebuild \
   '{}' \
-  --id search-index-rebuild-canonical-4-kind-platform-canonical-v1
+  --id search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 
 pnpm check:search-rebuild
 pnpm check:search-rollout
@@ -230,28 +229,19 @@ resource name, class, and runner ID; changing only a runner ID is not isolation.
 See `AI_SEARCH_V6_RUNBOOK.md` for the active rebuild and verification
 procedure.
 
-#### Historical generation-3 evidence
+Generation 5 and the canonical `blog`/`forum` database cutover are complete.
+The one-shot migration lives in git history; current operations start from the
+target schema and use the active rebuild/verification procedure above.
+
+#### Historical generation evidence
 
 `newsence-corpus-v5`, durable state `public-corpus`, generation
 `3 / canonical-3-kind`, and `newsence-search-index-rebuild` belong to the
 completed #245 rollout. Historical scripts and logs retain those exact names as
-evidence. They are not active bindings and must not be triggered or adopted for
-the generation-4 contract.
-
-### Recent resource image warmup
-
-New ingest eagerly rehosts every trusted resource image through the app Worker's
-`DomainRpc`. After deploying a change to this pipeline, warm the homepage window
-with a bounded Workflow run:
-
-```sh
-pnpm exec wrangler workflows trigger newsence-recent-resource-image-backfill-v2 '{"days":7}'
-```
-
-The Workflow accepts only 1–7 days, pages through enriched public corpus rows by
-effective date, and is safe to rerun because R2 keys are content-addressed. Older
-rows are intentionally not scanned; their first image request uses the resource
-row to validate and lazily rehost an R2 miss.
+evidence. Generation 4 used `canonical-4-kind-platform` and
+`newsence-search-index-canonical-v6-rebuild`. These historical Workflow
+resources are not active bindings and must not be triggered or adopted for the
+generation-5 contract.
 
 ### Academic metadata backfill
 
@@ -281,11 +271,16 @@ The workflow receives a `resourceId`. SQL writes stay in
 
 Keep the axes separate: acquisition (`rss`, `web`, or a specialized adapter) is
 not canonical `ResourcePlatform` (`youtube`, `twitter`, `hackernews`, or null),
-`ResourceKind` (`document`, `post`, `video`, `paper`, `image`, `file`), blob
+`ResourceKind` (`blog`, `forum`, `post`, `video`, `paper`, `image`, `file`), blob
 representation (MIME/filename/size/pages), or lifecycle origin (`source`,
 `saved_url`, `upload`, `generated`). PDF extraction and Semantic Scholar paper
 enrichment are workflow stages keyed from row content/metadata, not additional
 identity values.
+
+Monitored `Source.kind` (`blog` or `news`) remains a separate feed/editorial
+classification. Both source kinds produce the canonical `blog` resource shell;
+the source classification may change feed copy or filtering, but never the
+resource identity.
 
 Minimum to add a new ingest source:
 

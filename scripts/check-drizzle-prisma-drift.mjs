@@ -273,12 +273,20 @@ if (!resourceKinds || !resourcePlatforms || !validKindPlatforms) {
 }
 
 const sourcePlatforms = parseStringArray(resourceTypesSource, 'SOURCE_PLATFORMS');
+const sourceKinds = parseStringArray(resourceTypesSource, 'SOURCE_KINDS');
 const sourceAcquisitionModes = parseStringArray(resourceTypesSource, 'SOURCE_ACQUISITION_MODES');
-if (!sourcePlatforms || !sourceAcquisitionModes) {
+if (!sourcePlatforms || !sourceKinds || !sourceAcquisitionModes) {
 	errors.push(`Unable to parse canonical source policy domains from ${resourceTypesPath}`);
 } else {
 	if (!/platform:\s*text\('platform',\s*\{\s*enum:\s*SOURCE_PLATFORMS\s*\}\)/.test(drizzleSource)) {
 		errors.push('Drizzle sources.platform must use the canonical SOURCE_PLATFORMS domain');
+	}
+	if (!/kind:\s*text\('kind',\s*\{\s*enum:\s*SOURCE_KINDS\s*\}\)\.default\('blog'\)\.notNull\(\),/.test(drizzleSource)) {
+		errors.push('Drizzle sources.kind must use the canonical SOURCE_KINDS domain and default to blog');
+	}
+	const sourceModelBody = prismaSource.match(/model Source \{([\s\S]*?)\n\}/)?.[1] ?? '';
+	if (!/^\s*kind\s+String\s+@default\("blog"\)\s*$/m.test(sourceModelBody)) {
+		errors.push('Prisma Source.kind must be required and default to blog');
 	}
 	if (!/acquisitionMode:\s*text\('content_mode',\s*\{\s*enum:\s*SOURCE_ACQUISITION_MODES\s*\}\)/.test(drizzleSource)) {
 		errors.push('Drizzle sources.acquisitionMode must use the canonical SOURCE_ACQUISITION_MODES domain');
@@ -287,6 +295,10 @@ if (!sourcePlatforms || !sourceAcquisitionModes) {
 	const constrainedPlatforms = platformConstraint ? [...platformConstraint[1].matchAll(/'([^']+)'/g)].map((match) => match[1]) : null;
 	if (!constrainedPlatforms || !sameMembers(constrainedPlatforms, sourcePlatforms)) {
 		errors.push('sources_platform_check differs from canonical SOURCE_PLATFORMS');
+	}
+	const constrainedKinds = parseDomainConstraint(manualIndexesSource, 'sources_kind_check', 'kind');
+	if (!constrainedKinds || !sameValues(constrainedKinds, sourceKinds)) {
+		errors.push('sources_kind_check differs from canonical SOURCE_KINDS');
 	}
 	const acquisitionConstraint = manualIndexesSource.match(
 		/ADD CONSTRAINT sources_acquisition_mode_check\s+CHECK \(([\s\S]*?)\n {2}\);/,

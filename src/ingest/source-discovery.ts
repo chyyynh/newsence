@@ -1,5 +1,5 @@
 import { fetchWithTimeout, readTextWithLimit, WEB_FETCH_USER_AGENT } from '@core-shared/http';
-import type { SourceAcquisitionMode, SourcePlatform } from '@core-shared/resource-types';
+import { isSourcePlatform, SOURCE_INPUT_MAX_LENGTH, type SourceAcquisitionMode, type SourcePlatform } from '@core-shared/resource-types';
 import { parseFeed } from 'feedsmith';
 import { decode } from 'html-entities';
 
@@ -21,6 +21,7 @@ export type ResolvedSourceCandidate = {
 };
 
 const MAX_DISCOVERY_BYTES = 1024 * 1024;
+const FEED_MIME_TYPES = new Set(['application/atom+xml', 'application/rss+xml']);
 /** Channels publish on the order of once a day; the RSS default of every 5 minutes is waste. */
 const YOUTUBE_POLL_INTERVAL_MINUTES = 30;
 const TWITTER_HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
@@ -31,6 +32,114 @@ const DISCOVERY_HEADERS = {
 	'User-Agent': WEB_FETCH_USER_AGENT,
 	Accept: 'application/rss+xml, application/atom+xml, application/feed+json, text/html, application/xml, text/xml, */*',
 };
+
+export type HtmlHead = {
+	title: string | null;
+	feedHref: string | null;
+	meta: ReadonlyMap<string, string>;
+};
+
+function decodedAttribute(element: Element, name: string): string | null {
+	const value = element.getAttribute(name);
+	return value === null ? null : decode(value).trim();
+}
+
+function isAlternateFeedLink(element: Element): boolean {
+	const rel = decodedAttribute(element, 'rel');
+	if (!rel?.split(/\s+/).some((token) => token.toLowerCase() === 'alternate')) return false;
+	const type = decodedAttribute(element, 'type')?.split(';', 1)[0]?.trim().toLowerCase();
+	return type !== undefined && FEED_MIME_TYPES.has(type);
+}
+
+/** Parse already-bounded HTML with the Workers-native streaming parser. */
+export async function parseHtmlHead(html: string, baseUrl?: URL): Promise<HtmlHead> {
+	const meta = new Map<string, string>();
+	let feedHref: string | null = null;
+	let title: string | null = null;
+	let titleChunks: string[] | null = null;
+	let titleSeen = false;
+
+	const rewriter = new HTMLRewriter()
+		.on('link', {
+			element(element) {
+				if (feedHref !== null || !baseUrl || !isAlternateFeedLink(element)) return;
+				const href = decodedAttribute(element, 'href');
+				if (!href) return;
+				try {
+					feedHref = new URL(href, baseUrl).toString();
+				} catch {
+					// Skip malformed hrefs; a later link tag may still resolve.
+				}
+			},
+		})
+		.on('meta', {
+			element(element) {
+				const key = decodedAttribute(element, 'property') ?? decodedAttribute(element, 'name');
+				const content = decodedAttribute(element, 'content');
+				if (!key || !content) return;
+				const normalizedKey = key.toLowerCase();
+				if (!meta.has(normalizedKey)) meta.set(normalizedKey, content);
+			},
+		})
+		.on('title', {
+			element(element) {
+				if (titleSeen || titleChunks !== null) return;
+				titleChunks = [];
+				element.onEndTag(() => {
+					if (titleSeen || titleChunks === null) return;
+					title = decode(titleChunks.join('')).trim() || null;
+					titleChunks = null;
+					titleSeen = true;
+				});
+			},
+			text(chunk) {
+				if (!titleSeen && titleChunks !== null) titleChunks.push(chunk.text);
+			},
+		});
+
+	// HTMLRewriter handlers run while the transformed body is consumed. The
+	// input is already byte-bounded by the caller, so buffering the discarded
+	// output cannot turn an unbounded response into isolate memory pressure.
+	await rewriter.transform(new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })).arrayBuffer();
+	return { title, feedHref, meta };
+}
+
+export function firstHtmlMetaValue(head: HtmlHead, keys: readonly string[]): string | null {
+	for (const key of keys) {
+		const value = head.meta.get(key);
+		if (value) return value;
+	}
+	return null;
+}
+
+/**
+ * Read through the closing head tag or byte cap, then cancel the origin body.
+ * The cap intentionally truncates instead of throwing because head metadata is
+ * useful even when a page inlines a very large script before it.
+ */
+export async function readHtmlHead(response: Response, maxBytes: number): Promise<string> {
+	if (!response.body) return '';
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let html = '';
+	let totalBytes = 0;
+
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) return html + decoder.decode();
+
+			totalBytes += value.byteLength;
+			html += decoder.decode(value, { stream: true });
+			if (totalBytes >= maxBytes || /<\/head\s*>/i.test(html)) {
+				await reader.cancel();
+				return html;
+			}
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
 
 function parseHttpUrl(value: string): URL | null {
 	let url: URL;
@@ -72,67 +181,60 @@ function parsedFeedTitle(body: string): { title: string | null } | null {
 	}
 }
 
-async function fetchTextForDiscovery(url: string): Promise<string> {
+type DiscoveryDocument = {
+	body: string;
+	url: URL;
+};
+
+async function fetchTextForDiscovery(url: string): Promise<DiscoveryDocument> {
 	const response = await fetchWithTimeout(url, { headers: DISCOVERY_HEADERS });
 	if (!response.ok) {
 		const status = response.status;
 		await response.body?.cancel();
 		throw new Error(`Fetch failed with HTTP ${status}: ${url}`);
 	}
-	return readTextWithLimit(response, MAX_DISCOVERY_BYTES);
-}
-
-const HTML_LINK_TAG_RE = /<link\b[^>]*>/gi;
-
-function discoverFeedHref(html: string, baseUrl: URL): string | null {
-	for (const tag of html.match(HTML_LINK_TAG_RE) ?? []) {
-		if (!/rel=["']?alternate["']?/i.test(tag)) continue;
-		if (!/type=["']?application\/(?:rss|atom)\+xml["']?/i.test(tag)) continue;
-		const href = tag.match(/href=["']([^"']+)["']/i)?.[1];
-		if (!href) continue;
-		try {
-			return new URL(decode(href), baseUrl).toString();
-		} catch {
-			// Skip malformed hrefs; a later link tag may still resolve.
-		}
+	const effectiveUrl = parseHttpUrl(response.url);
+	if (!effectiveUrl) {
+		await response.body?.cancel();
+		throw new Error('Fetch redirected to an invalid URL.');
 	}
-	return null;
-}
-
-function htmlTitle(html: string): string | null {
-	const raw = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1];
-	return raw ? decode(raw).trim().slice(0, 120) || null : null;
+	return {
+		body: await readTextWithLimit(response, MAX_DISCOVERY_BYTES),
+		url: effectiveUrl,
+	};
 }
 
 async function resolveRssCandidate(input: string): Promise<ResolvedSourceCandidate> {
-	const url = parseHttpUrl(input);
-	if (!url) throw new Error('Enter a valid site or feed URL (http/https).');
-	const body = await fetchTextForDiscovery(url.toString());
-	const host = url.hostname.toLowerCase().replace(/^www\./, '');
+	const requestedUrl = parseHttpUrl(input);
+	if (!requestedUrl) throw new Error('Enter a valid site or feed URL (http/https).');
+	const document = await fetchTextForDiscovery(requestedUrl.toString());
+	const host = document.url.hostname.toLowerCase().replace(/^www\./, '');
 
-	const directFeed = parsedFeedTitle(body);
+	const directFeed = parsedFeedTitle(document.body);
 	if (directFeed) {
 		return {
 			platform: 'rss',
-			handle: canonicalFeedHandle(url),
+			handle: canonicalFeedHandle(document.url),
 			name: directFeed.title ?? host,
-			siteUrl: url.origin,
+			siteUrl: document.url.origin,
 			avatarUrl: null,
 			acquisitionMode: 'web',
 		};
 	}
 
-	const feedHref = discoverFeedHref(body, url);
+	const head = await parseHtmlHead(document.body, document.url);
+	const feedHref = head.feedHref;
 	if (!feedHref) throw new Error('No RSS/Atom feed found at this URL.');
-	const feedUrl = parseHttpUrl(feedHref);
-	if (!feedUrl) throw new Error('Discovered feed URL is invalid.');
-	const feedMeta = parsedFeedTitle(await fetchTextForDiscovery(feedUrl.toString()));
+	const requestedFeedUrl = parseHttpUrl(feedHref);
+	if (!requestedFeedUrl) throw new Error('Discovered feed URL is invalid.');
+	const feedDocument = await fetchTextForDiscovery(requestedFeedUrl.toString());
+	const feedMeta = parsedFeedTitle(feedDocument.body);
 	if (!feedMeta) throw new Error('Discovered feed could not be read.');
 	return {
 		platform: 'rss',
-		handle: canonicalFeedHandle(feedUrl),
-		name: feedMeta.title ?? htmlTitle(body) ?? host,
-		siteUrl: url.origin,
+		handle: canonicalFeedHandle(feedDocument.url),
+		name: feedMeta.title ?? head.title?.slice(0, 120) ?? host,
+		siteUrl: document.url.origin,
 		avatarUrl: null,
 		acquisitionMode: 'web',
 	};
@@ -237,8 +339,10 @@ async function resolveYouTubeCandidate(env: CoreEnv, input: string): Promise<Res
 }
 
 export async function resolveSourceCandidate(env: CoreEnv, input: ResolveSourceCandidateInput): Promise<ResolvedSourceCandidate> {
-	const raw = input.input?.trim();
+	if (!isSourcePlatform(input.platform)) throw new Error('Unsupported source platform.');
+	const raw = typeof input.input === 'string' ? input.input.trim() : '';
 	if (!raw) throw new Error('Source input is required.');
+	if (raw.length > SOURCE_INPUT_MAX_LENGTH) throw new Error('Source input is too long.');
 	switch (input.platform) {
 		case 'rss':
 			return resolveRssCandidate(raw);
@@ -246,7 +350,5 @@ export async function resolveSourceCandidate(env: CoreEnv, input: ResolveSourceC
 			return resolveTwitterCandidate(raw);
 		case 'youtube':
 			return resolveYouTubeCandidate(env, raw);
-		default:
-			throw new Error(`Unsupported platform: ${String(input.platform)}`);
 	}
 }

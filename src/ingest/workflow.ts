@@ -1,15 +1,20 @@
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import {
 	hasSemanticScholarAcademicEnrichment,
+	isResourceSourceSnapshotHash,
 	needsResourcePlatformAcquisition,
+	parseResourceIdentity,
+	type ResourceSourceSnapshot,
 	resourceIdentityWithAcademic,
+	resourceSourceSnapshot,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type { ResourceForProcessing } from '@core-shared/types';
-import { loadResourceForProcessing, loadResourceShellForProcessing } from '@ingest/domain/resource-store';
+import { loadResourceForProcessing, loadResourceShellForProcessing, loadStalePendingAppResourceIds } from '@ingest/domain/resource-store';
 import { loadFeedSourcePolicy } from '@ingest/domain/source-store';
-import { syncCorpusItem } from '../ai-search';
-import { enqueueOrRestartWorkflow } from '../workflow-control';
+import { AI_SEARCH_SYNC_STEP_CONFIG, syncCorpusItem } from '../ai-search';
+import { DURABLE_WORKFLOW_RETRIES, enqueueOrRestartWorkflow } from '../workflow-control';
 import {
 	type AcquiredContent,
 	applyAcquiredContent,
@@ -19,7 +24,7 @@ import {
 	scrapeRssFeedItemArtifact,
 	scrapeSavedUrlArtifact,
 } from './acquisition';
-import { enqueueResourceTranslation, isResourceTranslationEligible } from './content-localization-workflow';
+import { enqueueResourceTranslation, loadEligibleResourceTranslationRevision } from './content-localization-workflow';
 import { classifyResource } from './domain/ai-utils';
 import { buildHackerNewsContent } from './platforms/hackernews';
 import { stagePaperEnrichment } from './platforms/paper';
@@ -36,28 +41,81 @@ import {
 } from './resource-persistence';
 
 type WorkflowOperation = 'ingest' | 'resync';
-type WorkflowPayload = { resourceId: string; operation: WorkflowOperation };
+type WorkflowPayload = { resourceId: string; operation: WorkflowOperation; sourceRevision?: string };
 
-export async function enqueueProcessing(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId), {
+const PENDING_RESOURCE_GRACE_MS = 10 * 60 * 1000;
+const PENDING_RESOURCE_RECONCILE_LIMIT = 50;
+const PENDING_RESOURCE_RECONCILE_CONCURRENCY = 5;
+const RESOURCE_TRANSLATION_ADMISSION_STEP_CONFIG = {
+	retries: DURABLE_WORKFLOW_RETRIES,
+	timeout: '30 seconds',
+} as const satisfies WorkflowStepConfig;
+
+export async function enqueueProcessing(env: CoreEnv, resourceId: string, sourceRevision?: string): Promise<string> {
+	if (sourceRevision && !isResourceSourceSnapshotHash(sourceRevision)) throw new Error('Invalid resource source revision');
+	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, storedWorkflowId(resourceId, sourceRevision), {
 		resourceId,
 		operation: 'ingest',
+		...(sourceRevision ? { sourceRevision } : {}),
+	});
+}
+
+/** Re-admits app-owned pending rows whose initial DB -> Workflow handoff was interrupted. */
+export async function reconcilePendingResourceProcessing(env: CoreEnv): Promise<void> {
+	const resourceIds = await loadStalePendingAppResourceIds(
+		env,
+		new Date(Date.now() - PENDING_RESOURCE_GRACE_MS),
+		PENDING_RESOURCE_RECONCILE_LIMIT,
+	);
+	if (!resourceIds.length) return;
+
+	let reconciled = 0;
+	let failed = 0;
+	for (let offset = 0; offset < resourceIds.length; offset += PENDING_RESOURCE_RECONCILE_CONCURRENCY) {
+		const batch = resourceIds.slice(offset, offset + PENDING_RESOURCE_RECONCILE_CONCURRENCY);
+		const results = await Promise.allSettled(batch.map((resourceId) => enqueueProcessing(env, resourceId)));
+		for (const [index, result] of results.entries()) {
+			if (result.status === 'fulfilled') {
+				reconciled++;
+				continue;
+			}
+			failed++;
+			console.error({
+				tag: 'RESOURCE_WORKFLOW',
+				event: 'pending_resource_reconciliation_failed',
+				resource_id: batch[index],
+				error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+			});
+		}
+	}
+	console.info({
+		tag: 'RESOURCE_WORKFLOW',
+		event: 'pending_resource_reconciliation_completed',
+		attempted: resourceIds.length,
+		reconciled,
+		failed,
 	});
 }
 
 export async function enqueueResourceResync(env: CoreEnv, resourceId: string): Promise<string> {
-	return enqueueOrRestartWorkflow(env.RESOURCE_PROCESSING_V2_WORKFLOW, `resource-resync-v2-${workflowIdPart(resourceId)}`, {
-		resourceId,
-		operation: 'resync',
+	// A resync is a distinct run, not a retry of the original ingest. A unique
+	// instance ID also keeps clients from observing a cached terminal status
+	// from an earlier resync of the same resource.
+	const instance = await env.RESOURCE_PROCESSING_V2_WORKFLOW.create({
+		id: `resource-resync-v2-${workflowIdPart(resourceId)}-${crypto.randomUUID()}`,
+		params: { resourceId, operation: 'resync' },
 	});
+	return instance.id;
 }
 
 function workflowIdPart(value: string): string {
 	return value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
 }
 
-function storedWorkflowId(resourceId: string): string {
-	return ['resource-v2', workflowIdPart(resourceId)].join('-');
+function storedWorkflowId(resourceId: string, sourceRevision?: string): string {
+	return sourceRevision
+		? ['resource-v3', workflowIdPart(resourceId), sourceRevision.slice(0, 32)].join('-')
+		: ['resource-v2', workflowIdPart(resourceId)].join('-');
 }
 
 async function stageResourceImageRehost(env: CoreEnv, step: WorkflowStep, resourceId: string): Promise<void> {
@@ -139,7 +197,7 @@ async function stageSavedUrlAcquisition(env: CoreEnv, step: WorkflowStep, resour
 	// explicit save, which feed policies must not veto.
 	const origin = { monitored: !!resource.source_id };
 	return readAcquiredContentArtifact(
-		await step.do('acquire-content-kind-platform-v1', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin)),
+		await step.do('acquire-content-kind-platform-v1', ACQUISITION_STEP, () => scrapeSavedUrlArtifact(sourceUrl, env, origin, resource.id)),
 	);
 }
 
@@ -235,6 +293,7 @@ async function acquireResourceForOperation(
 			return stageRssFeedAcquisition(env, step, {
 				feedUrl: source.handle,
 				articleUrl: resource.url,
+				resourceId: resource.id,
 				sourceName: source.name,
 			});
 		}
@@ -242,11 +301,36 @@ async function acquireResourceForOperation(
 	return stageSavedUrlAcquisition(env, step, resource);
 }
 
+function requireProcessingResourceIdentity(resource: ResourceForProcessing) {
+	const identity = parseResourceIdentity(resource.kind, resource.resource_platform);
+	if (identity) return identity;
+	throw new NonRetryableError(
+		`Resource ${resource.id} has invalid identity ${String(resource.kind)} / ${String(resource.resource_platform)}`,
+		'ResourceIdentityError',
+	);
+}
+
+function assertOperationCanProcessResource(resource: ResourceForProcessing, operation: WorkflowOperation): void {
+	if (operation === 'resync' && !resource.url) {
+		throw new NonRetryableError(`Resource ${resource.id} has no source URL`, 'ResourceResyncUnsupportedError');
+	}
+}
+
+function matchesExpectedSourceRevision(snapshot: ResourceSourceSnapshot, expectedRevision: string | undefined): boolean {
+	return expectedRevision === undefined || snapshot.hash === expectedRevision;
+}
+
 export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, WorkflowPayload> {
 	async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
-		const { resourceId, operation } = event.payload;
+		const { resourceId, operation, sourceRevision } = event.payload;
+		if (sourceRevision !== undefined && !isResourceSourceSnapshotHash(sourceRevision)) {
+			throw new NonRetryableError('Invalid resource source revision', 'ResourceSourceRevisionError');
+		}
+		let persistedSourceSnapshot: ResourceSourceSnapshot | null = null;
 		try {
-			return await this.runResource(resourceId, step, operation);
+			return await this.runResource(resourceId, step, operation, sourceRevision, (snapshot) => {
+				persistedSourceSnapshot = snapshot;
+			});
 		} catch (error) {
 			if (operation === 'resync') throw error;
 			// Cleanup must not throw: whatever it raises would replace `error`
@@ -261,37 +345,49 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 					resource_id: resourceId,
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 				});
-			await step
-				.do(
-					'mark-resource-failed-if-not-enriched-v1',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => markResourceEnrichmentFailed(this.env, resourceId),
-				)
-				.catch(logCleanupFailure('Failed to mark resource as failed'));
+			const failedSourceSnapshot = persistedSourceSnapshot;
+			if (failedSourceSnapshot) {
+				await step
+					.do(
+						'mark-resource-failed-for-source-snapshot-v2',
+						{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
+						() => markResourceEnrichmentFailed(this.env, resourceId, failedSourceSnapshot),
+					)
+					.catch(logCleanupFailure('Failed to mark resource as failed'));
+			}
 			throw error;
 		}
 	}
 
-	private async runResource(resourceId: string, step: WorkflowStep, operation: WorkflowOperation) {
+	private async runResource(
+		resourceId: string,
+		step: WorkflowStep,
+		operation: WorkflowOperation,
+		expectedSourceRevision: string | undefined,
+		recordPersistedSourceSnapshot: (snapshot: ResourceSourceSnapshot) => void,
+	) {
 		const initialResource = await step.do(
 			'fetch-resource-shell-kind-platform-v1',
 			{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
 			async () => loadResourceShellForProcessing(this.env, resourceId),
 		);
-		if (operation === 'resync' && !initialResource.url) {
-			throw new NonRetryableError(`Resource ${resourceId} has no source URL`, 'ResourceResyncUnsupportedError');
+		const initialSourceSnapshot = resourceSourceSnapshot(initialResource.platform_metadata);
+		recordPersistedSourceSnapshot(initialSourceSnapshot);
+		if (!matchesExpectedSourceRevision(initialSourceSnapshot, expectedSourceRevision)) {
+			return { success: true, resource_id: resourceId, operation, superseded: true };
 		}
+		assertOperationCanProcessResource(initialResource, operation);
 		const acquiredContent = await acquireResourceForOperation(this.env, step, initialResource, operation);
 		const acquiredResource = await stageTweetLinkUnfurl(step, applyAcquiredContent(initialResource, acquiredContent));
 		const paperEnrichment = await stagePaperEnrichment(this.env, step, acquiredResource);
+		const acquiredIdentity = requireProcessingResourceIdentity(acquiredResource);
 		const identity = resourceIdentityWithAcademic(
-			{ kind: acquiredResource.kind, resourcePlatform: acquiredResource.resource_platform },
+			acquiredIdentity,
 			!!paperEnrichment || hasSemanticScholarAcademicEnrichment(acquiredResource.platform_metadata),
 		);
 		const resource: ResourceForProcessing = {
 			...acquiredResource,
-			kind: identity.kind,
-			resource_platform: identity.resourcePlatform,
+			...toResourceIdentityColumns(identity),
 		};
 		const previousSnapshotHash = initialResource.platform_metadata?.sourceSnapshotHash;
 		const nextSnapshotHash = acquiredContent?.platformMetadata?.sourceSnapshotHash;
@@ -309,10 +405,8 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 				// Branch only on the persisted step result so replay sees the same
 				// decision. Let exhausted sync retries fail the resync instead of
 				// reporting success with a known index drift.
-				await step.do(
-					'sync-ai-search-unchanged-resync-index-relevance-v1',
-					{ retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' },
-					() => syncCorpusItem(this.env, resourceId),
+				await step.do('sync-ai-search-unchanged-resync-index-relevance-v1', AI_SEARCH_SYNC_STEP_CONFIG, () =>
+					syncCorpusItem(this.env, resourceId),
 				);
 			}
 			return {
@@ -340,6 +434,7 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 				() => persistResourceImageSnapshot(this.env, resourceId, resource, paperEnrichment),
 			);
 			if (!persisted) return { success: true, resource_id: resourceId, operation, superseded: true };
+			recordPersistedSourceSnapshot(resourceSourceSnapshot(resource.platform_metadata));
 			await stageResourceImageRehost(this.env, step, resourceId);
 		}
 
@@ -456,49 +551,17 @@ export class ResourceProcessingV2Workflow extends WorkflowEntrypoint<CoreEnv, Wo
 		}
 		const persistedResourceId = persistence.resourceId;
 		if (operation === 'resync') await stageResourceImageRehost(this.env, step, persistedResourceId);
-		const translationEligible = await step
-			.do(
-				'check-resource-translation-eligibility',
-				{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-				() => isResourceTranslationEligible(this.env, persistedResourceId),
-			)
-			.catch((error) => {
-				console.error({
-					tag: 'RESOURCE_TRANSLATION',
-					msg: 'Failed to inspect persisted resource for translation',
-					resource_id: persistedResourceId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-				return false;
-			});
-		if (translationEligible) {
-			await step
-				.do(
-					'enqueue-resource-translation',
-					{ retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
-					() => enqueueResourceTranslation(this.env, persistedResourceId),
-				)
-				.catch((error) =>
-					console.error({
-						tag: 'RESOURCE_TRANSLATION',
-						msg: 'Failed to enqueue resource translation',
-						resource_id: persistedResourceId,
-						error: error instanceof Error ? error.message : String(error),
-					}),
-				);
-		}
-		await step
-			.do('sync-ai-search', { retries: { limit: 5, delay: '10 seconds', backoff: 'exponential' }, timeout: '120 seconds' }, () =>
-				syncCorpusItem(this.env, persistedResourceId),
-			)
-			.catch((error) =>
-				console.error({
-					tag: 'AI_SEARCH',
-					msg: 'Failed to sync enriched resource; reindex can repair it',
-					resource_id: persistedResourceId,
-					error: error instanceof Error ? error.message : String(error),
-				}),
+		const translationSourceRevision = await step.do(
+			'load-resource-translation-revision-v1',
+			RESOURCE_TRANSLATION_ADMISSION_STEP_CONFIG,
+			() => loadEligibleResourceTranslationRevision(this.env, persistedResourceId),
+		);
+		if (translationSourceRevision) {
+			await step.do('enqueue-resource-translation', RESOURCE_TRANSLATION_ADMISSION_STEP_CONFIG, () =>
+				enqueueResourceTranslation(this.env, persistedResourceId, translationSourceRevision),
 			);
+		}
+		await step.do('sync-ai-search', AI_SEARCH_SYNC_STEP_CONFIG, () => syncCorpusItem(this.env, persistedResourceId));
 
 		console.info({ tag: 'WORKFLOW', msg: 'Completed', resource_id: persistedResourceId, table: 'resources' });
 		return {

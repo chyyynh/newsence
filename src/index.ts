@@ -1,22 +1,27 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import type { KnowledgeResolveResourcesInput, KnowledgeResourceReadInput } from '@app-domain/knowledge-contracts';
 import { AcademicMetadataBackfillV3Workflow, startAcademicMetadataBackfill } from '@ingest/academic-metadata-backfill-workflow';
 import { ResourceTranslationV2Workflow } from '@ingest/content-localization-workflow';
 import { handleRSSCron } from '@ingest/platforms/rss';
 import { handleTwitterCron } from '@ingest/platforms/twitter';
-import { RecentResourceImageBackfillV2Workflow } from '@ingest/resource-image-backfill-workflow';
 import { type ResolveSourceCandidateInput, resolveSourceCandidate } from '@ingest/source-discovery';
-import { enqueueProcessing, enqueueResourceResync, ResourceProcessingV2Workflow } from '@ingest/workflow';
-import { probeSearchIndexCutover, SearchIndexCanonicalV6RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
-import type { ReadContextItem, RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
-import { readCorpusItems, relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
+import {
+	enqueueProcessing,
+	enqueueResourceResync,
+	ResourceProcessingV2Workflow,
+	reconcilePendingResourceProcessing,
+} from '@ingest/workflow';
+import { probeSearchIndexCutover, SearchIndexGeneration5RebuildWorkflow, startSearchIndexRebuild } from './ai-search';
+import type { RelatedResourceSearchInput, ResourceSearchInput } from './corpus';
+import { relatedCorpusResourceIds, searchCorpusResourceRanks, searchCorpusResources } from './corpus';
+import { readCorpusResource, resolveCorpusResources } from './corpus-retrieval';
 import { assertResourceProcessable, isResourceEnrichmentComplete } from './ingest/domain/resource-store';
 
 export {
 	AcademicMetadataBackfillV3Workflow,
-	RecentResourceImageBackfillV2Workflow,
 	ResourceProcessingV2Workflow,
 	ResourceTranslationV2Workflow,
-	SearchIndexCanonicalV6RebuildWorkflow,
+	SearchIndexGeneration5RebuildWorkflow,
 };
 
 type MonitorHandler = (env: CoreEnv) => Promise<void>;
@@ -48,6 +53,17 @@ async function runMonitorCycle(env: CoreEnv, handler: MonitorHandler): Promise<v
 	}
 }
 
+async function runFiveMinuteCycle(env: CoreEnv): Promise<void> {
+	const results = await Promise.allSettled([handleRSSCron(env), reconcilePendingResourceProcessing(env)]);
+	const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+	if (failures.length) {
+		throw new AggregateError(
+			failures.map(({ reason }) => reason),
+			'One or more five-minute core jobs failed',
+		);
+	}
+}
+
 export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 	override fetch(request: Request): Response {
 		const url = new URL(request.url);
@@ -61,7 +77,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		// YouTube channels ride the RSS monitor: their handles are Atom feed URLs,
 		// so they are ordinary rss sources with a 30-minute poll interval.
 		if (event.cron === '*/5 * * * *') {
-			this.ctx.waitUntil(runMonitorCycle(this.env, handleRSSCron));
+			this.ctx.waitUntil(runMonitorCycle(this.env, runFiveMinuteCycle));
 		} else if (event.cron === '0 */6 * * *') {
 			this.ctx.waitUntil(runMonitorCycle(this.env, handleTwitterCron));
 		}
@@ -89,7 +105,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 
 	/** Read search-index rebuild status for operator polling. */
 	async getSearchIndexRebuildStatus(instanceId: string) {
-		const instance = await this.env.SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW.get(instanceId);
+		const instance = await this.env.SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW.get(instanceId);
 		return instance.status();
 	}
 
@@ -109,7 +125,7 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return instance.status();
 	}
 
-	/** Hybrid AI Search retrieval for the chat search-news tool. */
+	/** Hybrid AI Search retrieval for the canonical corpus search tool. */
 	searchResources(input: ResourceSearchInput) {
 		return searchCorpusResources(this.env, input);
 	}
@@ -130,9 +146,14 @@ export default class CoreWorker extends WorkerEntrypoint<CoreEnv> {
 		return instance.status();
 	}
 
-	/** Read collection/resource/url entries from the core corpus. */
-	readCorpusItems(items: ReadContextItem[], userId: string) {
-		return readCorpusItems(this.env, items, userId);
+	/** Bounded, revision-pinned product resource chunk. */
+	readCorpusResource(input: KnowledgeResourceReadInput) {
+		return readCorpusResource(this.env, input);
+	}
+
+	/** Authoritative resource references and titles for product context. */
+	resolveCorpusResources(input: KnowledgeResolveResourcesInput) {
+		return resolveCorpusResources(this.env, input);
 	}
 
 	/** Resolve user input (site/feed/channel URL or handle) into a monitorable source candidate (#237). */

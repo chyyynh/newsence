@@ -1,10 +1,12 @@
 import {
 	hasSemanticScholarAcademicEnrichment,
+	isContentResourceIdentity,
 	isContentResourceKind,
 	isResourcePlatform,
 	parseResourceIdentity,
 	resourceIdentityForDetectedPlatform,
 	resourceIdentityWithAcademic,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import type { NormalizedContent, PdfExtractionMetadata, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { withPdfExtractionMetadata } from '@core-shared/types';
@@ -43,14 +45,17 @@ export function applyAcquiredContent(resource: ResourceForProcessing, acquired?:
 		);
 	}
 	const hasAcademicEnrichment = hasSemanticScholarAcademicEnrichment(platformMetadata);
+	const explicitIdentity = parseResourceIdentity(acquired.kind, acquired.resourcePlatform);
+	if (!explicitIdentity || !isContentResourceIdentity(explicitIdentity)) {
+		throw new Error(`Acquired content has invalid identity ${String(acquired.kind)} / ${String(acquired.resourcePlatform)}`);
+	}
 	const acquiredPlatform = acquired.resourcePlatform ?? detectedPlatform;
 	const identity = acquiredPlatform
 		? resourceIdentityForDetectedPlatform(acquiredPlatform, hasAcademicEnrichment)
-		: resourceIdentityWithAcademic({ kind: acquired.kind, resourcePlatform: null }, hasAcademicEnrichment);
+		: resourceIdentityWithAcademic(explicitIdentity, hasAcademicEnrichment);
 	return {
 		...resource,
-		kind: identity.kind,
-		resource_platform: identity.resourcePlatform,
+		...toResourceIdentityColumns(identity),
 		title: acquired.title.trim(),
 		summary: acquired.metadata.description,
 		content: acquired.markdown,
@@ -123,7 +128,7 @@ async function sanitizeAcquiredContent(acquired: AcquiredContent): Promise<Acqui
  */
 export type AcquisitionOrigin = { monitored: boolean };
 
-async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<AcquiredContent> {
+async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrigin, resourceId: string): Promise<AcquiredContent> {
 	const validatedUrl = validateAcquisitionUrl(url);
 	const detected = detectResourceUrl(validatedUrl);
 	if (detected) {
@@ -133,17 +138,22 @@ async function scrapeSavedUrl(url: string, env: CoreEnv, origin: AcquisitionOrig
 			case 'twitter':
 				return sanitizeAcquiredContent(await scrapeTweet(detected.platformId, env.KAITO_API_KEY));
 			case 'hackernews':
-				return sanitizeAcquiredContent(await scrapeHackerNews(detected.platformId, env));
+				return sanitizeAcquiredContent(await scrapeHackerNews(detected.platformId, env, resourceId));
 			default:
 				detected.resourcePlatform satisfies never;
 		}
 	}
 
-	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env));
+	return sanitizeAcquiredContent(await acquireWebResource(validatedUrl, env, resourceId));
 }
 
-export async function scrapeSavedUrlArtifact(url: string, env: CoreEnv, origin: AcquisitionOrigin): Promise<ReadableStream<Uint8Array>> {
-	const acquired = await scrapeSavedUrl(url, env, origin);
+export async function scrapeSavedUrlArtifact(
+	url: string,
+	env: CoreEnv,
+	origin: AcquisitionOrigin,
+	resourceId: string,
+): Promise<ReadableStream<Uint8Array>> {
+	const acquired = await scrapeSavedUrl(url, env, origin, resourceId);
 	return acquiredContentArtifact(acquired);
 }
 

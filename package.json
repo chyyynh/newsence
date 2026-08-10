@@ -2,6 +2,7 @@
 	"name": "newsence-core",
 	"version": "0.0.0",
 	"private": true,
+	"packageManager": "pnpm@11.9.0",
 	"type": "module",
 	"scripts": {
 		"deploy": "wrangler deploy",
@@ -12,8 +13,8 @@
 		"check:search-rebuild": "node scripts/check-search-rebuild.mjs",
 		"check:search-rollout": "node scripts/check-search-rollout.mjs",
 		"check:startup": "wrangler check startup",
-		"dev": "wrangler dev --test-scheduled",
-		"start": "wrangler dev --test-scheduled",
+		"dev": "wrangler dev --test-scheduled --var AI_GATEWAY_ENVIRONMENT:development",
+		"start": "wrangler dev --test-scheduled --var AI_GATEWAY_ENVIRONMENT:development",
 		"cf-typegen": "wrangler types --env-interface BaseCoreEnv",
 		"typecheck": "pnpm cf-typegen && pnpm check:db-schema && pnpm check:resource-identity && pnpm check:resource-contract && tsc --noEmit",
 		"typecheck:types": "wrangler types --check --env-interface BaseCoreEnv",
@@ -35,6 +36,6 @@
 		"@types/node": "^22.19.7",
 		"@types/pg": "^8.20.0",
 		"typescript": "^5.9.3",
-		"wrangler": "^4.113.0"
+		"wrangler": "^4.120.0"
 	}
 }

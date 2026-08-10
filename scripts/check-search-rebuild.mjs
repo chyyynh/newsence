@@ -3,11 +3,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
-const WORKFLOW_NAME = 'newsence-search-index-canonical-v6-rebuild';
-const DEFAULT_INSTANCE_ID = 'search-index-rebuild-canonical-4-kind-platform-canonical-v1';
+const WORKFLOW_NAME = 'newsence-search-index-generation-5-rebuild';
+const DEFAULT_INSTANCE_ID = 'search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1';
 const STATE_INDEX_NAME = 'public-corpus-v6';
-const GENERATION = 4;
-const GENERATION_KEY = 'canonical-4-kind-platform';
+const GENERATION = 5;
+const GENERATION_KEY = 'canonical-5-blog-forum-kind';
 const INSTANCE_ID = process.env.SEARCH_REBUILD_INSTANCE_ID?.trim() || DEFAULT_INSTANCE_ID;
 const ALLOW_IN_PROGRESS = process.argv.includes('--allow-in-progress');
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -69,7 +69,7 @@ assert.ok(NON_FAILURE_STATUSES.has(status), `Workflow entered terminal failure s
 if (!ALLOW_IN_PROGRESS) {
 	assert.equal(status, 'complete', 'Workflow terminal completion');
 	assert.equal(workflowError, null, 'completed Workflow error');
-	assert.match(lastSuccessfulStep, /^mark-canonical-v6-search-index-generation-ready-\d+$/, 'canonical v6 final ready step');
+	assert.match(lastSuccessfulStep, /^mark-generation-5-search-index-ready-\d+$/, 'generation 5 final ready step');
 }
 
 const client = new pg.Client({ connectionString: databaseUrl() });

@@ -24,7 +24,10 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
 		return await fetch(url, { ...options, signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
 	} catch (err) {
 		if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-			throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+			// URLs may contain API keys, signed tokens, private resource paths, or
+			// user-authored queries. Callers can add a safe resource identifier when
+			// they need context; the shared transport must never echo credentials.
+			throw new Error(`Request timed out after ${timeoutMs}ms`);
 		}
 		throw err;
 	}

@@ -8,10 +8,12 @@ history and the closed issues, not in the current operator surface.
 
 | Role | Instance or resource | Durable state | Generation |
 | --- | --- | --- | --- |
-| Serving binding | `AI_SEARCH → newsence-corpus-v6` | `public-corpus-v6` | `4 / canonical-4-kind-platform` |
-| Rebuild binding | `SEARCH_INDEX_CANONICAL_REBUILD_WORKFLOW` | — | — |
-| Physical Workflow | `newsence-search-index-canonical-v6-rebuild` | — | — |
-| Stable runner | `search-index-rebuild-canonical-4-kind-platform-canonical-v1` | — | — |
+| Serving binding | `AI_SEARCH → newsence-corpus-v6` | `public-corpus-v6` | `5 / canonical-5-blog-forum-kind` |
+| Rebuild binding | `SEARCH_INDEX_GENERATION_5_REBUILD_WORKFLOW` | — | — |
+| Physical Workflow | `newsence-search-index-generation-5-rebuild` | — | — |
+| Entrypoint class | `SearchIndexGeneration5RebuildWorkflow` | — | — |
+| Stable runner | `search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1` | — | — |
+| Durable step namespace | `generation-5` | — | — |
 
 The v6 instance owns exactly five custom metadata fields:
 `effective_at`, `source_id`, `category`, `kind`, and `resource_platform`.
@@ -19,8 +21,8 @@ Canonical null platforms are stored as the reserved text sentinel `none`.
 
 Readiness compares PostgreSQL and AI Search for every searchable identity pair:
 
-- `document / none`
-- `document / hackernews`
+- `blog / none`
+- `forum / hackernews`
 - `post / twitter`
 - `video / youtube`
 - `paper / none`
@@ -41,9 +43,16 @@ For an incompatible rebuild graph revision, create all four together:
 3. a new exported `WorkflowEntrypoint` class;
 4. a new source-controlled runner ID.
 
-Never trigger historical generation-3, shadow-rollout, or one-shot repair
-Workflow resources. Local source cleanup does not delete their remote execution
-history.
+Never trigger historical generation-3/generation-4, shadow-rollout, or one-shot
+repair Workflow resources. Local source cleanup does not delete their remote
+execution history.
+
+## Database prerequisite
+
+Generation 5 serves only the current canonical `blog`/`forum` identity matrix.
+The completed `document` cutover and its one-shot SQL live in git history. Do
+not run this rebuild against a database that fails the current schema and
+resource-contract gates.
 
 ## Bootstrap or rebuild
 
@@ -60,7 +69,8 @@ pnpm -C workers/core-worker exec wrangler ai-search create \
   --hybrid-search
 ```
 
-Run the Core gates and deploy a compatible Worker before starting a rebuild:
+Run the Core gates before starting a rebuild. A fresh environment needs the
+current schema and a schema-compatible Worker first:
 
 ```sh
 pnpm -C workers/core-worker typecheck
@@ -73,9 +83,9 @@ operator trigger is:
 
 ```sh
 pnpm -C workers/core-worker exec wrangler workflows trigger \
-  newsence-search-index-canonical-v6-rebuild \
+  newsence-search-index-generation-5-rebuild \
   '{}' \
-  --id search-index-rebuild-canonical-4-kind-platform-canonical-v1
+  --id search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 ```
 
 Inspect that exact runner before an explicit trigger. Do not start a second
@@ -84,8 +94,12 @@ source-compatible runner; a graph change requires the isolation sequence above.
 
 The Workflow configures the instance, validates the identity matrix, uploads
 the full corpus plus a start-time delta, prunes stale owned items, repairs
-retryable terminal items, and marks generation 4 ready only after PostgreSQL and
-AI Search converge.
+retryable terminal items, and marks generation 5 ready only after PostgreSQL and
+AI Search converge. Terminal-item repair is per item: a native
+`items.get(id).sync()` re-index when the stored document is current, or a
+re-upload when the DB row is newer than the stored document. The binding's
+`sync()` returns null at runtime despite its declared type — observed state
+comes from a follow-up `info()`.
 
 ## Verify
 
@@ -94,11 +108,11 @@ checks:
 
 ```sh
 pnpm -C workers/core-worker exec node \
-  --env-file="$PWD/web-tanstack/.env.local" \
+  --env-file="$PWD/web-tanstack/.env" \
   scripts/check-search-rebuild.mjs
 
 pnpm -C workers/core-worker exec node \
-  --env-file="$PWD/web-tanstack/.env.local" \
+  --env-file="$PWD/web-tanstack/.env" \
   scripts/check-search-rollout.mjs
 ```
 
@@ -109,7 +123,7 @@ credentials.
 
 The strict rollout check requires:
 
-- durable generation 4 status `ready`;
+- durable generation 5 status `ready`;
 - zero queued, running, outdated, error, and skipped owned items;
 - completed item count equal to the enriched searchable corpus;
 - canonical resource identity constraints;
@@ -124,7 +138,7 @@ durable ready row.
 If a rebuild fails:
 
 1. inspect only the active canonical runner and its failed step;
-2. leave the serving instance and database schema unchanged;
+2. leave the serving instance and current database schema intact;
 3. restart the same runner only for a transient, source-compatible failure;
 4. deploy a newly isolated physical Workflow for any graph change;
 5. require both verification checks and the fresh cutover probe again.

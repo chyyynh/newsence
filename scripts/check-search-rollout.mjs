@@ -3,12 +3,12 @@ import pg from 'pg';
 
 const INDEX_NAME = 'newsence-corpus-v6';
 const STATE_INDEX_NAME = 'public-corpus-v6';
-const GENERATION = 4;
-const GENERATION_KEY = 'canonical-4-kind-platform';
+const GENERATION = 5;
+const GENERATION_KEY = 'canonical-5-blog-forum-kind';
 const ALLOW_IN_PROGRESS = process.argv.includes('--allow-in-progress');
 const CONTENT_IDENTITIES = [
-	{ kind: 'document', resourcePlatform: null },
-	{ kind: 'document', resourcePlatform: 'hackernews' },
+	{ kind: 'blog', resourcePlatform: null },
+	{ kind: 'forum', resourcePlatform: 'hackernews' },
 	{ kind: 'post', resourcePlatform: 'twitter' },
 	{ kind: 'video', resourcePlatform: 'youtube' },
 	{ kind: 'paper', resourcePlatform: null },
@@ -147,7 +147,8 @@ try {
 		  WHERE scope = 'corpus'
 		    AND enrichment_status = 'enriched'
 		    AND (
-		      (kind = 'document' AND (resource_platform IS NULL OR resource_platform = 'hackernews'))
+		      (kind = 'blog' AND resource_platform IS NULL)
+		      OR (kind = 'forum' AND resource_platform = 'hackernews')
 		      OR (kind = 'post' AND resource_platform = 'twitter')
 		      OR (kind = 'video' AND resource_platform = 'youtube')
 		      OR (kind = 'paper' AND (resource_platform IS NULL OR resource_platform = 'hackernews'))
@@ -159,7 +160,7 @@ try {
 		`SELECT
 		   COUNT(*) FILTER (WHERE kind IS NULL)::int AS null_kind,
 		   COUNT(*) FILTER (
-		     WHERE kind NOT IN ('document', 'post', 'video', 'paper', 'image', 'file')
+		     WHERE kind NOT IN ('blog', 'forum', 'post', 'video', 'paper', 'image', 'file')
 		   )::int AS invalid_kind,
 		   COUNT(*) FILTER (
 		     WHERE resource_platform IS NOT NULL
@@ -167,8 +168,8 @@ try {
 		   )::int AS invalid_platform,
 		   COUNT(*) FILTER (
 		     WHERE NOT ((
-		       (kind = 'document' AND resource_platform IS NULL)
-		       OR (kind = 'document' AND resource_platform = 'hackernews')
+		       (kind = 'blog' AND resource_platform IS NULL)
+		       OR (kind = 'forum' AND resource_platform = 'hackernews')
 		       OR (kind = 'post' AND resource_platform = 'twitter')
 		       OR (kind = 'video' AND resource_platform = 'youtube')
 		       OR (kind = 'paper' AND resource_platform IS NULL)

@@ -2,7 +2,10 @@ import {
 	hasSemanticScholarAcademicEnrichment,
 	isIncomingResourceSnapshotSuperseded,
 	parseResourceIdentity,
+	type ResourceSourceSnapshot,
 	resourceIdentityWithAcademic,
+	resourceSourceSnapshot,
+	toResourceIdentityColumns,
 } from '@core-shared/resource-types';
 import {
 	type PaperMetadata,
@@ -15,7 +18,7 @@ import { type CoreDb, withCoreDb, withCoreTx } from '@db/client';
 import { resources } from '@db/schema';
 import { toStoredResourceEntities } from '@entities/normalize';
 import { updateResourceAfterProcessing } from '@ingest/domain/resource-store';
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { type PdfExtractionMetadata, pdfExtractionMetadata } from './acquisition';
 import type { ProcessorResult } from './domain/ai-utils';
 import type { PdfTextArtifact } from './platforms/pdf';
@@ -185,7 +188,11 @@ function mergeLockedResourceState(
 	}
 	const paperEnrichment = newestAcademicEnrichment(incomingPaperEnrichment, academicEnrichmentFrom(lockedResource.platform_metadata));
 	let merged = mergeLockedPlatformMetadata(resource, lockedResource.platform_metadata);
-	if (lockedIdentity?.kind === 'paper' && merged.kind === 'document' && lockedIdentity.resourcePlatform === merged.resource_platform) {
+	if (
+		lockedIdentity.kind === 'paper' &&
+		(merged.kind === 'blog' || merged.kind === 'forum') &&
+		lockedIdentity.resourcePlatform === merged.resource_platform
+	) {
 		merged = { ...merged, kind: 'paper' };
 	}
 	if (!merged.published_date && lockedResource.published_date) {
@@ -225,9 +232,13 @@ function withAcademicPublishedDate(resource: ResourceForProcessing, paperEnrichm
 }
 
 function withAcademicIdentity(resource: ResourceForProcessing, paperEnrichment?: PaperMetadata | null): ResourceForProcessing {
-	const identity = resourceIdentityWithAcademic({ kind: resource.kind, resourcePlatform: resource.resource_platform }, !!paperEnrichment);
+	const persistedIdentity = parseResourceIdentity(resource.kind, resource.resource_platform);
+	if (!persistedIdentity) {
+		throw new Error(`Resource ${resource.id} has invalid identity ${String(resource.kind)} / ${String(resource.resource_platform)}`);
+	}
+	const identity = resourceIdentityWithAcademic(persistedIdentity, !!paperEnrichment);
 	if (identity.kind === resource.kind && identity.resourcePlatform === resource.resource_platform) return resource;
-	return { ...resource, kind: identity.kind, resource_platform: identity.resourcePlatform };
+	return { ...resource, ...toResourceIdentityColumns(identity) };
 }
 
 function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResourceUpdateInput) {
@@ -257,22 +268,42 @@ function buildResourceUpdate(resource: ResourceForProcessing, input: BuildResour
 	};
 }
 
-export async function markResourceEnrichmentFailed(env: CoreEnv, resourceId: string): Promise<boolean> {
+export async function markResourceEnrichmentFailed(
+	env: CoreEnv,
+	resourceId: string,
+	expectedSnapshot: ResourceSourceSnapshot,
+): Promise<boolean> {
 	return withCoreDb(env, async (db) => {
-		const updated = await db
-			.update(resources)
-			.set({
-				enrichmentStatus: 'failed',
-				// Counts consecutive failures so the monitors back off and eventually stop
-				// re-enqueuing a URL that never resolves.
-				enrichmentAttempts: sql`${resources.enrichmentAttempts} + 1`,
-				updatedAt: sql`NOW()`,
-			})
-			.where(and(eq(resources.id, resourceId), ne(resources.enrichmentStatus, 'enriched')))
-			.returning({ id: resources.id });
-		if (updated.length) return true;
-		const existing = await db.select({ id: resources.id }).from(resources).where(eq(resources.id, resourceId)).limit(1);
+		const updated = await db.execute(sql`
+			UPDATE resources
+			SET enrichment_status = 'failed',
+			    -- Counts consecutive failures so monitors back off and eventually stop
+			    -- re-enqueuing a URL that never resolves.
+			    enrichment_attempts = enrichment_attempts + 1,
+			    updated_at = NOW()
+			WHERE id = ${resourceId}::uuid
+			  AND enrichment_status <> 'enriched'
+			  AND NULLIF(BTRIM(platform_metadata->>'sourceSnapshotHash'), '') IS NOT DISTINCT FROM ${expectedSnapshot.hash}
+			  AND NULLIF(BTRIM(platform_metadata->>'fetchedAt'), '') IS NOT DISTINCT FROM ${expectedSnapshot.fetchedAt}
+			RETURNING id
+		`);
+		if (updated.rows.length) return true;
+		const existing = await db
+			.select({ enrichmentStatus: resources.enrichmentStatus, id: resources.id, platformMetadata: resources.platformMetadata })
+			.from(resources)
+			.where(eq(resources.id, resourceId))
+			.limit(1);
 		if (!existing.length) throw new Error(`Failed to mark resource ${resourceId} as failed: not found`);
+		if (existing[0]?.enrichmentStatus !== 'enriched') {
+			console.info({
+				tag: 'RESOURCE_PERSIST',
+				event: 'superseded_resource_failure_skipped',
+				resource_id: resourceId,
+				expected_snapshot: expectedSnapshot,
+				current_snapshot: resourceSourceSnapshot(existing[0]?.platformMetadata),
+			});
+			return false;
+		}
 		console.info({
 			tag: 'RESOURCE_PERSIST',
 			event: 'enriched_resource_failure_preserved',

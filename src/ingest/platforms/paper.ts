@@ -177,15 +177,13 @@ function authorNames(authors: S2Author[] | null | undefined): string[] {
 function normalizeReferences(references: S2Ref[] | null | undefined): PaperReference[] {
 	if (!references) return [];
 	return references.map((ref) => {
-		const authors = authorNames(ref.authors);
 		return {
 			paperId: ref.paperId ?? undefined,
 			doi: ref.externalIds?.DOI?.toLowerCase(),
 			url: normalizeHttpsUrl(ref.url),
 			title: ref.title ?? undefined,
 			year: ref.year ?? undefined,
-			authors,
-			author: authors[0],
+			authors: authorNames(ref.authors),
 		};
 	});
 }
