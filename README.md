@@ -138,9 +138,11 @@ The HTTP surface only exposes `GET /health`. App/chat integrations use Cloudflar
 
 ## Hosted MCP
 
-The newsence app exposes a hosted [MCP](https://modelcontextprotocol.io)
-endpoint at `https://www.newsence.app/api/mcp`. The retired local CLI/MCP
-package is not part of this Worker.
+The newsence app exposes an anonymous, read-only hosted
+[MCP](https://modelcontextprotocol.io) endpoint at
+`https://www.newsence.app/api/mcp`. It supports public corpus search and
+bounded resource reads. The retired local CLI/MCP package is not part of this
+Worker.
 
 ## Architecture
 
