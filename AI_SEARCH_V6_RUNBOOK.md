@@ -103,25 +103,15 @@ comes from a follow-up `info()`.
 
 ## Verify
 
-Inspect the exact Workflow instance with Wrangler, then load the direct database
-environment without printing it and run the authoritative rollout check:
+Inspect the exact Workflow instance with Wrangler:
 
 ```sh
 pnpm -C workers/core-worker exec wrangler workflows instances describe \
   newsence-search-index-generation-5-rebuild \
   search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
-
-pnpm -C workers/core-worker exec node \
-  --env-file="$PWD/web-tanstack/.env" \
-  scripts/check-search-rollout.mjs
 ```
 
-`check-search-rollout.mjs` requires explicit `CLOUDFLARE_ACCOUNT_ID` and
-`CLOUDFLARE_AISEARCH_API_TOKEN` variables. Use a dedicated token with AI Search
-Edit and Run permissions. The checker does not reuse Wrangler OAuth
-credentials.
-
-The strict rollout check requires:
+A completed Workflow has already verified:
 
 - durable generation 5 status `ready`;
 - zero queued, running, outdated, error, and skipped owned items;
@@ -141,8 +131,7 @@ If a rebuild fails:
 2. leave the serving instance and current database schema intact;
 3. restart the same runner only for a transient, source-compatible failure;
 4. deploy a newly isolated physical Workflow for any graph change;
-5. require the native Workflow inspection, rollout check, and fresh cutover
-   probe again.
+5. require the native Workflow inspection and fresh cutover probe again.
 
 Do not revive the removed #251 single-item or terminal-repair tooling. The
 canonical rebuild owns current retry, stale-item pruning, convergence, and
