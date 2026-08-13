@@ -214,11 +214,15 @@ pnpm exec wrangler workflows trigger \
   '{}' \
   --id search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 
-pnpm check:search-rebuild
+pnpm exec wrangler workflows instances describe \
+  newsence-search-index-generation-5-rebuild \
+  search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 pnpm check:search-rollout
 ```
 
-`check:search-rollout` talks directly to the AI Search REST API and deliberately
+Wrangler's native instance description is the operator view of Workflow status,
+steps, retries, and errors. `check:search-rollout` is the authoritative outcome
+check; it talks directly to the AI Search REST API and deliberately
 does not reuse Wrangler OAuth credentials. Set `CLOUDFLARE_ACCOUNT_ID` and a
 dedicated `CLOUDFLARE_AISEARCH_API_TOKEN` with `AI Search:Edit` and
 `AI Search:Run` permissions in the operator environment before running it.

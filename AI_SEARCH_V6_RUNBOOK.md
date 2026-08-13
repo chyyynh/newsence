@@ -52,7 +52,7 @@ execution history.
 Generation 5 serves only the current canonical `blog`/`forum` identity matrix.
 The completed `document` cutover and its one-shot SQL live in git history. Do
 not run this rebuild against a database that fails the current schema and
-resource-contract gates.
+resource-identity gates.
 
 ## Bootstrap or rebuild
 
@@ -103,13 +103,13 @@ comes from a follow-up `info()`.
 
 ## Verify
 
-Load the direct database environment without printing it, then run both active
-checks:
+Inspect the exact Workflow instance with Wrangler, then load the direct database
+environment without printing it and run the authoritative rollout check:
 
 ```sh
-pnpm -C workers/core-worker exec node \
-  --env-file="$PWD/web-tanstack/.env" \
-  scripts/check-search-rebuild.mjs
+pnpm -C workers/core-worker exec wrangler workflows instances describe \
+  newsence-search-index-generation-5-rebuild \
+  search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 
 pnpm -C workers/core-worker exec node \
   --env-file="$PWD/web-tanstack/.env" \
@@ -141,7 +141,8 @@ If a rebuild fails:
 2. leave the serving instance and current database schema intact;
 3. restart the same runner only for a transient, source-compatible failure;
 4. deploy a newly isolated physical Workflow for any graph change;
-5. require both verification checks and the fresh cutover probe again.
+5. require the native Workflow inspection, rollout check, and fresh cutover
+   probe again.
 
 Do not revive the removed #251 single-item or terminal-repair tooling. The
 canonical rebuild owns current retry, stale-item pruning, convergence, and
