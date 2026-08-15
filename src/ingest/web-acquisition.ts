@@ -3,7 +3,6 @@ import { fetchWithTimeout, readBytesWithLimit, readTextWithLimit, WEB_FETCH_USER
 import type { NormalizedContent, PdfExtractionMetadata } from '@core-shared/types';
 import { normalizePreviewImageUrl } from '@core-shared/url';
 import { addTransformations, extractFromHtml } from '@extractus/article-extractor';
-import { arxivHtmlUrl } from './platforms/paper';
 import { type PdfTextArtifact, parsePdfBytes } from './platforms/pdf';
 
 export const PDF_MIME = 'application/pdf';
@@ -186,43 +185,18 @@ async function acquireHtmlArticle(env: CoreEnv, html: string, url: string, resou
 	};
 }
 
-function articleRequestInit(): RequestInit {
-	return {
-		headers: {
-			'User-Agent': WEB_FETCH_USER_AGENT,
-			Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.5',
-			'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
-		},
-	};
-}
-
-// The LaTeXML rendering is an upgrade, never a requirement: arXiv answers 200
-// for papers it has not rendered, and a thin or unparseable page must not turn
-// a resource that the abs page would have acquired into a failed one. Any
-// problem here falls through to the caller's original URL.
-async function tryAcquireArxivHtml(htmlUrl: string, env: CoreEnv, resourceId?: string): Promise<AcquiredWebContent | null> {
-	try {
-		const response = await fetchWithTimeout(htmlUrl, articleRequestInit(), GENERIC_FETCH_TIMEOUT_MS);
-		const finalUrl = response.url.trim();
-		if (!response.ok || !finalUrl || !new URL(finalUrl).pathname.startsWith('/html/')) {
-			await response.body?.cancel();
-			return null;
-		}
-		const html = await readTextWithLimit(response, GENERIC_HTML_MAX_BYTES);
-		return await acquireHtmlArticle(env, html, finalUrl, resourceId);
-	} catch {
-		return null;
-	}
-}
-
 export async function acquireWebResource(url: string, env: CoreEnv, resourceId?: string): Promise<AcquiredWebContent> {
-	const htmlUrl = arxivHtmlUrl(url);
-	if (htmlUrl && htmlUrl !== url) {
-		const rendered = await tryAcquireArxivHtml(htmlUrl, env, resourceId);
-		if (rendered) return rendered;
-	}
-
-	const response = await fetchWithTimeout(url, articleRequestInit(), GENERIC_FETCH_TIMEOUT_MS);
+	const response = await fetchWithTimeout(
+		url,
+		{
+			headers: {
+				'User-Agent': WEB_FETCH_USER_AGENT,
+				Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.5',
+				'Accept-Language': 'en-US,en;q=0.9,zh-TW;q=0.8,zh;q=0.7',
+			},
+		},
+		GENERIC_FETCH_TIMEOUT_MS,
+	);
 	if (!response.ok) {
 		await response.body?.cancel();
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
