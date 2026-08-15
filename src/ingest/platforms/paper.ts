@@ -127,6 +127,17 @@ export function isExplicitPaperUrl(url: string | null | undefined): boolean {
 	return detectPaperId(url) !== null;
 }
 
+/**
+ * arXiv's LaTeXML rendering of a paper, when the URL identifies one. An abs
+ * page carries only the abstract; the HTML rendering carries the sectioned
+ * body and its bracketed citation markers, so acquisition prefers it and
+ * falls back when arXiv has not published one (papers before late 2023).
+ */
+export function arxivHtmlUrl(url: string | null | undefined): string | null {
+	const id = detectPaperId(url);
+	return id?.kind === 'arxiv' ? `https://arxiv.org/html/${id.versionedValue}` : null;
+}
+
 async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (apiKey) headers['x-api-key'] = apiKey;
