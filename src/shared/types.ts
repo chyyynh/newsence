@@ -72,7 +72,7 @@ export interface YouTubeChapter {
 	endTime?: number;
 }
 
-export interface YouTubeHighlight {
+interface YouTubeHighlight {
 	title: string;
 	summary: string;
 	startTime: number;
@@ -182,7 +182,7 @@ export interface HackerNewsMetadata {
 	storyUrl?: string | null;
 }
 
-export interface ResourceRepresentationMetadata {
+interface ResourceRepresentationMetadata {
 	fileName: string;
 	fileSize: number;
 }
@@ -216,7 +216,7 @@ export interface PaperMetadata {
 	referencesTruncated: boolean;
 }
 
-export interface PlatformEnrichments {
+interface PlatformEnrichments {
 	academic?: PaperMetadata | null;
 	links?: string[];
 }

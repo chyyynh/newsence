@@ -60,7 +60,7 @@ type PaperEnrichmentCandidate = {
 	hasExistingAcademic?: boolean;
 };
 
-export type PaperEnrichmentAttempt = {
+type PaperEnrichmentAttempt = {
 	metadata: PaperMetadata | null;
 	outcome: 'resolved' | 'preserved' | 'not_found' | 'failed' | 'not_applicable';
 };
@@ -198,7 +198,7 @@ async function enrichS2FromTitle(title: string, apiKey?: string): Promise<PaperM
  * matter, and failing that from its title, which is resolved separately since
  * it costs a request.
  */
-export function detectPaperIdentity(input: { url?: string | null; text?: string | null }): PaperId | null {
+function detectPaperIdentity(input: { url?: string | null; text?: string | null }): PaperId | null {
 	const fromUrl = detectPaperId(input.url);
 	if (fromUrl) return fromUrl;
 	const head = input.text?.slice(0, IDENTIFIER_SCAN_CHARS);

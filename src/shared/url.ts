@@ -133,7 +133,7 @@ export function extractHackerNewsId(url: string): string | null {
 	return parsed.searchParams.get('id')?.match(/^\d+$/)?.[0] ?? null;
 }
 
-export type DetectedResourceUrl = Readonly<{
+type DetectedResourceUrl = Readonly<{
 	resourcePlatform: Exclude<ResourcePlatform, null>;
 	platformId: string;
 }>;
