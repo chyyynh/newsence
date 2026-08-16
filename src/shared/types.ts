@@ -230,7 +230,7 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-export interface PlatformMetadataDataByResourcePlatform {
+interface PlatformMetadataDataByResourcePlatform {
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;

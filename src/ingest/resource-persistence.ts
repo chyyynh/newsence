@@ -55,7 +55,7 @@ type LockedResourceState = {
 	scraped_date: Date | string | null;
 };
 
-export type ResourcePersistenceOutcome = {
+type ResourcePersistenceOutcome = {
 	/**
 	 * False only when compare-and-set protection rejected a superseded workflow
 	 * snapshot. A current no-op still counts as persisted.

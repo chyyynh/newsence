@@ -9,7 +9,7 @@ import { decode } from 'html-entities';
 
 export type ResolveSourceCandidateInput = { platform: SourcePlatform; input: string };
 
-export type ResolvedSourceCandidate = {
+type ResolvedSourceCandidate = {
 	platform: SourcePlatform;
 	handle: string;
 	name: string;
@@ -33,7 +33,7 @@ const DISCOVERY_HEADERS = {
 	Accept: 'application/rss+xml, application/atom+xml, application/feed+json, text/html, application/xml, text/xml, */*',
 };
 
-export type HtmlHead = {
+type HtmlHead = {
 	title: string | null;
 	feedHref: string | null;
 	meta: ReadonlyMap<string, string>;

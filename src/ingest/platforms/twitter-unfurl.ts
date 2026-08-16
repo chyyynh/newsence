@@ -18,7 +18,7 @@ const UNFURL_HEADERS = {
 const OG_IMAGE_KEYS = ['og:image', 'og:image:secure_url', 'og:image:url', 'twitter:image', 'twitter:image:src'];
 const OG_TITLE_KEYS = ['og:title', 'twitter:title'];
 
-export type TweetLinkUnfurl = { externalOgImage: string; externalTitle: string | null };
+type TweetLinkUnfurl = { externalOgImage: string; externalTitle: string | null };
 
 /**
  * The linked URL still missing a card image, or null when there is nothing to

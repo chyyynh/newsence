@@ -97,7 +97,7 @@ export function isResourcePlatform(value: unknown): value is ResourcePlatform {
 	return value === null || (typeof value === 'string' && (RESOURCE_PLATFORMS as readonly string[]).includes(value));
 }
 
-export function isResourceIdentity(identity: { kind: unknown; resourcePlatform: unknown }): identity is ResourceIdentity {
+function isResourceIdentity(identity: { kind: unknown; resourcePlatform: unknown }): identity is ResourceIdentity {
 	if (!isResourceKind(identity.kind) || !isResourcePlatform(identity.resourcePlatform)) return false;
 	const validPlatforms: readonly ResourcePlatform[] = VALID_KIND_PLATFORMS[identity.kind];
 	return validPlatforms.includes(identity.resourcePlatform);
