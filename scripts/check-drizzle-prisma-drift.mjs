@@ -165,6 +165,10 @@ const prismaTables = parsePrismaModels(prismaSource);
 const drizzleTables = parseDrizzleTables(drizzleSource);
 const errors = [];
 
+if (/^(?!\s*--)[^\r\n]*\bDROP\s+(?:TABLE|COLUMN)\b/im.test(manualIndexesSource)) {
+	errors.push('manual-indexes.sql must not drop tables or columns; use an explicit cutover');
+}
+
 const accountKinds = parseStringArray(systemIdentitiesSource, 'USER_ACCOUNT_KINDS');
 const accountKindConstraint = manualIndexesSource.match(/ADD CONSTRAINT user_account_kind_check\s+CHECK \(account_kind IN \(([^)]+)\)\);/);
 const constrainedAccountKinds = accountKindConstraint

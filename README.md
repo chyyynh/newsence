@@ -138,9 +138,11 @@ The HTTP surface only exposes `GET /health`. App/chat integrations use Cloudflar
 
 ## Hosted MCP
 
-The newsence app exposes a hosted [MCP](https://modelcontextprotocol.io)
-endpoint at `https://www.newsence.app/api/mcp`. The retired local CLI/MCP
-package is not part of this Worker.
+The newsence app exposes an anonymous, read-only hosted
+[MCP](https://modelcontextprotocol.io) endpoint at
+`https://www.newsence.app/api/mcp`. It supports public corpus search and
+bounded resource reads. The retired local CLI/MCP package is not part of this
+Worker.
 
 ## Architecture
 
@@ -212,14 +214,14 @@ pnpm exec wrangler workflows trigger \
   '{}' \
   --id search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 
-pnpm check:search-rebuild
-pnpm check:search-rollout
+pnpm exec wrangler workflows instances describe \
+  newsence-search-index-generation-5-rebuild \
+  search-index-rebuild-canonical-5-blog-forum-kind-canonical-v1
 ```
 
-`check:search-rollout` talks directly to the AI Search REST API and deliberately
-does not reuse Wrangler OAuth credentials. Set `CLOUDFLARE_ACCOUNT_ID` and a
-dedicated `CLOUDFLARE_AISEARCH_API_TOKEN` with `AI Search:Edit` and
-`AI Search:Run` permissions in the operator environment before running it.
+Wrangler's native instance description is the operator view of Workflow status,
+steps, retries, and errors. A completed run has already passed the Workflow's
+PostgreSQL/AI Search convergence checks and persisted generation readiness.
 
 Immediately before a reader or schema cutover, call
 `probeSearchIndexCutover()` for an independent six-pair DB/index comparison.

@@ -72,6 +72,20 @@ export interface YouTubeChapter {
 	endTime?: number;
 }
 
+interface YouTubeHighlight {
+	title: string;
+	summary: string;
+	startTime: number;
+	endTime: number;
+}
+
+export interface YouTubeHighlights {
+	version: '1.0';
+	model: string;
+	highlights: YouTubeHighlight[];
+	generatedAt: string;
+}
+
 export interface YoutubeTranscript {
 	videoId: string;
 	segments: TranscriptSegment[];
@@ -168,7 +182,7 @@ export interface HackerNewsMetadata {
 	storyUrl?: string | null;
 }
 
-export interface ResourceRepresentationMetadata {
+interface ResourceRepresentationMetadata {
 	fileName: string;
 	fileSize: number;
 }
@@ -202,7 +216,7 @@ export interface PaperMetadata {
 	referencesTruncated: boolean;
 }
 
-export interface PlatformEnrichments {
+interface PlatformEnrichments {
 	academic?: PaperMetadata | null;
 	links?: string[];
 }
@@ -216,7 +230,7 @@ interface ClassificationEnvelope {
 	classification?: ClassificationMetadata | null;
 }
 
-export interface PlatformMetadataDataByResourcePlatform {
+interface PlatformMetadataDataByResourcePlatform {
 	twitter: TwitterMetadata;
 	youtube: YouTubeMetadata;
 	hackernews: HackerNewsMetadata;

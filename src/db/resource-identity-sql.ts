@@ -8,7 +8,7 @@ import {
 import { type SQL, sql } from 'drizzle-orm';
 import { textArraySql } from './client';
 
-export type ResourceIdentitySqlFields = {
+type ResourceIdentitySqlFields = {
 	kind: SQL;
 	resourcePlatform: SQL;
 };

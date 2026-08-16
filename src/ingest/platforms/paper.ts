@@ -6,6 +6,7 @@ import type { WorkflowDynamicDelayContext, WorkflowSleepDuration, WorkflowStep }
 import { fetchWithTimeout, readTextWithLimit } from '@core-shared/http';
 import type { PaperMetadata, PaperReference, PlatformMetadata, ResourceForProcessing } from '@core-shared/types';
 import { z } from 'zod';
+import { PDF_MIME } from '../web-acquisition';
 
 const S2_BASE = 'https://api.semanticscholar.org/graph/v1';
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -16,6 +17,14 @@ const DEFAULT_RATE_LIMIT_DELAY_SECONDS = 15;
 const MAX_RATE_LIMIT_DELAY_SECONDS = 5 * 60;
 const ARXIV_PATH_RE = /^\/(?:abs|html|pdf)\/(\d{4}\.\d{4,5})(v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)/i;
+const ARXIV_TEXT_RE = /arxiv[:\s]\s*(\d{4}\.\d{4,5})(v\d+)?/i;
+// A paper prints its own identifiers in the front matter. Deeper in, every DOI
+// and arXiv id belongs to a work it cites, so scanning the whole body would
+// cheerfully identify a paper as one of its own references.
+const IDENTIFIER_SCAN_CHARS = 3_000;
+// The title matcher answers with its single best guess and no notion of "no
+// match", so its answer is checked rather than trusted.
+const TITLE_MATCH_MIN_SIMILARITY = 0.82;
 
 const PAPER_FIELDS = [
 	'title',
@@ -36,15 +45,22 @@ const PAPER_FIELDS = [
 	'references.authors',
 ].join(',');
 
-type PaperId = { kind: 'doi'; value: string } | { kind: 'arxiv'; value: string; versionedValue: string };
+type PaperId =
+	| { kind: 'doi'; value: string }
+	| { kind: 'arxiv'; value: string; versionedValue: string }
+	// Only reachable by title match: the paper has no DOI we can key on.
+	| { kind: 's2'; value: string };
 type PaperEnrichmentCandidate = {
 	id: string;
 	url?: string | null;
+	content?: string | null;
+	title?: string | null;
+	file_type?: string | null;
 	platform_metadata?: Pick<PlatformMetadata, 'enrichments'>;
 	hasExistingAcademic?: boolean;
 };
 
-export type PaperEnrichmentAttempt = {
+type PaperEnrichmentAttempt = {
 	metadata: PaperMetadata | null;
 	outcome: 'resolved' | 'preserved' | 'not_found' | 'failed' | 'not_applicable';
 };
@@ -74,6 +90,8 @@ const S2PaperSchema = z.object({
 	authors: z.array(S2AuthorSchema).nullish(),
 	references: z.array(S2ReferenceSchema).nullish(),
 });
+
+const S2MatchSchema = z.object({ data: z.array(S2PaperSchema).nullish() });
 
 type S2Author = z.infer<typeof S2AuthorSchema>;
 type S2Ref = z.infer<typeof S2ReferenceSchema>;
@@ -123,15 +141,84 @@ function detectPaperId(url: string | null | undefined): PaperId | null {
 	return null;
 }
 
+/** Bigram Dice coefficient over word characters, for verifying a title match. */
+function titleSimilarity(a: string, b: string): number {
+	const normalize = (value: string) =>
+		value
+			.toLowerCase()
+			.replace(/[^\p{L}\p{N}]+/gu, ' ')
+			.trim();
+	const left = normalize(a);
+	const right = normalize(b);
+	if (!left || !right) return 0;
+	if (left === right) return 1;
+	const bigrams = (value: string) => {
+		const set = new Set<string>();
+		for (let i = 0; i < value.length - 1; i++) set.add(value.slice(i, i + 2));
+		return set;
+	};
+	const first = bigrams(left);
+	const second = bigrams(right);
+	if (first.size === 0 || second.size === 0) return 0;
+	let shared = 0;
+	for (const gram of first) if (second.has(gram)) shared++;
+	return (2 * shared) / (first.size + second.size);
+}
+
+function identityFromMatchedPaper(paper: S2Paper): PaperId | null {
+	const doi = paper.externalIds?.DOI?.toLowerCase();
+	if (doi) {
+		const trimmed = trimDoi(doi);
+		if (!isPlaceholderDoi(trimmed)) return { kind: 'doi', value: trimmed };
+	}
+	return paper.paperId ? { kind: 's2', value: paper.paperId } : null;
+}
+
+/**
+ * Resolve a paper from its title. Only worth attempting for documents that are
+ * already paper-shaped: the matcher always answers, so asking it about an
+ * arbitrary blog post invites a confident wrong answer.
+ */
+async function enrichS2FromTitle(title: string, apiKey?: string): Promise<PaperMetadata | null> {
+	// The endpoint answers 400 to punctuation, so the query is reduced to words.
+	const query = title.replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+	if (!query) return null;
+	const json = await fetchS2Json(`/paper/search/match?query=${encodeURIComponent(query)}&fields=${PAPER_FIELDS}`, apiKey);
+	if (json === null) return null;
+	const paper = S2MatchSchema.parse(json).data?.[0];
+	if (!paper?.paperId || !paper.title) return null;
+	if (titleSimilarity(paper.title, title) < TITLE_MATCH_MIN_SIMILARITY) return null;
+	const id = identityFromMatchedPaper(paper);
+	return id ? normalizePaper(id, paper) : null;
+}
+
+/**
+ * The single identity ladder every entry point shares. A saved URL carries the
+ * identity outright; an uploaded file has to give it up from its own front
+ * matter, and failing that from its title, which is resolved separately since
+ * it costs a request.
+ */
+function detectPaperIdentity(input: { url?: string | null; text?: string | null }): PaperId | null {
+	const fromUrl = detectPaperId(input.url);
+	if (fromUrl) return fromUrl;
+	const head = input.text?.slice(0, IDENTIFIER_SCAN_CHARS);
+	if (!head) return null;
+	const doi = extractDoi(head);
+	if (doi) return { kind: 'doi', value: doi };
+	const arxiv = head.match(ARXIV_TEXT_RE);
+	if (arxiv?.[1]) return { kind: 'arxiv', value: arxiv[1], versionedValue: `${arxiv[1]}${arxiv[2] ?? ''}` };
+	return null;
+}
+
 export function isExplicitPaperUrl(url: string | null | undefined): boolean {
 	return detectPaperId(url) !== null;
 }
 
-async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | null> {
+async function fetchS2Json(path: string, apiKey?: string): Promise<unknown | null> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (apiKey) headers['x-api-key'] = apiKey;
 	const res = await fetchWithTimeout(`${S2_BASE}${path}`, { headers }, REQUEST_TIMEOUT_MS);
-	if (res.ok) return S2PaperSchema.parse(JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES)));
+	if (res.ok) return JSON.parse(await readTextWithLimit(res, RESPONSE_MAX_BYTES));
 	const status = res.status;
 	const retryAfterSeconds = parseRetryAfterSeconds(res.headers.get('retry-after'));
 	await res.body?.cancel();
@@ -144,6 +231,11 @@ async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | nu
 		);
 	}
 	throw new Error(`Semantic Scholar request failed with HTTP ${status}`);
+}
+
+async function fetchS2Paper(path: string, apiKey?: string): Promise<S2Paper | null> {
+	const json = await fetchS2Json(path, apiKey);
+	return json === null ? null : S2PaperSchema.parse(json);
 }
 
 function parseRetryAfterSeconds(value: string | null): number | null {
@@ -236,7 +328,9 @@ function normalizePaper(id: PaperId, paper: S2Paper): PaperMetadata {
 }
 
 function idPath(id: PaperId): string {
-	return id.kind === 'doi' ? `DOI:${id.value}` : `ARXIV:${id.value}`;
+	if (id.kind === 'doi') return `DOI:${id.value}`;
+	if (id.kind === 'arxiv') return `ARXIV:${id.value}`;
+	return id.value;
 }
 
 /** Resolve a paper by DOI or arXiv id. Returns null when Semantic Scholar has no match. */
@@ -252,9 +346,12 @@ export async function stagePaperEnrichmentAttempt(
 	candidate: PaperEnrichmentCandidate,
 	stepName = 'enrich-paper-metadata',
 ): Promise<PaperEnrichmentAttempt> {
-	const url = candidate.url?.trim();
-	const paperId = detectPaperId(url);
-	if (!url || !paperId) return { metadata: null, outcome: 'not_applicable' };
+	const paperId = detectPaperIdentity({ text: candidate.content, url: candidate.url });
+	// Title matching is reserved for PDFs. It always returns something, so
+	// letting it loose on ordinary web pages would turn any post that shares a
+	// paper's phrasing into that paper.
+	const title = candidate.file_type === PDF_MIME ? candidate.title?.trim() : undefined;
+	if (!paperId && !title) return { metadata: null, outcome: 'not_applicable' };
 	const hasExistingAcademic = candidate.hasExistingAcademic ?? !!candidate.platform_metadata?.enrichments?.academic;
 	const attemptStartedAt = Date.now();
 
@@ -264,12 +361,12 @@ export async function stagePaperEnrichmentAttempt(
 			{ retries: { limit: 5, delay: paperEnrichmentRetryDelay }, timeout: '30 seconds' },
 			async () => {
 				const startedAt = Date.now();
-				const paper = await enrichS2FromId(paperId, env.S2_API_KEY);
+				const paper = paperId ? await enrichS2FromId(paperId, env.S2_API_KEY) : await enrichS2FromTitle(title as string, env.S2_API_KEY);
 				console.info({
 					tag: 'S2',
 					event: 'academic_enrichment',
 					resource_id: candidate.id,
-					identity_kind: paperId.kind,
+					identity_kind: paperId?.kind ?? 'title',
 					outcome: paper ? 'resolved' : hasExistingAcademic ? 'preserved' : 'not_found',
 					references_loaded: paper?.references.length ?? 0,
 					latency_ms: Date.now() - startedAt,
@@ -286,7 +383,7 @@ export async function stagePaperEnrichmentAttempt(
 			tag: 'S2',
 			event: 'academic_enrichment',
 			resource_id: candidate.id,
-			identity_kind: paperId.kind,
+			identity_kind: paperId?.kind ?? 'title',
 			outcome: hasExistingAcademic ? 'preserved' : 'failed',
 			references_loaded: 0,
 			latency_ms: Date.now() - attemptStartedAt,
@@ -299,7 +396,7 @@ export async function stagePaperEnrichmentAttempt(
 export async function stagePaperEnrichment(
 	env: CoreEnv,
 	step: WorkflowStep,
-	candidate: Pick<ResourceForProcessing, 'id' | 'platform_metadata' | 'url'>,
+	candidate: Pick<ResourceForProcessing, 'id' | 'platform_metadata' | 'url' | 'content' | 'title' | 'file_type'>,
 ): Promise<PaperMetadata | null> {
 	return (await stagePaperEnrichmentAttempt(env, step, candidate)).metadata;
 }

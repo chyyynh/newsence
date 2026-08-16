@@ -134,9 +134,9 @@ HTTP surface 只提供 `GET /health`。App/chat 透過 Cloudflare service-bindin
 
 ## Hosted MCP
 
-newsence app 在 `https://www.newsence.app/api/mcp` 提供 hosted
-[MCP](https://modelcontextprotocol.io) endpoint。已退役的本機 CLI／MCP
-套件不屬於這個 Worker。
+newsence app 在 `https://www.newsence.app/api/mcp` 提供匿名、唯讀的 hosted
+[MCP](https://modelcontextprotocol.io) endpoint，支援公開 corpus 搜尋與有限長度的
+resource 讀取。已退役的本機 CLI／MCP 套件不屬於這個 Worker。
 
 ## 架構
 

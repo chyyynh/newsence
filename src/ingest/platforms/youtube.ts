@@ -1,5 +1,11 @@
 import { CORE_JSON_MODEL, generateObject } from '@core-ai/generation';
-import { platformMetadataFor, type ResourceForProcessing, type TranscriptSegment, type YoutubeTranscript } from '@core-shared/types';
+import {
+	platformMetadataFor,
+	type ResourceForProcessing,
+	type TranscriptSegment,
+	type YouTubeHighlights,
+	type YoutubeTranscript,
+} from '@core-shared/types';
 import { type CoreDb, withCoreDb } from '@db/client';
 import { youtubeTranscripts } from '@db/schema';
 import { eq, sql } from 'drizzle-orm';
@@ -17,16 +23,9 @@ const YouTubeHighlightSchema = z.object({
 	endTime: z.number().nonnegative(),
 });
 
-type YouTubeHighlight = z.infer<typeof YouTubeHighlightSchema>;
-
 export interface YouTubeHighlightsUpdate {
 	videoId: string;
-	value: {
-		version: '1.0';
-		model: string;
-		highlights: YouTubeHighlight[];
-		generatedAt: string;
-	};
+	value: YouTubeHighlights;
 }
 
 const HIGHLIGHTS_SYSTEM_PROMPT = `你是專業的影片內容分析師。分析 YouTube 影片逐字稿，找出 5-8 個最重要的主題段落。
